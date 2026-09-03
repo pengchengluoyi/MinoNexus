@@ -1,0 +1,52 @@
+id: tap_element
+display_name: 点击元素
+event_kind: tap_element
+category: ui_interaction
+description: 点击屏幕上的指定元素（按钮、图标、文字等），VLM 给出坐标
+platforms: [android, ios, web]
+trigger_phrases: [点击, 点, 按, tap, click]
+needs_vlm: true
+
+implementations:
+  - id: vlm_locate_remote_tap
+    display_name: VLM 定位 + Remote TAP
+    executor: remote
+    requires_caps: [ui_native_input, ui_screenshot]
+    needs_vlm: true
+    locate_prompt: LOCATE_VISION
+    low_level:
+      command: TAP
+      params: { x: "{x}", y: "{y}" }
+    cost: 5
+
+  - id: vlm_locate_adb_tap
+    display_name: VLM 定位 + ADB input tap
+    executor: adb
+    requires_caps: [ui_native_input, ui_screenshot]
+    needs_vlm: true
+    locate_prompt: LOCATE_VISION
+    low_level:
+      shell: "input tap {x} {y}"
+    cost: 4
+    description: Remote 不可用时的 adb 兜底（拟人感稍弱但可靠）
+
+  - id: vlm_locate_ios_wda_tap
+    display_name: VLM 定位 + WDA tap
+    executor: ios_wda
+    requires_caps: [ui_native_input, ui_screenshot]
+    needs_vlm: true
+    locate_prompt: LOCATE_VISION
+    cost: 4
+    description: iOS 真机（usbmuxd / WDA）
+
+  - id: playwright_tap
+    display_name: Playwright 点击
+    executor: playwright
+    requires_caps: [ui_native_input, ui_screenshot]
+    needs_vlm: false
+    cost: 3
+    description: 优先按按钮/链接名字点，坐标兜底
+
+ui:
+  shown_in_settings: true
+  examples: ["点击「同意」", "点击 一键登录"]

@@ -1,0 +1,46 @@
+id: press_key
+display_name: 系统按键
+event_kind: press_key
+category: system
+description: 按系统按键（Back / Home / Menu / Power / 音量）
+platforms: [android, ios, web]
+trigger_phrases: [返回, 后退, 主页, 菜单, back, home, menu]
+needs_vlm: false
+
+implementations:
+  - id: adb_keyevent
+    display_name: ADB input keyevent
+    executor: adb
+    requires_caps: [key_event]
+    needs_vlm: false
+    low_level:
+      shell: "input keyevent {keycode}"
+    cost: 1
+
+  - id: remote_key_event
+    display_name: Remote KEY_EVENT
+    executor: remote
+    requires_caps: [key_event]
+    needs_vlm: false
+    low_level:
+      command: KEY_EVENT
+      params: { keyevent: "{key}" }
+    cost: 2
+
+  - id: ios_wda_press
+    display_name: WDA press
+    executor: ios_wda
+    requires_caps: [key_event]
+    needs_vlm: false
+    cost: 2
+
+  - id: playwright_press
+    display_name: Playwright 按键
+    executor: playwright
+    requires_caps: [key_event]
+    needs_vlm: false
+    cost: 1
+
+ui:
+  shown_in_settings: true
+  examples: ["返回", "Home"]

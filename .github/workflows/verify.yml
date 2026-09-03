@@ -1,0 +1,23 @@
+name: verify
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: verify hard constraints
+        run: python scripts/verify_all.py
+      - name: install
+        run: pip install -e .
+      # verify_all 里的 verify_app_imports 在没装依赖时会 SKIP；装完再跑一次才算数
+      - name: app imports
+        run: python scripts/verify_app_imports.py
+      - name: http contract
+        run: python scripts/check_http_contract.py
