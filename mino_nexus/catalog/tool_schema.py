@@ -19,6 +19,10 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
         "properties": {
             "x": COORD,
             "y": COORD,
+            "selector_text": {
+                "type": "string",
+                "description": "目标上的可见文字，如 首页 / 我的。执行侧用层级定位，比纯坐标稳",
+            },
         },
         "required": ["x", "y"],
     },
@@ -27,6 +31,10 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
         "properties": {
             "x": COORD,
             "y": COORD,
+            "selector_text": {
+                "type": "string",
+                "description": "目标上的可见文字；执行侧用层级定位，比纯坐标稳",
+            },
             "duration_ms": {"type": "integer", "description": "按住毫秒，默认 800"},
         },
         "required": ["x", "y"],
@@ -132,6 +140,18 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
         },
         "required": ["question"],
     },
+    "relogin": {
+        "type": "object",
+        "properties": {
+            "intent": {"type": "string", "description": "对齐登录态：看当前屏决定登入或退出"},
+        },
+    },
+    "lease_account": {
+        "type": "object",
+        "properties": {
+            "tags_prompt": {"type": "string", "description": "这条用例要测的事，用于租号"},
+        },
+    },
 }
 
 SIGNAL_DONE = "signal_done"
@@ -193,7 +213,7 @@ CONTROL_TOOLS: list[dict[str, Any]] = [
 ]
 
 
-def _yaml_params_to_schema(rows: Any) -> Optional[dict[str, Any]]:
+def _params_to_schema(rows: Any) -> Optional[dict[str, Any]]:
     if not isinstance(rows, list) or not rows:
         return None
     props: dict[str, Any] = {}
@@ -224,10 +244,10 @@ def _yaml_params_to_schema(rows: Any) -> Optional[dict[str, Any]]:
     return out
 
 
-def params_schema_for(cap_id: str, yaml_params: Any = None) -> dict[str, Any]:
-    from_yaml = _yaml_params_to_schema(yaml_params)
-    if from_yaml:
-        return from_yaml
+def params_schema_for(cap_id: str, catalog_params: Any = None) -> dict[str, Any]:
+    from_catalog = _params_to_schema(catalog_params)
+    if from_catalog:
+        return from_catalog
     return dict(PARAM_DEFAULTS.get(str(cap_id or ""), {"type": "object", "properties": {}}))
 
 
@@ -285,25 +305,21 @@ def tools_for_menu(menu: list[dict[str, Any]]) -> list[dict[str, Any]]:
         cid = str(row.get("id") or "").strip()
         if not cid or cid in seen or cid in CONTROL_TOOL_NAMES:
             continue
-        if cid in {
-            "assert_visual", "assert_goal", "assert",
-            "get_otp", "get_phone", "lease_account", "release_account",
-            "provision_session", "pick_account",
-        }:
+        if cid in {"release_account", "pick_account", "get_otp", "get_phone"}:
             continue
         seen.add(cid)
-        yaml_params = None
+        catalog_params = None
         try:
             from mino_nexus.catalog import registry as plugin_registry
 
             cap = plugin_registry.get_capability(cid)
-            yaml_params = getattr(cap, "params", None) if cap is not None else None
+            catalog_params = getattr(cap, "params", None) if cap is not None else None
         except Exception:
-            yaml_params = None
+            catalog_params = None
         tools.append(openai_tool(
             cid,
             str(row.get("summary") or cid),
-            params_schema_for(cid, yaml_params),
+            params_schema_for(cid, catalog_params),
         ))
     tools.extend(CONTROL_TOOLS)
     return tools

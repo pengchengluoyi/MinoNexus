@@ -35,7 +35,7 @@ UI **只**打 MinoNexus。没有公网域名时用内网名 `mino.local`：Nexus
 |---|---|---|
 | `/auth/users` 写 | 允许 | 403 |
 | `/settings/mail` 写 | 允许 | 403 |
-| `/packs` 写 | 允许 | 403 |
+| `/packs` 写（builtin） | 允许 | 403 |
 | `/settings/ai/providers` 写 | 403 | 允许 |
 | `/runtime/nodes/install-token` | 403 | 允许 |
 | `/runtime/nodes/{id}/command` | 403 | 允许 |
@@ -65,36 +65,46 @@ Console 不提供 Scout 安装或包配置。
 
 HITL 问人界面、排期 cron、基线库、从设计稿/定位抽登录图标（CLIP/视觉）、完整 3500 行 Agent 恢复/拟人化路径。
 
-已经可联：登录、概览、账号、发信、模型 Key、角色目录 / prompt / 对话、扩展包只读、节点列表、项目/应用/环境/号池、自动化配置与用例草稿、**Case Runner 下发与轮询**（无 Scout / 无 Key 时任务失败并带中文原因，不再 501）、qa-process tick/assist/导入/脑图、Figma 同步（无 Token 时 400）。
+已经可联：登录、概览、账号、发信、模型 Key、**技能**（`/settings/ai/skills`）与角色 prompt / 对话、扩展包只读、节点列表、项目/应用/环境/号池、自动化配置与用例草稿、**Case Runner 下发与轮询**（无 Scout / 无 Key 时任务失败并带中文原因，不再 501）、qa-process tick/assist/导入/脑图、Figma 同步（无 Token 时 400）。
 
-## 知识开关（Studio）
+## 技能
 
-沉淀知识 / 知识机审跟**被测产品的登录账号**走（号池 `test_accounts`），不是 Mino 管理员。
+技能是可编辑产品对象（角色 + SOP + prompt + 结果视图），与 `/packs` 分开。引擎 / 指针 / 视图只能选自已注册枚举。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/settings/ai/skills` | 列表 + `enums`（engine / pointer / view） |
+| GET | `/settings/ai/skills/{id}` | 单条。空 prompt / 坏 SOP 回退 builtin |
+| POST | `/settings/ai/skills` | 新建。`engine` 必须是 `agent_loop` / `qa_job` / `chat` |
+| PUT | `/settings/ai/skills/{id}` | 改 prompt / SOP / view。`{ reset: true }` 恢复 builtin prompt |
+| GET | `/settings/ai/roles` | 仍返回产品角色；`skills` 字段已是技能表 |
+| PUT | `/settings/ai/roles/{id}/prompt` | 兼容旧入口；技能 id 会写进 `skills` 表 |
+
+## 知识库
+
+条目落 `knowledge_entries`。Console「能力 → 知识库」与 Studio 测试页共用 `/settings/knowledge*`。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/settings/knowledge` | 列表。可按 `app_id` / `account_id` / `account_ident` 过滤 |
+| PUT | `/settings/knowledge` | 整表替换 `items` |
+| PUT | `/settings/knowledge/{id}` | 新建或更新一条 |
+| DELETE | `/settings/knowledge/{id}` | 删除 |
+| POST | `/settings/knowledge/{id}/review` | `approve` / `reject` |
+| GET | `/settings/knowledge/app/{app_id}` | 某应用的条目 |
+| POST | `/settings/knowledge/append` | 给某应用追加一条 |
+
+机审开关仍在 `settings.payload.knowledge_jobs`（按被测账号），**不要**写进知识表：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/settings/knowledge/jobs?account_id=&project_id=` | 读该应用登录账号的开关；不传账号返回旧缺省 + `accounts[]` |
-| PUT / POST / PATCH | `/settings/knowledge/jobs` | 写入。body 必须带 `account_id` 或 `account_ident`，且能在号池里解析到 |
+| PUT / POST / PATCH | `/settings/knowledge/jobs` | body 必须带 `account_id` 或 `account_ident`，且能在号池里解析到 |
 | POST | `/settings/knowledge/auto-review` | 机审待审。关开关时 `skipped`，否则先留人工 |
 | POST | `/settings/knowledge/analyze-failure` | 失败分析入口，避免再 405 |
-
-落盘 `~/.mino-nexus/settings.json` 的 `knowledge_jobs.accounts[<account_id>]`。旧的顶层 `capture_enabled` / `review_enabled` 只当未写过该账号时的缺省，不删导入知识。
-
-沉淀知识 / 知识机审开关按**登录用户**隔离（不是 Scout `node_id`）：
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/settings/knowledge/jobs` | 当前登录用户的开关。缺省两项都开 |
-| PUT / POST / PATCH | `/settings/knowledge/jobs` | 只写当前用户。落盘 `users/<user_id>/knowledge_jobs.json` |
-| DELETE | `/settings/knowledge/jobs` | 405。没有删除方法 |
-| POST | `/settings/knowledge/auto-review` | 机审待审。用户关掉「知识机审」时跳过 |
-
-知识库条目（`/settings/knowledge`）仍是共享目录；不要把这两项开关写进全局 `settings.json`。
 
 ## 自检
 
 ```bash
 pip install -e .    # 或 uv sync
-python scripts/check_http_contract.py
-python scripts/verify_all.py
 ```

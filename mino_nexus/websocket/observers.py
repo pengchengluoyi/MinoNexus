@@ -1,20 +1,52 @@
 """UI 观察者：`WS /ws`。登录页会连，没有 token 也要收下，否则一直重连。"""
 from __future__ import annotations
 
+import asyncio
 import json
 import platform
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import Query, WebSocket, WebSocketDisconnect
 
-from mino_nexus import auth_store
-from mino_nexus.log import SLog
-from mino_nexus.mdns import http_origin, mdns_status, public_urls
-from mino_nexus.node_registry import get_registry
-from mino_nexus.ui_devices import ui_devices, ui_nodes
+from mino_nexus.services import auth_store
+from mino_nexus.core.log import SLog
+from mino_nexus.core.mdns import http_origin, mdns_status, public_urls
+from mino_nexus.services.node_registry import get_registry
+from mino_nexus.services.ui_devices import ui_devices, ui_nodes
 from mino_nexus.websocket.node import NEXUS_VERSION
 
 TAG = "Observers"
+
+_CLIENTS: set[WebSocket] = set()
+_LOOP: Optional[asyncio.AbstractEventLoop] = None
+
+
+def set_loop(loop: asyncio.AbstractEventLoop) -> None:
+    global _LOOP
+    _LOOP = loop
+
+
+def broadcast_sync(payload: dict[str, Any]) -> None:
+    """从执行线程把 agent_step / testing_task 推给 Studio。"""
+    loop = _LOOP
+    if loop is None or not loop.is_running():
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(_broadcast(payload), loop)
+    except Exception as exc:
+        SLog.d(TAG, f"broadcast_sync failed: {exc}")
+
+
+async def _broadcast(payload: dict[str, Any]) -> None:
+    text = json.dumps(payload, ensure_ascii=False, default=str)
+    dead: list[WebSocket] = []
+    for ws in list(_CLIENTS):
+        try:
+            await ws.send_text(text)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _CLIENTS.discard(ws)
 
 
 def _reply(req_id: str, action: str, data: Any = None, *, code: int = 200, msg: str = "") -> dict[str, Any]:
@@ -77,6 +109,7 @@ def register_routes(app: Any) -> None:
     async def ui_endpoint(websocket: WebSocket, token: str = Query(default="")) -> None:
         await websocket.accept()
         sess = auth_store.session_of(token)
+        _CLIENTS.add(websocket)
         SLog.i(TAG, f"UI 连入 logged_in={bool(sess)}")
         try:
             while True:
@@ -99,3 +132,5 @@ def register_routes(app: Any) -> None:
             SLog.i(TAG, "UI 断开")
         except Exception as exc:
             SLog.e(TAG, f"UI 连接异常: {type(exc).__name__}: {exc}")
+        finally:
+            _CLIENTS.discard(websocket)

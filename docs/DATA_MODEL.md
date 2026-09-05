@@ -4,15 +4,27 @@
 
 ## 1. 归属总表
 
-| 数据 | 存在哪 | 权威来源 |
+库文件是 `mino.db`（`data_dir()`，默认 `~/.mino-nexus`，可用 `MINO_NEXUS_DATA_DIR` 覆盖）。SQLAlchemy，`create_all` + 启动时 `run_auto_migration()`。
+
+| 数据 | 表 | 权威来源 |
 |---|---|---|
-| `App` / 项目 / 环境 | Nexus DB | UI / 飞书同步 |
-| 用例、前置、预期 | Nexus DB | 飞书同步 |
-| `AppRegressionRun`（批次结果） | Nexus DB | Nexus 的循环 |
-| `TaskTimeline` / `WorkflowLog` | Nexus DB | Nexus 的循环 |
-| `MDevice`（设备） | Nexus DB | **连通性来自 Scout 上报**，其余来自 UI |
-| 能力目录 | `plugins/**.yaml` | 本仓，唯一真源 |
-| 知识 / 覆盖度 / 号池 | Nexus DB | 知识捕获 + 人工审核 |
+| `App` / 项目 / 环境 | `projects` / `apps` | UI / 飞书同步 |
+| 用例、前置、预期 | `app_cases`（需求/脑图仍在 `apps.env.automation.qa_process`） | UI / QA 推进 |
+| `AppRegressionRun`（批次结果） | `app_regression_runs` | Nexus 的循环 |
+| 逐步 trace / baseline | `m_case_run_trace` / `m_case_baseline` | Nexus 的循环 |
+| 设备身份 | `m_device` | **连通性来自 Scout 上报**，其余来自 UI |
+| 节点 / 工作台归属 | `nodes` / `studios` | 活连接在内存 `NodeRegistry` |
+| 账号 / 会话 | `users` / `sessions` / `auth_state` | UI 登录 |
+| 设置 / 知识机审开关 | `settings` | UI |
+| 知识条目 | `knowledge_entries` | UI / 学习沉淀 |
+| 调度流水 | `dispatch_calls` | LLM / pipeline |
+| 能力目录 | `catalog_entries`（`kind` 区分五类） | 空库不灌；只经 Console `/packs` 写入 |
+| 技能 | `skills`（角色 + SOP + prompt + `view.id`） | builtin 从代码灌种一次，之后以库为准；坏行回退 `ai/skill_defs.py` |
+| 图谱别名 | `m_atlas_alias` | UI |
+| 集成插件策略 / 用户密钥 | `plugin_policies` / `user_plugin_secrets` | UI |
+| Studio 侧栏 | `studio_nav` | Console |
+| Scout 安装凭证 | `install_tokens` | Studio 领取 |
+| 轻量任务 | `tasks` | `rTask` |
 | 节点 manifest | Nexus 内存缓存 | **Scout 的 `REGISTER` / `HEARTBEAT`** |
 | 原始截图 / 屏幕流 | **Scout 本地**，用后即删 | Scout |
 | trace 缩略图 | Nexus 内存 `_RUNS` + 落库 | Nexus |
@@ -47,9 +59,9 @@
 
 ## 4. 从 sqlite 到 PG
 
-上游是 `APP_DATA_DIR` 下的 sqlite（`server/core/database.py`），配 `migration.py` 自动迁移。
+本仓已经是 sqlite：`data_dir() / mino.db`，`core/database.py` + `core/migration.py`。上游文件名是 `autobots.db`，这里不用。
 
-搬迁建议：**先沿用 sqlite 把双进程链路跑通，PG 单列一个阶段。** 换 PG 时要处理：
+换 PG 单列一个阶段。到时候要处理：
 
 - 15 个 ORM 模型的方言差异（JSON 字段、自增主键、大小写）
 - `migration.py` 的自动迁移逻辑重做（建议换 alembic）

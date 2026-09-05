@@ -38,8 +38,7 @@ mino_nexus/ai/
 ## 3. 改 prompt 的流程
 
 1. 改 `prompts.py`，**不要就地改 `planner.py` 里的拼装逻辑**
-2. 用 `scripts/verify_*.py` 里的 prompt 相关脚本跑一遍（沿用上游 `verify_agent_tools.py` / `verify_no_app_literals.py` 的思路）
-3. **不要在 prompt 里硬编码具体 app 的包名、按钮文案** —— 那属于知识库（`knowledge_*`），有 owner、有作用域、有审核闭环
+2. **不要在 prompt 里硬编码具体 app 的包名、按钮文案** —— 那属于知识库（`knowledge_*`），有 owner、有作用域、有审核闭环
 
 ## 4. 成本与超时
 

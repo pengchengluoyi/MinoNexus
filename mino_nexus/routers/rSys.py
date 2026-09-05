@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
-from mino_nexus.http_util import ok
-from mino_nexus.mdns import LAN_HOST, mdns_status, node_ws_url, public_urls
-from mino_nexus.node_registry import get_registry
-from mino_nexus.ui_devices import ui_nodes
+from mino_nexus.core.http_util import ok
+from mino_nexus.core.mdns import LAN_HOST, mdns_status, node_ws_url, public_urls
+from mino_nexus.services.node_registry import get_registry
+from mino_nexus.services.ui_devices import ui_nodes
 from mino_nexus.websocket.node import NEXUS_VERSION
 
 router = APIRouter(tags=["Sys"])

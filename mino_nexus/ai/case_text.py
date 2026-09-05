@@ -13,7 +13,10 @@ from typing import Any, Dict, List
 
 
 _NUMBERED_PATTERN = re.compile(r"(?:^|\n)\s*(\d+)[.、．)\）]\s*")
-_STEP_VERB_RE = re.compile(r"点击|打开|关闭|滑|等待|返回|启动|输入|勾选|选择", re.I)
+
+
+def _strip_number_prefix(text: str) -> str:
+    return re.sub(r"^\s*\d+[.、．)\）]\s*", "", text or "").strip()
 
 
 def parse_numbered_items_rules(text: str) -> List[Dict[str, Any]]:

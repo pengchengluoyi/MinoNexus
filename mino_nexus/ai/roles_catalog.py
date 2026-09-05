@@ -74,7 +74,7 @@ def _role(
 
 
 def _apply_role_prompt(row: dict[str, Any]) -> dict[str, Any]:
-    from mino_nexus.settings_store import get_role_prompt_override
+    from mino_nexus.services.settings_store import get_role_prompt_override
 
     out = dict(row)
     built_in = str(out.get("default_prompt") or out.get("system_prompt") or "").strip()
@@ -267,21 +267,22 @@ def list_playbooks() -> list[dict[str, Any]]:
 
 def list_roles() -> dict[str, Any]:
     from mino_nexus.ai.layer_stack import get_stack
+    from mino_nexus.services.skill_store import list_skills
 
     product = [_apply_role_prompt(row) for row in _product_roles()]
     runtime = [_apply_role_prompt(row) for row in _runtime_roles()]
     abstract = [p for p in product if p.get("group") == "abstract"]
     workers = [p for p in product if p.get("group") != "abstract"]
     stack = get_stack()
-    skills = [dict(row) for row in (stack.get("skills") or [])]
+    jobs = [dict(row) for row in (stack.get("skills") or [])]
     bound = {str(row.get("id") or ""): list(row.get("skill_ids") or []) for row in (stack.get("roles") or [])}
     for role in product:
         ids = bound.get(str(role.get("id") or ""), list(role.get("skill_ids") or []))
         role["skill_ids"] = ids
-        role["skills"] = [row for row in skills if row.get("id") in ids]
+        role["skills"] = [row for row in jobs if row.get("id") in ids]
     trees = []
     for p in workers:
-        caps = [s for s in skills if s.get("id") in (p.get("skill_ids") or [])] or [
+        caps = [s for s in jobs if s.get("id") in (p.get("skill_ids") or [])] or [
             r for r in runtime if r.get("owner") == p["id"]
         ]
         trees.append({**p, "capabilities": caps})
@@ -290,11 +291,13 @@ def list_roles() -> dict[str, Any]:
     for row in product:
         key = str(row.get("called") or "unknown")
         called_counts[key] = called_counts.get(key, 0) + 1
+    skills = list_skills()
     return {
         "abstract": abstract,
         "product": product,
         "runtime": runtime,
         "meta": [],
+        "jobs": jobs,
         "skills": skills,
         "skill_categories": list(stack.get("skill_categories") or []),
         "trees": trees,
@@ -307,6 +310,7 @@ def list_roles() -> dict[str, Any]:
             "runtime": len(runtime),
             "meta": 0,
             "skills": len(skills),
+            "jobs": len(jobs),
             "roles": len(product),
             "total": len(product),
             "called": called_counts,
@@ -321,6 +325,19 @@ def get_role(role_id: str) -> Optional[dict[str, Any]]:
     for row in _all_catalog_rows():
         if row["id"] == rid:
             return _apply_role_prompt(row)
+    try:
+        from mino_nexus.services.skill_store import get_skill
+
+        skill = get_skill(rid)
+        if skill:
+            return {
+                **skill,
+                "kind": "json" if skill.get("engine") == "qa_job" else "conversational",
+                "group": "product",
+                "default_prompt": skill.get("system_prompt") or "",
+            }
+    except Exception:
+        pass
     return None
 
 

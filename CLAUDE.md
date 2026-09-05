@@ -12,16 +12,14 @@ MinoNexus 是服务端大脑。它决定"下一步做什么"，让 [MinoScout](.
 
 ---
 
-## 1. 硬约束（违反即 CI 失败）
+## 1. 硬约束
 
-| # | 约束 | 守门脚本 | 为什么 |
-|---|---|---|---|
-| 1 | **不碰设备** —— 不 import `adbutils` / `uiautomator2` / `playwright` / `facebook-wda` / `Appium` / `pywinauto`，不 `subprocess` 调 `adb` | `scripts/verify_no_device_driver.py` | 设备操作全部经协议委托给 Scout。Nexus 一旦直连设备，就没法上云、没法多节点 |
-| 2 | **不含图像算法依赖** —— 不 import `torch` / `open_clip` / `paddleocr` / `ultralytics` / `cv2` | 同上 | 拆分时已确认批次路径运行时零调用（见 `docs/MIGRATION.md` §0）。引回来等于把 45% 的旧代码拖回来 |
-| 3 | **不 import Scout** | `scripts/verify_no_scout_import.py` | 依赖必须单向 |
-| 4 | **协议契约一致** | `scripts/verify_protocol_contract.py` | 两仓 fixture 哈希必须相同 |
-
-跑 `python scripts/verify_all.py` 一次性检查。
+| # | 约束 | 为什么 |
+|---|---|---|
+| 1 | **不碰设备** —— 不 import `adbutils` / `uiautomator2` / `playwright` / `facebook-wda` / `Appium` / `pywinauto`，不 `subprocess` 调 `adb` | 设备操作全部经协议委托给 Scout。Nexus 一旦直连设备，就没法上云、没法多节点 |
+| 2 | **不含图像算法依赖** —— 不 import `torch` / `open_clip` / `paddleocr` / `ultralytics` / `cv2` | 拆分时已确认批次路径运行时零调用（见 `docs/MIGRATION.md` §0）。引回来等于把 45% 的旧代码拖回来 |
+| 3 | **不 import Scout** | 依赖必须单向 |
+| 4 | **协议契约一致** | 两仓 `protocol.py` 必须能 round-trip 同一份 golden fixture |
 
 > 约束 2 的例外只有 `pillow`：缩略图压缩（`make_thumb`）需要它，且只做重采样，不做识别。
 
@@ -31,7 +29,7 @@ MinoNexus 是服务端大脑。它决定"下一步做什么"，让 [MinoScout](.
 
 ### 2.1 能力目录是唯一真源，且只在本仓
 
-`plugins/**.yaml` 声明"能做什么、用什么实现"，**不写"什么时候做、按什么顺序做"** —— 后者是 LLM 的事。
+`catalog_entries` 声明"能做什么、用什么实现"，**不写"什么时候做、按什么顺序做"** —— 后者是 LLM 的事。`kind` 为 `prep` / `do` / `check` / `generic` / `recovery`，与执行阶段和 `/packs?kind=` 同一套。空库不灌目录，能力只经 Console 写入。
 
 Scout 不读 YAML。所以**凡是 Scout 执行时需要知道的东西，必须由 Nexus 算完塞进 `EXECUTE` 载荷**：`executor_order`、`low_level`、`selected_impl`、`device_hint`。
 
@@ -64,61 +62,41 @@ result: EventResult = router.dispatch(event, ctx, ...)
 
 ## 3. 目录约定
 
-**这一节由 `scripts/verify_layout.py` 守着** —— 往根目录加模块 / 加子包会让 CI 红。
-不是洁癖：这份清单是新来的人（和模型）判断"东西该放哪"的唯一依据，它一过期，
-文件就会照着错的结构落。
+根上只准 `app.py` / `cli.py`。新业务进 `services/`，新表进 `models/`，基础设施进 `core/`。
 
 ```
 mino_nexus/
 ├── app.py                FastAPI 装配（请求模型必须模块级，见 §7）
 ├── cli.py                mino-nexus 入口
-├── protocol.py           九条消息 + EventStatus（stdlib dataclasses，零依赖，见 §5）
-├── schemas.py            跨界数据：PlanEvent / EventResult / CapturedScreen（与 Scout 同形）
-├── log.py                SLog
-├── paths.py              数据目录（data_dir() / APP_DATA_DIR）
-├── json_store.py         带锁 + 原子写的小 JSON 文件；所有 *_store 的底座
-├── http_util.py          bearer / ok / http_error
-├── client_gate.py        客户端准入中间件
-├── runtime_tokens.py     Scout 安装凭证
-├── node_registry.py      node_id ↔ 连接 ↔ 设备；派单（见 docs/NODE_REGISTRY.md）
-├── mdns.py               启动时注册 mino.local（无公网域名）
-├── settings.py           **LLM provider 凭据**（给 llm_client 用）
-├── settings_store.py     **UI 设置项读写**（给 rSettings 用）—— 与上者的分工见 §8
 │
+├── core/                 基础设施（不谈业务）
+│   database.py           engine / SessionLocal / get_db → mino.db
+│   migration.py          启动时 additive ALTER
+│   paths.py              数据目录（与 engine 分开，避免拼路径被迫 import ORM）
+│   log.py protocol.py schemas.py http_util.py client_gate.py mdns.py
+├── models/               ORM，一张表一个文件
 ├── routers/              HTTP 入口，沿用上游 r* 命名 + deps.py
 ├── websocket/            observers.py（UI /ws）· node.py（Scout /node）
 ├── loop/                 agent_loop · case_runner · router_proxy · local_executors
-│                         · agent_stream · persist_run_finish
-├── ai/                   planner · prompts · llm_client · schemas · dispatch_log
-│                         · roles_catalog · role_prompts · layer_stack · case_text
-├── catalog/              能力目录 loader / registry / models / tool_schema / exec_classes
-├── runtime/              run_context（从 Scout manifest 构造）· menu · session_gate · env_names
-│
-└── （业务服务，暂时平铺在根）
-    app_automation.py  project_env.py  project_store.py  auth_store.py
-    studio_nav.py  plugins_store.py  node_store.py  device_store.py
-    device_secrets.py  knowledge_jobs_store.py
-    run_store.py  task_store.py  qa_cover.py  qa_process_assist.py
-    qa_process_jobs.py  figma_service.py  figma_logic.py  atlas_aliases.py
-    ui_devices.py
+├── ai/                   planner · prompts · llm_client · …
+├── catalog/              能力目录 loader / registry（读 catalog_entries）
+├── runtime/              run_context · menu · session_gate
+└── services/             业务（项目 / 设备 / 跑批 / 设置 / QA / 集成插件）
 ```
 
 命名沿用上游：router 用 `r*`，websocket handler 用 `w*`。
+
+**业务状态进 sqlite（`mino.db`）。** 禁止再给项目 / 应用 / 设备 / 跑批 / 账号 / 设置 / 能力目录加 JSON 真源。
 
 ### 与上游 MiniOrangeServer 的结构差异（以及为什么）
 
 | 上游有 | 本仓 | 原因 |
 |---|---|---|
-| `core/database.py` + `models/`（SQLAlchemy） | **没有。** `json_store.py` + `*_store.py` | 现阶段用 JSON 文件落盘（`~/.mino-nexus/*.json`），不引 ORM。全仓 grep `sqlalchemy` 应为零命中 —— 由 §1 的守门保证 |
-| `core/database.APP_DATA_DIR` | `paths.py` | 上游把数据目录和 engine 塞在同一模块，任何要拼路径的模块都被迫 import ORM |
-| `system_settings_service.py`（2,682 行） | `settings.py` + `settings_store.py` | 见 §8 |
-| `services/`（80 文件大平层） | **平铺在根**（上表最后一组） | 搬迁时按"一个上游 service 一个根模块"落下来，没有重建这一层 |
-| `runtime/run_context.py`（跑探测） | `runtime/run_context.py`（**重写**） | 拆分后连通性来自 Scout 上报，Nexus 不探测（§6） |
-
-> **已知欠账**：根目录现在混了三类东西（基础设施 / 持久化 / 业务服务）。
-> 5,600 行还能忍，继续长应该分成 `store/` `services/` `nodes/` 三个包。
-> 那是一次纯 `git mv` + 改 import，**不要和功能改动混在一个 commit 里**。
-> 真要动时，同步改本节与 `scripts/verify_layout.py` 的白名单。
+| `core/database.py` + `models/`（SQLAlchemy） | **同样有。** 库文件叫 `mino.db`，不是 `autobots.db` | 服务端数据必须在库里 |
+| `core/database.APP_DATA_DIR` | `core/paths.py` | 上游把数据目录和 engine 塞在同一模块，任何要拼路径的模块都被迫 import ORM |
+| `system_settings_service.py` | `services/settings.py` + `services/settings_store.py` | 见 §8 |
+| `services/`（80 文件大平层） | `services/` + 已拆出的 `ai` / `loop` / `catalog` / `runtime` | 那四个包比上游扁平 services 好读，不拆回去 |
+| `runtime/run_context.py`（跑探测） | `runtime/run_context.py`（**重写**） | 连通性来自 Scout 上报，Nexus 不探测（§6） |
 
 ---
 
@@ -147,9 +125,9 @@ mino_nexus/
 1. 改 `docs/PROTOCOL.md`（两仓同一份文本）
 2. 改/加 `tests/fixtures/protocol/*.json`
 3. 两仓各自改 `protocol.py`，使其能 round-trip 全部 fixture
-4. 两仓各自跑 `scripts/verify_protocol_contract.py`（用 `--write` 更新哈希）
+4. 两仓各自确认 `protocol.py` 能 round-trip 全部 fixture
 
-哈希记录在 `docs/PROTOCOL.md` §8。两仓不一致 = 协议漂移，CI 失败。
+哈希记录在 `docs/PROTOCOL.md` §8。两仓不一致 = 协议漂移。
 
 ---
 
@@ -186,8 +164,7 @@ class ObserveBody(BaseModel): ...
 def create_app(): ...
 ```
 
-这个坑修完被一次重写带回来过，坏了一整天而 CI 全绿（静态守门不 import 代码）。
-现在由 `scripts/verify_app_imports.py` 守着。
+这个坑修完被一次重写带回来过，坏了一整天。请求模型必须留在模块级。
 
 ### 7.2 fastapi 版本上界是必须的
 
@@ -203,8 +180,7 @@ app.include_router(r)
 # 0.124.0 → "/x/ping"      0.141.1 → ""
 ```
 
-所以 `pyproject.toml` 钉了 `fastapi>=0.124,<0.130`，且 `verify_app_imports.py`
-除了基础路由，**必须另验一条带 prefix 的路由**（基础路由全在不代表服务是好的）。
+所以 `pyproject.toml` 钉了 `fastapi>=0.124,<0.130`。基础路由全在不代表服务是好的，带 prefix 的 router 也必须在。
 
 ---
 
@@ -212,10 +188,10 @@ app.include_router(r)
 
 | 模块 | 角色 | 落盘 |
 |---|---|---|
-| `settings_store.py` | **唯一真源。** UI（`rSettings`）读写；6 个 provider 预设、邮件、Figma、role prompt override、`case_execution_use` 等业务开关 | `~/.mino-nexus/settings.json` |
-| `settings.py` | **只做 env 覆盖 + 转发。自己不存任何配置。** | 无 |
+| `services/settings_store.py` | **唯一真源。** UI（`rSettings`）读写；落在 `settings` 表 | `mino.db` |
+| `services/settings.py` | **只做 env 覆盖 + 转发。自己不存任何配置。** | 无 |
 
-`llm_client` 与 `runtime/run_context` **只 import `settings.py`** —— "key 从哪来"收在一处。
+`llm_client` 与 `runtime/run_context` **只 import `mino_nexus.services.settings`** —— "key 从哪来"收在一处。
 
 ### 铁律
 
@@ -224,7 +200,7 @@ app.include_router(r)
 
 踩过的坑（两层）：
 
-1. `settings.py` 曾自己读 `ai_providers.json`，而 UI 写 `settings.json` —— 在设置页填了 key，
+1. `settings.py` 曾自己读 `ai_providers.json`，而 UI 写另一份配置 —— 在设置页填了 key，
    `llm_client` 读不到，所有 LLM 调用报"未配置 provider"。
 2. 更隐蔽：`llm_client` 会检查 `provider["case_execution_use"]`（"允许用于跑用例"），
    而当时 `settings.py` **根本不返回这个 key** → `.get()` 得到 `None` → 即使读对文件也被拒。

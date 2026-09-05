@@ -33,22 +33,9 @@ Nexus 侧的额外规定：
 - `RouterProxy` 自己产生的失败（超时、序列化错误）一律 `fail`，`executor_used` 填 `router_proxy`
 - `skipped` 不计入失败率，但要在覆盖度里体现为未观察
 
-## 4. 守门脚本
+## 4. 硬约束
 
-`scripts/verify_*.py`：纯静态、无需起服务、退出码非 0 即失败、失败时打出文件与行号。
-
-```bash
-python scripts/verify_all.py
-```
-
-| 脚本 | 断言 |
-|---|---|
-| `verify_no_device_driver.py` | 无设备驱动与图像算法依赖 |
-| `verify_no_scout_import.py` | 不 import Scout / 上游 server 包 |
-| `verify_protocol_contract.py` | protocol.py round-trip 全部 fixture + 哈希一致 |
-| `check_http_contract.py` | 登录 / 节点 / Scout 凭证 / `X-Mino-Client` 门禁 / 下发 / 角色 / qa-process / Figma（需安装依赖，不进 `verify_all`） |
-
-新增硬约束时同时新增 verify 脚本 —— **写在文档里的约束会漂移，写在脚本里的不会。**
+见 [CLAUDE.md](../CLAUDE.md) §1。不另设守门脚本。
 
 ## 5. 提交与 PR
 

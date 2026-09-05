@@ -1,4 +1,4 @@
-"""节点列表、归属过滤、Scout 安装凭证与 NODE_COMMAND。"""
+"""节点列表、归属过滤、Scout 安装凭证与节点指令（EXECUTE node.stop 等）。"""
 from __future__ import annotations
 
 import inspect
@@ -7,14 +7,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from mino_nexus import auth_store
-from mino_nexus import protocol as P
-from mino_nexus.http_util import client_header, ok
-from mino_nexus.node_registry import get_registry
-from mino_nexus.node_store import filter_nodes, get_node as stored_node, node_visible
+from mino_nexus.services import auth_store
+from mino_nexus.core import protocol as P
+from mino_nexus.core.http_util import client_header, ok
+from mino_nexus.services.node_registry import get_registry
+from mino_nexus.services.node_store import filter_nodes, get_node as stored_node, node_visible
 from mino_nexus.routers.deps import current_session
-from mino_nexus.runtime_tokens import issue
-from mino_nexus.ui_devices import ui_assets, ui_nodes
+from mino_nexus.services.runtime_tokens import issue
+from mino_nexus.services.ui_devices import ui_assets, ui_nodes
 
 router = APIRouter(prefix="/runtime", tags=["Runtime"])
 
@@ -107,8 +107,15 @@ async def command_node(
     if live is None or not live.alive or live.send is None:
         raise HTTPException(status_code=409, detail="节点离线，无法下发")
 
-    payload = P.NodeCommand(command=cmd, reason=str(body.reason or "studio"))
-    result = live.send(P.MsgType.NODE_COMMAND, payload, timeout=25.0)
+    payload = P.Execute(
+        run_id="",
+        step_idx=-1,
+        sn="",
+        capability_id=f"node.{cmd}",
+        params={"command": cmd, "reason": str(body.reason or "studio")},
+        timeout_sec=20.0,
+    )
+    result = live.send(P.MsgType.EXECUTE, payload, timeout=25.0)
     if inspect.isawaitable(result):
         result = await result
     if result is None:

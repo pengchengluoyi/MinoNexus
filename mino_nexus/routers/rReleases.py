@@ -8,7 +8,7 @@ import urllib.request
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from mino_nexus.http_util import ok
+from mino_nexus.core.http_util import ok
 from mino_nexus.routers.deps import current_session
 
 router = APIRouter(prefix="/releases", tags=["Releases"])

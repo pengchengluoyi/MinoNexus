@@ -1,16 +1,16 @@
 [project]
 name = "mino-nexus"
-version = "0.1.1"
+version = "0.1.2"
 description = "MinoNexus — 服务端：与大模型交互、持有能力目录与数据、驱动执行循环"
 requires-python = ">=3.12"
 
 # 注意本仓禁止：adbutils / uiautomator2 / playwright / facebook-wda / Appium /
-# torch / paddle / ultralytics / opencv —— 见 CLAUDE.md §1，由守门脚本静态断言。
+# torch / paddle / ultralytics / opencv —— 见 CLAUDE.md §1。
 # 唯一的图像相关例外是 pillow（缩略图重采样，不做识别）。
 dependencies = [
   # 上界是必须的：fastapi 0.141.1 起 include_router(APIRouter(prefix=...)) 会把
   # 路由路径解析成空串 —— 12 个 router 全部静默失效（无 /auth、无 /case-runner），
-  # 而 app 照常启动、不报错。最小复现见 scripts/verify_app_imports.py 的注释。
+  # 而 app 照常启动、不报错。
   "fastapi>=0.124,<0.130",
   "uvicorn>=0.38",
   "sqlalchemy>=2.0",
@@ -18,7 +18,6 @@ dependencies = [
   "httpx>=0.28",          # 打 LLM endpoint
   "requests>=2.32",       # llm_client / Figma 同步
   "websockets>=15.0",     # UI observers + Scout 节点接入
-  "pyyaml>=6.0",          # 能力目录
   "APScheduler>=3.11",
   "pillow>=12.0",         # make_thumb
   "python-multipart>=0.0.20",
@@ -28,6 +27,10 @@ dependencies = [
 
 [project.scripts]
 mino-nexus = "mino_nexus.cli:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["mino_nexus*"]

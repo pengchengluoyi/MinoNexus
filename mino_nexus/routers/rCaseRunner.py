@@ -6,12 +6,12 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
-from mino_nexus import project_store as ps
-from mino_nexus import run_store
-from mino_nexus.http_util import ok
+from mino_nexus.services import project_store as ps
+from mino_nexus.services import run_store
+from mino_nexus.core.http_util import ok
 from mino_nexus.loop import agent_stream, case_runner as cr
 from mino_nexus.routers.deps import current_session
-from mino_nexus.ui_devices import ui_devices
+from mino_nexus.services.ui_devices import ui_devices
 
 router = APIRouter(prefix="/case-runner", tags=["CaseRunner"])
 
@@ -221,17 +221,62 @@ def traces(
 
 @router.get("/traces/{run_id:path}")
 def get_trace_detail(run_id: str, _sess: dict = Depends(current_session)):
+    batch, _, case_id = str(run_id or "").partition("::")
+    case_id = case_id.split("::", 1)[0]
     doc = run_store.get(run_id)
     if doc is None:
-        # maybe report_run_id = batch::case
-        batch = run_id.split("::", 1)[0]
         doc = run_store.get(batch)
+    events = agent_stream.get_run_events(run_id)
     if doc is None:
-        data = agent_stream.get_run_events(run_id)
-        if data is None:
+        if events is None:
             raise HTTPException(status_code=404, detail=f"trace not found: {run_id}")
-        return ok(data)
-    return ok(run_store.to_task_json(doc))
+        return ok(events)
+    payload = run_store.to_task_json(doc)
+    case = None
+    if case_id:
+        case = next(
+            (c for c in (payload.get("cases") or []) if str(c.get("case_id") or "") == case_id),
+            None,
+        )
+    engine = (case or {}).get("engine_steps") or []
+    if engine:
+        payload["event_results"] = engine
+    if case:
+        payload["case_status"] = str(case.get("status") or "")
+    if events:
+        payload["events"] = events.get("events") or []
+        payload["goal"] = events.get("goal") or payload.get("goal") or ""
+        payload["agent_finished"] = bool(events.get("finished"))
+        skill_id = events.get("skill_id") or (case or {}).get("skill_id")
+        view_id = events.get("view_id") or (case or {}).get("view_id")
+        slots = events.get("slots") if isinstance(events.get("slots"), dict) else None
+        if not slots and isinstance((case or {}).get("slots"), dict):
+            slots = case.get("slots")
+        if skill_id:
+            payload["skill_id"] = skill_id
+        if view_id:
+            payload["view_id"] = view_id
+        if slots:
+            payload["slots"] = slots
+        ov = str(events.get("overall") or "").strip()
+        if ov in {
+            "pass", "fail", "done", "blocked", "declined", "skipped",
+            "cancelled", "untestable", "unverifiable", "unexecutable",
+        }:
+            payload["overall_status"] = ov
+        else:
+            if ov:
+                payload["summary"] = ov
+            payload["overall_status"] = str((case or {}).get("status") or "")
+    elif case:
+        payload["overall_status"] = str(case.get("status") or "")
+        if case.get("skill_id"):
+            payload["skill_id"] = case.get("skill_id")
+        if case.get("view_id"):
+            payload["view_id"] = case.get("view_id")
+        if isinstance(case.get("slots"), dict):
+            payload["slots"] = case.get("slots")
+    return ok(payload)
 
 
 @router.get("/baseline/{case_id}")

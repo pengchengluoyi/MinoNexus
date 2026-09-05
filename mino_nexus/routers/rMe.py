@@ -4,9 +4,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Header
 from pydantic import BaseModel
 
-from mino_nexus import auth_store as auth
-from mino_nexus import studio_nav
-from mino_nexus.http_util import bearer, http_error, ok
+from mino_nexus.services import auth_store as auth
+from mino_nexus.services import studio_nav
+from mino_nexus.core.http_util import bearer, http_error, ok
 from mino_nexus.routers.deps import current_session
 
 router = APIRouter(tags=["Me"])

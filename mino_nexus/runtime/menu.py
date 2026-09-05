@@ -1,31 +1,17 @@
-# !/usr/bin/env python
-# -*-coding:utf-8 -*-
-"""把 RunContext 的连通性结果喂给 plugins.registry，得到当前 Run 可用的 capability 菜单。
-
-这是 PLAN_OVERVIEW_TEXT 之前最关键的一步：决定 AI 能"看见"哪些能力。
-"""
+"""按阶段 + 平台 + 连通性组装喂给模型的能力菜单。"""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from mino_nexus.catalog import registry as plugin_registry
+from mino_nexus.catalog.exec_classes import CAPABILITY_KINDS
 from mino_nexus.catalog.models import Capability
 from mino_nexus.runtime.run_context import RunContext
 
-
-def available_capabilities(ctx: RunContext) -> list[Capability]:
-    """返回当前 RunContext 下可用的 capability 列表（每项 implementations 已过滤）。"""
-    return plugin_registry.filter_capabilities_by_connectivity(ctx.connectivity_flags)
+RECOVER_PREFIX = "recover_"
 
 
 def _visible_to(cap: Capability, audience: str) -> bool:
-    """能力对该受众是否可见。
-
-    audience="case"   业务用例决策 agent（默认，行为与改造前一致）
-    audience="system" L0 系统层处置 agent
-    audience="all"    不过滤（Skills 页 / 诊断用）
-    老 yaml 不写 visible_to 时默认 ["case","system"]，两个受众都能看到。
-    """
     if audience == "all":
         return True
     allowed = [str(x).strip().lower() for x in (getattr(cap, "visible_to", None) or [])]
@@ -39,104 +25,96 @@ def _cap_summary(cap: Capability) -> str:
     return text[:120] if text else ""
 
 
-def _executor_costs(cap: Capability) -> list[dict[str, Any]]:
-    """同一 executor 只留 cost 最低的一条。规划模型选通道用，不需要 impl id / requires_caps。"""
-    seen: dict[str, int] = {}
-    for impl in sorted(cap.implementations or [], key=lambda i: getattr(i, "cost", 5)):
-        ex = str(getattr(impl, "executor", "") or "").strip()
-        if not ex or ex in seen:
-            continue
-        seen[ex] = int(getattr(impl, "cost", 5))
-    return [{"executor": ex, "cost": cost} for ex, cost in seen.items()]
+def phase_kinds(phase: str, *, tool_kinds: Optional[list[str]] = None) -> list[str]:
+    """prep/do 并 generic；check 只要 check。recovery 另走工具。"""
+    p = str(phase or "do").strip().lower()
+    if p == "prep":
+        kinds = ["prep", "generic"]
+    elif p == "check":
+        kinds = ["check"]
+    elif p == "do":
+        kinds = ["do", "generic"]
+    else:
+        kinds = list(CAPABILITY_KINDS)
+    if tool_kinds:
+        allow = {str(x) for x in tool_kinds}
+        kinds = [k for k in kinds if k in allow]
+    return kinds
+
+
+def available_capabilities(
+    ctx: RunContext,
+    *,
+    phase: str = "do",
+    platform: str = "",
+    tool_kinds: Optional[list[str]] = None,
+) -> list[Capability]:
+    plat = str(platform or getattr(ctx, "platform", "") or "").strip()
+    return plugin_registry.filter_capabilities(
+        ctx.connectivity_flags,
+        kinds=phase_kinds(phase, tool_kinds=tool_kinds),
+        platform=plat,
+    )
 
 
 def available_menu_brief(
     ctx: RunContext,
     *,
     audience: str = "case",
-    kind: str = "plan",
+    kind: str = "agent",
+    phase: str = "do",
+    platform: str = "",
+    tool_kinds: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
-    """喂给大模型的能力菜单。YAML 里的 trigger_phrases / platforms / 实现细节不进 prompt。
-
-    kind="plan"  文本规划 / 拟人展开：id + summary + implementations[{executor, cost}]
-    kind="agent" 看图决策：只给 id + summary。点哪、走哪条通道由系统提示词和 Router 负责。
-
-    audience 决定按 capability.visible_to 过滤：业务菜单不该出现系统层专用能力。
-    """
-    kind = (kind or "plan").strip().lower()
-    if kind not in {"plan", "agent"}:
-        kind = "plan"
+    """id + summary。不把 platforms / implementations / low_level 塞进 prompt。"""
+    kind = (kind or "agent").strip().lower()
+    plat = str(platform or getattr(ctx, "platform", "") or "").strip()
+    kinds = list(tool_kinds or [])
     out: list[dict[str, Any]] = []
-    for cap in available_capabilities(ctx):
+    for cap in available_capabilities(ctx, phase=phase, platform=plat, tool_kinds=tool_kinds):
         if not _visible_to(cap, audience):
             continue
-        row: dict[str, Any] = {"id": cap.id}
+        row: dict[str, Any] = {"id": cap.id, "kind": cap.kind}
         summary = _cap_summary(cap)
         if summary:
             row["summary"] = summary
-        if kind == "plan":
-            impls = _executor_costs(cap)
-            if impls:
-                row["implementations"] = impls
         out.append(row)
+    allow_recovery = (not kinds) or ("recovery" in kinds)
+    if kind != "plan" and allow_recovery:
+        out.extend(recovery_menu_brief(ctx, platform=plat))
     return out
 
 
-def capability_menu_diagnostics(ctx: RunContext) -> dict[str, Any]:
-    """诊断模式：包含被过滤掉的 capability 及原因，便于 UI 显示"为什么这个事件不可用"。"""
-    from mino_nexus.catalog.loader import get_loader
-
-    loader = get_loader()
-    flags = ctx.connectivity_flags
-
-    # 计算所有可用 executor 的能力并集（和 registry.filter_capabilities_by_connectivity 同语义）
-    executor_available: dict[str, bool] = {}
-    executor_caps: dict[str, set[str]] = {}
-    for exec_id, executor in loader.executors.items():
-        from mino_nexus.catalog.registry import _executor_available
-
-        is_avail = _executor_available(executor, flags)
-        executor_available[exec_id] = is_avail
-        caps: set[str] = set()
-        if is_avail:
-            caps = set(executor.provides)
-            for cond in executor.conditional_provides or []:
-                cap = cond.get("cap")
-                if cap and flags.get(cap, False):
-                    caps.add(cap)
-        executor_caps[exec_id] = caps
-    executor_available.setdefault("internal", True)
-    executor_caps.setdefault("internal", set())
-    globally_available_caps: set[str] = set()
-    for exec_id, is_avail in executor_available.items():
-        if is_avail:
-            globally_available_caps.update(executor_caps.get(exec_id, set()))
-
-    available_ids = {c.id for c in available_capabilities(ctx)}
-    dropped: list[dict[str, Any]] = []
-    for cap_id, cap in loader.capabilities.items():
-        if cap_id in available_ids:
+def recovery_menu_brief(ctx: RunContext, *, platform: str = "") -> list[dict[str, Any]]:
+    plat = str(platform or getattr(ctx, "platform", "") or "").strip()
+    rows: list[dict[str, Any]] = []
+    for rule in plugin_registry.list_recovery_rules(enabled_only=True):
+        if not plugin_registry.platform_ok(list(rule.platforms or []), plat):
             continue
-        reasons: list[str] = []
-        for impl in cap.implementations:
-            if impl.executor not in executor_available or not executor_available[impl.executor]:
-                reasons.append(f"executor `{impl.executor}` not connected")
-                continue
-            missing = [c for c in impl.requires_caps if c not in globally_available_caps]
-            if missing:
-                reasons.append(
-                    f"impl `{impl.id}`: requires_caps {missing} not satisfied by any executor"
-                )
+        summary = (rule.when or rule.prompt_snippet or rule.title or rule.id).strip().splitlines()[0][:120]
+        rows.append({
+            "id": f"{RECOVER_PREFIX}{rule.id}",
+            "kind": "recovery",
+            "summary": summary,
+        })
+    return rows
+
+
+def capability_menu_diagnostics(ctx: RunContext) -> dict[str, Any]:
+    flags = ctx.connectivity_flags
+    available_ids = {c.id for c in available_capabilities(ctx, phase="do")}
+    dropped: list[dict[str, Any]] = []
+    for cap in plugin_registry.list_capabilities():
+        if cap.id in available_ids:
+            continue
         dropped.append({
-            "id": cap_id,
-            "needs_vlm": cap.needs_vlm,
-            "category": cap.category,
-            "reasons": list({r for r in reasons}) or ["unknown"],
+            "id": cap.id,
+            "kind": cap.kind,
+            "platforms": list(cap.platforms or []),
+            "reasons": ["filtered by platform or connectivity"],
         })
     return {
         "flags": flags,
-        "executor_available": executor_available,
-        "globally_available_caps": sorted(globally_available_caps),
         "available_count": len(available_ids),
         "dropped": dropped,
     }

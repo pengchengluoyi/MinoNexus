@@ -4,10 +4,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from mino_nexus.device_secrets import set_lock_password
-from mino_nexus.http_util import http_error, ok
+from mino_nexus.services.device_secrets import set_lock_password
+from mino_nexus.core.http_util import http_error, ok
 from mino_nexus.routers.deps import current_session
-from mino_nexus.ui_devices import ui_devices
+from mino_nexus.services.ui_devices import ui_devices
 
 router = APIRouter(prefix="/device", tags=["Device"])
 

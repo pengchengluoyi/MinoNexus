@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from mino_nexus.routers.deps import current_session
-from mino_nexus import task_store as ts
+from mino_nexus.services import task_store as ts
 
 router = APIRouter(prefix="/task", tags=["Task"])
 

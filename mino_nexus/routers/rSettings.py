@@ -6,11 +6,11 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from mino_nexus.http_util import http_error, ok
+from mino_nexus.core.http_util import http_error, ok
 from mino_nexus.routers.deps import current_session
-from mino_nexus import knowledge_jobs_store as kjs
-from mino_nexus import plugins_store as ps
-from mino_nexus import settings_store as ss
+from mino_nexus.services import knowledge_jobs_store as kjs
+from mino_nexus.services import plugins_store as ps
+from mino_nexus.services import settings_store as ss
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
 
@@ -74,6 +74,28 @@ class RoleChatBody(BaseModel):
     role_id: str = ""
     messages: list[dict[str, Any]] = []
     explain_mode: bool = False
+
+
+class SkillSaveBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = ""
+    label: str = ""
+    summary: str = ""
+    category: str = ""
+    engine: str = ""
+    system_prompt: str = ""
+    sop: dict[str, Any] | None = None
+    input: dict[str, Any] | None = None
+    view: dict[str, Any] | None = None
+    view_id: str = ""
+    role: dict[str, Any] | None = None
+    role_id: str = ""
+    role_label: str = ""
+    triggers: list[str] | None = None
+    enabled: bool | None = None
+    sort_order: int | None = None
+    reset: bool = False
 
 
 class FigmaSettingsBody(BaseModel):
@@ -142,6 +164,52 @@ def list_ai_roles(_sess: dict = Depends(current_session)):
     return ok(list_roles())
 
 
+@router.get("/ai/skills")
+def list_ai_skills(_sess: dict = Depends(current_session)):
+    from mino_nexus.services import skill_store as sks
+
+    return ok(sks.catalog_payload())
+
+
+@router.get("/ai/skills/{skill_id}")
+def get_ai_skill(skill_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.services import skill_store as sks
+
+    row = sks.get_skill(skill_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"未知技能：{skill_id}")
+    return ok(row)
+
+
+@router.post("/ai/skills")
+def create_ai_skill(body: SkillSaveBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services import skill_store as sks
+
+    payload = body.model_dump(exclude_none=True)
+    payload.pop("reset", None)
+    try:
+        data = sks.save_skill(payload.get("id") or payload.get("label") or "", payload, create=True)
+    except Exception as e:
+        http_error(e)
+    return ok(data, msg="已新建技能")
+
+
+@router.put("/ai/skills/{skill_id}")
+def save_ai_skill(skill_id: str, body: SkillSaveBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services import skill_store as sks
+
+    payload = body.model_dump(exclude_none=True)
+    reset = bool(payload.pop("reset", False))
+    try:
+        if reset:
+            data = sks.reset_skill_prompt(skill_id)
+        else:
+            data = sks.save_skill(skill_id, payload, create=False)
+    except Exception as e:
+        http_error(e)
+    return ok(data, msg="已恢复默认" if reset else "已保存")
+
+
 @router.get("/ai/roles/{role_id}")
 def get_ai_role(role_id: str, _sess: dict = Depends(current_session)):
     from mino_nexus.ai.roles_catalog import get_role
@@ -204,7 +272,7 @@ def save_figma(body: FigmaSettingsBody, _sess: dict = Depends(current_session)):
 
 @router.post("/figma/test")
 def test_figma(body: FigmaSettingsBody, _sess: dict = Depends(current_session)):
-    from mino_nexus import figma_service as fs
+    from mino_nexus.services import figma_service as fs
 
     try:
         info = fs.test_figma_token(body.access_token or None)

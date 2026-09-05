@@ -14,15 +14,15 @@
 """
 from __future__ import annotations
 
-import hashlib
 import re
 import time
 from typing import Any, Optional
 
 from pydantic import ValidationError
-from mino_nexus.log import SLog
+from mino_nexus.core.log import SLog
 
 from mino_nexus.ai import prompts as P
+from mino_nexus.ai.coords import apply_xy_params, lift_selector_target
 from mino_nexus.ai.llm_client import (
     call_chat_text,
     resolve_regression_provider,
@@ -46,9 +46,6 @@ from mino_nexus.runtime.menu import available_menu_brief
 from mino_nexus.runtime.run_context import RunContext
 
 TAG = "RegressionPlanner"
-
-_SCENE_CACHE: dict[str, dict[str, Any]] = {}
-_SCENE_CACHE_MAX = 256
 
 
 def _chat(*, job: str, provider, messages, **kwargs):
@@ -488,6 +485,32 @@ def assert_visual(
     return _parse_assert_result(raw)
 
 
+def verify_step_expected(
+    *,
+    expectation: str,
+    image_base64: str,
+    image_mime: str = "image/png",
+    provider_id: Optional[str] = None,
+    timeout_sec: int = 60,
+    context_block: str = "",
+) -> AssertResult:
+    """系统校验当前步骤预期。agent 菜单没有这条能力；signal_done 之后由循环调用。"""
+    extra = (
+        "只根据当前截图判定。图上有的东西就是有；禁止假设会被关掉或点掉。"
+        "不要因为「可以关掉所以算不出现」而判通过。"
+    )
+    ctx = "\n".join(x for x in ((context_block or "").strip(), extra) if x)
+    return assert_visual(
+        expectation=expectation,
+        image_base64=image_base64,
+        image_mime=image_mime,
+        ai_hint="",
+        context_block=ctx,
+        provider_id=provider_id,
+        timeout_sec=timeout_sec,
+    )
+
+
 # ============== HITL Composer (Step 5) ==============
 
 
@@ -855,119 +878,6 @@ def _checkpoints_from_expected(case_spec: CaseSpec) -> list[CaseCheckpoint]:
     ]
 
 
-def _case_scene_blob(
-    *,
-    name: str = "",
-    steps: str = "",
-    expected: str = "",
-    precondition: str = "",
-) -> str:
-    return "\n".join([
-        str(name or "").strip(),
-        str(precondition or "").strip(),
-        str(steps or "").strip(),
-        str(expected or "").strip(),
-    ])
-
-
-def _case_scene_key(blob: str) -> str:
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
-
-
-def _steps_from_spec(case_spec: CaseSpec) -> str:
-    raw = case_spec.raw_row or {}
-    if isinstance(raw, dict):
-        text = str(raw.get("steps_raw") or "").strip()
-        if text:
-            return text
-    lines: list[str] = []
-    for i, step in enumerate(case_spec.steps or [], 1):
-        inst = str(getattr(step, "instruction", "") or "").strip()
-        if inst:
-            lines.append(f"{i}. {inst}")
-    return "\n".join(lines)
-
-
-def classify_case_scene(
-    case_spec: Optional[CaseSpec] = None,
-    *,
-    name: str = "",
-    steps: str = "",
-    expected: str = "",
-    precondition: str = "",
-    provider_id: Optional[str] = None,
-    timeout_sec: int = 30,
-    run_context: Optional[RunContext] = None,
-) -> dict[str, Any]:
-    """开跑前理解登录闸门、设备需求和前置 kind。按原文缓存；失败则 skip，不自动登录、不占 Web。"""
-    from mino_nexus.runtime.session_gate import clamp_case_scene, fallback_case_scene
-
-    if case_spec is not None:
-        name = name or (case_spec.name or "")
-        expected = expected or (case_spec.expected or "")
-        precondition = precondition or (case_spec.preconditions or "")
-        steps = steps or _steps_from_spec(case_spec)
-    blob = _case_scene_blob(
-        name=name, steps=steps, expected=expected, precondition=precondition,
-    )
-    key = _case_scene_key(blob)
-    cached = _SCENE_CACHE.get(key)
-    if cached:
-        scene = clamp_case_scene(cached)
-        if run_context is not None:
-            run_context.case_scene = dict(scene)
-        return scene
-
-    provider, gate = resolve_regression_provider(provider_id)
-    if provider is None:
-        scene = fallback_case_scene(
-            f"未启用 AI：{gate.get('reason')}，不自动登录",
-            precondition=precondition,
-        )
-        _put_scene_cache(key, scene, run_context)
-        return scene
-
-    messages = P.build_case_scene_messages(
-        name=name, precondition=precondition, steps=steps, expected=expected,
-    )
-    raw, meta = _chat(
-        job="case-scene",
-        provider=provider,
-        messages=messages,
-        temperature=0.1,
-        max_tokens=1200,
-        timeout_sec=timeout_sec,
-        response_schema=P.CASE_SCENE_JSON_SCHEMA,
-    )
-    if not isinstance(raw, dict):
-        err = str((meta or {}).get("error") or "").strip() or "场景理解返回空"
-        scene = fallback_case_scene(f"{err}，不自动登录", precondition=precondition)
-        SLog.w(TAG, f"classify_case_scene failed err={err!r}")
-        _put_scene_cache(key, scene, run_context)
-        return scene
-
-    scene = clamp_case_scene(raw)
-    SLog.i(
-        TAG,
-        f"classify_case_scene prep={scene.get('session_prep')} "
-        f"required={scene.get('required_session')} "
-        f"device={scene.get('device_need')} how={scene.get('how')} "
-        f"reason={(scene.get('reason') or '')[:80]!r}",
-    )
-    _put_scene_cache(key, scene, run_context)
-    return scene
-
-
-def _put_scene_cache(
-    key: str, scene: dict[str, Any], run_context: Optional[RunContext],
-) -> None:
-    if len(_SCENE_CACHE) >= _SCENE_CACHE_MAX:
-        _SCENE_CACHE.clear()
-    _SCENE_CACHE[key] = dict(scene)
-    if run_context is not None:
-        run_context.case_scene = dict(scene)
-
-
 def extract_goal(
     case_spec: CaseSpec,
     *,
@@ -1048,21 +958,8 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
     raw_action = raw.get("action")
     if isinstance(raw_action, dict) and raw_action.get("capability_id"):
         params = raw_action.get("params") if isinstance(raw_action.get("params"), dict) else {}
-
-        def _to_px(v, dim):
-            # 约定 0-1000 归一化；>1000 视为模型误给的绝对像素（兜底）
-            try:
-                fv = float(v)
-            except (TypeError, ValueError):
-                return v
-            px = fv if fv > 1000 else (fv / 1000.0 * dim)
-            return max(0, min(dim, int(round(px))))
-
-        for kx, ky in (("x", "y"), ("from_x", "from_y"), ("to_x", "to_y")):
-            if kx in params and width > 0:
-                params[kx] = _to_px(params[kx], width)
-            if ky in params and height > 0:
-                params[ky] = _to_px(params[ky], height)
+        apply_xy_params(params, width, height)
+        lift_selector_target(params)
         action = AgentAction(capability_id=str(raw_action.get("capability_id")), params=params)
     if status in {"continue", "ask_human"} and action is None:
         warnings.append(f"status={status} 但无有效 action")
@@ -1111,13 +1008,21 @@ def decide_next_action(
     provider_id: Optional[str] = None,
     timeout_sec: int = 90,
     menu_ids: Optional[set[str]] = None,
+    phase: str = "do",
+    system_prompt: str = "",
+    tool_kinds: Optional[list[str]] = None,
 ) -> AgentDecision:
-    """看图决定下一步一个动作（D2 直接出坐标 / D3 每步看图）。永远返回 AgentDecision。"""
-    menu = available_menu_brief(run_context, kind="agent")
+    """看图决定下一步一个动作。永远返回 AgentDecision。"""
+    menu = available_menu_brief(
+        run_context,
+        kind="agent",
+        phase=phase,
+        platform=str(getattr(run_context, "platform", "") or ""),
+        tool_kinds=tool_kinds,
+    )
     if not menu:
         return AgentDecision(status="give_up", thought="capability_menu 为空（连通性丢失）",
                              parse_warnings=["empty menu"])
-    menu = [c for c in menu if str(c.get("id") or "") not in {"assert_visual", "assert_goal", "assert"}]
     if menu_ids:
         allow = {str(x) for x in menu_ids}
         menu = [c for c in menu if str(c.get("id") or "") in allow]
@@ -1149,6 +1054,7 @@ def decide_next_action(
         knowledge_hint=knowledge_hint,
         session_block=session_block,
         accounts_brief=accounts_brief,
+        system_prompt=system_prompt,
     )
 
     # 给前端展示：我们喂给模型的“文本块/上下文”（不直接回传超大 image_base64）。
@@ -1200,46 +1106,6 @@ def decide_next_action(
     return decision
 
 
-def decide_restart_app(
-    *,
-    goal: str,
-    preconditions: str = "",
-    target_package: str = "",
-    target_app_name: str = "",
-    image_base64: str = "",
-    image_mime: str = "image/png",
-    provider_id: Optional[str] = None,
-    timeout_sec: int = 60,
-) -> tuple[bool, str]:
-    """用例开场：看图决定是否 force-stop + launch 目标应用。失败时默认不重启。"""
-    if not image_base64:
-        return False, "无截图，跳过重启判断"
-    provider, gate = resolve_regression_provider(provider_id)
-    if provider is None:
-        return False, f"未启用 AI：{gate.get('reason')}，跳过重启"
-    messages = P.build_restart_decide_messages(
-        goal=goal,
-        preconditions=preconditions,
-        target_package=target_package,
-        target_app_name=target_app_name,
-        image_base64=image_base64,
-        image_mime=image_mime,
-    )
-    raw, meta = _chat(
-        job="agent-restart",
-        provider=provider, messages=messages,
-        temperature=0.1, max_tokens=512, timeout_sec=timeout_sec,
-    )
-    if not isinstance(raw, dict):
-        SLog.w(TAG, f"decide_restart_app LLM failed err={meta.get('error')!r}")
-        return False, "LLM 返回空/解析失败，跳过重启"
-    restart = raw.get("restart")
-    if isinstance(restart, str):
-        restart = restart.strip().lower() in {"true", "1", "yes"}
-    thought = str(raw.get("thought") or "").strip() or "（未说明）"
-    return bool(restart), thought
-
-
 def _parse_inspect_session_raw(raw: dict[str, Any]) -> dict[str, Any]:
     session = str(raw.get("session") or "unknown").strip().lower()
     if session not in {"logged_out", "logged_in", "unknown"}:
@@ -1255,10 +1121,6 @@ def _parse_inspect_session_raw(raw: dict[str, Any]) -> dict[str, Any]:
         probe = probe.strip().lower() in {"true", "1", "yes"}
     seen = str(raw.get("seen") or "").strip()[:240]
     reason = str(raw.get("reason") or "").strip()[:240] or "（未说明）"
-    if session == "unknown" and nxt == "human" and not re.search(
-        r"登录|注册|验证码|退出|昵称|手机号|账号", f"{seen} {reason}"
-    ):
-        nxt = "keep"
     return {
         "session": session,
         "identity": identity,

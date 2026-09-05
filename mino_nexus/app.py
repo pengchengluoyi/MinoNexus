@@ -5,6 +5,7 @@ UI（Console / Studio）只打这里。Scout 走 `WS /node`。
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
@@ -13,13 +14,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from mino_nexus import protocol as P
+from mino_nexus.core import protocol as P
 from mino_nexus.catalog import registry as catalog
-from mino_nexus.client_gate import ClientGateMiddleware
-from mino_nexus.log import SLog
+from mino_nexus.core.client_gate import ClientGateMiddleware
+from mino_nexus.core.log import SLog
 from mino_nexus.loop.router_proxy import RouterProxy, is_local_cap
-from mino_nexus.node_registry import get_registry
-from mino_nexus.paths import data_dir
+from mino_nexus.services.node_registry import get_registry
+from mino_nexus.core.paths import data_dir
 from mino_nexus.routers import (
     rAppAutomation,
     rAuth,
@@ -34,7 +35,7 @@ from mino_nexus.routers import (
     rSys,
     rTask,
 )
-from mino_nexus.schemas import PlanEvent
+from mino_nexus.core.schemas import PlanEvent
 from mino_nexus.websocket import node as node_ws
 from mino_nexus.websocket import observers as ui_ws
 
@@ -45,9 +46,17 @@ NEXUS_VERSION = node_ws.NEXUS_VERSION
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from mino_nexus.mdns import configure_proxy_bypass, register_beacon, unregister_beacon
+    from mino_nexus.core.database import ensure_db
+    from mino_nexus.core.mdns import configure_proxy_bypass, register_beacon, unregister_beacon
+    from mino_nexus.core.migration import run_auto_migration
 
+    ensure_db()
+    run_auto_migration()
+    from mino_nexus.services.auth_store import ensure_seed_users
+
+    ensure_seed_users()
     configure_proxy_bypass()
+    ui_ws.set_loop(asyncio.get_running_loop())
     handle = await register_beacon()
     app.state.mdns = handle
     yield
@@ -57,8 +66,8 @@ async def lifespan(app: FastAPI):
 # ---------------- 请求模型 ----------------
 # 必须**模块级**定义。本文件有 `from __future__ import annotations`，函数注解是字符串，
 # FastAPI 拿模块 globals 去 eval —— 定义在 create_app() 内部会 NameError，
-# 整个服务起不来（而静态守门脚本不 import 代码，抓不到这类问题）。
-# 由 scripts/verify_app_imports.py 守着，别再挪回函数里。
+# 整个服务起不来。
+# 别再挪回函数里。
 
 
 class ObserveBody(BaseModel):
@@ -138,32 +147,30 @@ def create_app() -> FastAPI:
 
     @app.get("/capabilities")
     def capabilities(sn: str = "") -> dict[str, Any]:
-        """能力菜单 = Nexus 目录 ∩ 该节点上报的 provides。
+        """能力菜单 = Nexus 目录 ∩ 该节点上报的 executor。
 
-        不带 sn 时返回目录全集；带 sn 时返回**这台设备实际能干什么** ——
-        这就是 ARCHITECTURE.md §4 说的"菜单是交集，不是 Nexus 猜的"。
+        不带 sn 时返回目录全集；带 sn 时返回这台设备实际能干什么。
         """
         caps = catalog.list_capabilities()
         if not sn:
             return {
                 "scope": "catalog",
                 "capabilities": [
-                    {"id": c.id, "executors": sorted({i.executor for i in c.implementations})}
+                    {"id": c.id, "kind": c.kind, "executors": sorted({i.executor for i in c.implementations})}
                     for c in caps
                 ],
             }
         node, why = get_registry().resolve(sn)
         if node is None:
             raise HTTPException(status_code=409, detail=why)
-        avail, provides = set(node.available_executors()), node.provides()
+        from mino_nexus.loop.router_proxy import executors_for_device
+
+        avail = set(executors_for_device(sn, node))
         out = []
         for c in caps:
-            usable = [
-                i.executor for i in c.implementations
-                if i.executor in avail and not (set(i.requires_caps or []) - provides)
-            ]
-            if usable:
-                out.append({"id": c.id, "executors": sorted(set(usable))})
+            usable = [i.executor for i in c.implementations if i.executor in avail]
+            if usable or not c.implementations:
+                out.append({"id": c.id, "kind": c.kind, "executors": sorted(set(usable))})
         return {
             "scope": f"node={node.node_id} sn={sn}",
             "node_executors": sorted(avail),
@@ -237,13 +244,6 @@ def create_app() -> FastAPI:
             "attempts": res.attempts,
             "raw": res.raw_response,
         }
-
-    @app.post("/settings/skills/reload")
-    def reload_catalog() -> dict[str, Any]:
-        """改完 plugins/**.yaml 后热更新（CAPABILITY_CATALOG.md §6）。"""
-        out = catalog.reload()
-        SLog.i(TAG, f"能力目录已重载: {out}")
-        return out
 
     return app
 

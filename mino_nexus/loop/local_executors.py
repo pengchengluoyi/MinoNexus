@@ -6,8 +6,8 @@ from datetime import datetime
 from typing import Any
 
 from mino_nexus.loop.router_proxy import LOCAL_CAPS, LOCAL_CAP_PREFIXES, is_local_cap
-from mino_nexus.protocol import EventStatus
-from mino_nexus.schemas import EventResult, PlanEvent
+from mino_nexus.core.protocol import EventStatus
+from mino_nexus.core.schemas import EventResult, PlanEvent
 
 
 def _now() -> str:
@@ -51,12 +51,66 @@ def dispatch_local(event: PlanEvent, *, shot: Any = None) -> EventResult:
             executor="hitl",
         )
     if cap == "assert_visual":
-        expected = str((event.params or {}).get("expected") or event.ai_reasoning or "").strip()
+        params = event.params or {}
+        expectation = str(params.get("expectation") or params.get("expected") or "").strip()
+        has_image = bool(shot is not None and getattr(shot, "has_image", lambda: False)())
+        if not has_image:
+            return _result(
+                event,
+                status=EventStatus.FAIL,
+                summary="视觉断言没有截图，不能记为通过",
+                error="no screenshot",
+                executor="vlm",
+                elapsed_ms=int((time.time() - t0) * 1000),
+            )
+        from mino_nexus.ai.planner import verify_step_expected
+
+        res = verify_step_expected(
+            expectation=expectation,
+            image_base64=shot.image_base64,
+            image_mime=getattr(shot, "image_mime", None) or "image/png",
+        )
+        ok = bool(res.passed)
+        summary = (res.evidence or res.ai_reasoning or "").strip() or (
+            "预期成立" if ok else "预期未成立"
+        )
         return _result(
             event,
-            status=EventStatus.PASS,
-            summary=f"视觉断言未接独立 VLM，按通过记下：{expected[:80]}" if expected else "视觉断言未接独立 VLM，记为通过",
+            status=EventStatus.PASS if ok else EventStatus.FAIL,
+            summary=summary,
+            error="" if ok else summary,
             executor="vlm",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    if cap == "relogin":
+        from mino_nexus.ai.planner import inspect_session
+
+        image = ""
+        mime = "image/png"
+        if shot is not None and getattr(shot, "has_image", lambda: False)():
+            image = shot.image_base64
+            mime = getattr(shot, "image_mime", None) or "image/png"
+        row = inspect_session(image_base64=image, image_mime=mime)
+        session = str(row.get("session") or "unknown")
+        reason = str(row.get("reason") or "")
+        ok = bool(row.get("ok"))
+        summary = reason or f"会话观察：{session}"
+        return _result(
+            event,
+            status=EventStatus.PASS if ok else EventStatus.FAIL,
+            summary=summary,
+            error="" if ok else summary,
+            executor="vlm",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    if cap == "lease_account":
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary="账号池尚未接线",
+            error="lease_account 没有账号源",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
         )
     if cap == "persona_subtask":
         return _result(

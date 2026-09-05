@@ -6,8 +6,8 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from mino_nexus.http_util import ok
-from mino_nexus.project_env import (
+from mino_nexus.core.http_util import ok
+from mino_nexus.services.project_env import (
     ENV_PROFILE_LABELS,
     list_test_accounts,
     normalize_project_env,
@@ -15,7 +15,7 @@ from mino_nexus.project_env import (
     public_test_accounts,
     save_test_accounts,
 )
-from mino_nexus import project_store as ps
+from mino_nexus.services import project_store as ps
 from mino_nexus.routers.deps import current_session
 
 router = APIRouter(prefix="/project", tags=["Project"])

@@ -8,12 +8,13 @@
 本类提供同签名实现，于是那几千行循环代码搬过来**基本不用改** —— 改的是注入进去的对象。
 
 职责（选路在 Nexus，执行在 Scout）：
-  1. 查能力目录：这条 cap 在该节点的 connectivity 下允许哪些 executor
-  2. 合成 executor_order：expected_executor → fallback_executors → 菜单兜底
-  3. 从 YAML 取 low_level / selected_impl
-  4. 注入 device_hint（sn → adb_serial / password）
-  5. 发 EXECUTE，等 RESULT；超时按协议 §6 重发一次
-  6. RESULT → EventResult（五态、attempts、executor_used 原样透传）
+  1. 按 **这台 sn** 的设备（platform + 已连通通道）定点选 executor，不是按节点上挂了哪些插件
+  2. 查能力目录：这条 cap 在该设备上允许哪些 implementation
+  3. 合成 executor_order：只含该设备适用的通道（Web 不含 adb，安卓不含 playwright）
+  4. 从 catalog_entries 取 low_level / selected_impl，抄进 EXECUTE 给 Scout
+  5. 注入 device_hint（sn → adb_serial / password）
+  6. 发 EXECUTE，等 RESULT；超时按协议 §6 重发一次
+  7. RESULT → EventResult（五态、attempts、executor_used 原样透传）
 
 **循环代码不该知道 Scout 存在。** 网络、重试、节点选择都在这里。
 """
@@ -23,23 +24,25 @@ import asyncio
 import time
 from typing import Any, Optional
 
-from mino_nexus import protocol as P
+from mino_nexus.core import protocol as P
 from mino_nexus.catalog import registry as catalog
-from mino_nexus.device_secrets import get_lock_password
-from mino_nexus.log import SLog
-from mino_nexus.node_registry import NodeSession, get_registry
-from mino_nexus.schemas import CapturedScreen, EventResult, EventStatus, PlanEvent
+from mino_nexus.services.device_secrets import get_lock_password
+from mino_nexus.core.log import SLog
+from mino_nexus.services.node_registry import NodeSession, get_registry
+from mino_nexus.core.schemas import CapturedScreen, EventResult, EventStatus, PlanEvent
 
 TAG = "RouterProxy"
 
 # 这四个 capability 由 Nexus 本地 executor 处理，**不出网**（CLAUDE.md §2.3）。
 # 搞错会让 Scout 收到它 supports() 返回 False 的能力，白跑一圈 fallback。
-LOCAL_CAP_PREFIXES = ("human_",)
+LOCAL_CAP_PREFIXES = ("human_", "recover_")
 LOCAL_CAPS = frozenset({
-    "assert_visual",        # vlm_executor —— 是 LLM 调用
-    "persona_subtask",      # ai_persona_executor —— 拟人化编排
-    "wait_ms",              # internal_executor —— 不需要设备
+    "assert_visual",
+    "persona_subtask",
+    "wait_ms",
     "wait_screen_ready",
+    "relogin",
+    "lease_account",
 })
 
 
@@ -52,9 +55,17 @@ class NoRouteError(Exception):
 
 
 class RouterProxy:
-    def __init__(self, sn: str, *, run_id: str = "", timeout_pad_sec: float = 5.0):
+    def __init__(
+        self,
+        sn: str,
+        *,
+        run_id: str = "",
+        timeout_pad_sec: float = 5.0,
+        target_package: str = "",
+    ):
         self.sn = sn
         self.run_id = run_id
+        self.target_package = str(target_package or "")
         # 协议 §6：等 RESULT 用 payload.timeout_sec + 宽限
         self.timeout_pad_sec = timeout_pad_sec
 
@@ -124,6 +135,8 @@ class RouterProxy:
             selected_impl=dict(impl or {}),
             device_hint=self._device_hint(node),
             timeout_sec=_timeout_for(event),
+            device_id=self.sn,
+            platform=_device_platform(self.sn, node),
         )
 
         res = await self._send_with_retry(node, P.MsgType.EXECUTE, req, req.timeout_sec)
@@ -148,55 +161,86 @@ class RouterProxy:
         if node is None:
             return CapturedScreen(ok=False, source="router_proxy", error=why)
 
+        plat = _device_platform(self.sn, node)
+        family = set(executors_for_platform(plat))
+        device_order = executors_for_device(self.sn, node)
         if prefer is None:
-            prefer = _default_prefer(node)
-
-        req = P.Observe(
-            run_id=self.run_id, sn=self.sn, kind=P.ObserveKind(kind),
-            prefer=list(prefer), force_fresh=force_fresh,
-            timeout_sec=timeout_sec, compress_ratio=compress_ratio,
+            prefer = tuple(device_order)
+        else:
+            prefer = tuple(ex for ex in prefer if ex in family)
+        if not prefer:
+            return CapturedScreen(
+                ok=False,
+                source="router_proxy",
+                error=f"sn={self.sn} platform={plat} 没有适用的截图通道",
+            )
+        SLog.i(
+            TAG,
+            f"[{(self.run_id or '')[:8]}] observe {kind} sn={self.sn} plat={plat} order={list(prefer)}",
         )
-        res = await self._send_with_retry(node, P.MsgType.OBSERVE, req, timeout_sec)
+
+        cap = P.OBSERVE_CAPS.get(kind, kind)
+        req = P.Execute(
+            run_id=self.run_id,
+            step_idx=-1,
+            sn=self.sn,
+            capability_id=cap,
+            params={
+                "force_fresh": force_fresh,
+                "compress_ratio": compress_ratio,
+            },
+            executor_order=list(prefer),
+            device_hint=self._device_hint(node),
+            timeout_sec=timeout_sec,
+            device_id=self.sn,
+            platform=_device_platform(self.sn, node),
+        )
+        res = await self._send_with_retry(node, P.MsgType.EXECUTE, req, timeout_sec)
         if res is None:
             return CapturedScreen(
                 ok=False, source="router_proxy",
-                error=f"scout timeout（node={node.node_id}，OBSERVE {kind}）",
+                error=f"scout timeout（node={node.node_id}，EXECUTE {cap}）",
             )
         if res.status is not EventStatus.PASS:
             return CapturedScreen(ok=False, source=res.source or "", error=res.error or res.summary)
+        data = dict(res.data or {})
         return CapturedScreen(
-            ok=True, source=res.source, image_base64=res.image_base64,
-            image_mime=res.image_mime, width=res.width, height=res.height,
-            elapsed_ms=res.elapsed_ms, remote_detail=dict(res.extra or {}),
+            ok=True,
+            source=res.source,
+            image_base64=res.image_base64 or str(data.get("image_base64") or ""),
+            image_mime=res.image_mime or str(data.get("image_mime") or ""),
+            width=res.width or int(data.get("width") or 0),
+            height=res.height or int(data.get("height") or 0),
+            elapsed_ms=res.elapsed_ms,
+            remote_detail={**dict(res.extra or {}), **data},
         )
 
     # ---------------- 选路 ----------------
 
     def _plan_route(self, event: PlanEvent, node: NodeSession) -> tuple[list[str], dict[str, Any]]:
-        """算 executor_order + 选中的 implementation。
+        """算这台 sn 的 executor_order + 选中的 implementation。
 
-        对齐上游 `router._executor_order()` 的优先级：
+        screenshot / hierarchy 是协议框架指令，不进能力目录，所以 observe 不走这里。
+        选路函数仍是同一个：executors_for_device(sn) —— 只看这台设备，不看节点上其它插件。
+
+        顺序：
           1. event.expected_executor（AI 选的）
           2. event.fallback_executors
-          3. 该 cap 在菜单里允许的其它 executor（按 cost 升序）
-        再按**该节点上报的可用 executor** 过滤 —— 这是拆分后的关键差异：
-        连通性来自 Scout 的 manifest，不是 Nexus 自己探的。
+          3. 该 cap 在目录里允许的其它 executor
+        再按 **这台 sn 已连通且类型匹配的通道** 过滤。
         """
         cap = catalog.get_capability(event.capability_id)
         if cap is None:
             raise NoRouteError(
                 f"能力目录里没有 cap={event.capability_id}"
-                "（AI 选了菜单外的能力？或 plugins/ 缺这条 yaml）"
+                "（AI 选了菜单外的能力？或 catalog_entries 缺这条）"
             )
 
-        avail = set(node.available_executors())
-        provides = node.provides()
-
-        # 菜单顺序：按 cost 升序（YAML 里已排，这里稳妥再排一次）
-        impls = sorted(cap.implementations or [], key=lambda i: getattr(i, "cost", 99))
         by_executor: dict[str, Any] = {}
-        for impl in impls:
-            by_executor.setdefault(impl.executor, impl)
+        for impl in cap.implementations or []:
+            ex = str(getattr(impl, "executor", "") or "").strip()
+            if ex and ex not in by_executor:
+                by_executor[ex] = impl
 
         ordered: list[str] = []
         for ex in [event.expected_executor, *(event.fallback_executors or [])]:
@@ -206,24 +250,21 @@ class RouterProxy:
             if ex not in ordered:
                 ordered.append(ex)
 
+        plat = _device_platform(self.sn, node)
+        allowed = set(executors_for_device(self.sn, node))
         out: list[str] = []
         dropped: dict[str, str] = {}
         for ex in ordered:
-            if ex not in avail:
-                dropped[ex] = "该节点未上报此 executor 可用"
-                continue
-            need = set(getattr(by_executor[ex], "requires_caps", None) or [])
-            missing = need - provides
-            if missing:
-                dropped[ex] = f"缺 abstract cap {sorted(missing)}"
+            if ex not in allowed:
+                dropped[ex] = f"不是 sn={self.sn}（{plat}）的执行通道"
                 continue
             out.append(ex)
 
         if not out:
             raise NoRouteError(
-                f"cap={event.capability_id} 在节点 {node.node_id} 上无可用实现："
+                f"cap={event.capability_id} 对设备 {self.sn}（{plat}）无可用实现："
                 f"{dropped or '该能力没有任何 implementation'}"
-                f"（节点可用 executor={sorted(avail)}）"
+                f"（该设备通道={sorted(allowed)}）"
             )
 
         impl = by_executor[out[0]]
@@ -242,7 +283,12 @@ class RouterProxy:
         （MIGRATION.md §1 E1 附近）。
         """
         dev = node.devices.get(self.sn)
-        hint: dict[str, Any] = {"platform": dev.platform if dev else "android"}
+        plat = _device_platform(self.sn, node)
+        hint: dict[str, Any] = {"platform": plat}
+        if self.target_package:
+            hint["target_package"] = self.target_package
+        if plat in ("web", "browser", "playwright"):
+            return hint
         if dev is not None:
             hint["model"] = dev.model
             serial = (dev.channels or {}).get("serial") or ""
@@ -272,11 +318,58 @@ class RouterProxy:
 # ---------------- 小工具 ----------------
 
 
-def _default_prefer(node: NodeSession) -> tuple[str, ...]:
-    avail = node.available_executors()
-    if "playwright" in avail and len(avail) == 1:
+def executors_for_platform(platform: str) -> tuple[str, ...]:
+    """这台设备类型允许的通道。家族互斥：Web 没有 adb，安卓/iOS 没有 playwright。"""
+    plat = str(platform or "").strip().lower()
+    if plat in ("web", "browser", "playwright"):
         return ("playwright",)
-    return tuple(ex for ex in ("adb", "remote", "ios_wda", "playwright") if ex in avail)
+    if plat in ("ios",):
+        return ("ios_wda", "remote")
+    return ("adb", "remote")
+
+
+def _device_platform(sn: str, node: NodeSession) -> str:
+    from mino_nexus.runtime.run_context import is_web_slot
+
+    dev = node.devices.get(sn)
+    plat = str(getattr(dev, "platform", "") or "").strip().lower()
+    if plat:
+        return plat
+    if is_web_slot(sn):
+        return "web"
+    return "android"
+
+
+_CHANNEL_EXEC = (("playwright", "playwright"), ("adb", "adb"), ("remote", "remote"), ("ios", "ios_wda"))
+_ONLINE = frozenset({"connected", "online", "available", "authenticated"})
+
+
+def _channel_state(raw: Any) -> str:
+    if isinstance(raw, dict):
+        return str(raw.get("state") or raw.get("status") or "").strip().lower()
+    return str(raw or "").strip().lower()
+
+
+def executors_for_device(sn: str, node: NodeSession) -> list[str]:
+    """这台 sn 此刻能走的 executor。
+
+    节点上 adb 插件在（哪怕手机全离线）不构成「给 Web 槽发 adb」的理由。
+    """
+    plat = _device_platform(sn, node)
+    family = list(executors_for_platform(plat))
+    avail = set(node.available_executors())
+    ordered = [ex for ex in family if ex in avail]
+    dev = node.devices.get(sn)
+    connected: list[str] = []
+    if dev is not None and isinstance(dev.channels, dict):
+        for ch, ex in _CHANNEL_EXEC:
+            if ex not in family:
+                continue
+            if _channel_state((dev.channels or {}).get(ch)) in _ONLINE:
+                connected.append(ex)
+    if connected:
+        return [ex for ex in ordered if ex in set(connected)] or list(connected)
+    return ordered
 
 
 def _timeout_for(event: PlanEvent) -> float:
@@ -310,6 +403,9 @@ def _fail(event: PlanEvent, started: str, t0: float, msg: str, *, executor_used:
 
 
 def _event_result_from(event: PlanEvent, res: P.Result, started: str) -> EventResult:
+    raw = dict(res.extra or {})
+    if res.data:
+        raw = {**raw, **dict(res.data), "data": dict(res.data)}
     return EventResult(
         seq=event.seq, capability_id=event.capability_id,
         event_kind=event.event_kind or event.capability_id,
@@ -317,7 +413,7 @@ def _event_result_from(event: PlanEvent, res: P.Result, started: str) -> EventRe
         elapsed_ms=res.elapsed_ms, summary=res.summary, error=res.error,
         ai_reasoning=event.ai_reasoning or "",
         plan_event=event.model_dump(exclude_none=True),
-        raw_response=dict(res.extra or {}),
+        raw_response=raw,
         attempts=[
             {"executor": a.executor, "status": a.status.value if hasattr(a.status, "value") else a.status,
              "elapsed_ms": a.elapsed_ms, "error": a.error}

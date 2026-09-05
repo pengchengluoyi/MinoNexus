@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from mino_nexus.paths import APP_DATA_DIR
+from mino_nexus.core.paths import APP_DATA_DIR
 
 _CTX: contextvars.ContextVar[dict] = contextvars.ContextVar("dispatch_ctx", default={})
 _LOCK = threading.Lock()
@@ -27,12 +27,6 @@ _DATA_URL_RE = re.compile(
 
 def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
-
-
-def _path() -> Path:
-    folder = Path(APP_DATA_DIR) / "data" / "dispatch"
-    folder.mkdir(parents=True, exist_ok=True)
-    return folder / "calls.jsonl"
 
 
 def bind(**kwargs) -> contextvars.Token:
@@ -343,20 +337,34 @@ def _clip_media(value: Any, *, stem: str) -> tuple[str, list[str]]:
 
 
 def _write(row: dict) -> dict:
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.dispatch import DispatchCall
+
     row = dict(row)
     row.setdefault("id", f"ds-{uuid.uuid4().hex[:12]}")
     row.setdefault("at", _now())
-    line = json.dumps(row, ensure_ascii=False)
     with _LOCK:
-        path = _path()
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-        try:
-            raw = path.read_text(encoding="utf-8").splitlines()
-            if len(raw) > _MAX_ROWS:
-                path.write_text("\n".join(raw[-_MAX_ROWS:]) + "\n", encoding="utf-8")
-        except Exception:
-            pass
+        with session_scope() as db:
+            db.merge(DispatchCall(
+                id=str(row["id"]),
+                at=str(row.get("at") or ""),
+                kind=str(row.get("kind") or ""),
+                trigger=str(row.get("trigger") or ""),
+                role=str(row.get("role") or ""),
+                app_id=str(row.get("app_id") or ""),
+                pipeline_id=str(row.get("pipeline_id") or ""),
+                payload_json=row,
+            ))
+            extra = db.query(DispatchCall).count() - _MAX_ROWS
+            if extra > 0:
+                old = (
+                    db.query(DispatchCall)
+                    .order_by(DispatchCall.at.asc(), DispatchCall.id.asc())
+                    .limit(extra)
+                    .all()
+                )
+                for item in old:
+                    db.delete(item)
     return row
 
 
@@ -502,58 +510,51 @@ def list_calls(
     app_id: str = "",
     pipeline_id: str = "",
 ) -> list[dict]:
-    path = _path()
-    if not path.exists():
-        return []
+    from mino_nexus.core.database import SessionLocal, ensure_db
+    from mino_nexus.models.dispatch import DispatchCall
+
+    ensure_db()
+    db = SessionLocal()
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except Exception:
-        return []
-    rows = []
-    for line in reversed(lines):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except Exception:
-            continue
-        if not isinstance(row, dict):
-            continue
-        row = decorate_row(row)
-        if kind and row.get("kind") != kind:
-            continue
-        if role and row.get("role") != role:
-            continue
-        if trigger and row.get("trigger") != trigger:
-            continue
-        if app_id and row.get("app_id") != app_id:
-            continue
-        if pipeline_id and row.get("pipeline_id") != pipeline_id:
-            continue
-        rows.append(row)
-        if len(rows) >= max(1, min(int(limit or 80), 300)):
-            break
-    return rows
+        q = db.query(DispatchCall)
+        if kind:
+            q = q.filter(DispatchCall.kind == kind)
+        if role:
+            q = q.filter(DispatchCall.role == role)
+        if trigger:
+            q = q.filter(DispatchCall.trigger == trigger)
+        if app_id:
+            q = q.filter(DispatchCall.app_id == app_id)
+        if pipeline_id:
+            q = q.filter(DispatchCall.pipeline_id == pipeline_id)
+        cap = max(1, min(int(limit or 80), 300))
+        rows = []
+        for item in q.order_by(DispatchCall.at.desc(), DispatchCall.id.desc()).limit(cap).all():
+            payload = dict(item.payload_json or {})
+            payload.setdefault("id", item.id)
+            payload.setdefault("at", item.at)
+            rows.append(decorate_row(payload))
+        return rows
+    finally:
+        db.close()
 
 
 def get_call(call_id: str) -> Optional[dict]:
+    from mino_nexus.core.database import SessionLocal, ensure_db
+    from mino_nexus.models.dispatch import DispatchCall
+
     cid = str(call_id or "").strip()
     if not cid:
         return None
-    for row in list_calls(limit=300):
-        if row.get("id") == cid:
-            return hydrate_row_images(decorate_row(row))
-    path = _path()
-    if not path.exists():
-        return None
+    ensure_db()
+    db = SessionLocal()
     try:
-        for line in reversed(path.read_text(encoding="utf-8").splitlines()):
-            try:
-                row = json.loads(line)
-            except Exception:
-                continue
-            if isinstance(row, dict) and row.get("id") == cid:
-                return hydrate_row_images(decorate_row(row))
-    except Exception:
-        return None
-    return None
+        item = db.get(DispatchCall, cid)
+        if item is None:
+            return None
+        payload = dict(item.payload_json or {})
+        payload.setdefault("id", item.id)
+        payload.setdefault("at", item.at)
+        return hydrate_row_images(decorate_row(payload))
+    finally:
+        db.close()

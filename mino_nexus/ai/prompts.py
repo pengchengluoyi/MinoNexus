@@ -33,7 +33,7 @@ PLAN_OVERVIEW_SYSTEM_PROMPT = """你是 Mino 的 AI 回归测试规划器（PLAN
 【输入】
 - case_spec：用例文本（name / preconditions / steps / expected）。
 - run_context：当前设备 + 通道连通性（adb / remote / vlm / hitl）。
-- capability_menu：当前 Run 里能用的 capability（id、一句 summary、以及可选 executor/cost）。不要臆造菜单外的能力。
+- capability_menu：当前 Run 里能用的 capability（id、一句 summary）。不要臆造菜单外的能力。
 - baseline（可选）：本 case 之前若执行过，会附上一次的事件序列摘要供你参考。
 
 【你的任务】
@@ -846,41 +846,37 @@ def build_goal_extract_messages(*, case_spec: "CaseSpec") -> list[dict[str, Any]
     ]
 
 
-AGENT_DO_SYSTEM_PROMPT = """你是操控一台移动设备的自动化 agent（通过当前可用通道执行：adb / 远程节点 / iOS WDA）。你会看到【当前屏幕截图】，只负责【当前步骤的操作】。校验由系统在操作结束后单独做，你不要验、不要为预期去点。
+AGENT_DO_SYSTEM_PROMPT = """你是操控一台移动设备的自动化 agent（通过当前可用通道执行：adb / 远程节点 / iOS WDA / playwright）。你会看到【当前屏幕截图】，只做指针里【当前阶段】的事。菜单里出现的工具才能调。
 
-回答方式：必须调用一个工具（function call）。工具名 = capability id。一次只调一个。不要在正文写 JSON，不要输出 thought/status/action 对象。
-本步操作结束 → signal_done；客观做不到 → signal_give_up；要人填能进输入框的信息 → signal_ask_human。
-菜单里没有 assert / 校验能力。禁止臆造工具名。thought 一两句即可。
+回答方式：必须调用一个工具（function call）。工具名 = capability id。一次只调一个。不要在正文写 JSON。
+本步结束 → signal_done；客观做不到 → signal_give_up；要人填能进输入框的信息 → signal_ask_human。
+thought 一两句即可。
 
 铁律：
 1. 坐标一律用【0-1000 归一化整数】：x=横向千分比、y=纵向千分比。屏幕正中央 = x:500,y:500。
-   - tap_element: x,y
-   - multi_tap: x,y,count=6,interval_ms=80  连点彩蛋用这条，禁止拆成多次 tap_element
+   - tap_element: x,y,selector_text（selector_text=按钮上可见文字，如「首页」）
+   - multi_tap: x,y,count=6,interval_ms=80
    - swipe_element_to_element: from_x,from_y,to_x,to_y,duration_ms
    - input_text: text,x,y（先点输入框再输入）
-   - launch_app/close_app: package
-   - get_app_version: package  读安装包 versionName，禁止看图猜版本
-   - get_foreground_app: 无参数  读当前前台包名，禁止看图猜是不是目标 App
+   - launch_app/close_app: package 必须是下方「目标应用」
    - press_key: key=back|home|...
    - wait_ms: ms
+   - assert_visual: expectation=当前屏应看到的客观状态（校验阶段用）
+   - relogin: 看屏对齐登录态
 2. 你能看图：遇到未预期的隐私协议/权限申请/更新提示/广告弹窗等，主动点同意/允许/关闭/稍后，不要卡住。
-★【启动应用只能启动被测目标应用】：launch_app/open_app 的 package 必须用下方「目标应用」给定的包名。
-★【版本 / 前台】：客户端版本和是不是目标 App 在前台，用 get_app_version / get_foreground_app，禁止看图猜。
-3. **只做当前步骤的操作**。signal_done 只表示【本步操作结束】，不是整案完成，也不是校验通过。
-   - 禁止去做后面的步骤。
-   - 禁止自己校验预期、禁止调用 assert 类能力。
-   - 禁止为了让后面的预期成立而关闭/隐藏/返回。
+3. **只做当前阶段**。signal_done 不是整案完成。
+   - 前置：做完前置原文再 signal_done。不要进步骤、不要验预期。
+   - 操作：做完当前步骤再 signal_done。不要跳步。
+   - 校验：只能看。用 assert_visual；通过后再 signal_done。禁止点击/滑动/输入来改界面凑绿。
 4. 客观无法完成 → signal_give_up。加载/占位用 wait_ms。
 5. 需要人提供【能填进界面的信息】→ signal_ask_human。禁止让人去设备上点。
-   - 资源网关已租账号时：当前屏是登录/手机号输入 → 必须 input_text 并带 field=phone，text 可写占位。
-   - 当前屏在问一次性口令 → 必须 input_text 并带 field=sms_code。值由系统填入。
-   - 禁止 ask_human 再要手机号，禁止 ask_human 要号或码，禁止把口令写进 thought。
-6. 不要连续多次点同一位置无效动作；不要盲目连按返回键退出应用。
-   需要连点触发调试面板/版本号彩蛋时，必须用 multi_tap 一次发出，禁止拆成多次 tap_element。
+   - 当前屏是登录/手机号输入 → input_text 并带 field=phone。
+   - 当前屏在问一次性口令 → input_text 并带 field=sms_code。
+6. 不要连续多次点同一位置；不要盲目连按返回键退出应用。
 7. 已执行动作历史和【短期记忆】会给你。后面要对比变化时把事实写入 remember。
 8. 当前屏明显在加载/转圈时，用 wait_ms，禁止乱点。
-9. 【本步简报】是编译结果，不是某条原文。与当前屏幕冲突时以屏幕为准。还需某条原文时把 id 写入 knowledge_ids。
-10. 每个应用的登录、退出、业务路径都不同。只按本应用简报和当前截图操作，禁止套用其它 App 的界面结构。"""
+9. 【本步简报】是编译结果，不是某条原文。与当前屏幕冲突时以屏幕为准。
+10. 每个应用的登录、退出、业务路径都不同。只按本应用简报和当前截图操作。"""
 
 
 AGENT_DECIDE_SYSTEM_PROMPT = """你是操控一台移动设备的自动化 agent（通过当前可用通道执行：adb / 远程节点 / iOS WDA）。你会看到【当前屏幕截图】，要朝着【目标】推进，每次只决定并输出【下一步一个动作】。
@@ -902,7 +898,8 @@ AGENT_DECIDE_SYSTEM_PROMPT = """你是操控一台移动设备的自动化 agent
 铁律：
 1. capability_id 必须来自 capability_menu（菜单只有 id 和一句 summary），禁止臆造。
 2. 坐标一律用【0-1000 归一化整数】：x=横向千分比、y=纵向千分比（与分辨率无关，系统会按真实屏幕尺寸换算成像素）。例如屏幕正中央 = x:500,y:500；右下角 ≈ x:950,y:950。
-   - tap_element: params={"x":0-1000,"y":0-1000}
+   - tap_element: params={"x":0-1000,"y":0-1000,"selector_text":"可见文字"}
+     底栏 Tab 已是选中态时不要再点，做下一步。selector_text 填按钮上的字（如 首页）。
    - multi_tap: params={"x":0-1000,"y":0-1000,"count":6,"interval_ms":80}  连点彩蛋用这条，禁止拆成多次 tap_element
    - swipe_element_to_element: params={"from_x","from_y","to_x","to_y"（均 0-1000）,"duration_ms"}
    - input_text: params={"text":str,"x":0-1000,"y":0-1000}(先点输入框再输入)
@@ -1011,6 +1008,7 @@ def build_agent_do_messages(
     knowledge_hint: str = "",
     session_block: str = "",
     accounts_brief: str = "",
+    system_prompt: str = "",
 ) -> list[dict[str, Any]]:
     messages = build_agent_decide_messages(
         goal=goal,
@@ -1031,7 +1029,8 @@ def build_agent_do_messages(
         session_block=session_block,
         accounts_brief=accounts_brief,
     )
-    messages[0] = {"role": "system", "content": AGENT_DO_SYSTEM_PROMPT + (
+    sys = str(system_prompt or "").strip() or AGENT_DO_SYSTEM_PROMPT
+    messages[0] = {"role": "system", "content": sys + (
         AGENT_WEB_CHANNEL_ADDENDUM if _playwright_brief(device_brief) else ""
     )}
     return messages
@@ -1417,7 +1416,7 @@ KNOWLEDGE_CAPTURE_SYSTEM = """你是移动端测试知识管理员。根据一�
       "content": "可操作的一条事实",
       "question": "需要用户确认时的提问，可空",
       "facet": "chrome|server|hybrid|exception",
-      "situation": {"need": "fill|judge_selected|judge|howto", "slot": "", "surface": "app|web", "lane": "prep|step|expect"},
+      "situation": {"need": "fill|judge_selected|judge|howto", "slot": "", "surface": "app|web", "lane": "prep|do|check"},
       "bind": {"slot": "identity.otp|identity.phone|identity.password", "value": "", "env": "test|staging|prod", "surface": "app|web"},
       "conflicts_with": "冲突时填写已有知识 id，可空"
     }

@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from mino_nexus.log import SLog
+from mino_nexus.core.log import SLog
 
 TAG = "RunContext"
 
@@ -97,7 +97,7 @@ class RunContext:
 
     @property
     def connectivity_flags(self) -> dict[str, bool]:
-        """喂给 catalog.registry.filter_capabilities_by_connectivity。
+        """喂给 catalog.registry.filter_capabilities。
 
         取值口径与上游一致：只有 `connected` / `available` 算通。
         """
@@ -166,9 +166,12 @@ def from_node(
     """
     dev = (session.devices or {}).get(sn)
     channels = dict(getattr(dev, "channels", None) or {})
-    avail = set(session.available_executors())
 
-    platform = str(getattr(dev, "platform", "") or "android")
+    platform = str(getattr(dev, "platform", "") or "").strip()
+    if is_web_slot(sn, platform):
+        platform = "web"
+    elif not platform:
+        platform = "android"
     ctx = RunContext(
         sn=sn,
         platform=platform,
@@ -184,13 +187,17 @@ def from_node(
     )
 
     def _state_for(channel: str, executor: str) -> dict[str, Any]:
-        """Scout 报的 channels 优先；没报就看该 executor 在不在可用列表里。"""
-        raw = str(channels.get(channel) or "")
-        if raw:
-            return _channel(raw, source="scout_manifest")
-        if executor in avail:
-            return _channel("available", source="scout_executors")
-        return _channel("not_applicable", reason=f"节点未上报 {executor}")
+        """只看这台 sn 自己报的通道。节点上装了 adb 插件 ≠ 这台设备能走 adb。"""
+        raw = channels.get(channel)
+        if isinstance(raw, dict):
+            state = str(raw.get("state") or raw.get("status") or "").strip()
+            if state:
+                return _channel(state, source="scout_manifest")
+        else:
+            state = str(raw or "").strip()
+            if state:
+                return _channel(state, source="scout_manifest")
+        return _channel("not_applicable", reason=f"该设备未上报 {channel} 通道")
 
     ctx.adb = _state_for("adb", "adb")
     ctx.remote = _state_for("remote", "remote")
@@ -223,7 +230,7 @@ def build_run_context(sn: str, **kwargs: Any) -> RunContext:
     找不到节点时返回一个**通道全空**的 RunContext —— `has_control_channel` 为 False，
     上层应据此 decline，而不是拿着空菜单去问 LLM。
     """
-    from mino_nexus.node_registry import get_registry
+    from mino_nexus.services.node_registry import get_registry
 
     node, why = get_registry().resolve(sn)
     if node is None:
@@ -243,7 +250,7 @@ def build_run_context(sn: str, **kwargs: Any) -> RunContext:
 def _probe_vlm(provider_id: str = "", model_name: str = "") -> dict[str, Any]:
     """有没有配可用的 LLM provider。这是本仓的设置，不是设备状态。"""
     try:
-        from mino_nexus import settings
+        from mino_nexus.services import settings
 
         provider = settings.get_ai_provider_credentials(provider_id or None)
         if provider.get("configured") and provider.get("api_key"):

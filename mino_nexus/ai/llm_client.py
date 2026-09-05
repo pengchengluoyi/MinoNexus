@@ -19,7 +19,7 @@ import re
 import time
 from typing import Any, Optional
 
-from mino_nexus.log import SLog
+from mino_nexus.core.log import SLog
 
 TAG = "RegressionLLM"
 
@@ -955,7 +955,7 @@ def resolve_regression_provider(provider_id: Optional[str] = None) -> tuple[Opti
     未传入时：CaseRunner 回归仍走「大模型 Key → 可用 + 用例」。
     """
     try:
-        from mino_nexus import settings as ss
+        from mino_nexus.services import settings as ss
     except Exception as e:
         return None, {"enabled": False, "reason": f"system_settings import failed: {e}"}
 

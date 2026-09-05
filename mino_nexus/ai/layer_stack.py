@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mino_nexus import settings_store as ss
+from mino_nexus.services import settings_store as ss
 
 DRIVERS: list[dict[str, Any]] = [
     {"id": "adb", "label": "真机 ADB", "kind": "device", "summary": "本机点按、截图、装包"},

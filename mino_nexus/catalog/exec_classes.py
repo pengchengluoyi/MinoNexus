@@ -1,46 +1,26 @@
-"""执行能力四类：前置 / 步骤 / 预期 / 通用。控制台 Tab 由这类元数据下发。"""
+"""目录 kind：prep / do / check / generic / recovery。与执行阶段、/packs?kind= 同一套词。"""
 from __future__ import annotations
 
 from typing import Dict, Tuple
 
-EXEC_KINDS: Tuple[str, ...] = ("prep", "step", "expect", "generic")
+CAPABILITY_KINDS: Tuple[str, ...] = ("prep", "do", "check", "generic")
+PACK_KINDS: Tuple[str, ...] = ("recovery",)
+ALL_KINDS: Tuple[str, ...] = CAPABILITY_KINDS + PACK_KINDS
+
+# 无 implementations、由 Nexus 本地编排的能力。Scout 不执行。
+LOCAL_ORCH_IDS = frozenset({
+    "relogin", "lease_account", "get_otp", "get_phone", "release_account",
+})
 
 KIND_META: Dict[str, Dict[str, str]] = {
-    "prep": {"label": "前置操作", "desc": "开跑前：账号、登录、环境"},
-    "step": {"label": "操作步骤", "desc": "按编号走到场景"},
-    "expect": {"label": "预期结果", "desc": "做成之后只看、不准再点"},
-    "generic": {"label": "通用能力", "desc": "点击、滑动、等待：哪一列都能调"},
+    "prep": {"label": "前置操作", "desc": "Agent 开跑前可调：账号、登录、环境"},
+    "do": {"label": "操作步骤", "desc": "执行器提供抽象原语；步骤阶段再并上通用能力"},
+    "check": {"label": "预期结果", "desc": "做成之后只看、不准再点"},
+    "generic": {"label": "通用能力", "desc": "点击、滑动、等待：prep / do 都能调"},
+    "recovery": {"label": "恢复", "desc": "系统/设备异常怎么处置"},
 }
 
-CAP_CLASS: Dict[str, str] = {
-    "wake_screen": "prep",
-    "dismiss_keyguard": "prep",
-    "clear_app_cache": "prep",
-    "kill_app": "prep",
-    "install_apk": "prep",
-    "read_device_data": "prep",
-    "probe_device_state": "prep",
-    "get_app_version": "prep",
-    "get_foreground_app": "prep",
-    "persona_subtask": "prep",
-    "assert_visual": "expect",
-    "tap_element": "generic",
-    "multi_tap": "generic",
-    "long_press_element": "generic",
-    "swipe_direction": "generic",
-    "swipe_element_to_element": "generic",
-    "input_text": "generic",
-    "press_key": "generic",
-    "set_clipboard": "generic",
-    "launch_app": "generic",
-    "close_app": "generic",
-    "wait_ms": "generic",
-    "wait_screen_ready": "generic",
-    "exec_script": "generic",
-    "human_confirm": "generic",
-    "human_input_text": "generic",
-    "human_choice_single": "generic",
-    "human_choice_multiple": "generic",
-    "human_acknowledge": "generic",
-    "human_upload_image": "generic",
-}
+MUTATE_CAPS = frozenset({
+    "tap_element", "multi_tap", "swipe_element_to_element", "swipe_direction",
+    "input_text", "press_key", "long_press_element",
+})

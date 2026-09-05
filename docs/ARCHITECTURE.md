@@ -32,8 +32,8 @@ UI 只跟 Nexus 说话，端口仍是 `10104`。Scout 主动 dial 进来，可�
 ```
 AgentExecutor.run()                       ← mino_nexus/loop/agent_executor.py
   每一步：
-   1. screen = RouterProxy.observe(screenshot)  ──► OBSERVE ──► Scout
-   2. dump   = RouterProxy.observe(hierarchy)   ──► OBSERVE ──► Scout
+   1. screen = RouterProxy.observe(screenshot)  ──► EXECUTE screenshot ──► Scout
+   2. dump   = RouterProxy.observe(hierarchy)   ──► EXECUTE hierarchy ──► Scout
    3. decision = planner.decide_next_action(screen, menu, history)   本地 LLM
    4. 若 impl 声明 locate 且 params 无坐标：
         planner.locate_element(screen)                              本地 LLM
@@ -108,7 +108,7 @@ planner.decide_next_action 的可选动作集
 一次 `POST /case-runner/run` 携带 `sns[]`。Nexus 需要回答"这台设备在哪个节点上"：
 
 ```
-sn ──► 设备表的 node_id 归属 ──► 该节点的连接 ──► OBSERVE / EXECUTE
+sn ──► 设备表的 node_id 归属 ──► 该节点的连接 ──► EXECUTE
 ```
 
 `node_id` 是拆分新引入的概念（上游只有 `sn`，它既是设备标识又是连接端点）。规则、冲突处理、无节点时的行为见 [NODE_REGISTRY.md](NODE_REGISTRY.md)。
@@ -129,7 +129,8 @@ Nexus **必须**能独立启动。无可用节点时：
 | 数据 | 存在哪 | Nexus 重启后 |
 |---|---|---|
 | 用例、任务、设备、知识、覆盖度 | DB | 保留 |
-| 能力目录 | `plugins/**.yaml` + 内存 registry | 重载 |
+| 能力目录 | `catalog_entries` + 内存 registry | 保留；空库不灌，只经 Console `/packs` 写入 |
+| 技能 | `skills` 表 | 保留；空库从 `ai/skill_defs.py` 灌种，坏行回退代码 |
 | 循环状态（当前跑到第几步、history、memory） | 进程内存 | **丢失，在途 run 判为中断，不续跑** |
 | trace `_RUNS` | 进程内存，上限 20 | 丢失（`AppRegressionRun` 里有落库副本） |
 | 节点 manifest / 连通性 | 内存缓存 | 等 Scout 重新 `REGISTER` 恢复 |

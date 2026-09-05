@@ -40,8 +40,8 @@ node_id  = 一台跑着 MinoScout 的机器
 | `REGISTER` 里的 `sn` 已归属**另一个** `node_id` | 见 §3 冲突 |
 | `HEARTBEAT.device_delta` | 更新该设备的 `channels` 状态。通道不是 `connected` 时 UI `status` 为 offline（节点还活着也不算在线） |
 | 节点 45s 无心跳 | 该节点名下所有设备连通性置 `disconnected`，标注"节点离线"，**不清除归属** |
-| `NODE_EVENT {device_lost}` | 该设备连通性置 `disconnected`。残留 `web-local` / `web_local` 直接删掉，不当成有效槽 |
-| `NODE_EVENT {shutting_down}` | 立刻把该节点 `HEARTBEAT.active_runs` 里的在途 run 判失败。不断线干等 |
+| `EXECUTE {capability_id: node.device_lost}` | 该设备连通性置 `disconnected`。残留 `web-local` / `web_local` 直接删掉，不当成有效槽 |
+| `EXECUTE {capability_id: node.shutting_down}` | 立刻把该节点 `HEARTBEAT.active_runs` 里的在途 run 判失败。不断线干等 |
 | 节点 WS 断开 | 同上：在途 run 立刻失败。专机为主，**本切片不重派**。节点行仍留在 `nodes.json`，UI 标离线 |
 
 账号归属（Studio「Scout 节点」页）由 `REGISTER.studio_id` 与安装凭证上的 `owner_user_id` 写入 `nodes.json`。列表过滤：当前登录用户的 `owner_user_id`，或查询参数里的本工作台 `studio_id`。没有这两项的历史节点只给管理员看，归属列写「未归属」。管理员可见全部节点。
@@ -75,7 +75,7 @@ for sn in sns:
     3. 该节点上报的 executors ∩ 能力目录 → 该设备的可用菜单
     4. 菜单为空？
          是 → 拒绝，原因："设备 {sn} 无可用执行通道"
-    5. 建 run，循环起在 Nexus，OBSERVE / EXECUTE 打向该节点
+    5. 建 run，循环起在 Nexus，EXECUTE 打向该节点
 ```
 
 **不要静默排队。** 节点离线时立刻拒绝并说清是哪台设备、哪个节点 —— 排队会让人以为任务在跑。

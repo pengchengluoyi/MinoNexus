@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from mino_nexus import run_store
-from mino_nexus.log import SLog
+from mino_nexus.services import run_store
+from mino_nexus.core.log import SLog
 
 TAG = "PersistRunFinish"
 

@@ -19,13 +19,13 @@ from typing import Any, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from mino_nexus import protocol as P
-from mino_nexus.log import SLog
-from mino_nexus.node_registry import get_registry
+from mino_nexus.core import protocol as P
+from mino_nexus.core.log import SLog
+from mino_nexus.services.node_registry import get_registry
 
 TAG = "NodeWS"
 
-NEXUS_VERSION = "0.1.0"
+NEXUS_VERSION = "0.1.2"
 HEARTBEAT_INTERVAL_SEC = 15
 
 # 协议 §1
@@ -121,17 +121,33 @@ class NodeConnection:
             await self._on_register(env)
         elif env.type is P.MsgType.HEARTBEAT:
             reg.heartbeat(env.payload)
-        elif env.type is P.MsgType.NODE_EVENT:
-            interrupted = reg.node_event(env.payload)
-            if interrupted:
-                from mino_nexus.run_store import interrupt_runs
-
-                interrupt_runs(
-                    interrupted,
-                    reason=f"节点 {env.payload.node_id} {env.payload.event}",
-                )
+        elif env.type is P.MsgType.EXECUTE:
+            await self._on_inbound_execute(env)
         else:
             SLog.w(TAG, f"[{self.node_id}] 收到不该由 Nexus 处理的消息 {env.type.value}，忽略")
+
+    async def _on_inbound_execute(self, env: P.Envelope) -> None:
+        req: P.Execute = env.payload
+        cap = str(req.capability_id or "")
+        if cap not in P.NODE_EVENT_CAPS:
+            SLog.w(TAG, f"[{self.node_id}] 忽略非框架入站 EXECUTE cap={cap}")
+            await self._reply_result(env, P.Result(
+                run_id=req.run_id, step_idx=req.step_idx,
+                status=P.EventStatus.FAIL, summary=f"Nexus 不处理 cap={cap}",
+                error=f"Nexus 不处理 cap={cap}", executor_used="nexus",
+            ))
+            return
+        interrupted = get_registry().node_event(req, node_id=self.node_id)
+        if interrupted:
+            from mino_nexus.services.run_store import interrupt_runs
+
+            event = cap.split(".", 1)[-1]
+            interrupt_runs(interrupted, reason=f"节点 {self.node_id} {event}")
+        await self._reply_result(env, P.Result(
+            run_id=req.run_id, step_idx=req.step_idx,
+            status=P.EventStatus.PASS, summary=f"acked {cap}",
+            executor_used="nexus",
+        ))
 
     async def _on_register(self, env: P.Envelope) -> None:
         req: P.Register = env.payload
@@ -155,7 +171,7 @@ class NodeConnection:
 
         self.node_id = req.node_id
         owner_user_id = ""
-        from mino_nexus.runtime_tokens import peek_token
+        from mino_nexus.services.runtime_tokens import peek_token
 
         info = peek_token(req.token)
         if info:
@@ -168,6 +184,13 @@ class NodeConnection:
             heartbeat_interval_sec=HEARTBEAT_INTERVAL_SEC,
             warnings=warnings,
         ))
+
+    async def _reply_result(self, req_env: P.Envelope, payload: P.Result) -> None:
+        env = P.Envelope(
+            type=P.MsgType.RESULT, msg_id=_msg_id(), ts=_now_iso(),
+            payload=payload, reply_to=req_env.msg_id,
+        )
+        await self.ws.send_text(json.dumps(P.dumps(env), ensure_ascii=False))
 
     async def _reply(self, req_env: P.Envelope, payload: Any) -> None:
         env = P.Envelope(
@@ -185,7 +208,7 @@ class NodeConnection:
         if self.node_id:
             runs = get_registry().disconnect(self.node_id)
             if runs:
-                from mino_nexus.run_store import interrupt_runs
+                from mino_nexus.services.run_store import interrupt_runs
 
                 interrupt_runs(runs, reason=f"节点 {self.node_id} 断开")
 
@@ -202,7 +225,7 @@ def _token_ok(token: str) -> bool:
     tok = str(token or "").strip()
     if not tok:
         return False
-    from mino_nexus.runtime_tokens import install_token_ok
+    from mino_nexus.services.runtime_tokens import install_token_ok
 
     if install_token_ok(tok):
         return True

@@ -5,12 +5,12 @@ import threading
 from datetime import datetime
 from typing import Any, Optional
 
-from mino_nexus import app_automation as aas
-from mino_nexus import project_store as ps
-from mino_nexus import run_store
-from mino_nexus import ui_devices
+from mino_nexus.services import app_automation as aas
+from mino_nexus.services import project_store as ps
+from mino_nexus.services import run_store
+from mino_nexus.services import ui_devices
 from mino_nexus.ai.llm_client import resolve_regression_provider
-from mino_nexus.log import SLog
+from mino_nexus.core.log import SLog
 from mino_nexus.loop.agent_stream import emit_testing_task
 from mino_nexus.loop.persist_run_finish import persist_run_finish
 from mino_nexus.runtime.run_context import device_platform_kind
@@ -217,28 +217,44 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
             cid = str(case.get("case_id") or "")
             sn = str(case.get("sn") or doc.get("sn") or "")
             run_store.patch_case(run_id, cid, status="running")
-            emit_testing_task({"event": "case_running", "run_id": run_id, "case_id": cid, "sn": sn})
+            emit_testing_task({
+                "event": "case_running",
+                "run_id": run_id,
+                "task_id": run_id,
+                "case_id": cid,
+                "sn": sn,
+                "app_id": str(doc.get("app_id") or ""),
+            })
             result = run_case(
                 run_id=run_id,
                 case=case,
                 sn=sn,
                 app_id=str(doc.get("app_id") or ""),
+                app_name=str(doc.get("app_name") or ""),
                 package=package,
                 provider_id=provider_id,
                 playbook=playbook if isinstance(playbook, dict) else {},
                 cancel_check=lambda: run_store.cancel_requested(run_id),
             )
+            # 用例 steps/expected 是原文。执行轨迹只能写 engine_steps，写进 steps 会让详情页变成 [object Object]。
             run_store.patch_case(
                 run_id, cid,
                 status=result.get("status") or "fail",
                 summary=result.get("summary") or "",
                 error=result.get("summary") or "",
                 elapsed_ms=result.get("elapsed_ms") or 0,
-                steps=result.get("steps") or [],
+                engine_steps=result.get("steps") or [],
+                skill_id=result.get("skill_id") or "",
+                view_id=result.get("view_id") or "",
+                slots=result.get("slots") if isinstance(result.get("slots"), dict) else {},
             )
             emit_testing_task({
-                "event": "case_finished", "run_id": run_id, "case_id": cid,
+                "event": "case_finished",
+                "run_id": run_id,
+                "task_id": run_id,
+                "case_id": cid,
                 "status": result.get("status"),
+                "app_id": str(doc.get("app_id") or ""),
             })
         latest = run_store.get(run_id) or doc
         if run_store.cancel_requested(run_id):
@@ -248,7 +264,13 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
             status = "failed" if failed else "done"
             finished = run_store.finish(run_id, status=status, error=latest.get("error") or "")
         persist_run_finish(finished)
-        emit_testing_task({"event": "task_finished", "run_id": run_id, "status": finished.get("status")})
+        emit_testing_task({
+            "event": "task_finished",
+            "run_id": run_id,
+            "task_id": run_id,
+            "status": finished.get("status"),
+            "app_id": str((latest or doc).get("app_id") or ""),
+        })
     except Exception as exc:
         SLog.e(TAG, f"run {run_id} crashed: {exc}")
         try:

@@ -285,7 +285,7 @@ class EventResult(BaseModel):
     seq: int
     capability_id: str
     event_kind: str = ""
-    lane: str = Field("", description="prep | step | expect：这条事件服务用例哪一列")
+    lane: str = Field("", description="prep | do | check：这条事件服务用例哪一列")
     status: EventStatus
     executor_used: str = Field("", description="实际跑这事件的 executor id（adb / remote / vlm / hitl / ai_persona）")
     elapsed_ms: int = 0

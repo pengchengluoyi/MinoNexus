@@ -2,21 +2,17 @@
 from __future__ import annotations
 
 import threading
-import uuid
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from mino_nexus import app_automation as aas
-from mino_nexus import project_store as ps
-from mino_nexus.http_util import ok
-from mino_nexus.paths import data_dir
+from mino_nexus.services import app_automation as aas
+from mino_nexus.services import project_store as ps
+from mino_nexus.core.http_util import ok
 from mino_nexus.routers.deps import current_session
 
 router = APIRouter(prefix="/app-automation", tags=["App Automation"])
-
-_NOT_VISION = "视觉定位尚未搬到本仓。请用手动画登录图标，或先同步设计稿。"
 
 
 class PlaybookSaveBody(BaseModel):
@@ -59,19 +55,6 @@ class AutomationConfigUpdate(BaseModel):
     figma: Optional[FigmaDesignConfig] = None
     suites: Optional[list[CaseSuiteBody]] = None
     qa_process: Optional[dict[str, Any]] = None
-
-
-class IconTargetBody(BaseModel):
-    id: str = ""
-    name: str
-    x: int = 0
-    y: int = 0
-    w: int = 0
-    h: int = 0
-    image_url: str = ""
-    aliases: list[str] = []
-    note: str = ""
-    component_uid: str = ""
 
 
 class QaProcessAssistBody(BaseModel):
@@ -192,84 +175,15 @@ def list_cached_cases(app_id: str, _sess: dict = Depends(current_session)):
 @router.get("/runs/{app_id}")
 def list_app_runs(app_id: str, _sess: dict = Depends(current_session)):
     _app(app_id)
-    from mino_nexus import run_store
+    from mino_nexus.services import run_store
 
     rows = run_store.list_runs(limit=30, app_id=app_id)
     return ok({"runs": [run_store.to_task_json(r, include_cases=False) for r in rows]})
 
 
-@router.get("/icon-targets/{app_id}")
-def list_icon_targets(
-    app_id: str,
-    page: int = 1,
-    page_size: int = 50,
-    keyword: str = "",
-    _sess: dict = Depends(current_session),
-):
-    _app(app_id)
-    return ok(aas.list_icon_targets(app_id, page=page, page_size=page_size, keyword=keyword))
-
-
-@router.post("/icon-targets/{app_id}")
-def save_icon_target(app_id: str, body: IconTargetBody, _sess: dict = Depends(current_session)):
-    _app(app_id)
-    try:
-        row = aas.upsert_icon_target(app_id, body.model_dump())
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ok(row)
-
-
-@router.delete("/icon-targets/{app_id}/{target_id}")
-def delete_icon_target(app_id: str, target_id: str, _sess: dict = Depends(current_session)):
-    _app(app_id)
-    if not aas.delete_icon_target(app_id, target_id):
-        raise HTTPException(status_code=404, detail="Target not found")
-    return ok(msg="已删除")
-
-
-@router.post("/icon-targets/{app_id}/upload")
-async def upload_icon_image(app_id: str, file: UploadFile = File(...), _sess: dict = Depends(current_session)):
-    _app(app_id)
-    uploads = data_dir() / "uploads"
-    uploads.mkdir(parents=True, exist_ok=True)
-    ext = (file.filename or "")
-    ext = ext[ext.rfind("."):] if "." in (file.filename or "") else ".png"
-    name = f"icon_{uuid.uuid4().hex[:12]}{ext}"
-    content = await file.read()
-    (uploads / name).write_bytes(content)
-    return ok({"image_url": f"/static/{name}"})
-
-
-@router.get("/icon-targets/{app_id}/graph-candidates")
-def graph_icon_candidates(app_id: str, _sess: dict = Depends(current_session)):
-    _app(app_id)
-    return ok({"items": []})
-
-
-@router.post("/icon-targets/{app_id}/seed-login-templates")
-def seed_login(app_id: str, _sess: dict = Depends(current_session)):
-    raise HTTPException(status_code=400, detail=_NOT_VISION)
-
-
-@router.post("/icon-targets/{app_id}/seed-from-figma")
-def seed_figma(app_id: str, _sess: dict = Depends(current_session)):
-    raise HTTPException(status_code=400, detail="从设计稿抽登录图标需要视觉能力，尚未搬迁。请先同步 Figma，再手动画图标。")
-
-
-@router.post("/icon-targets/{app_id}/from-locate")
-def from_locate(app_id: str, _sess: dict = Depends(current_session)):
-    raise HTTPException(status_code=400, detail=_NOT_VISION)
-
-
-@router.post("/icon-targets/{app_id}/import-graph")
-def import_graph(app_id: str, _sess: dict = Depends(current_session)):
-    raise HTTPException(status_code=400, detail="图谱组件导入尚未接线。请用手动画图标。")
-
-
 @router.post("/qa-process/assist/{app_id}")
 def qa_assist(app_id: str, body: QaProcessAssistBody, _sess: dict = Depends(current_session)):
-    from mino_nexus import qa_process_assist as assist
+    from mino_nexus.services import qa_process_assist as assist
 
     _app(app_id)
     if body.job not in assist.ASSIST_JOBS:
@@ -290,7 +204,7 @@ def qa_assist(app_id: str, body: QaProcessAssistBody, _sess: dict = Depends(curr
 
 @router.post("/qa-process/tick/{app_id}")
 def qa_tick(app_id: str, body: QaProcessTickBody, _sess: dict = Depends(current_session)):
-    from mino_nexus import qa_process_jobs as cover_jobs
+    from mino_nexus.services import qa_process_jobs as cover_jobs
 
     app = _app(app_id)
     cfg = aas.get_automation_config(app)
@@ -338,7 +252,7 @@ def qa_tick(app_id: str, body: QaProcessTickBody, _sess: dict = Depends(current_
 
 @router.get("/qa-process/job/{job_id}")
 def qa_job(job_id: str, _sess: dict = Depends(current_session)):
-    from mino_nexus import qa_process_jobs as cover_jobs
+    from mino_nexus.services import qa_process_jobs as cover_jobs
 
     job = cover_jobs.get(job_id)
     if not job:
@@ -355,7 +269,7 @@ def qa_job(job_id: str, _sess: dict = Depends(current_session)):
 
 @router.post("/qa-process/job/{job_id}/cancel")
 def qa_cancel(job_id: str, _sess: dict = Depends(current_session)):
-    from mino_nexus import qa_process_jobs as cover_jobs
+    from mino_nexus.services import qa_process_jobs as cover_jobs
 
     job = cover_jobs.get(job_id)
     if not job:
@@ -378,8 +292,8 @@ def _tick_in_background(
     rewrite_stubs: bool,
     replace_cases: bool,
 ) -> None:
-    from mino_nexus import qa_process_jobs as cover_jobs
-    from mino_nexus.qa_cover import tick
+    from mino_nexus.services import qa_process_jobs as cover_jobs
+    from mino_nexus.services.qa_cover import tick
 
     job = cover_jobs.get(job_id)
     if not job:
@@ -390,6 +304,7 @@ def _tick_in_background(
         result = tick(
             qa_process=qa_process,
             cases=cases,
+            app_id=app_id,
             requirement_id=requirement_id,
             user_note=user_note,
             force=force,
@@ -417,13 +332,14 @@ def _tick_in_background(
 
 @router.post("/qa-process/import/{app_id}")
 def qa_import(app_id: str, body: CoverImportBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.qa_cover import import_cover
+    from mino_nexus.services.qa_cover import import_cover
 
     app = _app(app_id)
     cfg = aas.get_automation_config(app)
     try:
         result = import_cover(
             qa_process=cfg.get("qa_process") or {},
+            app_id=app_id,
             requirement_id=body.requirement_id,
             kind=body.kind,
             text=body.text,
@@ -439,7 +355,7 @@ def qa_import(app_id: str, body: CoverImportBody, _sess: dict = Depends(current_
 
 @router.post("/qa-process/publish-mindmap/{app_id}")
 def qa_mindmap(app_id: str, body: PublishMindmapBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.qa_cover import publish_mindmap
+    from mino_nexus.services.qa_cover import publish_mindmap
 
     app = _app(app_id)
     cfg = aas.get_automation_config(app)
@@ -454,7 +370,7 @@ def qa_mindmap(app_id: str, body: PublishMindmapBody, _sess: dict = Depends(curr
 
 @router.post("/qa-process/hide-mindmap-wiki/{app_id}")
 def qa_hide(app_id: str, body: HideMindmapWikiBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.qa_cover import hide_mindmap
+    from mino_nexus.services.qa_cover import hide_mindmap
 
     app = _app(app_id)
     cfg = aas.get_automation_config(app)
@@ -469,7 +385,7 @@ def qa_hide(app_id: str, body: HideMindmapWikiBody, _sess: dict = Depends(curren
 
 @router.post("/qa-process/atlas-patch/{app_id}")
 def qa_atlas(app_id: str, body: AtlasPatchBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.qa_cover import apply_atlas_patch
+    from mino_nexus.services.qa_cover import apply_atlas_patch
 
     app = _app(app_id)
     cfg = aas.get_automation_config(app)
@@ -489,7 +405,7 @@ def qa_atlas(app_id: str, body: AtlasPatchBody, _sess: dict = Depends(current_se
 
 @router.get("/qa-process/atlas-aliases/{app_id}")
 def atlas_aliases(app_id: str, _sess: dict = Depends(current_session)):
-    from mino_nexus import atlas_aliases as aliases
+    from mino_nexus.services import atlas_aliases as aliases
 
     _app(app_id)
     return ok({"items": aliases.list_aliases(app_id)})
@@ -497,7 +413,7 @@ def atlas_aliases(app_id: str, _sess: dict = Depends(current_session)):
 
 @router.patch("/qa-process/atlas-aliases/{app_id}/{alias_id}")
 def patch_alias(app_id: str, alias_id: str, body: AtlasAliasUpdateBody, _sess: dict = Depends(current_session)):
-    from mino_nexus import atlas_aliases as aliases
+    from mino_nexus.services import atlas_aliases as aliases
 
     _app(app_id)
     row = aliases.patch(app_id, alias_id, body.model_dump(exclude_none=True))
@@ -508,7 +424,7 @@ def patch_alias(app_id: str, alias_id: str, body: AtlasAliasUpdateBody, _sess: d
 
 @router.delete("/qa-process/atlas-aliases/{app_id}/{alias_id}")
 def delete_alias(app_id: str, alias_id: str, _sess: dict = Depends(current_session)):
-    from mino_nexus import atlas_aliases as aliases
+    from mino_nexus.services import atlas_aliases as aliases
 
     _app(app_id)
     if not aliases.delete(app_id, alias_id):
@@ -518,8 +434,8 @@ def delete_alias(app_id: str, alias_id: str, _sess: dict = Depends(current_sessi
 
 @router.post("/config/{app_id}/figma/sync")
 def figma_sync(app_id: str, body: FigmaSyncBody, _sess: dict = Depends(current_session)):
-    from mino_nexus import figma_service as fs
-    from mino_nexus import settings_store as ss
+    from mino_nexus.services import figma_service as fs
+    from mino_nexus.services import settings_store as ss
 
     app = _app(app_id)
     file_key = ""
@@ -562,8 +478,8 @@ def figma_sync(app_id: str, body: FigmaSyncBody, _sess: dict = Depends(current_s
 
 @router.post("/config/{app_id}/figma/apply-logic")
 def figma_apply(app_id: str, body: FigmaApplyLogicBody, _sess: dict = Depends(current_session)):
-    from mino_nexus import figma_logic as fls
-    from mino_nexus import settings_store as ss
+    from mino_nexus.services import figma_logic as fls
+    from mino_nexus.services import settings_store as ss
 
     app = _app(app_id)
     if body.file_url or body.file_key:
