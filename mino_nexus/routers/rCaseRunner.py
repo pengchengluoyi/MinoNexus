@@ -10,6 +10,7 @@ from mino_nexus.services import project_store as ps
 from mino_nexus.services import run_store
 from mino_nexus.core.http_util import ok
 from mino_nexus.loop import agent_stream, case_runner as cr
+from mino_nexus.loop.web_env import release_web_for_run
 from mino_nexus.routers.deps import current_session
 from mino_nexus.services.ui_devices import ui_devices
 
@@ -36,6 +37,7 @@ class RunRequest(BaseModel):
     requirement_id: str = ""
     release_id: str = ""
     provider_id: str = ""
+    playwright_headless: bool = True
 
 
 class PromoteBaselineRequest(BaseModel):
@@ -87,6 +89,7 @@ def run_cases(body: RunRequest, _sess: dict = Depends(current_session)):
             slot_id=body.slot_id or "",
             instruction=str(body.instruction or "").strip(),
             provider_id=str(body.provider_id or "").strip(),
+            playwright_headless=bool(body.playwright_headless),
         )
         return ok(snapshot, msg="AI-led 回归任务已启动")
     except cr.DeviceBusy as exc:
@@ -144,6 +147,16 @@ def cancel_task(task_id: str, _sess: dict = Depends(current_session)):
         raise HTTPException(status_code=int(result.get("code") or 404), detail=result.get("reason") or "cancel failed")
     if result.get("already"):
         return ok(result, msg="任务已结束")
+    doc = run_store.get(task_id) or {}
+    sns = list(doc.get("sns") or [])
+    head = str(doc.get("sn") or "").strip()
+    if head and head not in sns:
+        sns = [head, *sns]
+    release_web_for_run(
+        task_id,
+        sns=sns,
+        platforms_by_sn=doc.get("platforms_by_sn") if isinstance(doc.get("platforms_by_sn"), dict) else {},
+    )
     return ok(result, msg="已请求取消，当前步骤结束后停止")
 
 

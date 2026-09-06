@@ -33,6 +33,20 @@ from mino_nexus.core.schemas import CapturedScreen, EventResult, EventStatus, Pl
 
 TAG = "RouterProxy"
 
+# case_runner 在后台线程跑同步 agent_loop，Scout WS 却在 FastAPI 主 loop。
+# 若用 asyncio.run() 临时 loop 去 await node.send，RESULT 回在主 loop 上，
+# waiter 永远等不到 → observe/action 每次都顶满 timeout+pad（17s / 35s）。
+_MAIN_LOOP: Optional[asyncio.AbstractEventLoop] = None
+_OBSERVE_TIMEOUT_SEC = 8.0
+_OBSERVE_PAD_SEC = 2.0
+_MUTATE_TIMEOUT_SEC = 10.0
+_DEFAULT_ACTION_TIMEOUT_SEC = 15.0
+
+
+def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
+    global _MAIN_LOOP
+    _MAIN_LOOP = loop
+
 # 这四个 capability 由 Nexus 本地 executor 处理，**不出网**（CLAUDE.md §2.3）。
 # 搞错会让 Scout 收到它 supports() 返回 False 的能力，白跑一圈 fallback。
 LOCAL_CAP_PREFIXES = ("human_", "recover_")
@@ -60,12 +74,14 @@ class RouterProxy:
         sn: str,
         *,
         run_id: str = "",
-        timeout_pad_sec: float = 5.0,
+        timeout_pad_sec: float = 2.0,
         target_package: str = "",
+        playwright_headless: bool = True,
     ):
         self.sn = sn
         self.run_id = run_id
         self.target_package = str(target_package or "")
+        self.playwright_headless = bool(playwright_headless)
         # 协议 §6：等 RESULT 用 payload.timeout_sec + 宽限
         self.timeout_pad_sec = timeout_pad_sec
 
@@ -88,7 +104,7 @@ class RouterProxy:
         *,
         prefer: Optional[tuple[str, ...]] = None,
         force_fresh: bool = True,
-        timeout_sec: float = 15.0,
+        timeout_sec: float = _OBSERVE_TIMEOUT_SEC,
         compress_ratio: float = 2.0,
     ) -> CapturedScreen:
         """替代上游的 `capture_screen(ctx, ...)`，返回值保持 CapturedScreen 形状。"""
@@ -98,6 +114,32 @@ class RouterProxy:
                 timeout_sec=timeout_sec, compress_ratio=compress_ratio,
             )
         )
+
+    def notify_scout_cancel_run(self, run_id: str = "") -> None:
+        """通知 Scout 结束 run：清幂等缓存并回收 Web 环境（best-effort）。"""
+        _run_sync(self.notify_scout_cancel_run_async(run_id))
+
+    async def notify_scout_cancel_run_async(self, run_id: str = "") -> None:
+        node, why = get_registry().resolve(self.sn)
+        if node is None:
+            SLog.w(TAG, f"cancel_run 跳过 sn={self.sn}: {why}")
+            return
+        rid = run_id or self.run_id
+        req = P.Execute(
+            run_id=rid,
+            step_idx=-1,
+            sn=self.sn,
+            capability_id="cancel_run",
+            params={},
+            executor_order=[],
+            low_level={},
+            selected_impl={},
+            device_hint=self._device_hint(node),
+            timeout_sec=10.0,
+            device_id=self.sn,
+            platform=_device_platform(self.sn, node),
+        )
+        await self._send_with_retry(node, P.MsgType.EXECUTE, req, req.timeout_sec)
 
     # ---------------- 异步实现 ----------------
 
@@ -154,7 +196,7 @@ class RouterProxy:
         *,
         prefer: Optional[tuple[str, ...]] = None,
         force_fresh: bool = True,
-        timeout_sec: float = 15.0,
+        timeout_sec: float = _OBSERVE_TIMEOUT_SEC,
         compress_ratio: float = 2.0,
     ) -> CapturedScreen:
         node, why = get_registry().resolve(self.sn)
@@ -195,7 +237,10 @@ class RouterProxy:
             device_id=self.sn,
             platform=_device_platform(self.sn, node),
         )
-        res = await self._send_with_retry(node, P.MsgType.EXECUTE, req, timeout_sec)
+        # 截图每轮都要走；observe 单独用更紧的 pad，且不重试（重试会把一步拖到 ~40s+）。
+        res = await self._send_once(
+            node, P.MsgType.EXECUTE, req, timeout_sec, pad_sec=_OBSERVE_PAD_SEC,
+        )
         if res is None:
             return CapturedScreen(
                 ok=False, source="router_proxy",
@@ -204,7 +249,7 @@ class RouterProxy:
         if res.status is not EventStatus.PASS:
             return CapturedScreen(ok=False, source=res.source or "", error=res.error or res.summary)
         data = dict(res.data or {})
-        return CapturedScreen(
+        shot = CapturedScreen(
             ok=True,
             source=res.source,
             image_base64=res.image_base64 or str(data.get("image_base64") or ""),
@@ -214,6 +259,10 @@ class RouterProxy:
             elapsed_ms=res.elapsed_ms,
             remote_detail={**dict(res.extra or {}), **data},
         )
+        scout_ms = int(res.elapsed_ms or 0)
+        if scout_ms and scout_ms < 5000:
+            SLog.d(TAG, f"[{(self.run_id or '')[:8]}] observe ok scout={scout_ms}ms cap={cap}")
+        return shot
 
     # ---------------- 选路 ----------------
 
@@ -288,6 +337,7 @@ class RouterProxy:
         if self.target_package:
             hint["target_package"] = self.target_package
         if plat in ("web", "browser", "playwright"):
+            hint["headless"] = self.playwright_headless
             return hint
         if dev is not None:
             hint["model"] = dev.model
@@ -302,17 +352,28 @@ class RouterProxy:
 
     # ---------------- 发送与重试 ----------------
 
+    async def _send_once(
+        self,
+        node: NodeSession,
+        mtype: P.MsgType,
+        payload: Any,
+        timeout_sec: float,
+        *,
+        pad_sec: Optional[float] = None,
+    ) -> Optional[P.Result]:
+        deadline = timeout_sec + (self.timeout_pad_sec if pad_sec is None else pad_sec)
+        assert node.send is not None
+        return await node.send(mtype, payload, timeout=deadline)
+
     async def _send_with_retry(
         self, node: NodeSession, mtype: P.MsgType, payload: Any, timeout_sec: float
     ) -> Optional[P.Result]:
         """协议 §6：超时后按同键重发一次；Scout 有幂等缓存，不会重复操作设备。"""
-        deadline = timeout_sec + self.timeout_pad_sec
-        assert node.send is not None
-        res = await node.send(mtype, payload, timeout=deadline)
+        res = await self._send_once(node, mtype, payload, timeout_sec)
         if res is not None:
             return res
         SLog.w(TAG, f"[{node.node_id}] {mtype.value} 超时，按同键重发一次（Scout 侧幂等）")
-        return await node.send(mtype, payload, timeout=deadline)
+        return await self._send_once(node, mtype, payload, timeout_sec)
 
 
 # ---------------- 小工具 ----------------
@@ -374,12 +435,17 @@ def executors_for_device(sn: str, node: NodeSession) -> list[str]:
 
 def _timeout_for(event: PlanEvent) -> float:
     params = event.params or {}
-    if event.capability_id == "install_apk":
+    cap = str(event.capability_id or "")
+    if cap == "install_apk":
         return 300.0
+    if cap in {"launch_app", "open_url", "open_app"}:
+        return 30.0
+    if cap in {"tap_element", "input_text", "tap_xy", "swipe", "scroll", "long_press"}:
+        return _MUTATE_TIMEOUT_SEC
     ms = params.get("duration_ms") or params.get("ms")
     if ms:
         return max(30.0, float(ms) / 1000.0 + 10.0)
-    return 30.0
+    return _DEFAULT_ACTION_TIMEOUT_SEC
 
 
 def _now_iso() -> str:
@@ -424,14 +490,14 @@ def _event_result_from(event: PlanEvent, res: P.Result, started: str) -> EventRe
 
 
 def _run_sync(coro):
-    """同步壳。上游循环是同步代码，而 transport 是 asyncio。
-
-    在已有事件循环的线程里（如 FastAPI handler）不能 run_until_complete ——
-    那种场景应直接 await *_async 版本。这里显式报错，别悄悄死锁。
-    """
+    """同步壳。agent_loop 在后台线程；Scout WS 在主 loop —— 必须桥接。"""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
+        main = _MAIN_LOOP
+        if main is not None and main.is_running():
+            fut = asyncio.run_coroutine_threadsafe(coro, main)
+            return fut.result()
         return asyncio.run(coro)
     coro.close()
     raise RuntimeError(

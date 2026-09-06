@@ -56,7 +56,11 @@ async def lifespan(app: FastAPI):
 
     ensure_seed_users()
     configure_proxy_bypass()
-    ui_ws.set_loop(asyncio.get_running_loop())
+    loop = asyncio.get_running_loop()
+    ui_ws.set_loop(loop)
+    from mino_nexus.loop.router_proxy import set_main_loop
+
+    set_main_loop(loop)
     handle = await register_beacon()
     app.state.mdns = handle
     yield

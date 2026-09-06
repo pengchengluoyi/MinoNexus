@@ -12,6 +12,7 @@ from mino_nexus.services import ui_devices
 from mino_nexus.ai.llm_client import resolve_regression_provider
 from mino_nexus.core.log import SLog
 from mino_nexus.loop.agent_stream import emit_testing_task
+from mino_nexus.loop.web_env import release_web_for_run
 from mino_nexus.loop.persist_run_finish import persist_run_finish
 from mino_nexus.runtime.run_context import device_platform_kind
 
@@ -79,6 +80,7 @@ def run_cases(
     slot_id: str = "",
     instruction: str = "",
     provider_id: str = "",
+    playwright_headless: bool = True,
 ) -> dict[str, Any]:
     device_sns = _normalize_sns(sn, sns)
     cov = str(coverage or "").strip().lower()
@@ -159,6 +161,7 @@ def run_cases(
         "provider_id": (provider or {}).get("id") or gate.get("provider_id") or "",
         "provider_name": (provider or {}).get("name") or "",
         "model_name": (provider or {}).get("model") or "",
+        "playwright_headless": bool(playwright_headless),
         "status": "running",
         "started_at": _now(),
         "finished_at": None,
@@ -211,7 +214,7 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
     if not doc:
         return
     try:
-        for case in list(doc.get("cases") or []):
+        for case_seq, case in enumerate(list(doc.get("cases") or [])):
             if run_store.cancel_requested(run_id):
                 break
             cid = str(case.get("case_id") or "")
@@ -235,6 +238,8 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
                 provider_id=provider_id,
                 playbook=playbook if isinstance(playbook, dict) else {},
                 cancel_check=lambda: run_store.cancel_requested(run_id),
+                case_seq=case_seq,
+                playwright_headless=bool(doc.get("playwright_headless", True)),
             )
             # 用例 steps/expected 是原文。执行轨迹只能写 engine_steps，写进 steps 会让详情页变成 [object Object]。
             run_store.patch_case(
@@ -278,6 +283,17 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
             persist_run_finish(finished)
         except Exception:
             pass
+    finally:
+        latest = run_store.get(run_id) or doc
+        sns = list(latest.get("sns") or [])
+        head = str(latest.get("sn") or "").strip()
+        if head and head not in sns:
+            sns = [head, *sns]
+        release_web_for_run(
+            run_id,
+            sns=sns,
+            platforms_by_sn=latest.get("platforms_by_sn") if isinstance(latest.get("platforms_by_sn"), dict) else {},
+        )
 
 
 def retry_failed(task_id: str, *, sn: str = "") -> dict[str, Any]:
@@ -303,6 +319,7 @@ def retry_failed(task_id: str, *, sn: str = "") -> dict[str, Any]:
         requirement_id=str(doc.get("requirement_id") or ""),
         release_id=str(doc.get("release_id") or ""),
         provider_id=str(doc.get("provider_id") or ""),
+        playwright_headless=bool(doc.get("playwright_headless", True)),
     )
     return {"ok": True, "code": 200, "case_ids": failed_ids, "data": snapshot}
 

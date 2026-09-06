@@ -21,6 +21,7 @@ from mino_nexus.catalog import registry as catalog
 from mino_nexus.core.protocol import EventStatus
 from mino_nexus.services.run_store import line_text, report_run_id
 from mino_nexus.runtime.run_context import build_run_context
+from mino_nexus.loop.web_env import cleanup_after_case, frame_step, reset_before_case
 from mino_nexus.core.schemas import EventResult, PlanEvent
 
 TAG = "AgentLoop"
@@ -69,6 +70,8 @@ def run_case(
     playbook: dict | None = None,
     app_name: str = "",
     cancel_check=None,
+    case_seq: int = 0,
+    playwright_headless: bool = True,
 ) -> dict[str, Any]:
     from mino_nexus.ai import dispatch_log as dispatch
 
@@ -87,7 +90,12 @@ def run_case(
     )
     if playbook:
         ctx.playbook = playbook
-    proxy = RouterProxy(sn, run_id=run_id, target_package=package)
+    proxy = RouterProxy(
+        sn,
+        run_id=run_id,
+        target_package=package,
+        playwright_headless=playwright_headless,
+    )
     history: list[str] = []
     steps: list[dict[str, Any]] = []
 
@@ -125,8 +133,10 @@ def run_case(
             steps=steps,
             t0=t0,
             run_id=run_id,
+            case_seq=case_seq,
         )
     finally:
+        cleanup_after_case(proxy, ctx, run_id=run_id, case_seq=case_seq, case=case)
         dispatch.reset(tok)
 
 
@@ -161,7 +171,7 @@ def _record(
     return row
 
 
-def _ensure_web_page(proxy: RouterProxy, ctx, *, run_id: str) -> Optional[dict[str, Any]]:
+def _ensure_web_page(proxy: RouterProxy, ctx, *, run_id: str, case_seq: int = 0) -> Optional[dict[str, Any]]:
     from mino_nexus.runtime.run_context import is_web_slot
 
     if not is_web_slot(str(getattr(ctx, "sn", "") or ""), str(getattr(ctx, "platform", "") or "")):
@@ -176,7 +186,7 @@ def _ensure_web_page(proxy: RouterProxy, ctx, *, run_id: str) -> Optional[dict[s
         label="打开页面",
         expected_executor="playwright",
     )
-    result = proxy.dispatch(event, run_id=run_id, step_idx=0)
+    result = proxy.dispatch(event, run_id=run_id, step_idx=frame_step(case_seq, 1))
     status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
     err = result.error or result.summary or ""
     fatal = status_val in ("fail", "failed", "declined", "blocked") and not any(
@@ -242,6 +252,7 @@ def _run_loop(
     steps: list[dict[str, Any]],
     t0: float,
     run_id: str,
+    case_seq: int = 0,
 ) -> dict[str, Any]:
     from mino_nexus.services.skill_store import get_skill
 
@@ -296,7 +307,8 @@ def _run_loop(
         summary = "用例没有可执行的步骤。"
         return _finish(emit, status="fail", summary=summary, steps=steps, t0=t0, pack=_pack)
 
-    opened = _ensure_web_page(proxy, ctx, run_id=run_id)
+    reset_before_case(proxy, ctx, run_id=run_id, case_seq=case_seq, case=case)
+    opened = _ensure_web_page(proxy, ctx, run_id=run_id, case_seq=case_seq)
     if opened:
         rec(
             0,

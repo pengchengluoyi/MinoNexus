@@ -1,6 +1,9 @@
 # !/usr/bin/env python
 # -*-coding:utf-8 -*-
-"""决策模型坐标：0-1000 千分比 → 截图像素。成对换算，避免一轴当千分比、一轴当像素。"""
+"""Agent 决策坐标：出站 EXECUTE 保持 0–1000 千分比，由 Scout 按分辨率换像素。
+
+Nexus 在派单前不得把千分比换成像素，否则 Scout 会再换算一次（Web 1280×800 上必偏）。
+"""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -28,12 +31,45 @@ def _one_to_px(v: Any, dim: int) -> Any:
     return _clamp_px(px, dim)
 
 
-def apply_xy_params(params: dict[str, Any], width: int, height: int) -> dict[str, Any]:
-    """就地换算 params 里的坐标对。
+def _clamp_milli(v: Any) -> Any:
+    fv = _as_float(v)
+    if fv is None:
+        return v
+    return max(0, min(int(_MILLI), int(round(fv))))
 
-    约定：0-1000 是千分比。若一对里**任意**一个值 >1000，整对按像素处理
-    （模型看截图直出像素时，x 常 ≤1000 而 y 在 1000+，旧逻辑会把 x 再乘一遍）。
-    """
+
+def _px_to_milli(v: Any, dim: int) -> Any:
+    fv = _as_float(v)
+    if fv is None or dim <= 0:
+        return v
+    return max(0, min(int(_MILLI), int(round(fv / dim * _MILLI))))
+
+
+def prepare_xy_params_for_execute(params: dict[str, Any], width: int, height: int) -> dict[str, Any]:
+    """规范化 agent 决策坐标，供 EXECUTE 发给 Scout（协议要求 0–1000 千分比）。"""
+    if not isinstance(params, dict):
+        return params
+    for kx, ky in _PAIRS:
+        if kx not in params and ky not in params:
+            continue
+        xv = _as_float(params.get(kx)) if kx in params else None
+        yv = _as_float(params.get(ky)) if ky in params else None
+        pair_is_px = (xv is not None and xv > _MILLI) or (yv is not None and yv > _MILLI)
+        if pair_is_px:
+            if kx in params:
+                params[kx] = _px_to_milli(params[kx], width)
+            if ky in params:
+                params[ky] = _px_to_milli(params[ky], height)
+        else:
+            if kx in params:
+                params[kx] = _clamp_milli(params[kx])
+            if ky in params:
+                params[ky] = _clamp_milli(params[ky])
+    return params
+
+
+def apply_xy_params(params: dict[str, Any], width: int, height: int) -> dict[str, Any]:
+    """千分比 → 截图像素。仅用于 Nexus 本地消费；**不要**在 EXECUTE 出站前调用。"""
     if not isinstance(params, dict):
         return params
     for kx, ky in _PAIRS:

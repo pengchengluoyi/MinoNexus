@@ -359,13 +359,6 @@ def account_label(row: dict | None, channels: Optional[List[dict]] = None) -> st
     row = row if isinstance(row, dict) else {}
     ident = account_ident(row) or "未填号码"
     env = str(row.get("env") or "").strip() or "-"
-    surf = str(row.get("surface_label") or "").strip()
-    if not surf:
-        sid = str(row.get("surface") or "").strip()
-        ch = _channel_by_id(channels, sid)
-        surf = _channel_title(ch) if ch else sid
-    if surf:
-        return f"{ident} · {env} · {surf}"
     return f"{ident} · {env}"
 
 
@@ -405,7 +398,6 @@ def _norm_test_accounts(raw: Any) -> List[dict]:
                 "name": ident[:40],
                 "env": _slug(item.get("env") or "test", "test"),
                 "kind": str(item.get("kind") or "mixed").strip() or "mixed",
-                "surface": _slug(item.get("surface") or item.get("channel_id") or "", ""),
                 "phone": phone,
                 "email": email,
                 "username": username,
@@ -506,11 +498,6 @@ def _tag_fits_query(tag: str, q: str) -> bool:
     return True
 
 
-def _account_surface(row: dict | None) -> str:
-    row = row if isinstance(row, dict) else {}
-    return _slug(row.get("surface") or row.get("channel_id") or "", "")
-
-
 def _surface_is_primary(ch: Optional[dict]) -> bool:
     if not isinstance(ch, dict):
         return False
@@ -518,19 +505,8 @@ def _surface_is_primary(ch: Optional[dict]) -> bool:
 
 
 def account_fits_surface(row: dict | None, want: str, channels: Optional[List[dict]] = None) -> bool:
-    """账号必须能登录 want 这个应用/平台。三方号不能落到主 App。"""
-    sid = _account_surface(row)
-    need = _slug(want, "")
-    if not need:
-        ch = _channel_by_id(channels, sid)
-        if not sid:
-            return True
-        return _surface_is_primary(ch)
-    if sid == need:
-        return True
-    if sid:
-        return False
-    return _surface_is_primary(_channel_by_id(channels, need))
+    """账号不再绑定平台；保留签名供租号路径调用。"""
+    return True
 
 
 def resolve_surface_id(
@@ -602,30 +578,15 @@ def pick_test_accounts(
     raw = str(prompt or "").strip()
     q = raw.lower()
     env_key = _slug(env, "") or infer_env_from_prompt(raw)
-    ch_list = channels if isinstance(channels, list) else (
-        (env_doc or {}).get("channels") if isinstance(env_doc, dict) else []
-    )
-    want = _slug(surface, "") or resolve_surface_id(
-        env_doc if isinstance(env_doc, dict) else {"channels": ch_list or []},
-        surface=surface,
-        platform=platform,
-        target_id=target_id,
-        prompt=raw,
-    )
     grams = _prompt_grams(raw)
     scored = []
     for row in rows or []:
         row_env = str(row.get("env") or "")
         if env_key and row_env and row_env != env_key:
             continue
-        if not account_fits_surface(row, want, ch_list):
-            continue
         tags = [str(t or "").strip() for t in (row.get("tags") or []) if str(t or "").strip()]
         ident = account_ident(row)
         note = str(row.get("note") or "")
-        sid = _account_surface(row)
-        ch = _channel_by_id(ch_list, sid)
-        surface_label = _channel_title(ch) if ch else sid
         blob = " ".join(
             [
                 ident,
@@ -633,8 +594,6 @@ def pick_test_accounts(
                 str(row.get("email") or ""),
                 str(row.get("username") or ""),
                 " ".join(tags),
-                surface_label,
-                sid,
             ]
         ).lower()
         score = 0
@@ -642,9 +601,6 @@ def pick_test_accounts(
         if env_key and row_env == env_key:
             score += 6
             reasons.append("环境匹配")
-        if want and (sid == want or (not sid and _surface_is_primary(_channel_by_id(ch_list, want)))):
-            score += 8
-            reasons.append("平台匹配")
         if row.get("locked"):
             score -= 8
             reasons.append("占用中")
@@ -679,7 +635,6 @@ def pick_test_accounts(
             **row,
             "score": int(score),
             "reason": " · ".join(reasons) or "无明显匹配",
-            "surface_label": surface_label,
         })
     scored.sort(key=lambda x: (-int(x.get("score") or 0), account_ident(x), str(x.get("env") or "")))
     return scored[:12]

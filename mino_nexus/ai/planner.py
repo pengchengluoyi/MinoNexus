@@ -22,7 +22,7 @@ from pydantic import ValidationError
 from mino_nexus.core.log import SLog
 
 from mino_nexus.ai import prompts as P
-from mino_nexus.ai.coords import apply_xy_params, lift_selector_target
+from mino_nexus.ai.coords import lift_selector_target, prepare_xy_params_for_execute
 from mino_nexus.ai.llm_client import (
     call_chat_text,
     resolve_regression_provider,
@@ -958,7 +958,7 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
     raw_action = raw.get("action")
     if isinstance(raw_action, dict) and raw_action.get("capability_id"):
         params = raw_action.get("params") if isinstance(raw_action.get("params"), dict) else {}
-        apply_xy_params(params, width, height)
+        prepare_xy_params_for_execute(params, width, height)
         lift_selector_target(params)
         action = AgentAction(capability_id=str(raw_action.get("capability_id")), params=params)
     if status in {"continue", "ask_human"} and action is None:

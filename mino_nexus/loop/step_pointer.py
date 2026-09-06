@@ -7,7 +7,8 @@ from typing import Any, Optional
 from mino_nexus.ai.case_text import parse_numbered_items_rules
 from mino_nexus.services.run_store import spec_lines
 
-TAP_REPEAT_TOL_PX = 48
+# agent 决策坐标是 0–1000 千分比；约等于 1280 宽屏上 48px 容差。
+TAP_REPEAT_TOL_MILLI = 40
 
 
 @dataclass
@@ -67,7 +68,7 @@ def repeats_last_tap(
     last: Optional[dict[str, Any]],
     params: Optional[dict[str, Any]],
     *,
-    tol: int = TAP_REPEAT_TOL_PX,
+    tol: int = TAP_REPEAT_TOL_MILLI,
 ) -> bool:
     if not last or not params:
         return False
