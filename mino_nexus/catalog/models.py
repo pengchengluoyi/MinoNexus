@@ -52,6 +52,7 @@ class RecoveryMatch(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     evidence: dict[str, str] = Field(default_factory=dict)
+    evidence_any: list[dict[str, str]] = Field(default_factory=list)
     screen_text_any: list[str] = Field(default_factory=list)
     top_window_pkg_prefix: list[str] = Field(default_factory=list)
 

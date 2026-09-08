@@ -5,6 +5,7 @@ from mino_nexus.models.catalog import CatalogEntry, CatalogMeta
 from mino_nexus.models.device import Device
 from mino_nexus.models.dispatch import DispatchCall
 from mino_nexus.models.knowledge import KnowledgeEntry
+from mino_nexus.models.llm_job import LlmJob
 from mino_nexus.models.nav import StudioNav
 from mino_nexus.models.node import Node, Studio
 from mino_nexus.models.plugin import PluginPolicy, UserPluginSecret
@@ -27,6 +28,7 @@ __all__ = [
     "Device",
     "DispatchCall",
     "KnowledgeEntry",
+    "LlmJob",
     "InstallToken",
     "MCaseBaseline",
     "MCaseRunTrace",

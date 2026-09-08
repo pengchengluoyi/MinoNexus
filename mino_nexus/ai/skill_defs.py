@@ -1,22 +1,8 @@
-"""技能枚举与 builtin 种子。prompt 正文仍在 prompts.py / role_prompts.py，这里只引用。"""
+"""技能枚举与 builtin 种子。prompt 正文在 llm_jobs，skills.system_prompt 列废弃。"""
 from __future__ import annotations
 
 from typing import Any
 
-from mino_nexus.ai import prompts as P
-from mino_nexus.ai.role_prompts import (
-    CASE_WRITER_SYSTEM_PROMPT,
-    DOC_KEEPER_SYSTEM_PROMPT,
-    KNOWLEDGE_REVIEWER_SYSTEM_PROMPT,
-    MINDMAP_WRITER_SYSTEM_PROMPT,
-    PRODUCT_EXPERT_SYSTEM_PROMPT,
-    REPORT_WRITER_SYSTEM_PROMPT,
-    REQ_ANALYST_IMPACT_PROMPT,
-    REQ_ANALYST_SYSTEM_PROMPT,
-    REQ_QA_BM_SYSTEM_PROMPT,
-    TEST_ENGINEER_SYSTEM_PROMPT,
-    VERSION_QA_BM_SYSTEM_PROMPT,
-)
 from mino_nexus.catalog.exec_classes import ALL_KINDS
 
 ENGINES = ("agent_loop", "qa_job", "chat")
@@ -31,7 +17,19 @@ ALIASES = {
 }
 
 DEFAULT_SOP = {
-    "phases": ["prep", "do", "check"],
+    "phases": [
+        {"id": "prep", "job": "agent-decide", "tool_kinds": ["prep", "generic", "recovery"], "guards": [], "advance_on": "signal_done"},
+        {"id": "do", "job": "agent-decide", "tool_kinds": ["do", "generic"], "guards": ["skip_repeat_tap"], "advance_on": "signal_done"},
+        {
+            "id": "check",
+            "job": "agent-decide",
+            "tool_kinds": ["check"],
+            "guards": ["deny_mutate", "force_case_expectation"],
+            "advance_on": "signal_done",
+            "require": "saw_assert",
+        },
+    ],
+    "inspections": [{"job": "inspect-session", "at": "case_start", "on_fail": "continue"}],
     "pointer": "none",
     "tool_kinds": list(ALL_KINDS),
     "max_steps": 24,
@@ -47,7 +45,7 @@ def _skill(
     role_id: str,
     role_label: str,
     engine: str,
-    system_prompt: str,
+    system_prompt: str = "",
     triggers: list[str],
     sop: dict[str, Any] | None = None,
     input_spec: dict[str, Any] | None = None,
@@ -73,12 +71,6 @@ def _skill(
 
 
 def builtin_skills() -> list[dict[str, Any]]:
-    from mino_nexus.ai.roles_catalog import (
-        CONDUCTOR_SYSTEM_PROMPT,
-        IM_DEFECT_PROMPT,
-        IM_DIALOGUE_PROMPT,
-    )
-
     return [
         _skill(
             id="run-case",
@@ -88,10 +80,10 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="test-engineer",
             role_label="测试工程师",
             engine="agent_loop",
-            system_prompt=P.AGENT_DO_SYSTEM_PROMPT,
             triggers=["case_run", "instruction"],
             sop={
-                "phases": ["prep", "do", "check"],
+                "phases": DEFAULT_SOP["phases"],
+                "inspections": DEFAULT_SOP["inspections"],
                 "pointer": "case_columns",
                 "tool_kinds": ["prep", "do", "check", "generic", "recovery"],
                 "max_steps": 24,
@@ -115,7 +107,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="req-analyst",
             role_label="需求分析师",
             engine="qa_job",
-            system_prompt=REQ_ANALYST_SYSTEM_PROMPT,
             triggers=["qa_tick"],
             input_spec={"type": "requirement", "map": {}},
             view_id="flow-doc",
@@ -129,7 +120,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="mindmap-writer",
             role_label="测试脑图编写",
             engine="qa_job",
-            system_prompt=MINDMAP_WRITER_SYSTEM_PROMPT,
             triggers=["qa_tick"],
             input_spec={"type": "requirement", "map": {}},
             view_id="flow-doc",
@@ -143,7 +133,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="case-writer",
             role_label="测试用例编写",
             engine="qa_job",
-            system_prompt=CASE_WRITER_SYSTEM_PROMPT,
             triggers=["qa_tick"],
             input_spec={"type": "requirement", "map": {}},
             view_id="flow-doc",
@@ -157,7 +146,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="req-analyst",
             role_label="需求分析师",
             engine="qa_job",
-            system_prompt=REQ_ANALYST_IMPACT_PROMPT,
             triggers=["qa_tick"],
             input_spec={"type": "requirement", "map": {}},
             view_id="flow-doc",
@@ -171,7 +159,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="conductor",
             role_label="分析师",
             engine="chat",
-            system_prompt=CONDUCTOR_SYSTEM_PROMPT,
             triggers=["qa_tick", "settings_chat"],
             view_id="job-timeline",
             sort_order=30,
@@ -184,7 +171,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="im-qa-assistant",
             role_label="IM 总指挥",
             engine="chat",
-            system_prompt=IM_DIALOGUE_PROMPT,
             triggers=["im_chat", "settings_chat"],
             view_id="job-timeline",
             sort_order=40,
@@ -197,7 +183,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="im-defect-assistant",
             role_label="IM 缺陷助手",
             engine="chat",
-            system_prompt=IM_DEFECT_PROMPT,
             triggers=["im_chat", "settings_chat"],
             view_id="job-timeline",
             sort_order=41,
@@ -210,7 +195,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="req-qa-bm",
             role_label="需求QA BM",
             engine="chat",
-            system_prompt=REQ_QA_BM_SYSTEM_PROMPT,
             triggers=["settings_chat"],
             view_id="flow-doc",
             sort_order=50,
@@ -223,7 +207,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="version-qa-bm",
             role_label="版本QA BM",
             engine="chat",
-            system_prompt=VERSION_QA_BM_SYSTEM_PROMPT,
             triggers=["settings_chat"],
             view_id="flow-doc",
             sort_order=51,
@@ -236,7 +219,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="test-engineer",
             role_label="测试工程师",
             engine="chat",
-            system_prompt=TEST_ENGINEER_SYSTEM_PROMPT,
             triggers=["settings_chat"],
             view_id="job-timeline",
             sort_order=52,
@@ -249,7 +231,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="report-writer",
             role_label="报告编写",
             engine="chat",
-            system_prompt=REPORT_WRITER_SYSTEM_PROMPT,
             triggers=["settings_chat"],
             view_id="flow-doc",
             sort_order=60,
@@ -262,7 +243,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="doc-keeper",
             role_label="文档维护",
             engine="chat",
-            system_prompt=DOC_KEEPER_SYSTEM_PROMPT,
             triggers=["settings_chat"],
             view_id="flow-doc",
             sort_order=61,
@@ -275,7 +255,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="knowledge-reviewer",
             role_label="知识审核员",
             engine="chat",
-            system_prompt=KNOWLEDGE_REVIEWER_SYSTEM_PROMPT,
             triggers=["settings_chat"],
             view_id="job-timeline",
             sort_order=70,
@@ -288,7 +267,6 @@ def builtin_skills() -> list[dict[str, Any]]:
             role_id="product-expert",
             role_label="产品专家",
             engine="chat",
-            system_prompt=PRODUCT_EXPERT_SYSTEM_PROMPT,
             triggers=["settings_chat"],
             view_id="job-timeline",
             sort_order=71,

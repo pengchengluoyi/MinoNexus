@@ -23,6 +23,7 @@ _CONSOLE_DENY: list[tuple[str, set[str]]] = [
 ]
 _STUDIO_DENY: list[tuple[str, set[str]]] = [
     (r"^/auth/users(/|$)", {"POST", "PUT", "DELETE"}),
+    (r"^/settings/ai/jobs(/|$)", {"PUT", "POST"}),
     (r"^/packs(/|$)", {"POST", "PUT", "PATCH", "DELETE"}),
     (r"^/settings/mail(/|$)", {"PUT", "POST"}),
     (r"^/settings/plugins/[^/]+$", {"PUT", "DELETE"}),

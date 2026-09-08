@@ -21,6 +21,16 @@ def bootstrap() -> None:
         n = seed_skills()
         if n:
             SLog.i(TAG, f"skills seeded {n}")
+        from mino_nexus.catalog.recovery_seed import seed_recovery_rules
+
+        rn = seed_recovery_rules()
+        if rn:
+            SLog.i(TAG, f"recovery rules seeded {rn}")
+        from mino_nexus.catalog.recovery_seed import upgrade_recovery_rules
+
+        un = upgrade_recovery_rules()
+        if un:
+            SLog.i(TAG, f"recovery rules upgraded {un}")
         db.commit()
     except Exception:
         db.rollback()

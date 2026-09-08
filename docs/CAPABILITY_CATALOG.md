@@ -105,3 +105,28 @@ Scout REGISTER: executors[].provides（abstract cap 字符串）
 | capability 直接绑 `executor: adb` 而不声明 `requires_caps` | 破坏抽象层，加通道时要改所有能力 |
 | 在 `adb_executor.py` 里写 `if capability_id == ...` 长链 | 用 `low_level`。这是上游被明确批评过的反模式 |
 | 再给 Scout 一份目录副本 | 必然漂移 |
+
+## 9. Recovery 规则（Console 扩展包 → kind=recovery）
+
+跑批开环前与 `wait_screen_ready` 会读 `catalog_entries` 里 `kind=recovery` 的行。Console **扩展包**页可新建/编辑（`POST /packs`），不必改代码。
+
+`payload.match` 支持：
+
+| 字段 | 含义 |
+|---|---|
+| `evidence` | 全部 key 同时满足（AND） |
+| `evidence_any` | 任一分支满足（OR），每分支为 `{capture_black: yes}` 等 |
+| `screen_text_any` | 截图 OCR 文本命中（后续） |
+
+常用取证 key（`probe_device_state` + 截图分析）：
+
+| key | yes 表示 |
+|---|---|
+| `screen_blocked` | 休眠或 keyguard |
+| `capture_black` | 截图均值极暗（**锁屏时常只有黑图**） |
+| `capture_ok` | Scout 返回可解码截图 |
+
+内置 `screen_asleep_or_locked`：`evidence_any` 三者任一命中 → `wake_screen` + `dismiss_keyguard`；verify 要求三项均正常。
+
+Agent 在 prep/do 菜单里也可主动调 `recover_<规则id>`（prep 阶段已含 `recovery` tool_kind）。
+

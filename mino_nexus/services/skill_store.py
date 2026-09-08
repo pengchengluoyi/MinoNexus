@@ -76,8 +76,11 @@ def _hydrate(row) -> dict[str, Any]:
     base = _fallback(row.id)
     if base:
         if not str(pub.get("system_prompt") or "").strip():
-            pub["system_prompt"] = base.get("system_prompt") or ""
-            pub["prompt_chars"] = len(pub["system_prompt"])
+            from mino_nexus.services.job_store import job_system_text, resolve_job_id
+
+            prompt = job_system_text(resolve_job_id(row.id))
+            pub["system_prompt"] = prompt
+            pub["prompt_chars"] = len(prompt)
             pub["prompt_custom"] = False
         if not pub.get("sop"):
             pub["sop"] = base.get("sop") or {}
@@ -169,24 +172,54 @@ def get_skill(skill_id: str) -> dict[str, Any] | None:
 
 
 def skill_prompt(skill_id: str) -> str:
-    row = get_skill(skill_id) or {}
-    return str(row.get("system_prompt") or "").strip()
+    from mino_nexus.services.job_store import job_system_text, resolve_job_id
+
+    sid = resolve_id(skill_id)
+    return job_system_text(resolve_job_id(sid))
 
 
-def _clean_sop(raw: Any) -> dict[str, Any]:
+def _validate_sop(raw: Any) -> dict[str, Any]:
+    from mino_nexus.loop.sop_runtime import normalize_inspections, normalize_phases, sop_union_tool_kinds
+
     src = raw if isinstance(raw, dict) else {}
-    phases = [str(x) for x in (src.get("phases") or ["prep", "do", "check"]) if str(x).strip()]
+    phases = normalize_phases(src.get("phases"))
+    inspections = normalize_inspections(src.get("inspections") if "inspections" in src else None)
     pointer = str(src.get("pointer") or "none").strip()
     if pointer not in POINTERS:
         pointer = "none"
-    kinds = [str(x) for x in (src.get("tool_kinds") or list(ALL_KINDS)) if str(x) in ALL_KINDS]
+    kinds = [str(x) for x in (src.get("tool_kinds") or sop_union_tool_kinds(phases)) if str(x) in ALL_KINDS]
     if not kinds:
-        kinds = list(ALL_KINDS)
+        kinds = sop_union_tool_kinds(phases)
     try:
         max_steps = max(1, min(80, int(src.get("max_steps") or 24)))
     except (TypeError, ValueError):
         max_steps = 24
-    return {"phases": phases or ["prep", "do", "check"], "pointer": pointer, "tool_kinds": kinds, "max_steps": max_steps}
+    return {
+        "phases": phases,
+        "inspections": inspections,
+        "pointer": pointer,
+        "tool_kinds": kinds,
+        "max_steps": max_steps,
+    }
+
+
+def _clean_sop(raw: Any) -> dict[str, Any]:
+    try:
+        return _validate_sop(raw)
+    except ValueError:
+        src = raw if isinstance(raw, dict) else {}
+        phases = [str(x) for x in (src.get("phases") or ["prep", "do", "check"]) if str(x).strip()]
+        pointer = str(src.get("pointer") or "none").strip()
+        if pointer not in POINTERS:
+            pointer = "none"
+        kinds = [str(x) for x in (src.get("tool_kinds") or list(ALL_KINDS)) if str(x) in ALL_KINDS]
+        if not kinds:
+            kinds = list(ALL_KINDS)
+        try:
+            max_steps = max(1, min(80, int(src.get("max_steps") or 24)))
+        except (TypeError, ValueError):
+            max_steps = 24
+        return {"phases": phases or ["prep", "do", "check"], "pointer": pointer, "tool_kinds": kinds, "max_steps": max_steps}
 
 
 def _clean_input(raw: Any) -> dict[str, Any]:
@@ -284,10 +317,20 @@ def save_skill(skill_id: str, body: dict[str, Any], *, create: bool = False) -> 
 
 
 def reset_skill_prompt(skill_id: str) -> dict[str, Any]:
-    base = _fallback(skill_id)
-    if not base:
-        raise ValueError(f"没有默认 prompt：{skill_id}")
-    return save_skill(skill_id, {"system_prompt": base.get("system_prompt") or " "})
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.skill import Skill
+
+    sid = resolve_id(skill_id)
+    with session_scope() as db:
+        row = db.query(Skill).filter(Skill.id == sid).first()
+        if row is None:
+            raise ValueError(f"未知技能：{skill_id}")
+        row.system_prompt = ""
+        db.flush()
+    hit = get_skill(sid)
+    if not hit:
+        raise ValueError(f"重置后读不到技能：{skill_id}")
+    return hit
 
 
 def _row_exists(skill_id: str) -> bool:

@@ -155,6 +155,7 @@ class RouterProxy:
                 f"cap={event.capability_id} 应由 Nexus 本地 executor 处理，不该走 RouterProxy"
                 "（CLAUDE.md §2.3；local_executors 尚未搬迁）",
                 executor_used="router_proxy",
+                local_reason="local_cap_misrouted",
             )
 
         node, why = get_registry().resolve(self.sn)
@@ -164,7 +165,9 @@ class RouterProxy:
         try:
             order, impl = self._plan_route(event, node)
         except NoRouteError as exc:
-            return _fail(event, started, t0, str(exc), executor_used="router_proxy")
+            msg = str(exc)
+            reason = "no_impl_for_device" if "无可用实现" in msg else "cap_not_in_catalog"
+            return _fail(event, started, t0, msg, executor_used="router_proxy", local_reason=reason)
 
         req = P.Execute(
             run_id=run_id or self.run_id,
@@ -454,8 +457,19 @@ def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _fail(event: PlanEvent, started: str, t0: float, msg: str, *, executor_used: str) -> EventResult:
+def _fail(
+    event: PlanEvent,
+    started: str,
+    t0: float,
+    msg: str,
+    *,
+    executor_used: str,
+    local_reason: str = "",
+) -> EventResult:
     SLog.w(TAG, msg)
+    raw: dict[str, Any] = {}
+    if local_reason:
+        raw["local_reason"] = local_reason
     return EventResult(
         seq=event.seq, capability_id=event.capability_id,
         event_kind=event.event_kind or event.capability_id,
@@ -465,6 +479,7 @@ def _fail(event: PlanEvent, started: str, t0: float, msg: str, *, executor_used:
         ai_reasoning=event.ai_reasoning or "",
         plan_event=event.model_dump(exclude_none=True),
         started_at=started, finished_at=_now_iso(),
+        raw_response=raw or None,
     )
 
 

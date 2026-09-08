@@ -42,6 +42,7 @@ class PackWriteBody(BaseModel):
 class PackPatchBody(BaseModel):
     model_config = ConfigDict(extra="allow")
 
+    kind: Optional[str] = None
     enabled: Optional[bool] = None
     lifecycle: Optional[str] = None
     status: Optional[str] = None
@@ -309,7 +310,9 @@ def put_pack(uid: str, body: PackWriteBody, sess: dict = Depends(current_session
         saved = upsert(kind, entry_id, payload)
     except CatalogWriteError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ok({"item": _find_item(uid, kind, entry_id)}, msg="已保存")
+    new_kind = str(saved.get("kind") or kind)
+    new_uid = f"builtin/{new_kind}/{entry_id}"
+    return ok({"item": _find_item(new_uid, new_kind, entry_id)}, msg="已保存")
 
 
 @router.patch("/{uid:path}")
@@ -321,11 +324,13 @@ def patch_pack(uid: str, body: PackPatchBody, sess: dict = Depends(current_sessi
 
     payload = {**body.model_dump(exclude_unset=True), **_status_patch(body)}
     try:
-        patch(kind, entry_id, payload)
+        saved = patch(kind, entry_id, payload)
     except CatalogWriteError as exc:
         status = 404 if "未找到" in str(exc) else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
-    return ok({"item": _find_item(uid, kind, entry_id)}, msg="已更新")
+    new_kind = str((saved or {}).get("kind") or kind)
+    new_uid = f"builtin/{new_kind}/{entry_id}"
+    return ok({"item": _find_item(new_uid, new_kind, entry_id)}, msg="已更新")
 
 
 @router.post("/{uid:path}/lifecycle")

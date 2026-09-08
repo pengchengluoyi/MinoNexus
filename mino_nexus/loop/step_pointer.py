@@ -7,8 +7,45 @@ from typing import Any, Optional
 from mino_nexus.ai.case_text import parse_numbered_items_rules
 from mino_nexus.services.run_store import spec_lines
 
+_POINTER_TEMPLATES: dict[str, str] = {
+    "prep_header": "【执行纪律：先完成前置检查，禁止进入操作步骤，禁止校验预期。】",
+    "prep_current": "【当前只做前置】{precondition}",
+    "prep_tail": "前置满足后调 signal_done。禁止去做步骤里的操作，也不要校验预期。",
+    "do_header": "【执行纪律：严格按步骤编号。禁止跳到后面的步骤，禁止提前验后面的预期。】",
+    "do_current": "【当前只做步骤 {n}】{instruction}",
+    "do_tail": "做完本步操作后调 signal_done，表示本步操作结束（不是整案结束）。禁止去做后面步骤。",
+    "check_current": "【当前只验步骤 {n}】{expected}",
+    "check_tail": "只看当前截图判断预期。调 assert_visual；通过后再 signal_done。禁止点击、滑动、输入来改界面凑绿。",
+    "step_future": "[ ] 步骤 {n} 未到，禁止执行：{instruction}",
+    "step_done": "[x] 步骤 {n} 已完成：{instruction}",
+    "step_active_do": "[>] 步骤 {n} 操作中：{instruction}",
+    "step_active_check": "[>] 步骤 {n} 校验中：{instruction} ｜ 预期：{expected}",
+    "step_pending_check": "[ ] 步骤 {n} 未到，禁止执行：{instruction} ｜ 做完后校验",
+    "all_done": "全部步骤已完成。不要再操作设备。",
+}
+
+
+def _pointer_templates() -> dict[str, str]:
+    return _POINTER_TEMPLATES
+
+
+def _pt(key: str, **kwargs: Any) -> str:
+    tpl = _pointer_templates().get(key) or key
+    try:
+        return str(tpl).format(**kwargs)
+    except (KeyError, ValueError):
+        return str(tpl)
+
 # agent 决策坐标是 0–1000 千分比；约等于 1280 宽屏上 48px 容差。
 TAP_REPEAT_TOL_MILLI = 40
+_OBSERVE_PREFIXES = ("查看", "观察", "确认屏", "检查屏", "目视", "看")
+
+
+def is_observe_only_step(instruction: str) -> bool:
+    text = str(instruction or "").strip()
+    if not text:
+        return False
+    return any(text.startswith(prefix) for prefix in _OBSERVE_PREFIXES)
 
 
 @dataclass
@@ -16,6 +53,7 @@ class SeqNode:
     n: int
     instruction: str
     expected: str
+    observe_only: bool = False
 
 
 def _column_lines(case: dict[str, Any], key: str, raw_key: str) -> list[str]:
@@ -60,7 +98,14 @@ def build_seq_nodes(case: dict[str, Any]) -> list[SeqNode]:
         exp = (expected[i] or "").strip()
         if not inst and not exp:
             continue
-        nodes.append(SeqNode(n=i + 1, instruction=inst, expected=exp))
+        nodes.append(
+            SeqNode(
+                n=i + 1,
+                instruction=inst,
+                expected=exp,
+                observe_only=is_observe_only_step(inst),
+            )
+        )
     return nodes
 
 
@@ -120,6 +165,10 @@ class StepCursor:
             self.phase = "check"
             self.step_checked = False
             return
+        if cur.observe_only and cur.expected:
+            self.phase = "check"
+            self.step_checked = False
+            return
         if not cur.instruction and not cur.expected:
             self._skip_empty()
             return
@@ -164,54 +213,47 @@ class StepCursor:
     def prompt_block(self) -> str:
         if self.phase == "prep":
             lines = [
-                "【执行纪律：先完成前置检查，禁止进入操作步骤，禁止校验预期。】",
+                _pt("prep_header"),
                 f"[>] 前置（进行中）：{self.precondition}",
             ]
             for node in self.nodes:
-                lines.append(f"[ ] 步骤 {node.n} 未到，禁止执行：{node.instruction or '（无操作）'}")
-            lines.append(f"【当前只做前置】{self.precondition}")
-            lines.append("前置满足后调 signal_done。禁止去做步骤里的操作，也不要校验预期。")
+                lines.append(_pt("step_future", n=node.n, instruction=node.instruction or "（无操作）"))
+            lines.append(_pt("prep_current", precondition=self.precondition))
+            lines.append(_pt("prep_tail"))
             return "\n".join(lines)
 
-        lines = [
-            "【执行纪律：严格按步骤编号。禁止跳到后面的步骤，禁止提前验后面的预期。】",
-        ]
+        lines = [_pt("do_header")]
         if self.precondition:
             lines.append(f"[x] 前置（已完成）：{self.precondition}")
         for i, node in enumerate(self.nodes):
             if i < self.index:
-                mark, tag = "x", "已完成"
+                bit = _pt("step_done", n=node.n, instruction=node.instruction or "（无操作）")
+            elif i == self.index and self.phase == "do":
+                bit = _pt("step_active_do", n=node.n, instruction=node.instruction or "（无操作）")
             elif i == self.index:
-                mark = ">"
-                tag = "操作中" if self.phase == "do" else "校验中"
+                bit = _pt(
+                    "step_active_check",
+                    n=node.n,
+                    instruction=node.instruction or "（无操作）",
+                    expected=node.expected,
+                )
             else:
-                mark, tag = " ", "未到，禁止执行"
-            bit = f"[{mark}] 步骤 {node.n} {tag}：{node.instruction or '（无操作）'}"
+                bit = _pt("step_pending_check", n=node.n, instruction=node.instruction or "（无操作）")
             if not node.expected:
                 bit += " ｜ 本步无预期（做完即过）" if not self.all_uncheckable() else " ｜ 本步无预期（无法校验）"
             elif i < self.index:
                 bit += " ｜ 已校验"
-            elif self.phase == "check" and i == self.index:
-                bit += f" ｜ 预期：{node.expected}"
-            else:
-                bit += " ｜ 做完后校验"
             lines.append(bit)
         cur = self.current()
         if not cur:
-            lines.append("全部步骤已完成。不要再操作设备。")
+            lines.append(_pt("all_done"))
             return "\n".join(lines)
         if self.phase == "do":
-            lines.append(f"【当前只做步骤 {cur.n}】{cur.instruction}")
-            lines.append(
-                "做完本步操作后调 signal_done，表示本步操作结束（不是整案结束）。"
-                "禁止去做后面步骤。"
-            )
+            lines.append(_pt("do_current", n=cur.n, instruction=cur.instruction))
+            lines.append(_pt("do_tail"))
         else:
-            lines.append(f"【当前只验步骤 {cur.n}】{cur.expected or '（无预期，无法执行校验）'}")
-            lines.append(
-                "只看当前截图判断预期。调 assert_visual；通过后再 signal_done。"
-                "禁止点击、滑动、输入来改界面凑绿。"
-            )
+            lines.append(_pt("check_current", n=cur.n, expected=cur.expected or "（无预期，无法执行校验）"))
+            lines.append(_pt("check_tail"))
         return "\n".join(lines)
 
     def decide_goal(self) -> str:

@@ -76,6 +76,25 @@ class RoleChatBody(BaseModel):
     explain_mode: bool = False
 
 
+class JobSaveBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    label: str = ""
+    summary: str = ""
+    system_blocks: list[dict[str, Any]] | None = None
+    user_blocks: list[dict[str, Any]] | None = None
+    image: dict[str, Any] | None = None
+    call: dict[str, Any] | None = None
+    enabled: bool | None = None
+    sort_order: int | None = None
+    reset: bool = False
+
+
+class JobPreviewBody(BaseModel):
+    slots: dict[str, str] | None = None
+    flags: dict[str, bool] | None = None
+
+
 class SkillSaveBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -208,6 +227,56 @@ def save_ai_skill(skill_id: str, body: SkillSaveBody, _sess: dict = Depends(curr
     except Exception as e:
         http_error(e)
     return ok(data, msg="已恢复默认" if reset else "已保存")
+
+
+@router.get("/ai/jobs")
+def list_ai_jobs(_sess: dict = Depends(current_session)):
+    from mino_nexus.services import job_store as js
+
+    return ok({"jobs": js.list_jobs()})
+
+
+@router.get("/ai/jobs/health")
+def ai_jobs_health(_sess: dict = Depends(current_session)):
+    from mino_nexus.services import job_store as js
+
+    return ok(js.startup_health())
+
+
+@router.get("/ai/jobs/{job_id}")
+def get_ai_job(job_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.services import job_store as js
+
+    row = js.get_job(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"未知 job：{job_id}")
+    return ok(row)
+
+
+@router.put("/ai/jobs/{job_id}")
+def save_ai_job(job_id: str, body: JobSaveBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services import job_store as js
+
+    payload = body.model_dump(exclude_none=True)
+    reset = bool(payload.pop("reset", False))
+    if reset:
+        payload = {"reset": True}
+    try:
+        data = js.save_job(job_id, payload)
+    except Exception as e:
+        http_error(e)
+    return ok(data, msg="已恢复上一版" if reset else "已保存")
+
+
+@router.post("/ai/jobs/{job_id}/preview")
+def preview_ai_job(job_id: str, body: JobPreviewBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services import job_store as js
+
+    try:
+        data = js.preview_job(job_id, slots=body.slots, flags=body.flags)
+    except Exception as e:
+        http_error(e)
+    return ok(data)
 
 
 @router.get("/ai/roles/{role_id}")

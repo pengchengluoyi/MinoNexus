@@ -1,6 +1,6 @@
 [project]
 name = "mino-nexus"
-version = "0.1.3"
+version = "0.1.4"
 description = "MinoNexus — 服务端：与大模型交互、持有能力目录与数据、驱动执行循环"
 requires-python = ">=3.12"
 
@@ -34,3 +34,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["mino_nexus*"]
+
+[tool.setuptools.package-data]
+mino_nexus = []

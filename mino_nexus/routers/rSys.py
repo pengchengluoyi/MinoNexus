@@ -30,6 +30,9 @@ def sys_runtime(request: Request):
     urls = public_urls(port)
     nodes = get_registry().nodes()
     alive = sum(1 for n in nodes if n.alive)
+    from mino_nexus.services.job_store import startup_health
+
+    jobs_health = startup_health()
     return ok({
         "electron": {"online": False, "pid": None, "version": None, "platform": "web"},
         "embeddedServer": {"running": True, "pid": None},
@@ -51,4 +54,5 @@ def sys_runtime(request: Request):
         "nodes": ui_nodes(),
         "node_count": len(nodes),
         "nexus_version": NEXUS_VERSION,
+        "jobs": jobs_health,
     })

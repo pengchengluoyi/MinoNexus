@@ -20,31 +20,54 @@ def resolve_kind(kind: str) -> str:
     return raw
 
 
+def _target_kind(url_kind: str, body: dict[str, Any]) -> str:
+    url_ck = resolve_kind(url_kind)
+    raw = str(body.get("kind") or "").strip()
+    if not raw or raw == url_ck:
+        return url_ck
+    return resolve_kind(raw)
+
+
 def upsert(kind: str, entry_id: str, body: dict[str, Any], *, create_only: bool = False) -> dict[str, Any]:
     from mino_nexus.catalog import registry as catalog
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.catalog import CatalogEntry
 
-    ck = resolve_kind(kind)
+    url_ck = resolve_kind(kind)
+    target_ck = _target_kind(url_ck, body)
     eid = str(entry_id or body.get("id") or "").strip()
     if not eid:
         raise CatalogWriteError("缺少 id")
-    fields = _prepare(ck, eid, body)
-    _validate(ck, fields)
+    fields = _prepare(target_ck, eid, body)
+    _validate(target_ck, fields)
     with session_scope() as db:
-        row = db.query(CatalogEntry).filter_by(kind=ck, id=eid).first()
+        row = db.query(CatalogEntry).filter_by(kind=url_ck, id=eid).first()
+        if row is None and not create_only:
+            row = db.query(CatalogEntry).filter_by(kind=target_ck, id=eid).first()
         if row is None:
+            exists = db.query(CatalogEntry).filter_by(kind=target_ck, id=eid).first()
+            if exists:
+                raise CatalogWriteError(f"{target_ck}/{eid} 已存在")
             db.add(CatalogEntry(**fields))
         elif create_only:
-            raise CatalogWriteError(f"{ck}/{eid} 已存在")
+            raise CatalogWriteError(f"{target_ck}/{eid} 已存在")
         else:
+            if target_ck != row.kind:
+                conflict = (
+                    db.query(CatalogEntry)
+                    .filter_by(kind=target_ck, id=eid)
+                    .filter(CatalogEntry.pk != row.pk)
+                    .first()
+                )
+                if conflict:
+                    raise CatalogWriteError(f"{target_ck}/{eid} 已存在")
             for key, val in fields.items():
                 setattr(row, key, val)
     catalog.reload()
     errs = [e.message for e in catalog.list_load_errors() if eid in (e.message or "")]
     if errs:
         raise CatalogWriteError(errs[0])
-    return {"kind": ck, "id": eid}
+    return {"kind": target_ck, "id": eid}
 
 
 def patch(kind: str, entry_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -52,13 +75,26 @@ def patch(kind: str, entry_id: str, body: dict[str, Any]) -> dict[str, Any]:
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.catalog import CatalogEntry
 
-    ck = resolve_kind(kind)
+    url_ck = resolve_kind(kind)
+    target_ck = _target_kind(url_ck, body)
     eid = str(entry_id or "").strip()
     with session_scope() as db:
-        row = db.query(CatalogEntry).filter_by(kind=ck, id=eid).first()
+        row = db.query(CatalogEntry).filter_by(kind=url_ck, id=eid).first()
         if row is None:
-            raise CatalogWriteError(f"未找到 {ck}/{eid}")
+            row = db.query(CatalogEntry).filter_by(kind=target_ck, id=eid).first()
+        if row is None:
+            raise CatalogWriteError(f"未找到 {url_ck}/{eid}")
         fields = _row_fields(row)
+        if target_ck != row.kind:
+            conflict = (
+                db.query(CatalogEntry)
+                .filter_by(kind=target_ck, id=eid)
+                .filter(CatalogEntry.pk != row.pk)
+                .first()
+            )
+            if conflict:
+                raise CatalogWriteError(f"{target_ck}/{eid} 已存在")
+            fields["kind"] = target_ck
         if "enabled" in body and body["enabled"] is not None:
             fields["enabled"] = bool(body["enabled"])
         if body.get("lifecycle"):
@@ -85,11 +121,11 @@ def patch(kind: str, entry_id: str, body: dict[str, Any]) -> dict[str, Any]:
             fields["visible_to_json"] = list((body.get("scope") or {}).get("visible_to") or [])
         if isinstance(body.get("payload"), dict):
             fields["payload_json"] = _clean_payload(dict(body["payload"]))
-        _validate(ck, fields)
+        _validate(target_ck, fields)
         for key, val in fields.items():
             setattr(row, key, val)
     catalog.reload()
-    return {"kind": ck, "id": eid}
+    return {"kind": target_ck, "id": eid}
 
 
 def soft_delete(kind: str, entry_id: str) -> dict[str, Any]:

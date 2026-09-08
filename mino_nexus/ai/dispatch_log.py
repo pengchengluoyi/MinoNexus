@@ -49,24 +49,27 @@ def ctx() -> dict:
 
 
 _JOB_TO_SKILL = {
-    "im_dialogue": "im.dialogue",
-    "im_defect": "im.defect",
-    "im.dialogue": "im.dialogue",
-    "im.defect": "im.defect",
+    "im_dialogue": "im-dialogue",
+    "im_defect": "im-defect",
+    "im.dialogue": "im-dialogue",
+    "im.defect": "im-defect",
     "review_impact": "propose_atlas",
     "edit_atlas": "propose_atlas",
-    "agent-restart": "agent-decide",
+    "agent-restart": "run-case",
     "inspect-session": "inspect-session",
-    "case-scene": "case-scene",
-    "pick_device": "pick_device",
-    "pick_account": "pick_account",
+    "case-scene": "inspect-session",
+    "pick_device": "run-case",
+    "pick_account": "run-case",
     "role_chat": "",
     "qa_tick": "",
-    "route": "",
-    "atlas_followup": "",
-    "knowledge-capture": "knowledge-capture",
-    "knowledge-review": "knowledge-review",
-    "account-tag": "account-tag",
+    "route": "conductor",
+    "atlas_followup": "propose_atlas",
+    "knowledge-capture": "knowledge-reviewer",
+    "knowledge-review": "knowledge-reviewer",
+    "account-tag": "run-case",
+    "plan-overview": "run-case",
+    "goal-extract": "run-case",
+    "locate-vision": "run-case",
 }
 
 _TRIGGER_SOURCE = {
@@ -110,36 +113,31 @@ def infer_call_meta(row: dict | None = None, *, output: Any = None, system_promp
         except Exception:
             parsed = None
     parsed = parsed if isinstance(parsed, dict) else {}
-    sys_l = str(system_prompt or (row or {}).get("system_prompt") or "")
 
     if parsed.get("goal") and (parsed.get("checkpoints") is not None or parsed.get("checkpoint") is not None):
-        return {"trigger": "case_run", "job": "goal-extract", "role": "test-engineer", "skill": "goal-extract", "source": "case_run"}
+        return {"trigger": "case_run", "job": "agent-decide", "role": "test-engineer", "skill": "run-case", "source": "case_run"}
     if "restart" in parsed and parsed.get("thought"):
-        return {"trigger": "case_run", "job": "agent-restart", "role": "test-engineer", "skill": "agent-decide", "source": "case_run"}
+        return {"trigger": "case_run", "job": "agent-decide", "role": "test-engineer", "skill": "run-case", "source": "case_run"}
     if parsed.get("session_prep") in ("relogin", "logout", "skip") and parsed.get("required_session"):
-        return {"trigger": "case_run", "job": "case-scene", "role": "test-engineer", "skill": "case-scene", "source": "case_run"}
+        return {"trigger": "case_run", "job": "inspect-session", "role": "test-engineer", "skill": "inspect-session", "source": "case_run"}
     if parsed.get("session") in ("logged_out", "logged_in", "unknown") and parsed.get("identity"):
         return {"trigger": "case_run", "job": "inspect-session", "role": "test-engineer", "skill": "inspect-session", "source": "case_run"}
     if parsed.get("thought") and any(k in parsed for k in ("action", "tool", "capability_id", "done", "x", "y")):
-        return {"trigger": "case_run", "job": "agent-decide", "role": "test-engineer", "skill": "agent-decide", "source": "case_run"}
+        return {"trigger": "case_run", "job": "agent-decide", "role": "test-engineer", "skill": "run-case", "source": "case_run"}
     if parsed.get("thought"):
-        return {"trigger": "case_run", "job": "agent-decide", "role": "test-engineer", "skill": "agent-decide", "source": "case_run"}
+        return {"trigger": "case_run", "job": "agent-decide", "role": "test-engineer", "skill": "run-case", "source": "case_run"}
     if "passed" in parsed and ("confidence" in parsed or parsed.get("ai_reasoning")):
         return {"trigger": "case_run", "job": "assert-vision", "role": "test-engineer", "skill": "assert-vision", "source": "case_run"}
     if isinstance(parsed.get("events"), list) or parsed.get("mode") in ("plan", "decline", "replan", "give_up"):
-        return {"trigger": "case_run", "job": "plan-overview", "role": "test-engineer", "skill": "plan-overview", "source": "case_run"}
+        return {"trigger": "case_run", "job": "agent-decide", "role": "test-engineer", "skill": "run-case", "source": "case_run"}
     if parsed.get("bbox") or ("x" in parsed and "y" in parsed):
-        return {"trigger": "case_run", "job": "locate-vision", "role": "test-engineer", "skill": "locate-vision", "source": "case_run"}
-    if (
-        (isinstance(parsed.get("tags"), list) and "replaces" in parsed and "reason" in parsed)
-        or ("测试账号" in sys_l and "标签" in sys_l)
-        or ("账号管理" in sys_l and "标签" in sys_l)
-    ):
+        return {"trigger": "case_run", "job": "agent-decide", "role": "test-engineer", "skill": "run-case", "source": "case_run"}
+    if isinstance(parsed.get("tags"), list) and "replaces" in parsed and "reason" in parsed:
         return {
             "trigger": "case_run",
-            "job": "account-tag",
+            "job": "agent-decide",
             "role": "test-engineer",
-            "skill": "account-tag",
+            "skill": "run-case",
             "source": "case_run",
         }
     if parsed.get("action") in ("approve", "reject", "hold") and "confidence" in parsed:
@@ -158,43 +156,6 @@ def infer_call_meta(row: dict | None = None, *, output: Any = None, system_promp
             "skill": "knowledge-capture",
             "source": "knowledge_capture",
         }
-    if "抽取目标" in sys_l or "goal-extract" in sys_l:
-        return {"trigger": "case_run", "job": "goal-extract", "role": "test-engineer", "skill": "goal-extract", "source": "case_run"}
-    if "是否先重开" in sys_l or "agent-restart" in sys_l:
-        return {"trigger": "case_run", "job": "agent-restart", "role": "test-engineer", "skill": "agent-decide", "source": "case_run"}
-    if "场景理解" in sys_l or "session_prep" in sys_l or "case-scene" in sys_l:
-        return {"trigger": "case_run", "job": "case-scene", "role": "test-engineer", "skill": "case-scene", "source": "case_run"}
-    if "登录会话" in sys_l or "inspect-session" in sys_l:
-        return {"trigger": "case_run", "job": "inspect-session", "role": "test-engineer", "skill": "inspect-session", "source": "case_run"}
-    if "下一个动作" in sys_l or "agent-decide" in sys_l:
-        return {"trigger": "case_run", "job": "agent-decide", "role": "test-engineer", "skill": "agent-decide", "source": "case_run"}
-    if "检查点" in sys_l or "assert-vision" in sys_l:
-        return {"trigger": "case_run", "job": "assert-vision", "role": "test-engineer", "skill": "assert-vision", "source": "case_run"}
-    if parsed.get("action") in ("submit", "clarify", "reject") and (
-        "title" in parsed or "steps" in parsed or "reply" in parsed
-    ):
-        return {"trigger": "im_chat", "job": "im_defect", "role": "im-defect-assistant", "skill": "im.defect", "source": "im_inbound"}
-    if any(
-        mark in sys_l
-        for mark in (
-            "在飞书 / 企业微信 / 钉钉 / Slack",
-            "不在这套对话里直接建禅道单",
-            "MiniOrange 的测试助手",
-            "MiniOrange 的总指挥",
-            "你排兵，其他角色干活",
-            "请他们说「提缺陷」",
-        )
-    ):
-        return {"trigger": "im_chat", "job": "im_dialogue", "role": "im-qa-assistant", "skill": "im.dialogue", "source": "im_inbound"}
-    if any(
-        mark in sys_l
-        for mark in (
-            "整理一张可提交到禅道的缺陷",
-            "只输出 JSON，不要输出其它文字",
-            '"action": "submit" | "clarify" | "reject"',
-        )
-    ):
-        return {"trigger": "im_chat", "job": "im_defect", "role": "im-defect-assistant", "skill": "im.defect", "source": "im_inbound"}
     return {}
 
 
@@ -390,7 +351,7 @@ def record_llm(*, messages: list | None = None, parsed=None, raw_text: str = "",
     usage = meta.get("usage") if isinstance(meta.get("usage"), dict) else {}
     guessed = infer_call_meta(output=output, system_prompt=system)
     trigger = env.get("trigger") or guessed.get("trigger") or "unknown"
-    job = env.get("job") or guessed.get("job") or ""
+    job = str(env.get("job") or meta.get("job_id") or guessed.get("job") or "")
     role = env.get("role") or guessed.get("role") or ""
     skill = env.get("skill") or guessed.get("skill") or skill_from_job(job)
     source = env.get("source") or guessed.get("source") or source_from_trigger(trigger)

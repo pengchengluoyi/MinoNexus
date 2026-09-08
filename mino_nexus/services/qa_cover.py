@@ -7,26 +7,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from mino_nexus.ai.llm_client import call_chat_text, resolve_regression_provider
-from mino_nexus.ai.role_prompts import (
-    CASE_WRITER_SYSTEM_PROMPT,
-    MINDMAP_WRITER_SYSTEM_PROMPT,
-    REQ_ANALYST_IMPACT_PROMPT,
-    REQ_ANALYST_SYSTEM_PROMPT,
-)
+from mino_nexus.ai.job_slots import assemble_json_chat_slots
+from mino_nexus.ai.prompt_render import JobRenderError, render
 from mino_nexus.core.log import SLog
 from mino_nexus.services import qa_process_jobs as cover_jobs
-
-
-def _job_prompt(job: str, fallback: str) -> str:
-    try:
-        from mino_nexus.services.skill_store import skill_prompt
-
-        text = skill_prompt(job)
-        if text:
-            return text
-    except Exception:
-        pass
-    return fallback
 
 TAG = "QaCover"
 LLM_JOBS = ("analyze_req", "draft_mindmap", "draft_cases", "propose_atlas")
@@ -48,22 +32,24 @@ def _source_text(req: dict) -> str:
     return ""
 
 
-def _ask_json(system: str, user: str, *, job: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+def _ask_json(job: str, user: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     provider, gate = resolve_regression_provider()
     if not provider:
         return None, {"error": gate.get("reason") or "未配置可用的大模型", "enabled": False}
     cover_jobs.report(phase=job, label=f"正在调用模型：{job}")
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user[:24000]},
-    ]
+    slots, flags = assemble_json_chat_slots(user_payload=user[:24000])
+    try:
+        messages, job_meta = render(job, slots, flags)
+    except JobRenderError as e:
+        return None, {"error": str(e)}
+    call = job_meta.get("call") or {}
     parsed, meta = call_chat_text(
         provider=provider,
         messages=messages,
-        temperature=0.2,
-        max_tokens=4096,
-        timeout_sec=90,
-        json_mode=True,
+        temperature=float(call.get("temperature", 0.2)),
+        max_tokens=int(call.get("max_tokens", 4096)),
+        timeout_sec=int(call.get("timeout_sec", 90)),
+        json_mode=bool(call.get("json_mode", True)),
     )
     if parsed is None:
         return None, meta
@@ -163,7 +149,7 @@ def run_llm_job(job: str, *, requirement: dict, cases: list | None = None, qa_pr
     src = _source_text(req)
     if job == "analyze_req":
         user = json.dumps({"title": title, "source_text": src, "human_feedback": req.get("human_feedback") or ""}, ensure_ascii=False)
-        parsed, meta = _ask_json(_job_prompt("analyze_req", REQ_ANALYST_SYSTEM_PROMPT), user, job=job)
+        parsed, meta = _ask_json(job, user)
         if parsed is None:
             return {"job": job, "status": "error", "error": meta.get("error") or "模型未返回分析", "engine": "llm", "meta": meta}
         return {"job": job, "status": "ok", "engine": "llm", "payload": parsed, "meta": meta}
@@ -174,7 +160,7 @@ def run_llm_job(job: str, *, requirement: dict, cases: list | None = None, qa_pr
             "source_text": src,
             "previous_mindmap": req.get("mindmap") or {},
         }, ensure_ascii=False)
-        parsed, meta = _ask_json(_job_prompt("draft_mindmap", MINDMAP_WRITER_SYSTEM_PROMPT), user, job=job)
+        parsed, meta = _ask_json(job, user)
         if parsed is None:
             return {"job": job, "status": "error", "error": meta.get("error") or "模型未返回脑图", "engine": "llm", "meta": meta}
         return {"job": job, "status": "ok", "engine": "llm", "payload": parsed, "meta": meta}
@@ -185,7 +171,7 @@ def run_llm_job(job: str, *, requirement: dict, cases: list | None = None, qa_pr
             "mindmap": req.get("mindmap") or {},
             "existing_cases": (cases or [])[:40],
         }, ensure_ascii=False)
-        parsed, meta = _ask_json(_job_prompt("draft_cases", CASE_WRITER_SYSTEM_PROMPT), user, job=job)
+        parsed, meta = _ask_json(job, user)
         if parsed is None:
             return {"job": job, "status": "error", "error": meta.get("error") or "模型未返回用例", "engine": "llm", "meta": meta}
         return {"job": job, "status": "ok", "engine": "llm", "payload": parsed, "meta": meta}
@@ -194,7 +180,7 @@ def run_llm_job(job: str, *, requirement: dict, cases: list | None = None, qa_pr
             "qa_process": {"app_atlas": (qa_process or {}).get("app_atlas"), "requirements": [(qa_process or {}).get("requirements") or []]},
             "requirement": {"id": req.get("id"), "title": title, "understanding": req.get("understanding") or {}},
         }, ensure_ascii=False)
-        parsed, meta = _ask_json(_job_prompt("propose_atlas", REQ_ANALYST_IMPACT_PROMPT), user, job=job)
+        parsed, meta = _ask_json(job, user)
         if parsed is None:
             return {"job": job, "status": "error", "error": meta.get("error") or "模型未返回图谱建议", "engine": "llm", "meta": meta}
         return {"job": job, "status": "ok", "engine": "llm", "payload": parsed, "meta": meta}

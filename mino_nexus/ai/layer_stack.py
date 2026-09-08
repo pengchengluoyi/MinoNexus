@@ -19,22 +19,51 @@ SKILL_CATEGORIES: list[dict[str, str]] = [
     {"id": "sync", "label": "外部同步", "desc": "设计稿 / 文档"},
 ]
 
-SKILLS: list[dict[str, Any]] = [
-    {"id": "im.dialogue", "label": "IM 对话", "owner": "im-qa-assistant", "summary": "在通道里回答和下令", "intent": "talk", "category": "channel"},
-    {"id": "im.defect", "label": "IM 提缺陷", "owner": "im-defect-assistant", "summary": "把说清的缺陷整理成单", "intent": "act", "category": "channel"},
-    {"id": "analyze_req", "label": "拆验收标准", "owner": "req-analyst", "summary": "读原文，拆测试点", "intent": "persist", "category": "flow"},
-    {"id": "propose_atlas", "label": "建议图谱", "owner": "req-analyst", "summary": "出品变更等人确认", "intent": "persist", "category": "flow"},
-    {"id": "draft_mindmap", "label": "写测试脑图", "owner": "mindmap-writer", "summary": "按入口和端铺脑图", "intent": "persist", "category": "flow"},
-    {"id": "draft_cases", "label": "写用例草稿", "owner": "case-writer", "summary": "按测试点出步骤", "intent": "persist", "category": "flow"},
-    {"id": "map_cases", "label": "对照用例库", "owner": "req-qa-bm", "summary": "看覆盖够不够", "intent": "persist", "category": "flow"},
-    {"id": "draft_sign", "label": "验收草稿", "owner": "req-qa-bm", "summary": "出建议，结论人点", "intent": "persist", "category": "flow"},
-    {"id": "pick_regression", "label": "圈回归范围", "owner": "version-qa-bm", "summary": "圈本版回归用例", "intent": "persist", "category": "flow"},
-    {"id": "draft_gate", "label": "发版草稿", "owner": "version-qa-bm", "summary": "出建议，结论人点", "intent": "persist", "category": "flow"},
-    {"id": "pick_device", "label": "申请执行设备", "owner": "test-engineer", "summary": "按用例占用当前环境设备", "intent": "persist", "category": "flow"},
-    {"id": "agent-decide", "label": "看图决策", "owner": "test-engineer", "summary": "每一步决定下一个动作", "intent": "act", "category": "device"},
-    {"id": "plan-overview", "label": "规划步骤", "owner": "test-engineer", "summary": "Plan 模式先排事件", "intent": "act", "category": "device"},
-    {"id": "assert-vision", "label": "视觉断言", "owner": "test-engineer", "summary": "检查点是否达成", "intent": "act", "category": "device"},
-]
+_SKILL_ALIASES = {
+    "im.dialogue": "im-dialogue",
+    "im.defect": "im-defect",
+    "agent-decide": "run-case",
+    "plan-overview": "run-case",
+}
+
+
+def _normalize_skill_id(skill_id: str) -> str:
+    sid = str(skill_id or "").strip()
+    return _SKILL_ALIASES.get(sid, sid)
+
+
+def _build_skills() -> list[dict[str, Any]]:
+    from mino_nexus.ai.skill_defs import builtin_skills
+
+    rows: list[dict[str, Any]] = []
+    for spec in builtin_skills():
+        sid = str(spec.get("id") or "")
+        role = spec.get("role") if isinstance(spec.get("role"), dict) else {}
+        engine = str(spec.get("engine") or "")
+        intent = "act" if engine == "agent_loop" else ("persist" if engine == "qa_job" else "talk")
+        rows.append({
+            "id": sid,
+            "label": str(spec.get("label") or sid),
+            "owner": str(role.get("id") or ""),
+            "summary": str(spec.get("summary") or ""),
+            "intent": intent,
+            "category": str(spec.get("category") or "flow"),
+        })
+    extras = [
+        {"id": "map_cases", "label": "对照用例库", "owner": "req-qa-bm", "summary": "看覆盖够不够", "intent": "persist", "category": "flow"},
+        {"id": "draft_sign", "label": "验收草稿", "owner": "req-qa-bm", "summary": "出建议，结论人点", "intent": "persist", "category": "flow"},
+        {"id": "pick_regression", "label": "圈回归范围", "owner": "version-qa-bm", "summary": "圈本版回归用例", "intent": "persist", "category": "flow"},
+        {"id": "draft_gate", "label": "发版草稿", "owner": "version-qa-bm", "summary": "出建议，结论人点", "intent": "persist", "category": "flow"},
+        {"id": "assert-vision", "label": "视觉断言", "owner": "test-engineer", "summary": "检查点是否达成", "intent": "act", "category": "device"},
+    ]
+    seen = {r["id"] for r in rows}
+    for row in extras:
+        if row["id"] not in seen:
+            rows.append(row)
+    return rows
+
+
+SKILLS: list[dict[str, Any]] = _build_skills()
 
 ROLES: list[dict[str, str]] = [
     {"id": "conductor", "label": "分析师"},
@@ -60,21 +89,20 @@ TRIGGERS: list[dict[str, Any]] = [
 ]
 
 DEFAULT_SKILL_DRIVERS: dict[str, list[str]] = {
-    "im.dialogue": ["im.send"],
-    "agent-decide": ["adb", "claw"],
-    "plan-overview": ["adb", "claw"],
+    "im-dialogue": ["im.send"],
+    "run-case": ["adb", "claw"],
     "assert-vision": ["adb", "claw"],
 }
 
 DEFAULT_ROLE_SKILLS: dict[str, list[str]] = {
-    "im-qa-assistant": ["im.dialogue"],
-    "im-defect-assistant": ["im.defect"],
+    "im-qa-assistant": ["im-dialogue"],
+    "im-defect-assistant": ["im-defect"],
     "req-analyst": ["analyze_req", "propose_atlas"],
     "mindmap-writer": ["draft_mindmap"],
     "case-writer": ["draft_cases"],
     "req-qa-bm": ["map_cases", "draft_sign"],
     "version-qa-bm": ["pick_regression", "draft_gate"],
-    "test-engineer": ["pick_device", "agent-decide", "plan-overview", "assert-vision"],
+    "test-engineer": ["run-case", "assert-vision"],
     "conductor": [],
 }
 
@@ -86,9 +114,9 @@ DEFAULT_TRIGGER_ROLES: dict[str, dict[str, str]] = {
 }
 
 DEFAULT_TRIGGER_SKILLS: dict[str, dict[str, str]] = {
-    "im_chat": {"dialogue": "im.dialogue", "defect": "im.defect"},
+    "im_chat": {"dialogue": "im-dialogue", "defect": "im-defect"},
     "qa_tick": {"default": ""},
-    "case_run": {"default": "agent-decide"},
+    "case_run": {"default": "run-case"},
     "settings_chat": {"default": ""},
 }
 
@@ -108,7 +136,7 @@ def _clean_id_list(raw: Any, allowed: set[str]) -> list[str]:
     if not isinstance(raw, list):
         return out
     for item in raw:
-        sid = str(item or "").strip()
+        sid = _normalize_skill_id(str(item or "").strip())
         if not sid or sid in seen or sid not in allowed:
             continue
         seen.add(sid)

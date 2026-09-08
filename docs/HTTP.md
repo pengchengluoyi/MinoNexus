@@ -65,7 +65,19 @@ Console 不提供 Scout 安装或包配置。
 
 HITL 问人界面、排期 cron、基线库、从设计稿/定位抽登录图标（CLIP/视觉）、完整 3500 行 Agent 恢复/拟人化路径。
 
-已经可联：登录、概览、账号、发信、模型 Key、**技能**（`/settings/ai/skills`）与角色 prompt / 对话、扩展包只读、节点列表、项目/应用/环境/号池、自动化配置与用例草稿、**Case Runner 下发与轮询**（无 Scout / 无 Key 时任务失败并带中文原因，不再 501）、qa-process tick/assist/导入/脑图、Figma 同步（无 Token 时 400）。
+已经可联：登录、概览、账号、发信、模型 Key、**技能**（`/settings/ai/skills`）与 **Jobs**（`/settings/ai/jobs`）prompt 编辑、角色 prompt / 对话、扩展包只读、节点列表、项目/应用/环境/号池、自动化配置与用例草稿、**Case Runner 下发与轮询**（无 Scout / 无 Key 时任务失败并带中文原因，不再 501）、qa-process tick/assist/导入/脑图、Figma 同步（无 Token 时 400）。
+
+## Jobs（LLM prompt 真源）
+
+Console **Jobs** 页读写下列 API。Studio 写入口经 `client_gate` 拦截。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/settings/ai/jobs` | 列表（含 `system_blocks` / `user_blocks`） |
+| GET | `/settings/ai/jobs/health` | 启动烟测：每条 enabled job 能否 render |
+| GET | `/settings/ai/jobs/{id}` | 单条 |
+| PUT | `/settings/ai/jobs/{id}` | 保存块或 `{ reset: true }` 恢复上一版；保留最近 5 次修订 |
+| POST | `/settings/ai/jobs/{id}/preview` | dry-render（假槽 + 可选 flags） |
 
 ## 技能
 

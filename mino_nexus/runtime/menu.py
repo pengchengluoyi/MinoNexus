@@ -25,17 +25,20 @@ def _cap_summary(cap: Capability) -> str:
     return text[:120] if text else ""
 
 
-def phase_kinds(phase: str, *, tool_kinds: Optional[list[str]] = None) -> list[str]:
+def phase_kinds(phase: str, *, tool_kinds: Optional[list[str]] = None, phase_cfg: Optional[dict] = None) -> list[str]:
     """prep/do 并 generic；check 只要 check。recovery 另走工具。"""
-    p = str(phase or "do").strip().lower()
-    if p == "prep":
-        kinds = ["prep", "generic"]
-    elif p == "check":
-        kinds = ["check"]
-    elif p == "do":
-        kinds = ["do", "generic"]
+    if isinstance(phase_cfg, dict) and phase_cfg.get("tool_kinds"):
+        kinds = [str(x) for x in phase_cfg.get("tool_kinds") or []]
     else:
-        kinds = list(CAPABILITY_KINDS)
+        p = str(phase or "do").strip().lower()
+        if p == "prep":
+            kinds = ["prep", "generic"]
+        elif p == "check":
+            kinds = ["check"]
+        elif p == "do":
+            kinds = ["do", "generic"]
+        else:
+            kinds = list(CAPABILITY_KINDS)
     if tool_kinds:
         allow = {str(x) for x in tool_kinds}
         kinds = [k for k in kinds if k in allow]

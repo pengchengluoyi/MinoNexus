@@ -78,7 +78,7 @@ mino_nexus/
 ├── routers/              HTTP 入口，沿用上游 r* 命名 + deps.py
 ├── websocket/            observers.py（UI /ws）· node.py（Scout /node）
 ├── loop/                 agent_loop · case_runner · router_proxy · local_executors
-├── ai/                   planner · prompts · llm_client · …
+├── ai/                   planner · prompt_render · job_store · llm_client · …
 ├── catalog/              能力目录 loader / registry（读 catalog_entries）
 ├── runtime/              run_context · menu · session_gate
 └── services/             业务（项目 / 设备 / 跑批 / 设置 / QA / 集成插件）
@@ -105,7 +105,7 @@ mino_nexus/
 | 你要做什么 | 先读 |
 |---|---|
 | 加一条能力 / 改能力的实现路径 | [docs/CAPABILITY_CATALOG.md](docs/CAPABILITY_CATALOG.md)。多数情况只改 YAML，**Scout 侧零改动** |
-| 改 prompt / 决策逻辑 | [docs/PROMPTS.md](docs/PROMPTS.md) |
+| 改 prompt / 决策逻辑 | [docs/PROMPTS.md](docs/PROMPTS.md) — **真源是 `llm_jobs`，Console Jobs 页** |
 | 改与 Scout 的通信 | [docs/PROTOCOL.md](docs/PROTOCOL.md) + §5。**协议改动必须两仓同步** |
 | 派单 / 设备归属 / 多节点 | [docs/NODE_REGISTRY.md](docs/NODE_REGISTRY.md) |
 | 动数据模型 | [docs/DATA_MODEL.md](docs/DATA_MODEL.md) |

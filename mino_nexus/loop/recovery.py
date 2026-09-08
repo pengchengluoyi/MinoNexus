@@ -27,6 +27,8 @@ class Evidence:
     top_window_pkg: str = ""
     screen_blocked: str = "unknown"
     app_foreground: str = "unknown"
+    capture_ok: str = "unknown"
+    capture_black: str = "unknown"
     raw: dict[str, Any] = field(default_factory=dict)
     error: str = ""
 
@@ -39,12 +41,15 @@ class Evidence:
             "ime_shown": self.ime_shown,
             "screen_blocked": self.screen_blocked,
             "app_foreground": self.app_foreground,
+            "capture_ok": self.capture_ok,
+            "capture_black": self.capture_black,
         }
 
     def brief(self) -> str:
         return (
             f"awake={self.awake} locked={self.locked} fg={self.foreground_pkg or '-'} "
-            f"blocked={self.screen_blocked}"
+            f"blocked={self.screen_blocked} capture_ok={self.capture_ok} "
+            f"capture_black={self.capture_black}"
         )
 
 
@@ -170,14 +175,30 @@ def _match_conditions(match, evidence: Evidence, screen_texts: list[str]) -> tup
     facts = evidence.as_match_dict()
     cond = match or None
     evid = dict(getattr(cond, "evidence", None) or {})
+    branches = list(getattr(cond, "evidence_any", None) or [])
     prefixes = list(getattr(cond, "top_window_pkg_prefix", None) or [])
     texts = list(getattr(cond, "screen_text_any", None) or [])
 
-    for key, want in evid.items():
-        got = facts.get(key, "unknown")
-        if got != str(want):
+    if evid:
+        for key, want in evid.items():
+            got = facts.get(key, "unknown")
+            if got != str(want):
+                return False, []
+            reasons.append(f"{key}={got}")
+    elif branches:
+        hit_branch = False
+        for branch in branches:
+            if not isinstance(branch, dict):
+                continue
+            ok = all(facts.get(str(k), "unknown") == str(v) for k, v in branch.items())
+            if ok:
+                hit_branch = True
+                reasons.extend(f"{k}={facts.get(str(k), 'unknown')}" for k in branch)
+                break
+        if not hit_branch:
             return False, []
-        reasons.append(f"{key}={got}")
+    elif not (prefixes or texts):
+        return False, []
 
     if prefixes:
         pkg = evidence.top_window_pkg or ""
@@ -192,8 +213,6 @@ def _match_conditions(match, evidence: Evidence, screen_texts: list[str]) -> tup
             return False, []
         reasons.append(f"screen_text~{hit}")
 
-    if not (evid or prefixes or texts):
-        return False, []
     return True, reasons
 
 
@@ -278,10 +297,23 @@ def apply_rule(match: RuleMatch, ctx, router, *, target_package: str = "") -> Re
                 out.error = res.error or f"{action.capability} 执行失败"
 
         verify = rule.verify
-        if not (verify.evidence or verify.screen_text_any or verify.top_window_pkg_prefix):
+        if not (verify.evidence or verify.evidence_any or verify.screen_text_any or verify.top_window_pkg_prefix):
             out.recovered = not out.error
             return out
         ev = collect_evidence(ctx, router, target_package=target_package)
+        if router is not None and hasattr(router, "observe"):
+            verify_ev = dict(getattr(verify, "evidence", None) or {})
+            branches = list(getattr(verify, "evidence_any", None) or [])
+            needs_capture = any(k.startswith("capture_") for k in verify_ev)
+            if not needs_capture:
+                for branch in branches:
+                    if isinstance(branch, dict) and any(str(k).startswith("capture_") for k in branch):
+                        needs_capture = True
+                        break
+            if needs_capture:
+                from mino_nexus.loop.screen_capture import merge_shot_evidence
+
+                merge_shot_evidence(ev, router.observe("screenshot", force_fresh=True))
         ok, _ = _match_conditions(verify, ev, [])
         if ok:
             out.recovered = True
@@ -292,16 +324,29 @@ def apply_rule(match: RuleMatch, ctx, router, *, target_package: str = "") -> Re
     return out
 
 
-def recover_if_needed(ctx, router, *, target_package: str = "") -> Optional[RecoveryOutcome]:
-    """取证 → 匹配 → 执行第一条命中规则。无命中返回 None。"""
+def recover_if_needed(
+    ctx,
+    router,
+    *,
+    target_package: str = "",
+    shot: Any = None,
+) -> Optional[RecoveryOutcome]:
+    """取证 → 可选合并截图信号 → 匹配 → 执行第一条命中规则。"""
     try:
         from mino_nexus.runtime.run_context import is_web_slot
 
         if is_web_slot(str(getattr(ctx, "sn", "") or ""), str(getattr(ctx, "platform", "") or "")):
-            return None
+            if shot is None:
+                return None
     except Exception:
         pass
     ev = collect_evidence(ctx, router, target_package=target_package)
+    if shot is not None:
+        from mino_nexus.loop.screen_capture import merge_shot_evidence
+
+        merge_shot_evidence(ev, shot)
+        if ev.capture_black == "yes" and ev.screen_blocked == "no":
+            ev.screen_blocked = "yes"
     plat = str(getattr(ctx, "platform", "") or "")
     hits = match_rules(ev, platform=plat)
     if not hits:

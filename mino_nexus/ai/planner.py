@@ -1,5 +1,3 @@
-# !/usr/bin/env python
-# -*-coding:utf-8 -*-
 """AI-led 回归 Plan / Replan 的高层入口。
 
 负责：
@@ -13,15 +11,17 @@
 这是 Step 3 的 PUBLIC 入口；上层 orchestrator（Step 4+ 才实现）来调它。
 """
 from __future__ import annotations
-
 import re
 import time
 from typing import Any, Optional
-
 from pydantic import ValidationError
 from mino_nexus.core.log import SLog
-
-from mino_nexus.ai import prompts as P
+from mino_nexus.ai.job_slots import (
+    assemble_agent_decide_slots,
+    assemble_assert_vision_slots,
+    assemble_inspect_session_slots,
+)
+from mino_nexus.ai.prompt_render import JobRenderError, render
 from mino_nexus.ai.coords import lift_selector_target, prepare_xy_params_for_execute
 from mino_nexus.ai.llm_client import (
     call_chat_text,
@@ -44,23 +44,18 @@ from mino_nexus.ai.schemas import (
 )
 from mino_nexus.runtime.menu import available_menu_brief
 from mino_nexus.runtime.run_context import RunContext
-
 TAG = "RegressionPlanner"
-
-
-def _chat(*, job: str, provider, messages, **kwargs):
+def _chat(*, job: str, provider, messages, job_meta: dict | None = None, **kwargs):
     from mino_nexus.ai import dispatch_log as dispatch
 
     tok = dispatch.bind(role="test-engineer", job=job, skill=job)
     try:
-        return call_chat_text(provider=provider, messages=messages, **kwargs)
+        raw, meta = call_chat_text(provider=provider, messages=messages, **kwargs)
+        if job_meta:
+            meta = {**meta, "job_id": job_meta.get("job_id") or job, "role_id": job_meta.get("role_id") or ""}
+        return raw, meta
     finally:
         dispatch.reset(tok)
-
-
-# ---------- 输出校验 ----------
-
-
 def _build_menu_index(menu: list[dict[str, Any]]) -> dict[str, set[str]]:
     """{capability_id: {executor_ids ...}}，用于事件级校验。"""
     idx: dict[str, set[str]] = {}
@@ -75,8 +70,6 @@ def _build_menu_index(menu: list[dict[str, Any]]) -> dict[str, set[str]]:
                 execs.add(ex)
         idx[cap_id] = execs
     return idx
-
-
 def _validate_events(
     events: list[PlanEvent],
     menu_index: dict[str, set[str]],
@@ -104,8 +97,6 @@ def _validate_events(
                 ev = ev.model_copy(update={"fallback_executors": cleaned})
         out.append(ev)
     return out, warnings
-
-
 def _parse_plan_result(raw: dict[str, Any], case_id: str, menu_index: dict[str, set[str]]) -> PlanResult:
     """LLM raw JSON → PlanResult；遇到 schema 错降级为 decline。"""
     warnings: list[str] = []
@@ -153,8 +144,6 @@ def _parse_plan_result(raw: dict[str, Any], case_id: str, menu_index: dict[str, 
         parse_warnings=warnings,
     )
     return result
-
-
 def _parse_replan_result(raw: dict[str, Any], menu_index: dict[str, set[str]]) -> ReplanResult:
     warnings: list[str] = []
     mode = (raw.get("mode") or "replan").strip().lower()
@@ -199,181 +188,6 @@ def _parse_replan_result(raw: dict[str, Any], menu_index: dict[str, set[str]]) -
         raw_llm=raw,
         parse_warnings=warnings,
     )
-
-
-# ---------- 公开入口 ----------
-
-
-def generate_overview(
-    case_spec: CaseSpec,
-    *,
-    run_context: RunContext,
-    baseline: Optional[BaselineContext] = None,
-    baseline_overview_text: str = "",
-    provider_id: Optional[str] = None,
-    timeout_sec: int = 120,
-    app_cache_cleared: bool = False,
-) -> PlanResult:
-    """跑 PLAN_OVERVIEW_TEXT，输出整 case 的事件序列。
-
-    永远返回 PlanResult（不抛异常）；LLM 不可用 / 解析失败 → mode=decline + 原因。
-    """
-    menu = available_menu_brief(run_context)
-    if not menu:
-        return PlanResult(
-            mode="decline",
-            case_id=case_spec.case_id,
-            ai_reasoning="capability_menu 为空，当前 RunContext 没有任何可用能力。",
-            confidence=0.0,
-            decline_reason="empty capability menu; check connectivity probes",
-        )
-    menu_index = _build_menu_index(menu)
-
-    provider, gate = resolve_regression_provider(provider_id)
-    if provider is None:
-        return PlanResult(
-            mode="decline",
-            case_id=case_spec.case_id,
-            ai_reasoning=f"未启用 AI 规划：{gate.get('reason')}",
-            confidence=0.0,
-            decline_reason=f"AI provider unavailable: {gate.get('reason')}",
-        )
-
-    messages = P.build_plan_overview_messages(
-        case_spec=case_spec,
-        run_brief=run_context.to_prompt_brief(app_cache_cleared=app_cache_cleared),
-        menu=menu,
-        baseline=baseline,
-        baseline_overview_text=baseline_overview_text,
-    )
-    raw, meta = _chat(
-        job="plan-overview",
-        provider=provider,
-        messages=messages,
-        temperature=0.1,
-        max_tokens=4096,
-        timeout_sec=timeout_sec,
-    )
-    if raw is None:
-        SLog.w(
-            TAG,
-            f"generate_overview LLM failed case={case_spec.case_id} "
-            f"err={meta.get('error') or meta.get('finish_reason')!r}",
-        )
-        return PlanResult(
-            mode="decline",
-            case_id=case_spec.case_id,
-            ai_reasoning="LLM 返回为空或 JSON 解析失败",
-            confidence=0.0,
-            decline_reason=str(meta.get("error") or meta.get("content_preview") or "")[:240],
-            raw_llm={"meta": meta},
-        )
-
-    return _parse_plan_result(raw, case_spec.case_id, menu_index)
-
-
-def replan_single_step(
-    *,
-    run_context: RunContext,
-    completed_events: list[Any],
-    failed_event: Any,
-    failure_summary: str,
-    remaining_events: Optional[list[Any]] = None,
-    baseline: Optional[BaselineContext] = None,
-    provider_id: Optional[str] = None,
-    timeout_sec: int = 90,
-) -> ReplanResult:
-    """跑 SINGLE_STEP_REPLAN，输出新事件队列。"""
-    menu = available_menu_brief(run_context)
-    if not menu:
-        return ReplanResult(
-            mode="give_up",
-            ai_reasoning="capability_menu 为空（连通性丢失），无法继续 replan。",
-            decline_reason="empty capability menu",
-        )
-    menu_index = _build_menu_index(menu)
-
-    provider, gate = resolve_regression_provider(provider_id)
-    if provider is None:
-        return ReplanResult(
-            mode="decline",
-            ai_reasoning=f"未启用 AI 规划：{gate.get('reason')}",
-            decline_reason=f"AI provider unavailable: {gate.get('reason')}",
-            needs_human=True,
-        )
-
-    messages = P.build_single_step_replan_messages(
-        run_brief=run_context.to_prompt_brief(),
-        menu=menu,
-        completed_events=completed_events,
-        failed_event=failed_event,
-        failure_summary=failure_summary,
-        remaining_events=remaining_events,
-        baseline=baseline,
-    )
-    raw, meta = _chat(
-        job="single-step-replan",
-        provider=provider,
-        messages=messages,
-        temperature=0.1,
-        max_tokens=2048,
-        timeout_sec=timeout_sec,
-    )
-    if raw is None:
-        SLog.w(
-            TAG,
-            f"replan_single_step LLM failed err={meta.get('error') or meta.get('finish_reason')!r}",
-        )
-        return ReplanResult(
-            mode="decline",
-            ai_reasoning="LLM 返回为空或 JSON 解析失败",
-            decline_reason=str(meta.get("error") or meta.get("content_preview") or "")[:240],
-            needs_human=True,
-            raw_llm={"meta": meta},
-        )
-    return _parse_replan_result(raw, menu_index)
-
-
-# ============== VLM 子流程：LOCATE_VISION / ASSERT_VISION ==============
-
-
-def _parse_locate_result(
-    raw: dict[str, Any], preview_width: int, preview_height: int
-) -> LocateResult:
-    warnings: list[str] = []
-    found = bool(raw.get("found"))
-    x = int(raw.get("x") or 0)
-    y = int(raw.get("y") or 0)
-    if preview_width > 0 and not (0 <= x <= preview_width):
-        warnings.append(f"x={x} 越界 [0,{preview_width}]，clip")
-        x = max(0, min(preview_width, x))
-    if preview_height > 0 and not (0 <= y <= preview_height):
-        warnings.append(f"y={y} 越界 [0,{preview_height}]，clip")
-        y = max(0, min(preview_height, y))
-    bbox_raw = raw.get("bbox") or []
-    if isinstance(bbox_raw, list) and len(bbox_raw) == 4 and all(isinstance(v, (int, float)) for v in bbox_raw):
-        bbox = [int(v) for v in bbox_raw]
-    else:
-        bbox = []
-    confidence = float(raw.get("confidence") or 0.0)
-    confidence = max(0.0, min(1.0, confidence))
-    if found and confidence == 0.0:
-        confidence = 0.5  # 模型忘填了，给个中性值
-
-    return LocateResult(
-        found=found,
-        x=x,
-        y=y,
-        coord_mode="preview_pixels",
-        bbox=bbox,
-        confidence=confidence,
-        ai_reasoning=str(raw.get("ai_reasoning") or "").strip() or "（模型未给出 reasoning）",
-        label_seen=str(raw.get("label_seen") or "").strip(),
-        raw_llm=raw,
-        parse_warnings=warnings,
-    )
-
-
 def _parse_assert_result(raw: dict[str, Any]) -> AssertResult:
     warnings: list[str] = []
     passed = bool(raw.get("passed"))
@@ -390,56 +204,6 @@ def _parse_assert_result(raw: dict[str, Any]) -> AssertResult:
         raw_llm=raw,
         parse_warnings=warnings,
     )
-
-
-def locate_element(
-    *,
-    description: str,
-    preview_width: int,
-    preview_height: int,
-    image_base64: str,
-    image_mime: str = "image/jpeg",
-    ai_hint: str = "",
-    provider_id: Optional[str] = None,
-    timeout_sec: int = 60,
-) -> LocateResult:
-    """LOCATE_VISION：在截图上定位一个元素，返回坐标 + 置信度。
-
-    永远返回 LocateResult；LLM 不可用 → found=False + 原因写进 ai_reasoning。
-    """
-    provider, gate = resolve_regression_provider(provider_id)
-    if provider is None:
-        return LocateResult(
-            found=False, x=0, y=0, confidence=0.0,
-            ai_reasoning=f"未启用 AI 视觉：{gate.get('reason')}",
-            parse_warnings=["provider unavailable"],
-        )
-    messages = P.build_locate_vision_messages(
-        description=description,
-        preview_width=preview_width,
-        preview_height=preview_height,
-        image_base64=image_base64,
-        image_mime=image_mime,
-        ai_hint=ai_hint,
-    )
-    raw, meta = _chat(
-        job="locate-vision",
-        provider=provider,
-        messages=messages,
-        temperature=0.0,
-        max_tokens=512,
-        timeout_sec=timeout_sec,
-    )
-    if raw is None:
-        return LocateResult(
-            found=False, x=0, y=0, confidence=0.0,
-            ai_reasoning="LLM 返回空 / JSON 解析失败",
-            parse_warnings=[str(meta.get("error") or meta.get("content_preview") or "")[:160]],
-            raw_llm={"meta": meta},
-        )
-    return _parse_locate_result(raw, preview_width, preview_height)
-
-
 def assert_visual(
     *,
     expectation: str,
@@ -459,20 +223,32 @@ def assert_visual(
             evidence="",
             parse_warnings=["provider unavailable"],
         )
-    messages = P.build_assert_vision_messages(
+    slots, flags = assemble_assert_vision_slots(
         expectation=expectation,
         image_base64=image_base64,
         image_mime=image_mime,
         ai_hint=ai_hint,
         context_block=context_block,
     )
+    try:
+        messages, job_meta = render("assert-vision", slots, flags)
+    except JobRenderError as e:
+        return AssertResult(
+            passed=False, confidence=0.0,
+            ai_reasoning=str(e),
+            evidence="",
+            parse_warnings=["job render failed"],
+        )
+    call = job_meta.get("call") or {}
     raw, meta = _chat(
         job="assert-vision",
         provider=provider,
         messages=messages,
-        temperature=0.0,
-        max_tokens=512,
-        timeout_sec=timeout_sec,
+        job_meta=job_meta,
+        temperature=float(call.get("temperature", 0.0)),
+        max_tokens=int(call.get("max_tokens", 512)),
+        timeout_sec=int(call.get("timeout_sec", timeout_sec)),
+        json_mode=bool(call.get("json_mode", True)),
     )
     if raw is None:
         return AssertResult(
@@ -483,8 +259,6 @@ def assert_visual(
             raw_llm={"meta": meta},
         )
     return _parse_assert_result(raw)
-
-
 def verify_step_expected(
     *,
     expectation: str,
@@ -509,11 +283,6 @@ def verify_step_expected(
         provider_id=provider_id,
         timeout_sec=timeout_sec,
     )
-
-
-# ============== HITL Composer (Step 5) ==============
-
-
 _HITL_FALLBACK_TITLES = {
     "confirm":          "需要您确认下一步操作",
     "input_text":       "需要您输入信息",
@@ -522,125 +291,6 @@ _HITL_FALLBACK_TITLES = {
     "upload_image":     "需要您上传一张参考截图",
     "acknowledge":      "请知悉以下事项",
 }
-
-
-def _hitl_fallback(kind: str, reason: str, raw_meta: Optional[dict[str, Any]] = None) -> HitlComposerResult:
-    """LLM 不可用 / 解析失败时给一个能用的兜底，避免阻塞整轮回归。"""
-    title = _HITL_FALLBACK_TITLES.get(kind, "需要您介入")
-    body = f"系统暂时无法生成针对性话术（原因：{reason}）。请根据当前用例上下文做出选择。"
-    constraints: dict[str, Any] = {}
-    options: list[dict[str, Any]] = []
-    if kind == "input_text":
-        constraints = {"min_len": 1, "max_len": 200}
-    elif kind == "upload_image":
-        constraints = {"accept_mime": ["image/png", "image/jpeg"], "max_size_kb": 4096}
-    elif kind in ("choice_single", "choice_multiple"):
-        options = [
-            {"id": "ok", "label": "继续", "hint": None},
-            {"id": "cancel", "label": "终止", "hint": None},
-        ]
-    return HitlComposerResult(
-        title=title,
-        body=body,
-        options=options,
-        constraints=constraints,
-        default_timeout_sec=300,
-        ai_reasoning=f"fallback: {reason}",
-        raw_llm={"meta": raw_meta or {}},
-        parse_warnings=[reason],
-    )
-
-
-def _parse_hitl_composer(raw: dict[str, Any], kind: str) -> HitlComposerResult:
-    warnings: list[str] = []
-    title = str(raw.get("title") or "").strip()
-    body = str(raw.get("body") or "").strip()
-    if not title:
-        warnings.append("title 为空 → 用兜底")
-        title = _HITL_FALLBACK_TITLES.get(kind, "需要您介入")
-    if not body:
-        warnings.append("body 为空")
-        body = "请根据当前用例上下文做出选择。"
-    options_raw = raw.get("options") or []
-    options: list[dict[str, Any]] = []
-    if isinstance(options_raw, list):
-        for opt in options_raw:
-            if isinstance(opt, dict) and opt.get("id"):
-                options.append({
-                    "id": str(opt.get("id")),
-                    "label": str(opt.get("label") or opt.get("id")),
-                    "hint": str(opt.get("hint") or "") or None,
-                })
-    if kind in ("choice_single", "choice_multiple") and not options:
-        warnings.append(f"{kind} 但模型没给 options → 兜底两项 ok/cancel")
-        options = [
-            {"id": "ok", "label": "确认", "hint": None},
-            {"id": "cancel", "label": "取消", "hint": None},
-        ]
-    constraints = raw.get("constraints") or {}
-    if not isinstance(constraints, dict):
-        warnings.append("constraints 非 dict → 丢弃")
-        constraints = {}
-    try:
-        timeout = int(raw.get("default_timeout_sec") or 300)
-    except (TypeError, ValueError):
-        warnings.append("default_timeout_sec 非整数 → 用 300")
-        timeout = 300
-    timeout = max(1, min(3600, timeout))
-    return HitlComposerResult(
-        title=title[:60],
-        body=body[:600],
-        options=options,
-        constraints=constraints,
-        default_timeout_sec=timeout,
-        ai_reasoning=str(raw.get("ai_reasoning") or "").strip() or "（模型未给出 reasoning）",
-        raw_llm=raw,
-        parse_warnings=warnings,
-    )
-
-
-def compose_hitl_prompt(
-    *,
-    hitl_kind: str,
-    case_summary: str,
-    event_dict: dict[str, Any],
-    device_brief: Optional[dict[str, Any]] = None,
-    provider_id: Optional[str] = None,
-    timeout_sec: int = 45,
-) -> HitlComposerResult:
-    """HITL_PROMPT_COMPOSER：给即将弹出的 HITL 写出标题/正文/选项。
-
-    永远返回 HitlComposerResult；LLM 不可用 → 兜底。
-    """
-    kind = (hitl_kind or "confirm").strip()
-    provider, gate = resolve_regression_provider(provider_id)
-    if provider is None:
-        SLog.w(TAG, f"HITL composer 不可用，使用兜底：{gate.get('reason')}")
-        return _hitl_fallback(kind, str(gate.get("reason") or "no provider"))
-
-    messages = P.build_hitl_composer_messages(
-        hitl_kind=kind,
-        case_summary=case_summary,
-        event_dict=event_dict,
-        device_brief=device_brief,
-    )
-    raw, meta = _chat(
-        job="hitl-composer",
-        provider=provider,
-        messages=messages,
-        temperature=0.2,
-        max_tokens=800,
-        timeout_sec=timeout_sec,
-    )
-    if raw is None:
-        SLog.w(TAG, f"HITL composer LLM 解析失败，使用兜底：{meta.get('error')}")
-        return _hitl_fallback(kind, "LLM 返回空 / JSON 解析失败", raw_meta=meta)
-    return _parse_hitl_composer(raw, kind)
-
-
-# ============== PERSONA_TASK (Step 7) ==============
-
-
 def _parse_persona_sub_events(
     raw_events: list[Any],
     menu_index: dict[str, set[str]],
@@ -688,128 +338,13 @@ def _parse_persona_sub_events(
         )
         out.append(ev)
     return out, warnings
-
-
-def expand_persona_task(
-    *,
-    task_description: str,
-    run_context: RunContext,
-    template_id: str = "PERSONA_TASK",
-    params: Optional[dict[str, Any]] = None,
-    ai_hint: str = "",
-    image_base64: str = "",
-    image_mime: str = "image/jpeg",
-    provider_id: Optional[str] = None,
-    timeout_sec: int = 90,
-    max_sub_events: int = 12,
-) -> PersonaExpandResult:
-    """PERSONA_TASK：把高层系统任务展开为可由 Remote 执行的拟人化子事件。
-
-    永远返回 PersonaExpandResult（不抛异常）；任何失败 → mode=decline + 详细原因。
-    """
-    menu = available_menu_brief(run_context)
-    if not menu:
-        return PersonaExpandResult(
-            mode="decline",
-            ai_reasoning="capability_menu 为空，无法展开任何子事件。",
-            decline_reason="empty capability menu; persona expand 不可行",
-        )
-    menu_index = _build_menu_index(menu)
-
-    provider, gate = resolve_regression_provider(provider_id)
-    if provider is None:
-        return PersonaExpandResult(
-            mode="decline",
-            ai_reasoning=f"未启用 AI：{gate.get('reason')}",
-            decline_reason=f"AI provider unavailable: {gate.get('reason')}",
-        )
-
-    messages = P.build_persona_task_messages(
-        task_description=task_description,
-        device_brief=run_context.to_prompt_brief(),
-        menu=menu,
-        params=params or {},
-        ai_hint=ai_hint,
-        image_base64=image_base64,
-        image_mime=image_mime,
-        template_id=template_id or "PERSONA_TASK",
-    )
-    raw, meta = _chat(
-        job="persona-task",
-        provider=provider,
-        messages=messages,
-        temperature=0.1,
-        max_tokens=3072,
-        timeout_sec=timeout_sec,
-    )
-    if raw is None:
-        SLog.w(
-            TAG,
-            f"persona expand LLM failed task={task_description!r} "
-            f"err={meta.get('error') or meta.get('finish_reason')!r}",
-        )
-        return PersonaExpandResult(
-            mode="decline",
-            ai_reasoning="LLM 返回空 / JSON 解析失败",
-            decline_reason=str(meta.get("error") or meta.get("content_preview") or "")[:240],
-            raw_llm={"meta": meta},
-        )
-
-    mode = str(raw.get("mode") or "expand").lower()
-    if mode == "decline":
-        return PersonaExpandResult(
-            mode="decline",
-            ai_reasoning=str(raw.get("ai_reasoning") or "").strip() or "(模型未给出 reasoning)",
-            confidence=float(raw.get("confidence") or 0.0),
-            decline_reason=str(raw.get("decline_reason") or "").strip() or "模型选择 decline",
-            needs_human=bool(raw.get("needs_human")),
-            raw_llm=raw,
-        )
-
-    sub_events, warnings = _parse_persona_sub_events(raw.get("sub_events") or [], menu_index)
-    if max_sub_events and len(sub_events) > max_sub_events:
-        warnings.append(f"sub_events 数量 {len(sub_events)} > 上限 {max_sub_events}，截断")
-        sub_events = sub_events[:max_sub_events]
-    # 重排 seq 保证 1..N 连续
-    for new_seq, ev in enumerate(sub_events, start=1):
-        ev.seq = new_seq
-
-    if not sub_events:
-        return PersonaExpandResult(
-            mode="decline",
-            ai_reasoning=str(raw.get("ai_reasoning") or "").strip() or "模型展开为空",
-            confidence=float(raw.get("confidence") or 0.0),
-            decline_reason="LLM 返回的 sub_events 全被校验丢弃",
-            needs_human=bool(raw.get("needs_human")),
-            raw_llm=raw,
-            parse_warnings=warnings,
-        )
-
-    return PersonaExpandResult(
-        mode="expand",
-        ai_reasoning=str(raw.get("ai_reasoning") or "").strip() or "(模型未给出 reasoning)",
-        sub_events=sub_events,
-        confidence=max(0.0, min(1.0, float(raw.get("confidence") or 0.5))),
-        needs_human=bool(raw.get("needs_human")),
-        raw_llm=raw,
-        parse_warnings=warnings,
-    )
-
-
-# ============== Agent 执行引擎（目标导向闭环，仅 adb 通道） ==============
-
-
 _PROCESS_KIND_RE = re.compile(r"加载占位|加载中|生成中|切换中|转圈|进度未|占位符|占位图")
-
-
 def _as_str_list(value: Any) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     if isinstance(value, (list, tuple)):
         return [str(x).strip() for x in value if str(x).strip()]
     return []
-
-
 def _checkpoint_kind(raw_kind: str, description: str) -> str:
     kind = (raw_kind or "").strip().lower()
     if kind in {"process", "transient", "mid"}:
@@ -817,8 +352,6 @@ def _checkpoint_kind(raw_kind: str, description: str) -> str:
     if kind in {"terminal", "final", "end"}:
         return "terminal"
     return "process" if _PROCESS_KIND_RE.search(description or "") else "terminal"
-
-
 def _split_process_from_success(
     success: str, cps: list[CaseCheckpoint],
 ) -> tuple[list[CaseCheckpoint], str]:
@@ -846,8 +379,6 @@ def _split_process_from_success(
     if moved:
         success_out = success_out.rstrip("。") + "。终态只判定完成后的稳定界面，不要把加载/占位/生成中/切换中当作最终失败理由。"
     return extra, success_out
-
-
 def _checkpoints_from_expected(case_spec: CaseSpec) -> list[CaseCheckpoint]:
     """检查点 = 有编号的预期原文；缺号步骤不生成检查点。"""
     from mino_nexus.ai.case_text import parse_numbered_items_rules
@@ -876,78 +407,6 @@ def _checkpoints_from_expected(case_spec: CaseSpec) -> list[CaseCheckpoint]:
         )
         for n, desc in rows
     ]
-
-
-def extract_goal(
-    case_spec: CaseSpec,
-    *,
-    run_context: Optional[RunContext] = None,
-    provider_id: Optional[str] = None,
-    timeout_sec: int = 60,
-) -> CaseGoal:
-    """检查点优先用用例预期；没有预期才让模型抽。"""
-    expected_cps = _checkpoints_from_expected(case_spec)
-    expected_text = (case_spec.expected or "").strip()
-    if expected_cps:
-        success = expected_text or "\n".join(c.description for c in expected_cps)
-        goal_text = (case_spec.name or success or "完成用例").strip()
-        SLog.i(
-            TAG,
-            f"extract_goal from expected case={case_spec.case_id} cps={len(expected_cps)}",
-        )
-        return CaseGoal(
-            case_id=case_spec.case_id,
-            goal=goal_text,
-            checkpoints=expected_cps,
-            success_criteria=success,
-            ai_reasoning="检查点来自用例预期原文，未改写",
-        )
-
-    provider, gate = resolve_regression_provider(provider_id)
-    if provider is None:
-        return CaseGoal(
-            case_id=case_spec.case_id,
-            goal=(case_spec.expected or case_spec.name or "完成用例").strip(),
-            ai_reasoning=f"未启用 AI：{gate.get('reason')}（用兜底 goal）",
-            parse_warnings=["provider unavailable"],
-        )
-    messages = P.build_goal_extract_messages(case_spec=case_spec)
-    raw, meta = _chat(
-        job="goal-extract",
-        provider=provider, messages=messages,
-        temperature=0.1, max_tokens=1024, timeout_sec=timeout_sec,
-    )
-    if raw is None:
-        SLog.w(TAG, f"extract_goal LLM failed case={case_spec.case_id} err={meta.get('error')!r}")
-        return CaseGoal(
-            case_id=case_spec.case_id,
-            goal=(case_spec.expected or case_spec.name or "完成用例").strip(),
-            ai_reasoning="LLM 返回空/解析失败，用兜底 goal",
-            raw_llm={"meta": meta},
-            parse_warnings=["llm failed"],
-        )
-    cps: list[CaseCheckpoint] = []
-    for idx, cp in enumerate(raw.get("checkpoints") or [], start=1):
-        if isinstance(cp, dict) and (cp.get("description") or "").strip():
-            desc = str(cp.get("description")).strip()
-            cps.append(CaseCheckpoint(
-                id=str(cp.get("id") or f"cp{idx}"),
-                description=desc,
-                kind=_checkpoint_kind(str(cp.get("kind") or ""), desc),
-            ))
-    goal_text = str(raw.get("goal") or "").strip() or (case_spec.expected or case_spec.name or "完成用例").strip()
-    success = str(raw.get("success_criteria") or "").strip() or goal_text
-    cps, success = _split_process_from_success(success, cps)
-    return CaseGoal(
-        case_id=case_spec.case_id,
-        goal=goal_text,
-        checkpoints=cps,
-        success_criteria=success,
-        ai_reasoning=str(raw.get("ai_reasoning") or "").strip() or "（模型未给出 reasoning）",
-        raw_llm=raw,
-    )
-
-
 def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> AgentDecision:
     warnings: list[str] = []
     status = (raw.get("status") or "continue").strip().lower()
@@ -988,8 +447,6 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
         raw_llm=raw,
         parse_warnings=warnings,
     )
-
-
 def decide_next_action(
     *,
     goal: str,
@@ -1009,7 +466,6 @@ def decide_next_action(
     timeout_sec: int = 90,
     menu_ids: Optional[set[str]] = None,
     phase: str = "do",
-    system_prompt: str = "",
     tool_kinds: Optional[list[str]] = None,
 ) -> AgentDecision:
     """看图决定下一步一个动作。永远返回 AgentDecision。"""
@@ -1037,7 +493,7 @@ def decide_next_action(
         return AgentDecision(status="ask_human", thought=f"未启用 AI 视觉：{gate.get('reason')}",
                              parse_warnings=["provider unavailable"])
     accounts_brief = str(getattr(run_context, "accounts_brief", "") or "").strip()
-    messages = P.build_agent_do_messages(
+    slots, flags = assemble_agent_decide_slots(
         goal=goal,
         checkpoints_block=checkpoints_block,
         device_brief=run_context.to_prompt_brief(),
@@ -1049,13 +505,22 @@ def decide_next_action(
         image_mime=image_mime,
         hierarchy_text=hierarchy_text,
         target_package=str(getattr(run_context, "target_package", "") or ""),
+        target_app_name=str(getattr(run_context, "target_app_name", "") or ""),
         success_criteria=success_criteria,
         memory_block=memory_block,
         knowledge_hint=knowledge_hint,
         session_block=session_block,
         accounts_brief=accounts_brief,
-        system_prompt=system_prompt,
     )
+    try:
+        messages, job_meta = render("agent-decide", slots, flags)
+    except JobRenderError as e:
+        return AgentDecision(
+            status="ask_human",
+            thought=str(e),
+            parse_warnings=["job render failed"],
+        )
+    call = job_meta.get("call") or {}
 
     # 给前端展示：我们喂给模型的“文本块/上下文”（不直接回传超大 image_base64）。
     llm_input_debug = {
@@ -1077,12 +542,14 @@ def decide_next_action(
     raw, meta = _chat(
         job="agent-decide",
         provider=provider, messages=messages,
-        # function call 参数通常很短；2048 只作上限。空白输出由流式早停处理。
-        temperature=0.1, max_tokens=2048, timeout_sec=timeout_sec,
-        json_mode=False,
+        job_meta=job_meta,
+        temperature=float(call.get("temperature", 0.1)),
+        max_tokens=int(call.get("max_tokens", 2048)),
+        timeout_sec=int(call.get("timeout_sec", timeout_sec)),
+        json_mode=bool(call.get("json_mode", False)),
         extra_payload=tool_payload or None,
         allow_tools_downgrade=False,
-        require_tool_calls=True,
+        require_tool_calls=bool(call.get("require_tool_calls", True)),
     )
     if raw is None:
         err = str(meta.get("error") or "").strip() or "LLM 返回空/解析失败"
@@ -1104,8 +571,6 @@ def decide_next_action(
     # 覆盖 raw_llm：既保留输出，也带上“喂给模型的输入”用于 UI 可视化溯源。
     decision.raw_llm = {"llm_input": llm_input_debug, "llm_output": raw, "meta": meta}
     return decision
-
-
 def _parse_inspect_session_raw(raw: dict[str, Any]) -> dict[str, Any]:
     session = str(raw.get("session") or "unknown").strip().lower()
     if session not in {"logged_out", "logged_in", "unknown"}:
@@ -1130,8 +595,6 @@ def _parse_inspect_session_raw(raw: dict[str, Any]) -> dict[str, Any]:
         "reason": reason,
         "ok": True,
     }
-
-
 def inspect_session(
     *,
     required_session: str = "",
@@ -1159,20 +622,30 @@ def inspect_session(
     if provider is None:
         empty["reason"] = f"未启用 AI：{gate.get('reason')}"
         return empty
-    messages = P.build_inspect_session_messages(
+    slots, flags = assemble_inspect_session_slots(
         required_session=required_session,
         knowledge_hint=knowledge_hint,
         accounts_brief=accounts_brief,
         image_base64=image_base64,
         image_mime=image_mime,
     )
+    try:
+        messages, job_meta = render("inspect-session", slots, flags)
+    except JobRenderError as e:
+        empty["reason"] = str(e)
+        return empty
+    call = job_meta.get("call") or {}
     last_err = "LLM 返回空/解析失败"
     attempts = 3
     for attempt in range(1, attempts + 1):
         raw, meta = _chat(
             job="inspect-session",
             provider=provider, messages=messages,
-            temperature=0.1, max_tokens=512, timeout_sec=timeout_sec,
+            job_meta=job_meta,
+            temperature=float(call.get("temperature", 0.1)),
+            max_tokens=int(call.get("max_tokens", 512)),
+            timeout_sec=int(call.get("timeout_sec", timeout_sec)),
+            json_mode=bool(call.get("json_mode", True)),
         )
         if isinstance(raw, dict) and str(raw.get("session") or "").strip():
             row = _parse_inspect_session_raw(raw)
@@ -1185,8 +658,6 @@ def inspect_session(
             time.sleep(0.4)
     empty["reason"] = last_err
     return empty
-
-
 def _parse_inspect_env_raw(raw: dict[str, Any]) -> dict[str, Any]:
     from mino_nexus.runtime.env_names import canon_run_env
 
@@ -1200,55 +671,3 @@ def _parse_inspect_env_raw(raw: dict[str, Any]) -> dict[str, Any]:
         "reason": str(raw.get("reason") or "").strip()[:240],
         "ok": True,
     }
-
-
-def inspect_env(
-    *,
-    wanted_env: str = "",
-    wanted_label: str = "",
-    knowledge_hint: str = "",
-    image_base64: str = "",
-    image_mime: str = "image/png",
-    provider_id: Optional[str] = None,
-    timeout_sec: int = 45,
-) -> dict[str, Any]:
-    """观察当前屏客户端环境。空输出当 unknown，不当成功匹配。"""
-    empty = {
-        "env": "unknown",
-        "seen": "",
-        "reason": "未观察",
-        "ok": False,
-    }
-    if not image_base64:
-        empty["reason"] = "无截图，无法查看环境"
-        return empty
-    provider, gate = resolve_regression_provider(provider_id)
-    if provider is None:
-        empty["reason"] = f"未启用 AI：{gate.get('reason')}"
-        return empty
-    messages = P.build_inspect_env_messages(
-        wanted_env=wanted_env,
-        wanted_label=wanted_label,
-        knowledge_hint=knowledge_hint,
-        image_base64=image_base64,
-        image_mime=image_mime,
-    )
-    last_err = "LLM 返回空/解析失败"
-    attempts = 3
-    for attempt in range(1, attempts + 1):
-        raw, meta = _chat(
-            job="inspect-env",
-            provider=provider, messages=messages,
-            temperature=0.1, max_tokens=400, timeout_sec=timeout_sec,
-        )
-        if isinstance(raw, dict) and str(raw.get("env") or "").strip():
-            row = _parse_inspect_env_raw(raw)
-            if attempt > 1:
-                SLog.i(TAG, f"inspect_env recovered on attempt {attempt}")
-            return row
-        last_err = str((meta or {}).get("error") or "").strip() or "LLM 返回空/解析失败"
-        SLog.w(TAG, f"inspect_env attempt {attempt}/{attempts} failed err={last_err!r}")
-        if attempt < attempts:
-            time.sleep(0.4)
-    empty["reason"] = last_err
-    return empty

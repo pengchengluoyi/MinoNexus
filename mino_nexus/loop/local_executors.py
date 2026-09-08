@@ -5,6 +5,8 @@ import time
 from datetime import datetime
 from typing import Any
 
+from mino_nexus.services.account_lease import format_accounts_brief, lease_for_context
+from mino_nexus.services.project_env import account_ident
 from mino_nexus.loop.router_proxy import LOCAL_CAPS, LOCAL_CAP_PREFIXES, is_local_cap
 from mino_nexus.core.protocol import EventStatus
 from mino_nexus.core.schemas import EventResult, PlanEvent
@@ -31,7 +33,14 @@ def _result(event: PlanEvent, *, status: EventStatus, summary: str, elapsed_ms: 
     )
 
 
-def dispatch_local(event: PlanEvent, *, shot: Any = None) -> EventResult:
+def dispatch_local(
+    event: PlanEvent,
+    *,
+    shot: Any = None,
+    ctx: Any = None,
+    router: Any = None,
+    target_package: str = "",
+) -> EventResult:
     cap = event.capability_id
     t0 = time.time()
     if cap == "wait_ms":
@@ -41,7 +50,14 @@ def dispatch_local(event: PlanEvent, *, shot: Any = None) -> EventResult:
             time.sleep(ms / 1000.0)
         return _result(event, status=EventStatus.PASS, summary=f"等待 {ms}ms", elapsed_ms=int((time.time() - t0) * 1000))
     if cap == "wait_screen_ready":
-        return _result(event, status=EventStatus.PASS, summary="跳过 wait_screen_ready（本仓只确认截图通道）", elapsed_ms=int((time.time() - t0) * 1000))
+        return _wait_screen_ready(
+            event,
+            shot=shot,
+            ctx=ctx,
+            router=router,
+            target_package=target_package,
+            t0=t0,
+        )
     if cap.startswith("human_"):
         return _result(
             event,
@@ -104,11 +120,26 @@ def dispatch_local(event: PlanEvent, *, shot: Any = None) -> EventResult:
             elapsed_ms=int((time.time() - t0) * 1000),
         )
     if cap == "lease_account":
+        params = dict(event.params or {})
+        row, err = lease_for_context(
+            ctx,
+            params,
+            ai_reasoning=str(event.ai_reasoning or ""),
+        )
+        if row:
+            brief = format_accounts_brief(row)
+            return _result(
+                event,
+                status=EventStatus.PASS,
+                summary=brief or f"已租账号 {account_ident(row)}",
+                executor="internal",
+                elapsed_ms=int((time.time() - t0) * 1000),
+            )
         return _result(
             event,
             status=EventStatus.FAIL,
-            summary="账号池尚未接线",
-            error="lease_account 没有账号源",
+            summary=err or "租号失败",
+            error=err or "lease failed",
             executor="internal",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
@@ -125,6 +156,68 @@ def dispatch_local(event: PlanEvent, *, shot: Any = None) -> EventResult:
         status=EventStatus.DECLINED,
         summary=f"未知本地能力 {cap}",
         error=f"cap={cap} 标为本地但没有 executor",
+    )
+
+
+def _wait_screen_ready(
+    event: PlanEvent,
+    *,
+    shot: Any,
+    ctx: Any,
+    router: Any,
+    target_package: str,
+    t0: float,
+) -> EventResult:
+    from mino_nexus.loop.recovery import recover_if_needed
+    from mino_nexus.loop.screen_capture import analyze_shot, shot_usable
+
+    elapsed = lambda: int((time.time() - t0) * 1000)
+    facts = analyze_shot(shot)
+    need_recovery = facts.get("capture_ok") == "no" or facts.get("capture_black") == "yes"
+
+    if not need_recovery:
+        return _result(
+            event,
+            status=EventStatus.PASS,
+            summary="屏幕内容可读",
+            elapsed_ms=elapsed(),
+        )
+
+    if ctx is not None and router is not None:
+        out = recover_if_needed(ctx, router, target_package=target_package, shot=shot)
+        if out and out.recovered and hasattr(router, "observe"):
+            fresh = router.observe("screenshot", force_fresh=True)
+            if shot_usable(fresh):
+                summary = out.summary() if callable(getattr(out, "summary", None)) else out.rule_id
+                return _result(
+                    event,
+                    status=EventStatus.PASS,
+                    summary=f"恢复后屏幕可读：{summary}",
+                    elapsed_ms=elapsed(),
+                )
+
+    if router is not None and hasattr(router, "observe"):
+        ms = min(int((event.params or {}).get("timeout_ms") or 3000), 15_000)
+        if ms > 0:
+            time.sleep(ms / 1000.0)
+            fresh = router.observe("screenshot", force_fresh=True)
+            if shot_usable(fresh):
+                return _result(
+                    event,
+                    status=EventStatus.PASS,
+                    summary=f"等待 {ms}ms 后屏幕可读",
+                    elapsed_ms=elapsed(),
+                )
+
+    detail = (
+        f"capture_ok={facts.get('capture_ok')} capture_black={facts.get('capture_black')}"
+    )
+    return _result(
+        event,
+        status=EventStatus.FAIL,
+        summary=f"截图不可用或全黑，recovery 未能恢复（{detail}）",
+        error="screen not readable",
+        elapsed_ms=elapsed(),
     )
 
 

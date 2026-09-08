@@ -55,6 +55,9 @@ async def lifespan(app: FastAPI):
     from mino_nexus.services.auth_store import ensure_seed_users
 
     ensure_seed_users()
+    from mino_nexus.core.bootstrap import bootstrap
+
+    bootstrap()
     configure_proxy_bypass()
     loop = asyncio.get_running_loop()
     ui_ws.set_loop(loop)
