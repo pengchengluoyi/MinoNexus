@@ -43,12 +43,24 @@ _JSON_OBJECT_KEY_RE = re.compile(r'"[A-Za-z_][A-Za-z0-9_]{1,64}"\s*:')
 
 
 def _safe_record_llm(*, messages, parsed=None, raw_text: str = "", meta=None) -> None:
+    row = None
+    meta_dict = meta if isinstance(meta, dict) else {}
     try:
         from mino_nexus.ai.dispatch_log import record_llm
 
-        record_llm(messages=messages, parsed=parsed, raw_text=raw_text, meta=meta)
+        row = record_llm(messages=messages, parsed=parsed, raw_text=raw_text, meta=meta_dict)
     except Exception:
         pass
+    if isinstance(row, dict):
+        did = str(row.get("id") or "")
+        if did and isinstance(meta, dict):
+            meta["dispatch_id"] = did
+        try:
+            from mino_nexus.loop.session_log import append_llm_response
+
+            append_llm_response(row)
+        except Exception:
+            pass
 
 
 # ---------- JSON 抽取 ----------

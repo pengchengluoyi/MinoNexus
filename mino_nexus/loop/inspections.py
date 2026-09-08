@@ -48,4 +48,36 @@ def run_inspections(
                 provider_id=provider_id or None,
             )
             slot_sink["session_block"] = format_session_block(row)
+            _log_inspection(mark=mark, job_id=job_id, result=row, session_block=slot_sink["session_block"])
         # 其它 observe job 后续按同一模式扩展
+
+
+def _log_inspection(
+    *,
+    mark: str,
+    job_id: str,
+    result: dict[str, Any] | None = None,
+    session_block: str = "",
+) -> None:
+    try:
+        from mino_nexus.loop.session_log import active_writer
+
+        writer = active_writer()
+        if writer is None:
+            return
+        row = dict(result or {})
+        writer.append(
+            "inspection/done",
+            {
+                "at": mark,
+                "job_id": job_id,
+                "ok": bool(row.get("ok")),
+                "session_block": str(session_block or "")[:1200],
+                "session": str(row.get("session") or ""),
+                "identity": str(row.get("identity") or ""),
+                "next": str(row.get("next") or ""),
+                "reason": str(row.get("reason") or "")[:400],
+            },
+        )
+    except Exception:
+        pass

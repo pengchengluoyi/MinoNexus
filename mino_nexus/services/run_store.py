@@ -401,6 +401,43 @@ def patch_case(run_id: str, case_id: str, **fields: Any) -> dict[str, Any]:
     return put(doc)
 
 
+def _session_status_for_close(case_status: str) -> str:
+    st = str(case_status or "").strip().lower()
+    if st in ("pass", "done"):
+        return "pass"
+    if st in ("cancelled",):
+        return "cancelled"
+    if st in ("blocked",):
+        return "blocked"
+    if st in ("unverifiable",):
+        return "unverifiable"
+    if st in ("fail", "failed", "declined"):
+        return "fail"
+    return st or "unknown"
+
+
+def _close_open_sessions(doc: dict[str, Any], *, summary: str = "") -> None:
+    from mino_nexus.loop.session_log import force_close_session
+
+    rid = str(doc.get("run_id") or "")
+    for case in doc.get("cases") or []:
+        if not isinstance(case, dict):
+            continue
+        sid = str(case.get("report_run_id") or "").strip()
+        if not sid:
+            cid = str(case.get("case_id") or "")
+            sid = report_run_id(rid, cid) if cid else ""
+        if not sid:
+            continue
+        cst = str(case.get("status") or "")
+        force_close_session(
+            session_id=sid,
+            status=_session_status_for_close(cst),
+            summary=str(case.get("summary") or summary or "")[:2000],
+            step_count=len(case.get("engine_steps") or []),
+        )
+
+
 def interrupt_runs(run_ids: list[str], *, reason: str) -> list[str]:
     """节点断开 / shutting_down：在途 run 立刻失败，不重派。"""
     done: list[str] = []
@@ -408,6 +445,7 @@ def interrupt_runs(run_ids: list[str], *, reason: str) -> list[str]:
         rid = str(raw or "").strip()
         if not rid:
             continue
+        request_cancel(rid)
         doc = get(rid)
         if not doc or doc.get("status") != "running":
             continue
@@ -428,5 +466,6 @@ def finish(run_id: str, *, status: str = "done", error: str = "") -> dict[str, A
     doc["status"] = status
     doc["error"] = error or doc.get("error") or ""
     doc["finished_at"] = _now()
+    _close_open_sessions(doc, summary=error or "")
     clear_cancel(run_id)
     return put(doc)

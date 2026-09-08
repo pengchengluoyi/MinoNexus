@@ -11,6 +11,7 @@ from mino_nexus.models.node import Node, Studio
 from mino_nexus.models.plugin import PluginPolicy, UserPluginSecret
 from mino_nexus.models.project import App, Project
 from mino_nexus.models.run import AppRegressionRun, MCaseBaseline, MCaseRunTrace
+from mino_nexus.models.session_event import SessionEvent, SessionMeta
 from mino_nexus.models.settings import Settings
 from mino_nexus.models.skill import Skill
 from mino_nexus.models.task import Task
@@ -35,6 +36,8 @@ __all__ = [
     "Node",
     "PluginPolicy",
     "Project",
+    "SessionEvent",
+    "SessionMeta",
     "Settings",
     "Skill",
     "Studio",

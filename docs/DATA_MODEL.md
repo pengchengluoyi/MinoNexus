@@ -18,6 +18,7 @@
 | 设置 / 知识机审开关 | `settings` | UI |
 | 知识条目 | `knowledge_entries` | UI / 学习沉淀 |
 | 调度流水 | `dispatch_calls` | LLM / pipeline |
+| Session 轨迹 | `session_events` / `session_meta` | Agent 循环双写 |
 | 能力目录 | `catalog_entries`（`kind` 区分五类） | 空库不灌；只经 Console `/packs` 写入 |
 | 技能 | `skills`（角色 + SOP + prompt + `view.id`） | builtin 从代码灌种一次，之后以库为准；坏行回退 `ai/skill_defs.py` |
 | 图谱别名 | `m_atlas_alias` | UI |
@@ -27,7 +28,7 @@
 | 轻量任务 | `tasks` | `rTask` |
 | 节点 manifest | Nexus 内存缓存 | **Scout 的 `REGISTER` / `HEARTBEAT`** |
 | 原始截图 / 屏幕流 | **Scout 本地**，用后即删 | Scout |
-| trace 缩略图 | Nexus 内存 `_RUNS` + 落库 | Nexus |
+| trace 缩略图 | Nexus 内存 `_RUNS` + `session_events` | Nexus |
 
 设备表里**连通性字段是缓存，不是权威** —— 权威在 Scout。Nexus 不要自己去探。
 
@@ -46,16 +47,17 @@
 
 `state` 取值：`connected` / `disconnected` / `unauthorized` / `auth_failed` / `unpaired` / `not_applicable`。
 
-## 3. trace 的两处存储
+## 3. trace 的三处存储
 
 | 存储 | 内容 | 生命周期 | 谁读 |
 |---|---|---|---|
-| `agent_stream._RUNS` | 每步的 thumb + decision + status | 内存，**上限 20 个 run** | `GET /case-runner/agent/{runs,steps}` |
+| `agent_stream._RUNS` | 每步 thumb + decision + status | 内存，**上限 40 个 run** | `GET /case-runner/agent/steps`（热路径） |
+| **`session_events` + `session_meta`** | append-only 轨迹（见 [9月8日_Session_Event_Log.md](9月8日_Session_Event_Log.md)） | DB，永久 | `GET /case-runner/sessions/{id}/events` · `/trajectory` · `/llm` |
 | `AppRegressionRun` | 批次级结论 + 用例级结果 | DB，永久 | `GET /case-runner/tasks/{id}` |
 
-`task_store` 读取顺序：先内存，兜底 DB。
+Studio 读取顺序：**先内存 `_RUNS`，兜底 session log 投影**。
 
-**已知隐患**：`_RUNS` 上限 20 是单机假设。多节点并发时会被挤爆，早期 run 的逐步 trace 会消失（批次结论仍在 DB 里）。处理方向：按 `node_id` 分桶，或改成落库 + 短 TTL 内存缓存。**未决，见 §5。**
+**说明**：session log 双写于 `agent_loop`（结构化 event + `stream/emit` 镜像）；服务重启后轨迹仍可从 DB 恢复。
 
 ## 4. 从 sqlite 到 PG
 
@@ -72,7 +74,7 @@
 
 | # | 事项 | 影响 |
 |---|---|---|
-| 1 | `_RUNS` 上限 20 在多节点下的处理 | 多节点并发时早期 run 的逐步 trace 丢失 |
+| 1 | `_RUNS` 内存上限 vs 多节点 | session log 已落库；内存仅作热缓存 |
 | 2 | sqlite → PG 的时机 | 上云的前置条件 |
 | 3 | 循环状态（跑到第几步、history）在内存 | Nexus 多实例需要 sticky routing 或状态外置 |
 | 4 | 截图归档策略 | 当前 Scout 用后即删，只有 thumb 留在 Nexus。若要复盘原图需要对象存储 |

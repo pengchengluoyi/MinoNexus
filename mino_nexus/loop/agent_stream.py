@@ -128,6 +128,14 @@ def make_thumb(png_b64: str, *, width: int = 360, quality: int = 70) -> str:
 def emit_agent_event(data: dict[str, Any]) -> None:
     _buffer(data)
     try:
+        from mino_nexus.loop.session_log import mirror_stream_event
+
+        seq = mirror_stream_event(data)
+        if seq:
+            data = {**data, "log_seq": seq}
+    except Exception as exc:
+        SLog.d(TAG, f"session log mirror failed: {exc!r}")
+    try:
         from mino_nexus.websocket import observers as ui_ws
 
         slim = dict(data)

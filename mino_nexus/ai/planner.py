@@ -50,6 +50,12 @@ def _chat(*, job: str, provider, messages, job_meta: dict | None = None, **kwarg
 
     tok = dispatch.bind(role="test-engineer", job=job, skill=job)
     try:
+        try:
+            from mino_nexus.loop.session_log import append_llm_request
+
+            append_llm_request(job_id=job, messages=messages)
+        except Exception:
+            pass
         raw, meta = call_chat_text(provider=provider, messages=messages, **kwargs)
         if job_meta:
             meta = {**meta, "job_id": job_meta.get("job_id") or job, "role_id": job_meta.get("role_id") or ""}
