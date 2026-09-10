@@ -11,7 +11,7 @@ DEFAULT_PHASES: dict[str, dict[str, Any]] = {
         "id": "prep",
         "job": "agent-decide",
         "tool_kinds": ["prep", "generic"],
-        "guards": [],
+        "guards": ["skip_repeat_read_device"],
         "advance_on": "signal_done",
     },
     "do": {

@@ -88,11 +88,14 @@ class JobSaveBody(BaseModel):
     enabled: bool | None = None
     sort_order: int | None = None
     reset: bool = False
+    activate_version: int | None = None
 
 
 class JobPreviewBody(BaseModel):
     slots: dict[str, str] | None = None
     flags: dict[str, bool] | None = None
+    system_blocks: list[dict[str, Any]] | None = None
+    user_blocks: list[dict[str, Any]] | None = None
 
 
 class SkillSaveBody(BaseModel):
@@ -273,7 +276,13 @@ def preview_ai_job(job_id: str, body: JobPreviewBody, _sess: dict = Depends(curr
     from mino_nexus.services import job_store as js
 
     try:
-        data = js.preview_job(job_id, slots=body.slots, flags=body.flags)
+        data = js.preview_job(
+            job_id,
+            slots=body.slots,
+            flags=body.flags,
+            system_blocks=body.system_blocks,
+            user_blocks=body.user_blocks,
+        )
     except Exception as e:
         http_error(e)
     return ok(data)
@@ -766,12 +775,38 @@ def append_app_knowledge(body: KnowledgeAppendBody, _sess: dict = Depends(curren
         ids = [str(x) for x in (item.get("app_ids") or []) if str(x).strip()]
         if body.app_id not in ids:
             ids.append(body.app_id)
+        try:
+            from mino_nexus.services import project_store as ps
+
+            app = ps.find_app(body.app_id)
+            pid = str((app or {}).get("project_id") or "").strip()
+            if pid and pid not in ids:
+                ids.append(pid)
+        except Exception:
+            pass
         item["app_ids"] = ids
     try:
         row = ss.upsert_knowledge_item(item)
     except Exception as e:
         http_error(e)
     return ok(row, msg="已写入")
+
+
+@router.post("/knowledge/backfill-situations")
+def backfill_knowledge_situations(
+    app_id: str = "",
+    project_id: str = "",
+    limit: int = 8,
+    _sess: dict = Depends(current_session),
+):
+    """给缺情境指纹的已审核知识补 LLM 情境卡（需配置 provider）。"""
+    from mino_nexus.services.knowledge_situation import backfill_situations
+
+    try:
+        n = backfill_situations(app_id=app_id, project_id=project_id, limit=limit)
+    except Exception as e:
+        http_error(e)
+    return ok({"updated": n}, msg=f"已补卡 {n} 条")
 
 
 @router.put("/knowledge/{kid}")

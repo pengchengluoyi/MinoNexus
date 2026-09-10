@@ -37,9 +37,9 @@ def _ask_json(job: str, user: str) -> tuple[dict[str, Any] | None, dict[str, Any
     if not provider:
         return None, {"error": gate.get("reason") or "未配置可用的大模型", "enabled": False}
     cover_jobs.report(phase=job, label=f"正在调用模型：{job}")
-    slots, flags = assemble_json_chat_slots(user_payload=user[:24000])
+    slots = assemble_json_chat_slots(user_payload=user[:24000])
     try:
-        messages, job_meta = render(job, slots, flags)
+        messages, job_meta = render(job, slots)
     except JobRenderError as e:
         return None, {"error": str(e)}
     call = job_meta.get("call") or {}
@@ -117,15 +117,15 @@ def _norm_case(row: dict, index: int) -> dict:
     }
 
 
-def _apply_cases(req: dict, payload: dict, *, app_id: str = "", replace: bool = False) -> dict:
+def _apply_cases(req: dict, payload: dict, *, project_id: str = "", replace: bool = False) -> dict:
     from mino_nexus.services.case_store import upsert_cases
 
     req = dict(req)
     incoming = payload.get("cases") if isinstance(payload.get("cases"), list) else []
     rows = [_norm_case(x, i) for i, x in enumerate(incoming) if isinstance(x, dict)]
     rid = str(req.get("id") or "")
-    if app_id:
-        upsert_cases(app_id, rid, rows, replace=replace)
+    if project_id:
+        upsert_cases(project_id, rid, rows, replace=replace)
         req.pop("draft_cases", None)
     elif replace:
         req["draft_cases"] = rows
@@ -187,7 +187,7 @@ def run_llm_job(job: str, *, requirement: dict, cases: list | None = None, qa_pr
     return {"job": job, "status": "error", "error": f"未知 job：{job}"}
 
 
-def _default_jobs(req: dict, requested: list[str], *, app_id: str = "") -> list[str]:
+def _default_jobs(req: dict, requested: list[str], *, project_id: str = "") -> list[str]:
     want = [j for j in requested if j in LLM_JOBS]
     if want:
         return want
@@ -201,7 +201,7 @@ def _default_jobs(req: dict, requested: list[str], *, app_id: str = "") -> list[
     if not drafts:
         from mino_nexus.services.case_store import count_cases
 
-        if not (app_id and count_cases(app_id, str(req.get("id") or ""))):
+        if not (project_id and count_cases(project_id, str(req.get("id") or ""))):
             jobs.append("draft_cases")
     return jobs or ["analyze_req"]
 
@@ -217,7 +217,7 @@ def tick(
     point_ids: list | None = None,
     rewrite_stubs: bool = False,
     replace_cases: bool = False,
-    app_id: str = "",
+    project_id: str = "",
 ) -> dict[str, Any]:
     del force, point_ids, rewrite_stubs
     doc = dict(qa_process or {})
@@ -238,7 +238,7 @@ def tick(
     cover_jobs.report(phase="running", label="开始推进", total=max(1, len(working) * 3))
 
     for req in working:
-        job_list = _default_jobs(req, list(jobs or []), app_id=app_id)
+        job_list = _default_jobs(req, list(jobs or []), project_id=project_id)
         if note:
             req["human_feedback"] = note
         for job in job_list:
@@ -257,7 +257,7 @@ def tick(
             elif job == "draft_mindmap":
                 req = _apply_mindmap(req, payload)
             elif job == "draft_cases":
-                req = _apply_cases(req, payload, app_id=app_id, replace=replace_cases)
+                req = _apply_cases(req, payload, project_id=project_id, replace=replace_cases)
             elif job == "propose_atlas":
                 patches = list(doc.get("atlas_patches") or [])
                 patches.append({
@@ -309,10 +309,8 @@ def import_cover(
     text: str = "",
     filename: str = "",
     replace: bool = False,
-    app_id: str = "",
+    project_id: str = "",
 ) -> dict[str, Any]:
-    from mino_nexus.services.cover_import import parse_cases
-
     doc = dict(qa_process or {})
     reqs = [dict(r) for r in (doc.get("requirements") or []) if isinstance(r, dict)]
     rid = str(requirement_id or "").strip()
@@ -325,23 +323,10 @@ def import_cover(
     kind = str(kind or "mindmap").strip().lower()
     stats: dict[str, Any]
     if kind in ("cases", "case", "csv"):
-        incoming = parse_cases(raw, filename)
-        if not incoming:
-            raise ValueError("没有解析到用例")
-        incoming = [{**c, "origin": "import", "locked": True} for c in incoming if isinstance(c, dict)]
-        req = _apply_cases(req, {"cases": incoming}, app_id=app_id, replace=replace)
-        total = 0
-        if app_id:
-            from mino_nexus.services.case_store import count_cases
-            total = count_cases(app_id, str(req.get("id") or ""))
-        else:
-            total = len([x for x in (req.get("draft_cases") or []) if isinstance(x, dict)])
-        stats = {
-            "kind": "cases",
-            "cases": len(incoming),
-            "total": total,
-            "action": "imported_cases",
-        }
+        raise ValueError(
+            "用例导入已改为 preview/commit 流程，请使用 "
+            "POST /project/{project_id}/cases/import/preview 与 commit"
+        )
     else:
         parsed: Any = None
         try:

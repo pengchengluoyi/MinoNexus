@@ -58,7 +58,12 @@ def _chat(*, job: str, provider, messages, job_meta: dict | None = None, **kwarg
             pass
         raw, meta = call_chat_text(provider=provider, messages=messages, **kwargs)
         if job_meta:
-            meta = {**meta, "job_id": job_meta.get("job_id") or job, "role_id": job_meta.get("role_id") or ""}
+            meta = {
+                **meta,
+                "job_id": job_meta.get("job_id") or job,
+                "role_id": job_meta.get("role_id") or "",
+                "prompt_version": int(job_meta.get("prompt_version") or 1),
+            }
         return raw, meta
     finally:
         dispatch.reset(tok)
@@ -229,7 +234,7 @@ def assert_visual(
             evidence="",
             parse_warnings=["provider unavailable"],
         )
-    slots, flags = assemble_assert_vision_slots(
+    slots = assemble_assert_vision_slots(
         expectation=expectation,
         image_base64=image_base64,
         image_mime=image_mime,
@@ -237,7 +242,7 @@ def assert_visual(
         context_block=context_block,
     )
     try:
-        messages, job_meta = render("assert-vision", slots, flags)
+        messages, job_meta = render("assert-vision", slots)
     except JobRenderError as e:
         return AssertResult(
             passed=False, confidence=0.0,
@@ -416,7 +421,7 @@ def _checkpoints_from_expected(case_spec: CaseSpec) -> list[CaseCheckpoint]:
 def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> AgentDecision:
     warnings: list[str] = []
     status = (raw.get("status") or "continue").strip().lower()
-    if status not in {"continue", "done", "give_up", "ask_human"}:
+    if status not in {"continue", "done", "give_up", "ask_human", "skip"}:
         warnings.append(f"unknown status={status!r} → continue")
         status = "continue"
     action: Optional[AgentAction] = None
@@ -467,6 +472,7 @@ def decide_next_action(
     success_criteria: str = "",
     memory_block: str = "",
     knowledge_hint: str = "",
+    knowledge_body: str = "",
     session_block: str = "",
     provider_id: Optional[str] = None,
     timeout_sec: int = 90,
@@ -499,7 +505,7 @@ def decide_next_action(
         return AgentDecision(status="ask_human", thought=f"未启用 AI 视觉：{gate.get('reason')}",
                              parse_warnings=["provider unavailable"])
     accounts_brief = str(getattr(run_context, "accounts_brief", "") or "").strip()
-    slots, flags = assemble_agent_decide_slots(
+    slots = assemble_agent_decide_slots(
         goal=goal,
         checkpoints_block=checkpoints_block,
         device_brief=run_context.to_prompt_brief(),
@@ -515,11 +521,14 @@ def decide_next_action(
         success_criteria=success_criteria,
         memory_block=memory_block,
         knowledge_hint=knowledge_hint,
+        knowledge_body=knowledge_body,
         session_block=session_block,
         accounts_brief=accounts_brief,
+        phase=phase,
+        case_scene=getattr(run_context, "case_scene", None) or {},
     )
     try:
-        messages, job_meta = render("agent-decide", slots, flags)
+        messages, job_meta = render("agent-decide", slots)
     except JobRenderError as e:
         return AgentDecision(
             status="ask_human",
@@ -534,6 +543,7 @@ def decide_next_action(
         "checkpoints_block": checkpoints_block,
         "history_block": history_block,
         "knowledge_hint": knowledge_hint,
+        "knowledge_body": knowledge_body,
         "session_block": session_block,
         "accounts_brief": accounts_brief,
         "memory_block": memory_block,
@@ -628,7 +638,7 @@ def inspect_session(
     if provider is None:
         empty["reason"] = f"未启用 AI：{gate.get('reason')}"
         return empty
-    slots, flags = assemble_inspect_session_slots(
+    slots = assemble_inspect_session_slots(
         required_session=required_session,
         knowledge_hint=knowledge_hint,
         accounts_brief=accounts_brief,
@@ -636,7 +646,7 @@ def inspect_session(
         image_mime=image_mime,
     )
     try:
-        messages, job_meta = render("inspect-session", slots, flags)
+        messages, job_meta = render("inspect-session", slots)
     except JobRenderError as e:
         empty["reason"] = str(e)
         return empty

@@ -1,11 +1,18 @@
-"""目录 kind：prep / do / check / generic / recovery。与执行阶段、/packs?kind= 同一套词。"""
+"""目录 kind：prep / do / check / generic / recovery。
+
+recovery 与 SOP tool_kinds 同名：payload 带 match/actions 时为 L0 规则，
+带 implementations（或本地编排 caller）时为可派单原子能力。
+"""
 from __future__ import annotations
 
 from typing import Dict, Tuple
 
 CAPABILITY_KINDS: Tuple[str, ...] = ("prep", "do", "check", "generic")
-PACK_KINDS: Tuple[str, ...] = ("recovery",)
+RECOVERY_KIND = "recovery"
+PACK_KINDS: Tuple[str, ...] = (RECOVERY_KIND,)
 ALL_KINDS: Tuple[str, ...] = CAPABILITY_KINDS + PACK_KINDS
+# 菜单 / 派单：阶段 tool_kinds 含 recovery 时，recovery 原子能力也进 capabilities。
+MENU_ATOMIC_KINDS: Tuple[str, ...] = CAPABILITY_KINDS + (RECOVERY_KIND,)
 
 # 无 implementations、由 Nexus 本地编排的能力。Scout 不执行。
 LOCAL_ORCH_IDS = frozenset({

@@ -68,6 +68,9 @@ def ensure_db() -> None:
         from mino_nexus import models  # noqa: F401 — 注册表
 
         Base.metadata.create_all(bind=engine)
+        from mino_nexus.core.migration import run_auto_migration
+
+        run_auto_migration()
         from mino_nexus.core.bootstrap import bootstrap
 
         bootstrap()

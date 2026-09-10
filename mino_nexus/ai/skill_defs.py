@@ -18,8 +18,8 @@ ALIASES = {
 
 DEFAULT_SOP = {
     "phases": [
-        {"id": "prep", "job": "agent-decide", "tool_kinds": ["prep", "generic", "recovery"], "guards": [], "advance_on": "signal_done"},
-        {"id": "do", "job": "agent-decide", "tool_kinds": ["do", "generic"], "guards": ["skip_repeat_tap"], "advance_on": "signal_done"},
+        {"id": "prep", "job": "agent-decide", "tool_kinds": ["prep", "generic", "recovery"], "guards": ["skip_repeat_read_device", "exec_script_params"], "advance_on": "signal_done"},
+        {"id": "do", "job": "agent-decide", "tool_kinds": ["do", "generic", "recovery"], "guards": ["skip_repeat_tap", "limit_advise_recovery", "stuck_alternation", "block_login_after_guest"], "advance_on": "signal_done"},
         {
             "id": "check",
             "job": "agent-decide",

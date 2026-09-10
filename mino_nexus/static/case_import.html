@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>用例导入向导</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #1a1a1a; }
+    body { margin: 0; padding: 16px 24px 48px; background: #f6f7fb; }
+    h1 { font-size: 20px; margin: 0 0 16px; }
+    .panel { background: #fff; border: 1px solid #e5e7ef; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 12px; }
+    label { font-size: 13px; color: #555; }
+    input, select, button, textarea { font-size: 14px; }
+    input, select, textarea { padding: 6px 8px; border: 1px solid #ccd; border-radius: 6px; }
+    button { padding: 8px 14px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+    button.secondary { background: #64748b; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border: 1px solid #e5e7ef; padding: 6px 8px; vertical-align: top; }
+    th { background: #eef2ff; }
+    tr.skip-row { opacity: 0.45; }
+    tr.conflict { background: #fff7ed; }
+    .hint { font-size: 12px; color: #666; }
+    .error { color: #b91c1c; font-size: 13px; }
+    .ok { color: #047857; font-size: 13px; }
+    #rawTable { max-height: 320px; overflow: auto; }
+    #previewTable { max-height: 360px; overflow: auto; }
+  </style>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+  <h1>用例导入向导（Studio 参考页）</h1>
+  <p class="hint">打开：<code>/studio-static/case_import.html</code>。需已登录 Nexus，并在下方填写 Bearer Token。</p>
+
+  <div class="panel">
+    <div class="row">
+      <label>API 根路径 <input id="apiBase" value="" style="width:280px" placeholder="留空=当前站点" /></label>
+      <label>Token <input id="token" style="width:320px" placeholder="Bearer 登录 token" /></label>
+    </div>
+    <div class="row">
+      <label>项目 ID <input id="projectId" style="width:220px" /></label>
+      <label>需求
+        <select id="requirementId" style="min-width:240px"><option value="">— 加载需求 —</option></select>
+      </label>
+      <button type="button" id="loadReqs" class="secondary">刷新需求</button>
+    </div>
+    <div class="row">
+      <input type="file" id="file" accept=".xlsx,.xls,.csv,.tsv" />
+      <label>列名行（0 起） <input id="headerRow" type="number" value="0" min="0" style="width:64px" /></label>
+      <button type="button" id="parseBtn">解析预览</button>
+    </div>
+  </div>
+
+  <div class="panel" id="mapPanel" hidden>
+    <h3 style="margin-top:0">列映射</h3>
+    <div class="row" id="columnMaps"></div>
+    <p class="hint">勾选「跳过」排除表头/垃圾行。合并单元格保持为空，不自动填充。</p>
+    <div id="rawTable"></div>
+  </div>
+
+  <div class="panel" id="previewPanel" hidden>
+    <h3 style="margin-top:0">导入预览</h3>
+    <div class="row">
+      <button type="button" id="commitBtn">确认导入</button>
+      <label>冲突默认
+        <select id="defaultConflict"><option value="skip">保留已有</option><option value="overwrite">覆盖</option></select>
+      </label>
+    </div>
+    <div id="previewTable"></div>
+    <p id="resultMsg"></p>
+  </div>
+
+  <script>
+    let tableData = [];
+    let previewToken = "";
+    let previewRows = [];
+
+    const $ = (id) => document.getElementById(id);
+
+    function api(path) {
+      const base = ($("apiBase").value || "").replace(/\/$/, "");
+      return `${base}${path}`;
+    }
+
+    function headers() {
+      const h = { "Content-Type": "application/json", "X-Mino-Client": "studio" };
+      const t = $("token").value.trim();
+      if (t) h.Authorization = t.startsWith("Bearer ") ? t : `Bearer ${t}`;
+      return h;
+    }
+
+    async function loadRequirements() {
+      const pid = $("projectId").value.trim();
+      if (!pid) return alert("请填写项目 ID");
+      const res = await fetch(api(`/project/${pid}/requirements`), { headers: headers() });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || JSON.stringify(json));
+      const sel = $("requirementId");
+      sel.innerHTML = "";
+      for (const r of (json.data?.requirements || [])) {
+        const opt = document.createElement("option");
+        opt.value = r.id;
+        opt.textContent = `${r.title} (${r.id})`;
+        sel.appendChild(opt);
+      }
+    }
+
+    function readFile(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
+      });
+    }
+
+    async function loadTableFromFile(file) {
+      const name = file.name.toLowerCase();
+      if (name.endsWith(".csv") || name.endsWith(".tsv")) {
+        const text = await file.text();
+        tableData = text.split(/\r?\n/).filter(Boolean).map((line) => line.split(/\t|,/));
+        return;
+      }
+      const buf = await readFile(file);
+      const wb = XLSX.read(buf, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      tableData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+    }
+
+    function skipRows() {
+      return [...document.querySelectorAll(".skip-check:checked")].map((el) => parseInt(el.dataset.row, 10));
+    }
+
+    function columnMap() {
+      const map = {};
+      document.querySelectorAll("[data-field]").forEach((sel) => {
+        const field = sel.dataset.field;
+        const val = sel.value;
+        if (val !== "") map[field] = parseInt(val, 10);
+      });
+      return map;
+    }
+
+    function renderRawTable() {
+      const hr = parseInt($("headerRow").value, 10) || 0;
+      const labels = tableData[hr] || [];
+      const fields = [
+        ["case_id", "编号"], ["name", "名称"], ["module", "模块"], ["platform", "端"],
+        ["precondition", "前置"], ["steps", "步骤"], ["expected", "预期"],
+      ];
+      $("columnMaps").innerHTML = fields.map(([f, label]) => {
+        const opts = labels.map((lb, i) => `<option value="${i}">${i}: ${lb || "列" + (i+1)}</option>`).join("");
+        return `<label>${label} <select data-field="${f}"><option value="">—</option>${opts}</select></label>`;
+      }).join("");
+
+      let html = "<table><thead><tr><th>跳过</th><th>#</th>";
+      const maxCols = Math.max(...tableData.map((r) => r.length), 0);
+      for (let c = 0; c < maxCols; c++) html += `<th>列${c}</th>`;
+      html += "</tr></thead><tbody>";
+      tableData.forEach((row, i) => {
+        html += `<tr class="${i === hr ? "" : ""}"><td><input type="checkbox" class="skip-check" data-row="${i}" ${i === hr ? "checked" : ""} /></td><td>${i}</td>`;
+        for (let c = 0; c < maxCols; c++) {
+          const cell = (row[c] ?? "").toString().replace(/</g, "&lt;");
+          html += `<td>${cell}</td>`;
+        }
+        html += "</tr>";
+      });
+      html += "</tbody></table>";
+      $("rawTable").innerHTML = html;
+      $("mapPanel").hidden = false;
+    }
+
+    async function preview() {
+      const pid = $("projectId").value.trim();
+      const rid = $("requirementId").value.trim();
+      if (!pid || !rid) return alert("请选择项目和需求");
+      const body = {
+        requirement_id: rid,
+        table: tableData,
+        header_row: parseInt($("headerRow").value, 10) || 0,
+        skip_rows: skipRows(),
+        column_map: columnMap(),
+      };
+      const res = await fetch(api(`/project/${pid}/cases/import/preview`), {
+        method: "POST", headers: headers(), body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(typeof json.detail === "string" ? json.detail : JSON.stringify(json));
+      previewToken = json.data.preview_token;
+      previewRows = json.data.rows || [];
+      renderPreview(json.data);
+    }
+
+    function renderPreview(data) {
+      let html = `<p class="hint">解析 ${data.parsed} 条，冲突 ${(data.conflicts || []).length} 条</p>`;
+      html += "<table><thead><tr><th>导入</th><th>编号</th><th>名称</th><th>冲突</th><th>策略</th><th>步骤摘要</th></tr></thead><tbody>";
+      previewRows.forEach((row) => {
+        const c = row.conflict;
+        const cls = c ? "conflict" : "";
+        html += `<tr class="${cls}" data-row-index="${row.row_index}">
+          <td><input type="checkbox" class="import-check" checked /></td>
+          <td>${row.case_id || "<em>系统生成</em>"}</td>
+          <td>${(row.name || "").replace(/</g,"&lt;")}</td>
+          <td>${c ? `已有：${c.existing_name} / 需求 ${c.existing_requirement_title}` : "-"}</td>
+          <td>${c ? `<select class="conflict-action"><option value="skip">保留</option><option value="overwrite">覆盖</option></select>` : "-"}</td>
+          <td><pre style="margin:0;white-space:pre-wrap">${(row.steps_preview || "").replace(/</g,"&lt;")}</pre></td>
+        </tr>`;
+      });
+      html += "</tbody></table>";
+      $("previewTable").innerHTML = html;
+      $("previewPanel").hidden = false;
+    }
+
+    async function commit() {
+      const pid = $("projectId").value.trim();
+      const rid = $("requirementId").value.trim();
+      const rows = [];
+      document.querySelectorAll("#previewTable tbody tr").forEach((tr) => {
+        const rowIndex = parseInt(tr.dataset.rowIndex, 10);
+        const selected = tr.querySelector(".import-check").checked;
+        const actionEl = tr.querySelector(".conflict-action");
+        rows.push({
+          row_index: rowIndex,
+          selected,
+          on_conflict: actionEl ? actionEl.value : $("defaultConflict").value,
+        });
+      });
+      const body = {
+        requirement_id: rid,
+        preview_token: previewToken,
+        default_on_conflict: $("defaultConflict").value,
+        rows,
+      };
+      const res = await fetch(api(`/project/${pid}/cases/import/commit`), {
+        method: "POST", headers: headers(), body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(typeof json.detail === "string" ? json.detail : JSON.stringify(json));
+      $("resultMsg").className = "ok";
+      $("resultMsg").textContent = `完成：新增 ${json.data.created}，更新 ${json.data.updated}，跳过 ${json.data.skipped}，本需求合计 ${json.data.total}`;
+    }
+
+    $("loadReqs").onclick = () => loadRequirements().catch((e) => alert(e.message));
+    $("file").onchange = async (ev) => {
+      const f = ev.target.files[0];
+      if (!f) return;
+      await loadTableFromFile(f);
+      renderRawTable();
+    };
+    $("parseBtn").onclick = () => preview().catch((e) => { alert(e.message); });
+    $("commitBtn").onclick = () => commit().catch((e) => { alert(e.message); });
+  </script>
+</body>
+</html>

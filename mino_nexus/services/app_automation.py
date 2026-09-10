@@ -76,6 +76,8 @@ def _normalize_qa_process(raw: Any) -> dict[str, Any]:
     def _reqs() -> list[dict[str, Any]]:
         rows = []
         for req in _rows("requirements"):
+            if str(req.get("id") or "") == "__imported_cases__":
+                continue
             item = dict(req)
             item.pop("draft_cases", None)
             rows.append(item)
@@ -112,38 +114,41 @@ def _app_env(app: dict) -> dict[str, Any]:
     return dict(app.get("env") or {}) if isinstance(app.get("env"), dict) else {}
 
 
-def _attach_draft_cases(app_id: str, qp: dict[str, Any]) -> dict[str, Any]:
-    """读路径：把 app_cases 填回 requirements[].draft_cases，给 Studio 用例库用。"""
+def _project_id(app: dict) -> str:
+    return str(app.get("project_id") or "").strip()
+
+
+def _attach_draft_cases(project_id: str, qp: dict[str, Any]) -> dict[str, Any]:
+    """读路径：把 project_cases 填回 requirements[].draft_cases，给 Studio 用例库用。"""
     from mino_nexus.services.case_store import list_cases
 
     qp = dict(qp or {})
     reqs = [dict(r) for r in (qp.get("requirements") or []) if isinstance(r, dict)]
-    aid = str(app_id or "").strip()
-    if not aid:
+    pid = str(project_id or "").strip()
+    if not pid:
         qp["requirements"] = reqs
         return qp
     by_req: dict[str, list[dict[str, Any]]] = {}
-    for row in list_cases(aid):
+    for row in list_cases(pid):
         by_req.setdefault(str(row.get("requirement_id") or ""), []).append(row)
+    known = {str(item.get("id") or "") for item in reqs}
     for item in reqs:
         item["draft_cases"] = by_req.get(str(item.get("id") or ""), [])
+    orphans: list[dict[str, Any]] = []
+    for rid, rows in by_req.items():
+        if rid not in known:
+            orphans.extend(rows)
+    if orphans or (not reqs and by_req):
+        if not orphans:
+            for rows in by_req.values():
+                orphans.extend(rows)
+        orphan_req = next((r for r in reqs if str(r.get("id") or "") == "__imported_cases__"), None)
+        if orphan_req is None:
+            orphan_req = {"id": "__imported_cases__", "title": "导入用例", "draft_cases": []}
+            reqs.append(orphan_req)
+        orphan_req["draft_cases"] = list(orphan_req.get("draft_cases") or []) + orphans
     qp["requirements"] = reqs
     return qp
-
-
-def _sync_draft_cases_to_store(app_id: str, qp: dict[str, Any]) -> None:
-    """写路径：请求里带了 draft_cases 才回写 sqlite；缺这个 key 表示没动用例，不覆盖。"""
-    from mino_nexus.services.case_store import upsert_cases
-
-    aid = str(app_id or "").strip()
-    if not aid or not isinstance(qp, dict):
-        return
-    for req in qp.get("requirements") or []:
-        if not isinstance(req, dict) or "draft_cases" not in req:
-            continue
-        rid = str(req.get("id") or "").strip()
-        rows = [x for x in (req.get("draft_cases") or []) if isinstance(x, dict)]
-        upsert_cases(aid, rid, rows, replace=True)
 
 
 def get_automation_config(app: dict, *, hydrate_cases: bool = True) -> dict[str, Any]:
@@ -176,7 +181,7 @@ def get_automation_config(app: dict, *, hydrate_cases: bool = True) -> dict[str,
     out["suites"] = _normalize_suites(raw.get("suites"))
     out["qa_process"] = _normalize_qa_process(raw.get("qa_process"))
     if hydrate_cases:
-        out["qa_process"] = _attach_draft_cases(str(app.get("id") or ""), out["qa_process"])
+        out["qa_process"] = _attach_draft_cases(_project_id(app), out["qa_process"])
     figma = raw.get("figma")
     if isinstance(figma, dict):
         out["figma"] = {
@@ -210,7 +215,6 @@ def save_automation_config(app: dict, config: dict[str, Any]) -> dict[str, Any]:
         current["suites"] = _normalize_suites(config.get("suites"))
     if "qa_process" in config:
         incoming = config.get("qa_process") if isinstance(config.get("qa_process"), dict) else {}
-        _sync_draft_cases_to_store(str(app.get("id") or ""), incoming)
         current["qa_process"] = _normalize_qa_process(incoming)
     if "figma" in config and isinstance(config["figma"], dict):
         prev = current.get("figma") or {}
@@ -231,16 +235,16 @@ def save_automation_config(app: dict, config: dict[str, Any]) -> dict[str, Any]:
     env["automation"] = current
     ps.update_app_record(str(app["id"]), env=env)
     out = copy.deepcopy(current)
-    out["qa_process"] = _attach_draft_cases(str(app.get("id") or ""), out["qa_process"])
+    out["qa_process"] = _attach_draft_cases(_project_id(app), out["qa_process"])
     return out
 
 
-def count_qa_process_cases_from_env(env: dict | None, app_id: str = "") -> int:
+def count_qa_process_cases_from_env(env: dict | None, project_id: str = "") -> int:
     from mino_nexus.services.case_store import count_cases
 
-    aid = str(app_id or "").strip()
-    if aid:
-        n = count_cases(aid)
+    pid = str(project_id or "").strip()
+    if pid:
+        n = count_cases(pid)
         if n:
             return n
     env = env if isinstance(env, dict) else {}
@@ -269,35 +273,42 @@ def _raw_env_has_draft_cases(app: dict) -> bool:
     return False
 
 
-def list_app_cases(app: dict) -> list[dict[str, Any]]:
-    from mino_nexus.services.case_store import list_cases, promote_from_env
+def list_project_cases(project_id: str) -> list[dict[str, Any]]:
+    from mino_nexus.services.case_import import list_project_requirements
+    from mino_nexus.services.case_store import list_cases
 
-    aid = str(app.get("id") or "").strip()
+    pid = str(project_id or "").strip()
+    if not pid:
+        return []
+    titles = {str(r.get("id") or ""): str(r.get("title") or "") for r in list_project_requirements(pid)}
+    rows: list[dict[str, Any]] = []
+    for raw in list_cases(pid):
+        title = titles.get(str(raw.get("requirement_id") or ""), "需求")
+        rows.append({**raw, "requirement_title": title})
+    return rows
+
+
+def list_app_cases(app: dict) -> list[dict[str, Any]]:
+    from mino_nexus.services.case_store import promote_from_env
+
+    pid = _project_id(app)
+    if not pid:
+        return []
     moved = promote_from_env(app)
     if moved or _raw_env_has_draft_cases(app):
         qp = get_automation_config(app, hydrate_cases=False).get("qa_process") or {}
         save_automation_config(app, {"qa_process": qp})
-    qp = get_automation_config(app, hydrate_cases=False).get("qa_process") or {}
-    titles = {}
-    for req in qp.get("requirements") or []:
-        if isinstance(req, dict) and req.get("id"):
-            titles[str(req["id"])] = str(req.get("title") or req.get("external_id") or "需求").strip() or "需求"
-    rows: list[dict[str, Any]] = []
-    for raw in list_cases(aid):
-        title = titles.get(str(raw.get("requirement_id") or ""), "需求")
-        module = str(raw.get("module") or "").strip()
-        if not module.startswith("本需求生成"):
-            module = f"本需求生成 / {title}" + (f" / {module}" if module else "")
-        rows.append({**raw, "module": module})
-    return rows
+    return list_project_cases(pid)
 
 
 def cases_payload(app: dict) -> dict[str, Any]:
+    pid = _project_id(app)
     cases = list_app_cases(app)
     return {
         "cases": cases,
         "total": len(cases),
-        "source": "app_cases",
+        "source": "project_cases",
+        "project_id": pid,
         "from_cache": True,
         "synced_at": "",
         "resolve_note": "",
@@ -368,6 +379,7 @@ def config_payload(app: dict) -> dict[str, Any]:
     return {
         "app_id": app.get("id"),
         "app_name": app.get("name"),
+        "project_id": pid,
         "project_name": (project or {}).get("name") or "",
         "env_profile": cfg.get("env_profile"),
         "env_profiles": profile_keys(env_doc) if env_doc is not None else ["test", "pre", "prod"],

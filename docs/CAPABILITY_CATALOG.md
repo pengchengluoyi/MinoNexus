@@ -123,10 +123,18 @@ Scout REGISTER: executors[].provides（abstract cap 字符串）
 | key | yes 表示 |
 |---|---|
 | `screen_blocked` | 休眠或 keyguard |
-| `capture_black` | 截图均值极暗（**锁屏时常只有黑图**） |
-| `capture_ok` | Scout 返回可解码截图 |
+| `capture_black` | 截图均值极暗（**锁屏时常只有黑图**；未锁屏时可能是 FLAG_SECURE） |
+| `app_foreground` | 前台包是否为被测 App |
 
-内置 `screen_asleep_or_locked`：`evidence_any` 三者任一命中 → `wake_screen` + `dismiss_keyguard`；verify 要求三项均正常。
+内置规则（Console 扩展包 kind=recovery，启动时 `upgrade_recovery_rules` 会补全）：
+
+| id | priority | 作用 |
+|---|---|---|
+| `screen_secure_or_no_capture` | 110 | `capture_black=yes` 且 `screen_blocked=no` → advise，禁止反复 wake |
+| `screen_asleep_or_locked` | 100 | 锁屏/休眠/不可读且 blocked → `wake_screen` + `dismiss_keyguard` |
+| `bring_target_app_foreground` | 90 | `app_foreground=no` → `launch_app` 拉回被测 App |
+
+`screen_asleep_or_locked` 的 verify 要求 blocked/截图均正常。
 
 Agent 在 prep/do 菜单里也可主动调 `recover_<规则id>`（prep 阶段已含 `recovery` tool_kind）。
 

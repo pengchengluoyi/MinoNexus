@@ -8,7 +8,7 @@
 |---|---|---|
 | **prompt 正文** | `llm_jobs` 表 | 块列表、call 参数、槽声明（Console Jobs 页） |
 | **阶段程序** | `skills.sop_json`（`run-case` 一行） | phases / inspections / pointer |
-| **步骤指针措辞** | `loop/step_pointer.py` | 模板常量，Python 拼结构 |
+| **步骤指针措辞** | `loop/step_pointer.py` | 模板常量；运行时注入 `checkpoints_block` / `success_criteria` 槽，替代 job 内 when 分块 |
 | **角色 override** | `settings._role_prompts` | 仅 IM 等可编辑角色；跑批读 `llm_jobs` |
 
 ```
@@ -39,7 +39,9 @@ mino_nexus/
 2. **禁止**在 `mino_nexus/**/*.py` 写模块级中文 prompt（`scripts/verify_no_prompt_literals.py` 守门）
 3. **不要**在 `skills.system_prompt` 列维护跑批 prompt —— 该列已废弃，读侧走 `job_store`
 
-恢复上一版：`PUT /settings/ai/jobs/{id}` body `{ "reset": true }`（从 `overrides_json.revisions` 回滚，须至少保存过一次）。
+每次保存会递增 `prompt_version`（当前生效版本）；`dispatch` 调用记录带 `prompt_version`，Studio 调用详情在技能旁展示。
+
+恢复上一版：`PUT /settings/ai/jobs/{id}` body `{ "reset": true }`。恢复指定历史：`{ "activate_version": 3 }`（会生成新版本号并启用该内容）。
 
 ## 4. 铁律
 

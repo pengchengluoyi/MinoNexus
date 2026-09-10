@@ -28,7 +28,7 @@ class CapabilityUI(BaseModel):
 
 
 class Capability(BaseModel):
-    """可调用能力。kind = prep | do | check | generic。"""
+    """可调用能力。kind = prep | do | check | generic | recovery（recovery 为恢复原子）。"""
 
     model_config = ConfigDict(extra="allow")
 

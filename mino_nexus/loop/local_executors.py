@@ -81,10 +81,15 @@ def dispatch_local(
             )
         from mino_nexus.ai.planner import verify_step_expected
 
+        knowledge_ctx = str(params.get("knowledge_context") or "").strip()
+        if knowledge_ctx:
+            knowledge_ctx = f"==== 相关知识（供断言参考）====\n{knowledge_ctx}"
+
         res = verify_step_expected(
             expectation=expectation,
             image_base64=shot.image_base64,
             image_mime=getattr(shot, "image_mime", None) or "image/png",
+            context_block=knowledge_ctx,
         )
         ok = bool(res.passed)
         summary = (res.evidence or res.ai_reasoning or "").strip() or (

@@ -215,11 +215,14 @@ def agent_runs(_sess: dict = Depends(current_session)):
 
 @router.get("/agent/steps/{run_id:path}")
 def agent_steps(run_id: str, _sess: dict = Depends(current_session)):
-    from mino_nexus.loop.session_project import project_trajectory
+    from mino_nexus.loop.session_project import project_trajectory, resolve_session_id
 
-    data = project_trajectory(run_id)
+    sid = resolve_session_id(run_id)
+    data = project_trajectory(sid)
     if data is None:
         data = agent_stream.get_run_events(run_id)
+    if data is None and sid != run_id:
+        data = agent_stream.get_run_events(sid)
     if data is None:
         raise HTTPException(status_code=404, detail=f"agent run not found: {run_id}")
     return ok(data)
@@ -396,9 +399,9 @@ def sessions_harvest(body: SessionHarvestRequest, _sess: dict = Depends(current_
 
 @router.get("/sessions/{session_id:path}/trajectory")
 def session_trajectory(session_id: str, _sess: dict = Depends(current_session)):
-    from mino_nexus.loop.session_project import project_trajectory
+    from mino_nexus.loop.session_project import project_trajectory, resolve_session_id
 
-    data = project_trajectory(session_id)
+    data = project_trajectory(resolve_session_id(session_id))
     if data is None:
         raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
     return ok(data)
@@ -469,13 +472,13 @@ def get_trace_detail(run_id: str, _sess: dict = Depends(current_session)):
         doc = run_store.get(batch)
     events = agent_stream.get_run_events(run_id)
     if events is None:
-        from mino_nexus.loop.session_project import project_trajectory
+        from mino_nexus.loop.session_project import project_trajectory, resolve_session_id
 
-        events = project_trajectory(run_id)
+        events = project_trajectory(resolve_session_id(run_id, case_id=case_id))
     elif not (events.get("events") or []) and str(events.get("source") or "") != "session_log":
-        from mino_nexus.loop.session_project import project_trajectory
+        from mino_nexus.loop.session_project import project_trajectory, resolve_session_id
 
-        logged = project_trajectory(run_id)
+        logged = project_trajectory(resolve_session_id(run_id, case_id=case_id))
         if logged and (logged.get("events") or []):
             events = logged
     if doc is None:
@@ -490,8 +493,11 @@ def get_trace_detail(run_id: str, _sess: dict = Depends(current_session)):
             None,
         )
     engine = (case or {}).get("engine_steps") or []
+    ui_events = (events or {}).get("events") if isinstance(events, dict) else None
     if engine:
-        payload["event_results"] = engine
+        from mino_nexus.loop.session_project import merge_engine_thumbs
+
+        payload["event_results"] = merge_engine_thumbs(engine, ui_events)
     if case:
         payload["case_status"] = str(case.get("status") or "")
     if events:

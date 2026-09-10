@@ -149,7 +149,10 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
     "lease_account": {
         "type": "object",
         "properties": {
-            "tags_prompt": {"type": "string", "description": "这条用例要测的事，用于租号"},
+            "tags_prompt": {
+                "type": "string",
+                "description": "用例要测的场景/标签，供账号池匹配；缺省可写用例目标或前置原文",
+            },
         },
     },
 }
@@ -157,7 +160,8 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
 SIGNAL_DONE = "signal_done"
 SIGNAL_GIVE_UP = "signal_give_up"
 SIGNAL_ASK_HUMAN = "signal_ask_human"
-CONTROL_TOOL_NAMES = frozenset({SIGNAL_DONE, SIGNAL_GIVE_UP, SIGNAL_ASK_HUMAN})
+SIGNAL_SKIP = "signal_skip"
+CONTROL_TOOL_NAMES = frozenset({SIGNAL_DONE, SIGNAL_GIVE_UP, SIGNAL_ASK_HUMAN, SIGNAL_SKIP})
 
 CONTROL_TOOLS: list[dict[str, Any]] = [
     {
@@ -207,6 +211,24 @@ CONTROL_TOOLS: list[dict[str, Any]] = [
                     "field": {"type": "string", "enum": ["sms_code", "phone", "text"]},
                 },
                 "required": ["question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": SIGNAL_SKIP,
+            "description": "本条用例在当前设备/渠道客观无法执行（渠道不对、缺专属入口等），跳过并写明原因。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thought": {"type": "string"},
+                    "reason": {
+                        "type": "string",
+                        "description": "跳过原因，会展示在任务详情",
+                    },
+                },
+                "required": ["reason"],
             },
         },
     },
@@ -397,6 +419,11 @@ def decision_from_tool_calls(
                 "field": str(args.get("field") or "text"),
             },
         }
+        return out
+    if name == SIGNAL_SKIP:
+        reason = str(args.get("reason") or thought or "当前渠道无法执行本条用例").strip()
+        out["status"] = "skip"
+        out["thought"] = reason
         return out
     out["action"] = {"capability_id": name, "params": args}
     return out

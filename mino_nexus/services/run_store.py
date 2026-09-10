@@ -12,7 +12,7 @@ _LIVE: dict[str, dict[str, Any]] = {}
 _CANCEL = set()
 
 _CASE_TERMINAL = {
-    "pass", "fail", "blocked", "declined", "skipped", "cancelled",
+    "pass", "fail", "blocked", "declined", "skipped", "skip", "cancelled",
     "untestable", "unverifiable", "unexecutable",
 }
 
@@ -159,6 +159,7 @@ def _recompute(doc: dict[str, Any]) -> dict[str, Any]:
     blocked = sum(1 for c in cases if c.get("status") == "blocked")
     declined = sum(1 for c in cases if c.get("status") == "declined")
     cancelled = sum(1 for c in cases if c.get("status") == "cancelled")
+    skipped = sum(1 for c in cases if c.get("status") == "skip")
     doc["total"] = len(cases)
     doc["completed"] = completed
     doc["passed"] = passed
@@ -166,6 +167,7 @@ def _recompute(doc: dict[str, Any]) -> dict[str, Any]:
     doc["blocked"] = blocked
     doc["declined"] = declined
     doc["cancelled"] = cancelled
+    doc["skipped"] = skipped
     current = ""
     for c in cases:
         if c.get("status") == "running":
@@ -411,6 +413,8 @@ def _session_status_for_close(case_status: str) -> str:
         return "blocked"
     if st in ("unverifiable",):
         return "unverifiable"
+    if st in ("skip", "skipped"):
+        return "skip"
     if st in ("fail", "failed", "declined"):
         return "fail"
     return st or "unknown"

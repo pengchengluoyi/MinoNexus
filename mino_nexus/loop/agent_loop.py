@@ -4,28 +4,48 @@ from __future__ import annotations
 import time
 from typing import Any, Optional
 
+from mino_nexus.ai.knowledge_hint import (
+    build_index_text,
+    pick_auto_knowledge_body,
+    should_auto_inject_do_body,
+)
+from mino_nexus.loop.step_pointer import cap_clears_repeat_tap
 from mino_nexus.ai.planner import decide_next_action
 from mino_nexus.ai.schemas import AgentAction, AgentDecision
 from mino_nexus.catalog.exec_classes import MUTATE_CAPS
 from mino_nexus.loop.registry import apply_force_case_expectation, run_guards
-from mino_nexus.loop.inspections import run_inspections
+from mino_nexus.loop.inspections import (
+    expand_named_knowledge,
+    match_step_knowledge,
+    refresh_session_block,
+    run_inspections,
+)
+from mino_nexus.runtime.session_gate import (
+    compile_login_session_hint,
+    ensure_case_scene,
+    is_login_module_case,
+)
+from mino_nexus.runtime.platform_gate import platform_skip_reason
 from mino_nexus.loop.sop_runtime import merge_phase_tool_kinds, normalize_inspections, normalize_phases, phase_for_id
 from mino_nexus.core.log import SLog
 from mino_nexus.loop.agent_stream import emit_agent_event, make_thumb
 from mino_nexus.loop.session_log import SessionWriter, bind_writer, open_session
 from mino_nexus.loop.local_executors import dispatch_local, is_local_cap
-from mino_nexus.loop.recovery import apply_rule, RuleMatch
+from mino_nexus.loop.recovery import apply_rule, ensure_target_app_foreground, recover_if_needed, RuleMatch
 from mino_nexus.loop.router_proxy import RouterProxy
 from mino_nexus.loop.skill_trace import envelope as skill_envelope
 from mino_nexus.loop.step_pointer import (
     StepCursor,
     build_seq_nodes,
+    enrich_assert_expectation,
+    screen_fingerprint,
 )
 from mino_nexus.catalog import registry as catalog
 from mino_nexus.core.protocol import EventStatus
 from mino_nexus.services.run_store import line_text, report_run_id
 from mino_nexus.runtime.run_context import build_run_context
-from mino_nexus.loop.web_env import cleanup_after_case, frame_step, reset_before_case
+from mino_nexus.loop.web_env import agent_step_idx, cleanup_after_case, frame_step, reset_before_case
+from mino_nexus.loop.app_env import reset_native_app_before_case
 from mino_nexus.core.schemas import EventResult, PlanEvent
 
 TAG = "AgentLoop"
@@ -49,6 +69,15 @@ def _case_overview(case: dict[str, Any]) -> str:
 
 def _history(rows: list[str]) -> str:
     return "\n".join(rows[-12:]) if rows else "（还没有动作）"
+
+
+def _screen_fp(shot, hierarchy_text: str = "") -> str:
+    return screen_fingerprint(
+        hierarchy_text=hierarchy_text,
+        image_base64=getattr(shot, "image_base64", "") or "",
+        width=int(getattr(shot, "width", 0) or 0),
+        height=int(getattr(shot, "height", 0) or 0),
+    )
 
 
 def _elapsed(t0: float) -> int:
@@ -107,6 +136,7 @@ def _log_context_slots(
                 "session_block": inspect_slots.get("session_block") or "",
                 "hierarchy_text": inspect_slots.get("hierarchy_text") or "",
                 "knowledge_hint": inspect_slots.get("knowledge_hint") or "",
+                "knowledge_body": inspect_slots.get("knowledge_body") or "",
                 "history_block": _history(history),
                 "tool_kinds": list(phase_tool_kinds or []),
                 "menu_count": len(menu),
@@ -158,9 +188,12 @@ def run_case(
     )
     if playbook:
         ctx.playbook = playbook
+    scout_run_id = stream_id
+    ctx.scout_run_id = scout_run_id
+    ctx.case_seq = case_seq
     proxy = RouterProxy(
         sn,
-        run_id=run_id,
+        run_id=scout_run_id,
         target_package=package,
         playwright_headless=playwright_headless,
     )
@@ -204,25 +237,46 @@ def run_case(
     if fork_state and writer:
         writer.append("session/fork", dict(fork_state))
     outcome: dict[str, Any] = {"status": "fail", "summary": "未开始", "steps": steps}
+    plat_skip = platform_skip_reason(case, str(getattr(ctx, "platform", "") or "android"))
     try:
         with bind_writer(writer):
-            outcome = _run_loop(
-                emit=emit,
-                ctx=ctx,
-                proxy=proxy,
-                case=case,
-                cid=cid,
-                overview=overview,
-                provider_id=provider_id,
-                cancel_check=cancel_check,
-                history=history,
-                steps=steps,
-                t0=t0,
-                run_id=run_id,
-                case_seq=case_seq,
-                writer=writer,
-                fork_state=fork_state,
-            )
+            if plat_skip:
+                def _skip_emit(phase: str, **extra: Any) -> None:
+                    payload = {
+                        "run_id": stream_id,
+                        "task_id": run_id,
+                        "case_id": cid,
+                        "app_id": app_id,
+                        "phase": phase,
+                        **extra,
+                    }
+                    emit_agent_event(payload)
+
+                _record(steps, history, 0, capability_id="signal_skip", status="skip", summary=plat_skip, thought=plat_skip)
+                writer.append(
+                    "platform/skip",
+                    {"reason": plat_skip, "device_platform": getattr(ctx, "platform", "")},
+                )
+                _skip_emit("start", thought="渠道校验", step=0, goal=overview)
+                outcome = _finish(_skip_emit, status="skip", summary=plat_skip, steps=steps, t0=t0)
+            else:
+                outcome = _run_loop(
+                    emit=emit,
+                    ctx=ctx,
+                    proxy=proxy,
+                    case=case,
+                    cid=cid,
+                    overview=overview,
+                    provider_id=provider_id,
+                    cancel_check=cancel_check,
+                    history=history,
+                    steps=steps,
+                    t0=t0,
+                    scout_run_id=scout_run_id,
+                    case_seq=case_seq,
+                    writer=writer,
+                    fork_state=fork_state,
+                )
             return outcome
     except Exception as exc:
         outcome = {
@@ -241,7 +295,7 @@ def run_case(
                 step_count=len(outcome.get("steps") or []),
             )
         release_ctx_lease(ctx)
-        cleanup_after_case(proxy, ctx, run_id=run_id, case_seq=case_seq, case=case)
+        cleanup_after_case(proxy, ctx, run_id=scout_run_id, case_seq=case_seq, case=case)
         dispatch.reset(tok)
 
 
@@ -257,6 +311,7 @@ def _record(
     error: str = "",
     executor_used: str = "",
     elapsed_ms: int = 0,
+    thumb: str = "",
     extra: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     row = {
@@ -268,6 +323,7 @@ def _record(
         "executor_used": executor_used,
         "elapsed_ms": elapsed_ms,
         "thought": thought,
+        "thumb": str(thumb or ""),
     }
     if extra:
         row.update(extra)
@@ -307,7 +363,7 @@ def _ensure_web_page(proxy: RouterProxy, ctx, *, run_id: str, case_seq: int = 0)
 
 
 
-def _run_action(*, event: PlanEvent, shot, proxy: RouterProxy, ctx, run_id: str, seq: int) -> Any:
+def _run_action(*, event: PlanEvent, shot, proxy: RouterProxy, ctx, scout_run_id: str, case_seq: int, seq: int) -> Any:
     cap = event.capability_id
     if cap.startswith(RECOVER_PREFIX):
         rule_id = cap[len(RECOVER_PREFIX):]
@@ -335,7 +391,11 @@ def _run_action(*, event: PlanEvent, shot, proxy: RouterProxy, ctx, run_id: str,
             router=proxy,
             target_package=str(getattr(ctx, "target_package", "") or ""),
         )
-    return proxy.dispatch(event, run_id=run_id, step_idx=seq)
+    return proxy.dispatch(
+        event,
+        run_id=scout_run_id,
+        step_idx=agent_step_idx(case_seq, seq),
+    )
 
 
 def _run_loop(
@@ -351,7 +411,7 @@ def _run_loop(
     history: list[str],
     steps: list[dict[str, Any]],
     t0: float,
-    run_id: str,
+    scout_run_id: str,
     case_seq: int = 0,
     writer: SessionWriter | None = None,
     fork_state: dict[str, Any] | None = None,
@@ -371,12 +431,13 @@ def _run_loop(
         build_seq_nodes(case),
         precondition=str(case.get("precondition") or "").strip(),
     )
-    inspect_slots: dict[str, str] = {"session_block": "", "hierarchy_text": "", "knowledge_hint": ""}
+    inspect_slots: dict[str, str] = {
+        "session_block": "", "hierarchy_text": "", "knowledge_hint": "", "knowledge_body": "",
+    }
     ran_case_start_inspection = False
     last_phase_seen = ""
-    pre = str(case.get("precondition") or "").strip()
-    if pre:
-        ctx.case_scene = {**(getattr(ctx, "case_scene", None) or {}), "precondition": pre}
+    ctx.case_scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
+    login_module_case = is_login_module_case(case=case, scene=ctx.case_scene)
 
     def _phase_cfg() -> dict[str, Any]:
         return phase_for_id(phases, cursor.phase)
@@ -436,8 +497,18 @@ def _run_loop(
         summary = "用例没有可执行的步骤。"
         return _finish(emit, status="fail", summary=summary, steps=steps, t0=t0, pack=_pack)
 
-    reset_before_case(proxy, ctx, run_id=run_id, case_seq=case_seq, case=case)
-    opened = _ensure_web_page(proxy, ctx, run_id=run_id, case_seq=case_seq)
+    reset_before_case(proxy, ctx, run_id=scout_run_id, case_seq=case_seq, case=case)
+    cold_started = reset_native_app_before_case(
+        proxy,
+        ctx,
+        run_id=scout_run_id,
+        case_seq=case_seq,
+        case=case,
+        login_module=login_module_case,
+    )
+    if cold_started and writer:
+        writer.append("app/cold_start", {"login_module": True, "package": str(getattr(ctx, "target_package", "") or "")})
+    opened = _ensure_web_page(proxy, ctx, run_id=scout_run_id, case_seq=case_seq)
     if opened:
         if writer:
             writer.append(
@@ -482,18 +553,14 @@ def _run_loop(
     except Exception:
         preflight_shot = None
 
-    recovery_out = recover_if_needed(
-        ctx,
-        proxy,
-        target_package=str(getattr(ctx, "target_package", "") or ""),
-        shot=preflight_shot,
-    )
-    if recovery_out:
-        cap_id = str(recovery_out.rule_id or "recovery")
-        summary = recovery_out.summary() if callable(getattr(recovery_out, "summary", None)) else (
-            recovery_out.evidence or recovery_out.error or cap_id
+    target_pkg = str(getattr(ctx, "target_package", "") or "")
+
+    def _log_preflight_recovery(out, *, source: str) -> None:
+        cap_id = str(getattr(out, "rule_id", "") or "recovery")
+        summary = out.summary() if callable(getattr(out, "summary", None)) else (
+            getattr(out, "evidence", "") or getattr(out, "error", "") or cap_id
         )
-        st = "pass" if recovery_out.recovered else ("skipped" if recovery_out.mode == "advise" else "fail")
+        st = "pass" if out.recovered else ("skipped" if out.mode == "advise" else "fail")
         rec(
             0,
             capability_id=cap_id,
@@ -517,9 +584,43 @@ def _run_loop(
                     "rule_id": cap_id,
                     "status": st,
                     "summary": summary,
-                    "source": "preflight",
+                    "source": source,
                 },
             )
+
+    recovery_out = recover_if_needed(
+        ctx,
+        proxy,
+        target_package=target_pkg,
+        shot=preflight_shot,
+        execute_only=True,
+    )
+    if recovery_out:
+        _log_preflight_recovery(recovery_out, source="preflight")
+
+    fg_out = ensure_target_app_foreground(
+        ctx,
+        proxy,
+        target_package=target_pkg,
+        shot=preflight_shot,
+    )
+    if fg_out:
+        _log_preflight_recovery(fg_out, source="preflight_fg")
+
+    if login_module_case and preflight_shot and preflight_shot.has_image():
+        refresh_session_block(
+            shot=preflight_shot,
+            ctx=ctx,
+            case=case,
+            provider_id=provider_id,
+            slot_sink=inspect_slots,
+        )
+        pre_hint = compile_login_session_hint(
+            getattr(ctx, "case_scene", None),
+            inspect_slots.get("session_block") or "",
+        )
+        if pre_hint:
+            history.append(f"0. program → info: {pre_hint}")
 
     for seq in range(1, max_steps + 1):
         turn_decision_cap = ""
@@ -551,6 +652,7 @@ def _run_loop(
                     "w": shot.width or 0,
                     "h": shot.height or 0,
                     "mime": shot.image_mime or "image/png",
+                    "thumb": thumb,
                     "thumb_len": len(thumb or ""),
                 },
             )
@@ -561,28 +663,40 @@ def _run_loop(
             emit("observe", thought=summary, step=seq, status="fail")
             return _finish(emit, status="fail", summary=summary, steps=steps, t0=t0, pack=_pack)
 
-        if not ran_case_start_inspection:
-            run_inspections(
-                inspections,
-                at="case_start",
+        if login_module_case and cursor.phase in ("prep", "do"):
+            refresh_session_block(
                 shot=shot,
                 ctx=ctx,
+                case=case,
                 provider_id=provider_id,
                 slot_sink=inspect_slots,
-                required_session=str(case.get("precondition") or ""),
             )
             ran_case_start_inspection = True
+        else:
+            if not ran_case_start_inspection:
+                run_inspections(
+                    inspections,
+                    at="case_start",
+                    shot=shot,
+                    ctx=ctx,
+                    provider_id=provider_id,
+                    slot_sink=inspect_slots,
+                    case=case,
+                )
+                ran_case_start_inspection = True
+
+            if cursor.phase != last_phase_seen:
+                run_inspections(
+                    inspections,
+                    at=f"phase_enter:{cursor.phase}",
+                    shot=shot,
+                    ctx=ctx,
+                    provider_id=provider_id,
+                    slot_sink=inspect_slots,
+                    case=case,
+                )
 
         if cursor.phase != last_phase_seen:
-            run_inspections(
-                inspections,
-                at=f"phase_enter:{cursor.phase}",
-                shot=shot,
-                ctx=ctx,
-                provider_id=provider_id,
-                slot_sink=inspect_slots,
-                required_session=str(case.get("precondition") or ""),
-            )
             if writer:
                 writer.append(
                     "phase/change",
@@ -590,6 +704,11 @@ def _run_loop(
                 )
                 writer.set_phase(cursor.phase)
             last_phase_seen = cursor.phase
+
+        cursor.login_session_hint = compile_login_session_hint(
+            getattr(ctx, "case_scene", None),
+            inspect_slots.get("session_block") or "",
+        )
 
         cur = cursor.current()
         if cur is None:
@@ -613,6 +732,25 @@ def _run_loop(
                     "cap_ids": [str(c.get("id") or "") for c in menu if c.get("id")],
                 },
             )
+        in_prep = cursor.phase == "prep"
+        in_check = cursor.phase == "check"
+        scripted_check = bool(in_check and cur and str(cur.expected or "").strip())
+        know_rows = match_step_knowledge(
+            ctx=ctx,
+            case=case,
+            cursor=cursor,
+            history=history,
+            steps=steps,
+            hierarchy_text=inspect_slots.get("hierarchy_text") or "",
+        )
+        inspect_slots["knowledge_hint"] = build_index_text(know_rows)
+        auto_knowledge_body = ""
+        if scripted_check:
+            auto_knowledge_body = pick_auto_knowledge_body(know_rows)
+        elif should_auto_inject_do_body(know_rows):
+            auto_knowledge_body = pick_auto_knowledge_body(know_rows)
+        inspect_slots["knowledge_body"] = auto_knowledge_body
+
         _log_context_slots(
             writer,
             cursor=cursor,
@@ -621,37 +759,54 @@ def _run_loop(
             inspect_slots=inspect_slots,
             history=history,
         )
-        in_prep = cursor.phase == "prep"
-        in_check = cursor.phase == "check"
         if cancel_check and cancel_check():
             return _finish(emit, status="cancelled", summary="任务已取消", steps=steps, t0=t0, pack=_pack)
-        if in_check and cur and str(cur.expected or "").strip():
+        if scripted_check:
+            exp = enrich_assert_expectation(cur.instruction, cur.expected)
+            assert_params: dict[str, Any] = {"expectation": exp}
+            if auto_knowledge_body:
+                assert_params["knowledge_context"] = auto_knowledge_body
             decision = AgentDecision(
                 status="continue",
                 thought=f"校验步骤 {cur.n}：{cur.expected}",
                 action=AgentAction(
                     capability_id="assert_visual",
-                    params={"expectation": cur.expected},
+                    params=assert_params,
                 ),
             )
         else:
-            decision = decide_next_action(
-                goal=cursor.decide_goal(),
-                checkpoints_block=cursor.prompt_block(),
-                run_context=ctx,
-                history_block=_history(history),
-                width=shot.width or 1080,
-                height=shot.height or 1920,
-                image_base64=shot.image_base64,
-                image_mime=shot.image_mime or "image/png",
-                success_criteria=cursor.decide_success(),
-                provider_id=provider_id or None,
-                phase=cursor.phase,
-                tool_kinds=phase_tool_kinds or None,
-                session_block=inspect_slots.get("session_block") or "",
-                hierarchy_text=inspect_slots.get("hierarchy_text") or "",
-                knowledge_hint=inspect_slots.get("knowledge_hint") or "",
-            )
+            def _decide() -> AgentDecision:
+                return decide_next_action(
+                    goal=cursor.decide_goal(),
+                    checkpoints_block=cursor.prompt_block(),
+                    run_context=ctx,
+                    history_block=_history(history),
+                    width=shot.width or 1080,
+                    height=shot.height or 1920,
+                    image_base64=shot.image_base64,
+                    image_mime=shot.image_mime or "image/png",
+                    success_criteria=cursor.decide_success(),
+                    provider_id=provider_id or None,
+                    phase=cursor.phase,
+                    tool_kinds=phase_tool_kinds or None,
+                    session_block=inspect_slots.get("session_block") or "",
+                    hierarchy_text=inspect_slots.get("hierarchy_text") or "",
+                    knowledge_hint=inspect_slots.get("knowledge_hint") or "",
+                    knowledge_body=inspect_slots.get("knowledge_body") or "",
+                )
+
+            decision = _decide()
+            # 点名了知识就展开正文重决策一次。只一次 —— 展开后再点名一律忽略。
+            body, named = expand_named_knowledge(decision, know_rows, ctx=ctx)
+            if body:
+                inspect_slots["knowledge_body"] = body
+                emit(
+                    "think",
+                    thought=f"点名知识 {', '.join(named)}，展开正文后重新决策本步",
+                    step=seq, status="continue", knowledge_ids=named,
+                )
+                decision = _decide()
+                inspect_slots["knowledge_body"] = ""
         thought = decision.thought or ""
         trace = _llm_trace(decision)
         emit(
@@ -662,7 +817,14 @@ def _run_loop(
             **trace,
         )
 
-        if decision.status in ("give_up", "ask_human"):
+        if decision.status in ("give_up", "ask_human", "skip"):
+            if decision.status == "skip":
+                st = "skip"
+                summary = thought or "当前渠道跳过本条用例"
+                if writer:
+                    writer.append("decision/skip", {"thought": thought, "phase": cursor.phase})
+                    writer.append("turn/end", {"decision_cap": "signal_skip", "decision_status": st})
+                return _finish(emit, status=st, summary=summary, steps=steps, t0=t0, pack=_pack)
             st = "blocked" if decision.status == "ask_human" else "fail"
             summary = thought or ("需要人介入" if st == "blocked" else "模型放弃")
             if writer:
@@ -689,8 +851,12 @@ def _run_loop(
             "cap_id": cap_id,
             "params": params,
             "cursor": cur,
+            "step_cursor": cursor,
             "last_tap": cursor.last_tap,
+            "screen_fp": _screen_fp(shot, inspect_slots.get("hierarchy_text") or ""),
             "guards": list(phase_cfg.get("guards") or []),
+            "history_lines": list(history[-12:]),
+            "tap_summary": str(params.get("selector_text") or thought or ""),
         }
         params = apply_force_case_expectation(params, guard_ctx)
         pending_mutate = bool(decision.status == "done" and cap_id in MUTATE_CAPS and action)
@@ -699,7 +865,7 @@ def _run_loop(
             if in_prep:
                 summary = thought or "前置检查完成，进入操作步骤"
                 rec(seq, capability_id="signal_done", status="skipped",
-                        summary=summary, thought=thought)
+                        summary=summary, thought=thought, thumb=thumb)
                 emit("result", thought=thought, step=seq, capability_id="signal_done",
                      status="skipped", summary=summary, thumb=thumb)
                 cursor.finish_prep()
@@ -708,21 +874,45 @@ def _run_loop(
             if in_check:
                 if not cursor.step_checked:
                     rec(seq, capability_id="signal_done", status="skipped",
-                            summary="校验尚未通过，继续本步", thought=thought)
+                            summary="校验尚未通过，继续本步", thought=thought, thumb=thumb)
                     emit("result", thought=thought, step=seq, capability_id="signal_done",
                          status="skipped", summary="请先 assert_visual", thumb=thumb)
                     _log_turn_end(writer, cap="signal_done", status="skipped")
                     continue
                 rec(seq, capability_id="signal_done", status="skipped",
-                        summary=thought or f"步骤 {cur.n} 校验结束", thought=thought)
+                        summary=thought or f"步骤 {cur.n} 校验结束", thought=thought, thumb=thumb)
                 emit("result", thought=thought, step=seq, capability_id="signal_done",
                      status="skipped", summary=f"步骤 {cur.n} 校验通过", thumb=thumb)
                 if not cursor.advance():
                     return _finish_case(emit, cursor=cursor, steps=steps, t0=t0, pack=_pack)
                 _log_turn_end(writer, cap="signal_done", status="skipped")
                 continue
+            do_work_reason = run_guards(
+                ["require_do_work"],
+                {**guard_ctx, "intent": "signal_done"},
+            )
+            if do_work_reason:
+                rec(
+                    seq,
+                    capability_id="require_do_work",
+                    status="skipped",
+                    summary=do_work_reason,
+                    thought=thought,
+                    thumb=thumb,
+                )
+                emit(
+                    "result",
+                    thought=thought,
+                    step=seq,
+                    capability_id="require_do_work",
+                    status="skipped",
+                    summary=do_work_reason,
+                    thumb=thumb,
+                )
+                _log_turn_end(writer, cap="require_do_work", status="skipped")
+                continue
             rec(seq, capability_id="signal_done", status="skipped",
-                    summary=thought or f"步骤 {cur.n} 操作结束，进入校验", thought=thought)
+                    summary=thought or f"步骤 {cur.n} 操作结束，进入校验", thought=thought, thumb=thumb)
             emit("result", thought=thought, step=seq, capability_id="signal_done",
                  status="skipped", summary=f"步骤 {cur.n} 操作结束，进入校验", thumb=thumb)
             cursor.enter_check()
@@ -735,13 +925,25 @@ def _run_loop(
 
         skip_reason = run_guards(list(phase_cfg.get("guards") or []), guard_ctx)
         if skip_reason:
-            skip_cap = "skip_repeat_tap" if "跳过这次点击" in skip_reason else cap_id
+            skip_cap = cap_id
+            if "已拒绝重复点击" in skip_reason:
+                skip_cap = "skip_repeat_tap"
+            elif "已拒绝重复 read_device_data" in skip_reason:
+                skip_cap = "skip_repeat_read_device"
+            elif "缺少 script_id" in skip_reason or "exec_script" in skip_reason:
+                skip_cap = "exec_script_params"
+            elif "同类 advise" in skip_reason:
+                skip_cap = "limit_advise_recovery"
+            elif "重复切换" in skip_reason or "⇄" in skip_reason:
+                skip_cap = "stuck_alternation"
+            elif "访客入口" in skip_reason or "游客入口" in skip_reason:
+                skip_cap = "block_login_after_guest"
             if writer:
                 writer.append(
                     "guard/block",
                     {"capability_id": cap_id, "reason": skip_reason, "rewritten_cap": skip_cap},
                 )
-            rec(seq, capability_id=skip_cap, status="skipped", summary=skip_reason, thought=thought)
+            rec(seq, capability_id=skip_cap, status="skipped", summary=skip_reason, thought=thought, thumb=thumb)
             emit(
                 "result",
                 thought=thought,
@@ -751,8 +953,6 @@ def _run_loop(
                 summary=skip_reason,
                 thumb=thumb,
             )
-            if skip_cap == "skip_repeat_tap":
-                cursor.enter_check()
             if writer:
                 writer.append(
                     "turn/end",
@@ -781,13 +981,25 @@ def _run_loop(
                 "tool/call",
                 {"capability_id": cap_id, "params": params},
             )
-        result = _run_action(event=event, shot=shot, proxy=proxy, ctx=ctx, run_id=run_id, seq=seq)
+        result = _run_action(
+            event=event,
+            shot=shot,
+            proxy=proxy,
+            ctx=ctx,
+            scout_run_id=scout_run_id,
+            case_seq=case_seq,
+            seq=seq,
+        )
         if hasattr(result, "recovered"):
             status_val = "pass" if result.recovered else ("fail" if result.applied else "skipped")
             summary = result.summary() if callable(getattr(result, "summary", None)) else str(getattr(result, "error", "") or "")
             elapsed_ms = 0
             error = result.error or ""
             executor_used = "recovery"
+            if str(getattr(result, "mode", "") or "") == "advise":
+                rid = str(getattr(result, "rule_id", "") or "").strip()
+                if rid:
+                    cursor.bump_advise_recovery(rid)
         else:
             status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
             summary = result.summary or ""
@@ -826,7 +1038,7 @@ def _run_loop(
             capability_id=event.capability_id, status=status_val,
             summary=summary, error=error,
             executor_used=executor_used,
-            elapsed_ms=elapsed_ms, thought=thought, extra=extra or None,
+            elapsed_ms=elapsed_ms, thought=thought, thumb=thumb, extra=extra or None,
         )
         emit(
             "result",
@@ -848,13 +1060,28 @@ def _run_loop(
                 )
             return _finish(emit, status="blocked", summary=error or summary or "被阻塞", steps=steps, t0=t0, pack=_pack)
         if hasattr(result, "status") and result.status in (EventStatus.FAIL, EventStatus.DECLINED):
-            SLog.w(TAG, f"[{run_id[:8]}] step {seq} {event.capability_id} {status_val}: {error or summary}")
+            SLog.w(TAG, f"[{scout_run_id[:8]}] step {seq} {event.capability_id} {status_val}: {error or summary}")
             if in_check and cap_id == "assert_visual":
                 fail_summary = f"步骤 {cur.n} 预期未成立：{cur.expected}。{summary}".strip()
                 return _finish(emit, status="fail", summary=fail_summary, steps=steps, t0=t0, pack=_pack)
 
+        if (
+            status_val == "pass"
+            and cap_clears_repeat_tap(cap_id)
+        ):
+            cursor.clear_repeat_tap()
+
+        if status_val == "pass" and cap_id in MUTATE_CAPS and not str(cap_id).startswith(RECOVER_PREFIX):
+            cursor.record_step_op()
+
         if cap_id == "tap_element" and getattr(result, "status", None) == EventStatus.PASS:
-            cursor.remember_tap(params)
+            post_shot = proxy.observe("screenshot", force_fresh=True)
+            cursor.remember_tap(
+                params,
+                screen_fp=_screen_fp(post_shot, inspect_slots.get("hierarchy_text") or ""),
+                selector_text=str(params.get("selector_text") or ""),
+            )
+            cursor.mark_guest_entry(summary)
 
         if cap_id == "assert_visual" and status_val == "pass":
             cursor.mark_checked()

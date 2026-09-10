@@ -1,6 +1,6 @@
 from mino_nexus.models.atlas import AtlasAlias
 from mino_nexus.models.auth import AuthSession, AuthState, User
-from mino_nexus.models.case import AppCase
+from mino_nexus.models.case import ProjectCase
 from mino_nexus.models.catalog import CatalogEntry, CatalogMeta
 from mino_nexus.models.device import Device
 from mino_nexus.models.dispatch import DispatchCall
@@ -19,7 +19,7 @@ from mino_nexus.models.token import InstallToken
 
 __all__ = [
     "App",
-    "AppCase",
+    "ProjectCase",
     "AppRegressionRun",
     "AtlasAlias",
     "AuthSession",

@@ -749,7 +749,7 @@ def _plugin_app_bindings(plugin_id: str) -> list[dict[str, Any]]:
                     "enabled": feishu.get("enabled", True) is not False,
                     "env_profile": feishu.get("env_profile") or "test",
                     "data_range": feishu.get("data_range") or "A1:O500",
-                    "case_count": count_qa_process_cases_from_env(env, app_id=str(app.get("id") or "")),
+                    "case_count": count_qa_process_cases_from_env(env, project_id=str(project.get("id") or "")),
                 })
             elif plugin_id == "figma":
                 automation = env.get("automation") if isinstance(env.get("automation"), dict) else {}

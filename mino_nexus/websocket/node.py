@@ -25,7 +25,7 @@ from mino_nexus.services.node_registry import get_registry
 
 TAG = "NodeWS"
 
-NEXUS_VERSION = "0.1.5"
+NEXUS_VERSION = "0.1.6"
 HEARTBEAT_INTERVAL_SEC = 15
 
 # 协议 §1

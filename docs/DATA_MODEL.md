@@ -9,7 +9,7 @@
 | 数据 | 表 | 权威来源 |
 |---|---|---|
 | `App` / 项目 / 环境 | `projects` / `apps` | UI / 飞书同步 |
-| 用例、前置、预期 | `app_cases`（需求/脑图仍在 `apps.env.automation.qa_process`） | UI / QA 推进 |
+| 用例、前置、预期 | `project_cases`（按 `project_id` + `requirement_id`；需求/脑图仍在 `apps.env.automation.qa_process`） | UI / QA 推进 |
 | `AppRegressionRun`（批次结果） | `app_regression_runs` | Nexus 的循环 |
 | 逐步 trace / baseline | `m_case_run_trace` / `m_case_baseline` | Nexus 的循环 |
 | 设备身份 | `m_device` | **连通性来自 Scout 上报**，其余来自 UI |

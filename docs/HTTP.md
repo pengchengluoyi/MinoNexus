@@ -65,7 +65,24 @@ Console 不提供 Scout 安装或包配置。
 
 HITL 问人界面、排期 cron、基线库、从设计稿/定位抽登录图标（CLIP/视觉）、完整 3500 行 Agent 恢复/拟人化路径。
 
-已经可联：登录、概览、账号、发信、模型 Key、**技能**（`/settings/ai/skills`）与 **Jobs**（`/settings/ai/jobs`）prompt 编辑、角色 prompt / 对话、扩展包只读、节点列表、项目/应用/环境/号池、自动化配置与用例草稿、**Case Runner 下发与轮询**（无 Scout / 无 Key 时任务失败并带中文原因，不再 501）、qa-process tick/assist/导入/脑图、Figma 同步（无 Token 时 400）。
+已经可联：登录、概览、账号、发信、模型 Key、**技能**（`/settings/ai/skills`）与 **Jobs**（`/settings/ai/jobs`）prompt 编辑、角色 prompt / 对话、扩展包只读、节点列表、项目/应用/环境/号池、自动化配置与用例草稿、**Case Runner 下发与轮询**（无 Scout / 无 Key 时任务失败并带中文原因，不再 501）、qa-process tick/assist/脑图、**项目用例库导入 preview/commit**、Figma 同步（无 Token 时 400）。
+
+## 项目用例库与导入
+
+用例真源表 `project_cases`，唯一键 `(project_id, case_id)`。导入需先选 `requirement_id`，经 preview → commit；冲突逐条或批量选「覆盖 / 保留」。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/project/{project_id}/cases` | 项目用例列表 |
+| GET | `/project/{project_id}/requirements` | 导入可选需求（项目内各 App 聚合） |
+| POST | `/project/{project_id}/cases/import/preview` | 解析表格；body 含 `table`、`header_row`、`skip_rows`、`column_map` |
+| POST | `/project/{project_id}/cases/import/commit` | 写入；body 含 `preview_token`、各行 `on_conflict` |
+| DELETE | `/project/{project_id}/cases/{case_id}` | 删除单条用例 |
+| POST | `/project/{project_id}/cases/delete` | 批量删除；body `{ case_ids: [] }` |
+
+参考 UI：`/studio-static/case_import.html`（开发用导入向导）。
+
+旧 `POST /app-automation/qa-process/import/{app_id}` 的 `kind=cases` 已停用，请走上述 preview/commit。
 
 ## Jobs（LLM prompt 真源）
 

@@ -79,15 +79,22 @@ def _apply(row: KnowledgeEntry, data: dict[str, Any]) -> None:
     row.updated_at = int(time.time())
 
 
+def _scope_ids(*, app_id: str = "", project_id: str = "") -> set[str]:
+    out = {str(x).strip() for x in (app_id, project_id) if str(x).strip()}
+    return out
+
+
 def _match_filters(
     row: dict[str, Any],
     *,
     app_id: str = "",
+    project_id: str = "",
     account_id: str = "",
     account_ident: str = "",
 ) -> bool:
-    want = str(app_id or "").strip()
-    if want and row["app_ids"] and want not in row["app_ids"]:
+    scope = _scope_ids(app_id=app_id, project_id=project_id)
+    bound = [str(x).strip() for x in (row.get("app_ids") or []) if str(x).strip()]
+    if scope and bound and not scope.intersection(bound):
         return False
     want_acc = str(account_id or "").strip()
     want_ident = str(account_ident or "").strip()
@@ -103,7 +110,13 @@ def _match_filters(
     return True
 
 
-def list_testing_knowledge(*, app_id: str = "", account_id: str = "", account_ident: str = "") -> list[dict[str, Any]]:
+def list_testing_knowledge(
+    *,
+    app_id: str = "",
+    project_id: str = "",
+    account_id: str = "",
+    account_ident: str = "",
+) -> list[dict[str, Any]]:
     from mino_nexus.core.database import SessionLocal, ensure_db
 
     ensure_db()
@@ -113,7 +126,13 @@ def list_testing_knowledge(*, app_id: str = "", account_id: str = "", account_id
         out: list[dict[str, Any]] = []
         for raw in rows:
             row = _to_public(raw)
-            if _match_filters(row, app_id=app_id, account_id=account_id, account_ident=account_ident):
+            if _match_filters(
+                row,
+                app_id=app_id,
+                project_id=project_id,
+                account_id=account_id,
+                account_ident=account_ident,
+            ):
                 out.append(row)
         return out
     finally:
@@ -149,7 +168,7 @@ def save_testing_knowledge(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return cleaned
 
 
-def upsert_knowledge_item(item: dict[str, Any]) -> dict[str, Any]:
+def upsert_knowledge_item(item: dict[str, Any], *, skip_extract: bool = False) -> dict[str, Any]:
     data = _normalize(item)
     if not data:
         raise ValueError("知识条目缺少标题")
@@ -157,9 +176,13 @@ def upsert_knowledge_item(item: dict[str, Any]) -> dict[str, Any]:
 
     with session_scope() as db:
         row = db.get(KnowledgeEntry, data["id"])
+        previous = _to_public(row) if row is not None else None
         if row is None:
             row = KnowledgeEntry(id=data["id"])
             db.add(row)
+        from mino_nexus.services.knowledge_situation import enrich_item
+
+        data = enrich_item(data, previous=previous, incoming=item, skip_extract=skip_extract)
         _apply(row, data)
     return data
 

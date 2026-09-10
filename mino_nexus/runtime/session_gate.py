@@ -19,6 +19,11 @@ _WECHAT_ONLY_RE = re.compile(
     re.I,
 )
 _PHONE_LOGIN_RE = re.compile(r"手机号|验证码|短信|一键登录|本机号码")
+_LOGIN_MODULE_RE = re.compile(r"登录|login", re.I)
+_LOGIN_TEST_STEP_RE = re.compile(
+    r"登录方式|登录页|游客|一键登录|微信登录|苹果|账号密码|手机号登录|验证码登录|账号登录",
+    re.I,
+)
 
 _SESSION_PREP = frozenset({"relogin", "logout", "skip"})
 _REQUIRED = frozenset({"logged_in", "guest", "any"})
@@ -209,6 +214,120 @@ def required_session(precondition: str = "", scene: Optional[dict[str, Any]] = N
     if not scene:
         return "any"
     return str(clamp_case_scene(scene).get("required_session") or "any")
+
+
+def _case_text_blob(case: dict[str, Any]) -> str:
+    bits: list[str] = []
+    for key in ("name", "module", "precondition", "precondition_raw", "steps_raw", "expected_raw"):
+        val = case.get(key)
+        if isinstance(val, list):
+            bits.extend(str(x) for x in val if x)
+        elif val:
+            bits.append(str(val))
+    steps = case.get("steps")
+    if isinstance(steps, list):
+        for item in steps:
+            if isinstance(item, dict):
+                bits.append(str(item.get("text") or item.get("instruction") or ""))
+            elif item:
+                bits.append(str(item))
+    return " ".join(bits)
+
+
+def is_login_module_case(
+    case: Optional[dict[str, Any]] = None,
+    scene: Optional[dict[str, Any]] = None,
+) -> bool:
+    """登录模块 / 登录流程测试：需要 guest 起点，批跑可能继承上一条已登录。"""
+    row = clamp_case_scene(scene) if scene else {}
+    req = str(row.get("required_session") or "")
+    prep = str(row.get("session_prep") or "")
+    if req == "guest" or prep == "logout":
+        return True
+    if not case:
+        return False
+    module = str(case.get("module") or "").strip()
+    if module and _LOGIN_MODULE_RE.search(module):
+        return True
+    return bool(_LOGIN_TEST_STEP_RE.search(_case_text_blob(case)))
+
+
+def ensure_case_scene(
+    case: dict[str, Any],
+    ctx_scene: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """合并 CaseScene JSON；登录模块缺省时补 guest + logout prep。"""
+    raw = case.get("case_scene") if isinstance(case.get("case_scene"), dict) else None
+    if raw is None and isinstance(case.get("scene"), dict):
+        raw = case.get("scene")
+    merged: dict[str, Any] = {**(ctx_scene or {}), **(raw or {})}
+    if (
+        str(merged.get("required_session") or "") in _REQUIRED
+        and str(merged.get("session_prep") or "") in _SESSION_PREP
+    ):
+        return clamp_case_scene(merged)
+    if is_login_module_case(case, merged):
+        return clamp_case_scene({
+            **merged,
+            "session_prep": "logout",
+            "required_session": "guest",
+            "device_need": merged.get("device_need") or "app",
+        })
+    pre = str(case.get("precondition") or merged.get("precondition") or "").strip()
+    if merged:
+        return clamp_case_scene({**merged, "precondition": pre} if pre else merged)
+    return fallback_case_scene(precondition=pre)
+
+
+def format_required_session_brief(scene: Optional[dict[str, Any]] = None) -> str:
+    """inspect-session 的 required_session 槽：结构化要求，不是前置原文。"""
+    req = required_session(scene=scene)
+    if req == "guest":
+        return (
+            "本条为登录流程测试，需要未登录或完整登录页（guest）。"
+            "批跑可能继承上一条已登录会话；若当前已登录，next 应为 logout。"
+        )
+    if req == "logged_in":
+        return "本条需要已登录态（logged_in）。"
+    return "（未限定会话要求，记录当前屏即可）"
+
+
+def reconcile_inspect_session(row: dict[str, Any], *, required: str = "any") -> dict[str, Any]:
+    """程序侧钳制：guest 用例 + 已登录 + keep → 改为 logout（配合 inspect-session prompt）。"""
+    if not row.get("ok"):
+        return row
+    req = str(required or "any").strip().lower()
+    session = str(row.get("session") or "unknown").strip().lower()
+    nxt = str(row.get("next") or "keep").strip().lower()
+    if req == "guest" and session == "logged_in" and nxt == "keep":
+        reason = str(row.get("reason") or "").strip()
+        extra = "用例要求未登录/登录页，当前已登录，应先退出再测"
+        out = dict(row)
+        out["next"] = "logout"
+        out["reason"] = f"{reason}；{extra}" if reason else extra
+        return out
+    return row
+
+
+def compile_login_session_hint(
+    scene: Optional[dict[str, Any]] = None,
+    session_block: str = "",
+) -> str:
+    """B3：编译进 checkpoints_block，与 agent-decide 登录态块配合。"""
+    if not is_login_module_case(scene=scene):
+        return ""
+    block = str(session_block or "")
+    if "session=logged_in" in block or "next=logout" in block:
+        return (
+            "【登录态】当前已登录或须退出：先退出至登录页，再执行本步「点登录方式」类操作；"
+            "勿在「我的」/个人主页上找登录入口；勿用 close_app 循环代替退出。"
+        )
+    if required_session(scene=scene) == "guest":
+        return (
+            "【登录态】本用例测登录流程，起点应为未登录或完整登录页；"
+            "若屏幕为个人主页/昵称页，先退出再点登录方式。"
+        )
+    return ""
 
 
 def is_wechat_untestable(screen_text: str) -> bool:

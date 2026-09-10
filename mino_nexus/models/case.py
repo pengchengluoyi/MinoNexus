@@ -5,13 +5,13 @@ from sqlalchemy import JSON, Column, Integer, String, Text, UniqueConstraint
 from mino_nexus.core.database import Base
 
 
-class AppCase(Base):
-    __tablename__ = "app_cases"
-    __table_args__ = (UniqueConstraint("app_id", "case_id", name="uq_app_case"),)
+class ProjectCase(Base):
+    __tablename__ = "project_cases"
+    __table_args__ = (UniqueConstraint("project_id", "case_id", name="uq_project_case"),)
 
     pk = Column(Integer, primary_key=True, autoincrement=True)
     case_id = Column(String, nullable=False, index=True)
-    app_id = Column(String, nullable=False, index=True)
+    project_id = Column(String, nullable=False, index=True)
     requirement_id = Column(String, default="", index=True)
     name = Column(String, default="")
     module = Column(String, default="")

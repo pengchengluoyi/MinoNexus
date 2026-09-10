@@ -26,4 +26,5 @@ class LlmJob(Base):
     builtin = Column(Boolean, default=False)
     sort_order = Column(Integer, default=0)
     seed_rev = Column(String, default="")
+    prompt_version = Column(Integer, default=1)
     overrides_json = Column(JSON, default=dict)

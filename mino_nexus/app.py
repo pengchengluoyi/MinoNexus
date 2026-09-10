@@ -20,6 +20,8 @@ from mino_nexus.core.client_gate import ClientGateMiddleware
 from mino_nexus.core.log import SLog
 from mino_nexus.loop.router_proxy import RouterProxy, is_local_cap
 from mino_nexus.services.node_registry import get_registry
+from pathlib import Path
+
 from mino_nexus.core.paths import data_dir
 from mino_nexus.routers import (
     rAppAutomation,
@@ -29,6 +31,7 @@ from mino_nexus.routers import (
     rMe,
     rPacks,
     rProject,
+    rProjectCases,
     rReleases,
     rRuntime,
     rSettings,
@@ -48,16 +51,11 @@ NEXUS_VERSION = node_ws.NEXUS_VERSION
 async def lifespan(app: FastAPI):
     from mino_nexus.core.database import ensure_db
     from mino_nexus.core.mdns import configure_proxy_bypass, register_beacon, unregister_beacon
-    from mino_nexus.core.migration import run_auto_migration
 
     ensure_db()
-    run_auto_migration()
     from mino_nexus.services.auth_store import ensure_seed_users
 
     ensure_seed_users()
-    from mino_nexus.core.bootstrap import bootstrap
-
-    bootstrap()
     configure_proxy_bypass()
     loop = asyncio.get_running_loop()
     ui_ws.set_loop(loop)
@@ -119,6 +117,7 @@ def create_app() -> FastAPI:
     app.include_router(rSettings.router)
     app.include_router(rPacks.router)
     app.include_router(rProject.router)
+    app.include_router(rProjectCases.router)
     app.include_router(rAppAutomation.router)
     app.include_router(rTask.router)
 
@@ -128,6 +127,9 @@ def create_app() -> FastAPI:
     uploads = data_dir() / "uploads"
     uploads.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(uploads)), name="static")
+    studio_static = Path(__file__).resolve().parent / "static"
+    studio_static.mkdir(parents=True, exist_ok=True)
+    app.mount("/studio-static", StaticFiles(directory=str(studio_static)), name="studio-static")
 
     @app.get("/health")
     def health() -> dict[str, Any]:

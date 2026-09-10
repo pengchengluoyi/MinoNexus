@@ -22,12 +22,24 @@ def _ensure_column(table: str, column: str, ddl: str) -> None:
     SLog.i(TAG, f"added column {table}.{column}")
 
 
+def _drop_table_if_exists(table: str) -> None:
+    insp = inspect(engine)
+    if table not in insp.get_table_names():
+        return
+    with engine.connect() as conn:
+        conn.execute(text(f"DROP TABLE {table}"))
+        conn.commit()
+    SLog.i(TAG, f"dropped table {table}")
+
+
 def run_auto_migration() -> None:
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
         conn.commit()
     try:
         _ensure_column("llm_jobs", "overrides_json", "overrides_json JSON")
+        _ensure_column("llm_jobs", "prompt_version", "prompt_version INTEGER DEFAULT 1")
+        _drop_table_if_exists("app_cases")
     except Exception as exc:
         SLog.w(TAG, f"migration skipped: {exc}")
     SLog.i(TAG, "schema ready")

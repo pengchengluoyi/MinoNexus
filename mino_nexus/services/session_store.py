@@ -222,6 +222,29 @@ def get_meta(session_id: str) -> dict[str, Any] | None:
         db.close()
 
 
+def resolve_session_id(run_id: str, *, case_id: str = "") -> str:
+    """把 batch run_id / report_run_id 解析成 session_id，供回放读 log。"""
+    rid = str(run_id or "").strip()
+    if not rid:
+        return ""
+    if get_meta(rid) is not None:
+        return rid
+    cid = str(case_id or "").strip()
+    if cid and "::" not in rid:
+        want = f"{rid}::{cid}"
+        if get_meta(want) is not None:
+            return want
+    batch = rid.partition("::")[0]
+    items, _ = list_sessions(run_id=batch, case_id=cid, limit=20)
+    if len(items) == 1:
+        return str(items[0].get("session_id") or "")
+    for row in items:
+        sid = str(row.get("session_id") or "")
+        if sid and (not cid or str(row.get("case_id") or "") == cid):
+            return sid
+    return rid
+
+
 def read_events(
     session_id: str,
     *,

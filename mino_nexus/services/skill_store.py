@@ -107,6 +107,60 @@ def seed_skills() -> int:
     return added
 
 
+def upgrade_run_case_sop_guards() -> int:
+    """run-case 各阶段 guards / tool_kinds 与 builtin 对齐（旧库可能缺项）。"""
+    import copy
+
+    from mino_nexus.ai.skill_defs import DEFAULT_SOP
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.skill import Skill
+
+    want_by_phase = {
+        str(p.get("id") or "").strip().lower(): p
+        for p in (DEFAULT_SOP.get("phases") or [])
+        if str(p.get("id") or "").strip()
+    }
+    updated = 0
+    with session_scope() as db:
+        row = db.query(Skill).filter(Skill.id == "run-case").first()
+        if not row:
+            return 0
+        sop = copy.deepcopy(dict(row.sop_json or {}))
+        phases = list(sop.get("phases") or [])
+        if not phases:
+            return 0
+        changed = False
+        for phase in phases:
+            pid = str(phase.get("id") or "").strip().lower()
+            spec = want_by_phase.get(pid)
+            if not spec:
+                continue
+            want_guards = [str(g).strip() for g in (spec.get("guards") or []) if str(g).strip()]
+            guards = [str(g).strip() for g in (phase.get("guards") or []) if str(g).strip()]
+            for g in want_guards:
+                if g not in guards:
+                    guards.append(g)
+                    changed = True
+            if guards != list(phase.get("guards") or []):
+                phase["guards"] = guards
+            want_kinds = [str(k).strip() for k in (spec.get("tool_kinds") or []) if str(k).strip()]
+            kinds = [str(k).strip() for k in (phase.get("tool_kinds") or []) if str(k).strip()]
+            for k in want_kinds:
+                if k not in kinds:
+                    kinds.append(k)
+                    changed = True
+            if kinds != list(phase.get("tool_kinds") or []):
+                phase["tool_kinds"] = kinds
+        if changed:
+            sop["phases"] = phases
+            row.sop_json = sop
+            from sqlalchemy.orm.attributes import flag_modified
+
+            flag_modified(row, "sop_json")
+            updated = 1
+    return updated
+
+
 def _to_row(spec: dict[str, Any], *, builtin: bool | None = None):
     from mino_nexus.models.skill import Skill
 

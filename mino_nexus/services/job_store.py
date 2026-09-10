@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Any
 
 from mino_nexus.ai.prompt_render import JobRenderError, render_job
-from mino_nexus.loop.registry import PREDICATES
 
 
 def _public(row) -> dict[str, Any]:
@@ -26,6 +25,8 @@ def _public(row) -> dict[str, Any]:
         "enabled": bool(row.enabled),
         "builtin": bool(row.builtin),
         "sort_order": int(row.sort_order or 0),
+        "seed_rev": str(row.seed_rev or ""),
+        "prompt_version": int(row.prompt_version or 1),
         "overrides_json": dict(row.overrides_json or {}),
     }
 
@@ -50,6 +51,7 @@ def _to_row(spec: dict[str, Any]):
         builtin=bool(spec.get("builtin", True)),
         sort_order=int(spec.get("sort_order") or 0),
         seed_rev="",
+        prompt_version=int(spec.get("prompt_version") or 1),
         overrides_json=dict(spec.get("overrides_json") or {}),
     )
 
@@ -89,15 +91,60 @@ def _slot_names(row: dict[str, Any]) -> set[str]:
     return {str(s.get("name") or "") for s in (row.get("slots") or []) if isinstance(s, dict)}
 
 
+def _strip_when_blocks(row: dict[str, Any]) -> bool:
+    """合并带 when 的 system 块为单块；去掉 when / flags。返回是否有改动。"""
+    changed = False
+    system = [dict(b) for b in (row.get("system_blocks") or []) if isinstance(b, dict)]
+    if any(str(b.get("when") or "").strip() for b in system):
+        parts: list[str] = []
+        for block in system:
+            if block.get("enabled") is False:
+                continue
+            text = str(block.get("text") or "").strip()
+            if text:
+                parts.append(text)
+        row["system_blocks"] = [{"id": "main", "text": "\n\n".join(parts), "enabled": True}] if parts else []
+        changed = True
+    for side in ("system_blocks", "user_blocks"):
+        for block in row.get(side) or []:
+            if isinstance(block, dict) and block.pop("when", None):
+                changed = True
+    if row.get("flags"):
+        row["flags"] = []
+        changed = True
+    return changed
+
+
+def upgrade_jobs_strip_when() -> int:
+    """启动迁移：去掉 llm_jobs 里的 when 条件块。"""
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+
+    n = 0
+    with session_scope() as db:
+        rows = db.query(LlmJob).all()
+        for row in rows:
+            spec = _public(row)
+            if not _strip_when_blocks(spec):
+                continue
+            _validate_job(spec)
+            _smoke_render(spec)
+            row.system_blocks_json = list(spec.get("system_blocks") or [])
+            row.user_blocks_json = list(spec.get("user_blocks") or [])
+            row.flags_json = list(spec.get("flags") or [])
+            n += 1
+        db.flush()
+    return n
+
+
 def _validate_job(row: dict[str, Any]) -> None:
     slots = _slot_names(row)
     for side in ("system_blocks", "user_blocks"):
         for block in row.get(side) or []:
             if not isinstance(block, dict):
                 continue
-            when = str(block.get("when") or "").strip()
-            if when and when not in PREDICATES:
-                raise ValueError(f"未知谓词：{when}")
+            if str(block.get("when") or "").strip():
+                raise ValueError("不再支持 when 条件块，请合并为单一 system 块")
             slot = block.get("slot")
             if slot and str(slot) not in slots:
                 raise ValueError(f"块引用了未声明槽：{slot}")
@@ -128,11 +175,57 @@ def _fake_slots(row: dict[str, Any]) -> dict[str, str]:
 
 
 def _smoke_render(row: dict[str, Any]) -> None:
-    slots = _fake_slots(row)
-    flags_all = {str(f): True for f in (row.get("flags") or [])}
-    flags_none = {str(f): False for f in (row.get("flags") or [])}
-    for flags in (flags_all, flags_none):
-        render_job(row, slots, flags)
+    render_job(row, _fake_slots(row))
+
+
+def _blocks_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "system_blocks": copy.deepcopy(row.get("system_blocks") or []),
+        "user_blocks": copy.deepcopy(row.get("user_blocks") or []),
+    }
+
+
+def _blocks_changed(current: dict[str, Any], merged: dict[str, Any]) -> bool:
+    return _blocks_snapshot(current) != _blocks_snapshot(merged)
+
+
+def _revision_list(row: dict[str, Any]) -> list[dict[str, Any]]:
+    bag = row.get("overrides_json") if isinstance(row.get("overrides_json"), dict) else {}
+    return [dict(x) for x in (bag.get("revisions") or []) if isinstance(x, dict)]
+
+
+def _set_revisions(row: dict[str, Any], revisions: list[dict[str, Any]]) -> None:
+    bag = dict(row.get("overrides_json") or {})
+    bag["revisions"] = revisions[-20:]
+    row["overrides_json"] = bag
+
+
+def upgrade_jobs_prompt_version() -> int:
+    """旧库补 prompt_version，修订记录补 version 字段。"""
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+
+    n = 0
+    with session_scope() as db:
+        rows = db.query(LlmJob).all()
+        for row in rows:
+            spec = _public(row)
+            changed = False
+            if not int(row.prompt_version or 0):
+                row.prompt_version = 1
+                spec["prompt_version"] = 1
+                changed = True
+            revs = _revision_list(spec)
+            for i, rev in enumerate(revs):
+                if rev.get("version") is None:
+                    rev["version"] = max(1, int(spec.get("prompt_version") or 1) - len(revs) + i)
+                    changed = True
+            if changed:
+                _set_revisions(spec, revs)
+                row.overrides_json = dict(spec.get("overrides_json") or {})
+                n += 1
+        db.flush()
+    return n
 
 
 def save_job(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -153,25 +246,43 @@ def save_job(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
     ):
         if key in body and body[key] is not None:
             merged[key] = body[key]
+    if "system_blocks" in body and body["system_blocks"] is not None:
+        _strip_when_blocks(merged)
 
-    if body.get("reset"):
-        prev_overrides = dict(current.get("overrides_json") or {})
-        revisions = list(prev_overrides.get("revisions") or [])
+    activate_version = body.get("activate_version")
+    if activate_version is not None:
+        target = int(activate_version)
+        hit = next((r for r in reversed(_revision_list(current)) if int(r.get("version") or 0) == target), None)
+        if hit is None:
+            raise ValueError(f"找不到版本 v{target}")
+        merged["system_blocks"] = copy.deepcopy(hit.get("system_blocks") or [])
+        merged["user_blocks"] = copy.deepcopy(hit.get("user_blocks") or [])
+        revisions = _revision_list(current)
+        revisions.append({
+            "version": int(current.get("prompt_version") or 1),
+            "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            **_blocks_snapshot(current),
+        })
+        merged["prompt_version"] = int(current.get("prompt_version") or 1) + 1
+        _set_revisions(merged, revisions)
+    elif body.get("reset"):
+        revisions = _revision_list(current)
         if not revisions:
             raise ValueError("无法恢复：没有历史修订")
         baseline = revisions.pop()
         merged["system_blocks"] = copy.deepcopy(baseline.get("system_blocks") or [])
         merged["user_blocks"] = copy.deepcopy(baseline.get("user_blocks") or [])
-        merged["overrides_json"] = {"revisions": revisions}
-    else:
-        prev_overrides = dict(current.get("overrides_json") or {})
-        revisions = list(prev_overrides.get("revisions") or [])
+        merged["prompt_version"] = int(baseline.get("version") or max(1, int(current.get("prompt_version") or 1) - 1))
+        _set_revisions(merged, revisions)
+    elif _blocks_changed(current, merged):
+        revisions = _revision_list(current)
         revisions.append({
+            "version": int(current.get("prompt_version") or 1),
             "at": datetime.now().astimezone().isoformat(timespec="seconds"),
-            "system_blocks": copy.deepcopy(current.get("system_blocks") or []),
-            "user_blocks": copy.deepcopy(current.get("user_blocks") or []),
+            **_blocks_snapshot(current),
         })
-        merged["overrides_json"] = {"revisions": revisions[-5:]}
+        merged["prompt_version"] = int(current.get("prompt_version") or 1) + 1
+        _set_revisions(merged, revisions)
 
     _validate_job(merged)
     _smoke_render(merged)
@@ -197,6 +308,7 @@ def save_job(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
                 row.enabled = bool(merged.get("enabled"))
             if "sort_order" in merged:
                 row.sort_order = int(merged.get("sort_order") or 0)
+            row.prompt_version = int(merged.get("prompt_version") or row.prompt_version or 1)
             row.overrides_json = dict(merged.get("overrides_json") or {})
         db.flush()
 
@@ -207,13 +319,26 @@ def save_job(job_id: str, body: dict[str, Any]) -> dict[str, Any]:
     return hit
 
 
-def preview_job(job_id: str, slots: dict[str, str] | None = None, flags: dict[str, bool] | None = None) -> dict[str, Any]:
+def preview_job(
+    job_id: str,
+    slots: dict[str, str] | None = None,
+    flags: dict[str, bool] | None = None,
+    *,
+    system_blocks: list[dict[str, Any]] | None = None,
+    user_blocks: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     row = get_job(job_id)
     if not row:
         raise ValueError(f"llm_jobs 里没有 {job_id}")
-    use_slots = dict(slots or _fake_slots(row))
-    use_flags = dict(flags or {str(f): True for f in (row.get("flags") or [])})
-    messages, meta = render_job(row, use_slots, use_flags)
+    draft = copy.deepcopy(row)
+    if system_blocks is not None:
+        draft["system_blocks"] = copy.deepcopy(system_blocks)
+    if user_blocks is not None:
+        draft["user_blocks"] = copy.deepcopy(user_blocks)
+    if system_blocks is not None:
+        _strip_when_blocks(draft)
+    use_slots = dict(slots or _fake_slots(draft))
+    messages, meta = render_job(draft, use_slots)
     return {"messages": messages, "meta": meta}
 
 
@@ -261,6 +386,4 @@ def job_system_text(job_id: str, *, explain_mode: bool = False) -> str:
     row = get_job(jid)
     if not row:
         return ""
-    flag_keys = [str(x) for x in (row.get("flags") or [])]
-    flags = {k: (bool(explain_mode) if k == "explain_mode" else False) for k in flag_keys}
-    return _render_side(list(row.get("system_blocks") or []), {}, flags)
+    return _render_side(list(row.get("system_blocks") or []), {})

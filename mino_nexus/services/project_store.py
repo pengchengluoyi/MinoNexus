@@ -234,9 +234,10 @@ def _public_app(a: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
 
     env = a.get("env") if isinstance(a.get("env"), dict) else {}
     aid = str(a.get("id") or "")
+    pid = str(a.get("project_id") or "")
     stats = {
-        "case_count": count_qa_process_cases_from_env(env, app_id=aid),
-        "feishu_cases": count_qa_process_cases_from_env(env, app_id=aid),
+        "case_count": count_qa_process_cases_from_env(env, project_id=pid),
+        "feishu_cases": count_qa_process_cases_from_env(env, project_id=pid),
         "knowledge_count": _knowledge_count(aid),
     }
     row = {
@@ -290,6 +291,11 @@ def project_env(project_id: str) -> dict[str, Any]:
     root = _root()
     project = require_project(project_id)
     return env_from_project_row(project, _apps_of(root, project_id))
+
+
+def list_apps(project_id: str) -> list[dict[str, Any]]:
+    root = _root()
+    return [a for a in _apps_of(root, str(project_id or "")) if isinstance(a, dict)]
 
 
 def list_projects() -> list[dict[str, Any]]:

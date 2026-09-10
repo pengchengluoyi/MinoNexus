@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from mino_nexus.catalog import registry as plugin_registry
-from mino_nexus.catalog.exec_classes import CAPABILITY_KINDS
+from mino_nexus.catalog.exec_classes import CAPABILITY_KINDS, RECOVERY_KIND
 from mino_nexus.catalog.models import Capability
 from mino_nexus.runtime.run_context import RunContext
 
@@ -26,7 +26,7 @@ def _cap_summary(cap: Capability) -> str:
 
 
 def phase_kinds(phase: str, *, tool_kinds: Optional[list[str]] = None, phase_cfg: Optional[dict] = None) -> list[str]:
-    """prep/do 并 generic；check 只要 check。recovery 另走工具。"""
+    """prep/do 并 generic；check 只要 check。tool_kinds 含 recovery 时并上 recovery 原子能力。"""
     if isinstance(phase_cfg, dict) and phase_cfg.get("tool_kinds"):
         kinds = [str(x) for x in phase_cfg.get("tool_kinds") or []]
     else:
@@ -42,6 +42,8 @@ def phase_kinds(phase: str, *, tool_kinds: Optional[list[str]] = None, phase_cfg
     if tool_kinds:
         allow = {str(x) for x in tool_kinds}
         kinds = [k for k in kinds if k in allow]
+        if RECOVERY_KIND in allow and RECOVERY_KIND not in kinds:
+            kinds.append(RECOVERY_KIND)
     return kinds
 
 

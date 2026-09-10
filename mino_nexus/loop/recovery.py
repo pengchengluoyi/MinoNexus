@@ -114,7 +114,15 @@ def collect_evidence(ctx, router, *, target_package: str = "") -> Evidence:
         label="设备取证",
     )
     try:
-        result = router.dispatch(event, run_id=str(getattr(ctx, "run_id", "") or ""), step_idx=0)
+        from mino_nexus.loop.web_env import frame_step
+
+        scout_run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
+        case_seq = int(getattr(ctx, "case_seq", 0) or 0)
+        result = router.dispatch(
+            event,
+            run_id=scout_run_id,
+            step_idx=frame_step(case_seq, 2),
+        )
     except Exception as exc:
         return Evidence(error=f"取证 dispatch 异常: {exc}")
 
@@ -251,7 +259,13 @@ def _forbidden(rule, action) -> str:
 def _dispatch(router, ctx, event: PlanEvent):
     if is_local_cap(event.capability_id):
         return dispatch_local(event)
-    return router.dispatch(event, run_id=str(getattr(ctx, "run_id", "") or ""), step_idx=event.seq)
+    from mino_nexus.loop.web_env import agent_step_idx, frame_step
+
+    scout_run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
+    case_seq = int(getattr(ctx, "case_seq", 0) or 0)
+    turn = int(event.seq or 0)
+    step_idx = agent_step_idx(case_seq, turn) if turn > 0 else frame_step(case_seq, 3)
+    return router.dispatch(event, run_id=scout_run_id, step_idx=step_idx)
 
 
 def apply_rule(match: RuleMatch, ctx, router, *, target_package: str = "") -> RecoveryOutcome:
@@ -330,6 +344,7 @@ def recover_if_needed(
     *,
     target_package: str = "",
     shot: Any = None,
+    execute_only: bool = False,
 ) -> Optional[RecoveryOutcome]:
     """取证 → 可选合并截图信号 → 匹配 → 执行第一条命中规则。"""
     try:
@@ -345,12 +360,45 @@ def recover_if_needed(
         from mino_nexus.loop.screen_capture import merge_shot_evidence
 
         merge_shot_evidence(ev, shot)
-        if ev.capture_black == "yes" and ev.screen_blocked == "no":
-            ev.screen_blocked = "yes"
     plat = str(getattr(ctx, "platform", "") or "")
     hits = match_rules(ev, platform=plat)
+    if execute_only:
+        hits = [h for h in hits if str(getattr(h.rule, "mode", "") or "") != "advise"]
     if not hits:
         return None
     out = apply_rule(hits[0], ctx, router, target_package=target_package)
+    out.evidence = ev.brief()
+    return out
+
+
+def ensure_target_app_foreground(
+    ctx,
+    router,
+    *,
+    target_package: str = "",
+    shot: Any = None,
+) -> Optional[RecoveryOutcome]:
+    """Case 开环：前台不是被测 App 时 launch 目标包（不处理锁屏/黑屏 advise）。"""
+    try:
+        from mino_nexus.runtime.run_context import is_web_slot
+
+        if is_web_slot(str(getattr(ctx, "sn", "") or ""), str(getattr(ctx, "platform", "") or "")):
+            return None
+    except Exception:
+        pass
+    pkg = target_package or str(getattr(ctx, "target_package", "") or "")
+    if not pkg:
+        return None
+    ev = collect_evidence(ctx, router, target_package=pkg)
+    if shot is not None:
+        from mino_nexus.loop.screen_capture import merge_shot_evidence
+
+        merge_shot_evidence(ev, shot)
+    if ev.app_foreground != "no" or ev.screen_blocked == "yes":
+        return None
+    rule = catalog.get_recovery_rule("bring_target_app_foreground")
+    if rule is None:
+        return None
+    out = apply_rule(RuleMatch(rule=rule, reasons=["preflight_fg"]), ctx, router, target_package=pkg)
     out.evidence = ev.brief()
     return out

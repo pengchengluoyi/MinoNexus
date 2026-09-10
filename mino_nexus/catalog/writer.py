@@ -5,8 +5,9 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from mino_nexus.catalog.exec_classes import ALL_KINDS, CAPABILITY_KINDS
+from mino_nexus.catalog.exec_classes import ALL_KINDS, CAPABILITY_KINDS, RECOVERY_KIND
 from mino_nexus.catalog.models import Capability, RecoveryRule
+from mino_nexus.catalog.recovery_shape import is_recovery_atomic_payload, is_recovery_rule_payload
 
 
 class CatalogWriteError(ValueError):
@@ -237,26 +238,49 @@ def _validate(kind: str, fields: dict[str, Any]) -> None:
                 ui=payload.get("ui") if isinstance(payload.get("ui"), dict) else {},
             )
             return
-        if kind == "recovery":
-            RecoveryRule(
-                id=eid,
-                title=fields.get("display_name") or eid,
-                enabled=bool(fields.get("enabled", True)),
-                provider=fields.get("provider") or "",
-                owner=fields.get("owner") or "",
-                lifecycle=fields.get("lifecycle") or "active",
-                priority=int(payload.get("priority") or 0),
-                when=str(payload.get("when") or ""),
-                match=payload.get("match") or {},
-                mode=str(payload.get("mode") or "advise"),
-                actions=list(payload.get("actions") or []),
-                verify=payload.get("verify") or {},
-                forbid=payload.get("forbid") or {},
-                prompt_snippet=str(payload.get("prompt_snippet") or ""),
-                max_attempts=int(payload.get("max_attempts") or 1),
-                platforms=list(fields.get("platforms_json") or []),
-                evidence_notes=list(payload.get("evidence_notes") or []),
-            )
+        if kind == RECOVERY_KIND:
+            rule = is_recovery_rule_payload(payload)
+            atomic = is_recovery_atomic_payload(eid, payload)
+            if not rule and not atomic:
+                raise CatalogWriteError(
+                    f"{RECOVERY_KIND}/{eid} 需为 L0 规则（match/actions）或原子能力（implementations/caller）"
+                )
+            if rule:
+                RecoveryRule(
+                    id=eid,
+                    title=fields.get("display_name") or eid,
+                    enabled=bool(fields.get("enabled", True)),
+                    provider=fields.get("provider") or "",
+                    owner=fields.get("owner") or "",
+                    lifecycle=fields.get("lifecycle") or "active",
+                    priority=int(payload.get("priority") or 0),
+                    when=str(payload.get("when") or ""),
+                    match=payload.get("match") or {},
+                    mode=str(payload.get("mode") or "advise"),
+                    actions=list(payload.get("actions") or []),
+                    verify=payload.get("verify") or {},
+                    forbid=payload.get("forbid") or {},
+                    prompt_snippet=str(payload.get("prompt_snippet") or ""),
+                    max_attempts=int(payload.get("max_attempts") or 1),
+                    platforms=list(fields.get("platforms_json") or []),
+                    evidence_notes=list(payload.get("evidence_notes") or []),
+                )
+            if atomic:
+                impls = list(payload.get("implementations") or [])
+                Capability(
+                    id=eid,
+                    kind=RECOVERY_KIND,
+                    display_name=fields.get("display_name") or eid,
+                    event_kind=str(payload.get("event_kind") or eid),
+                    category=fields.get("category") or "uncategorized",
+                    description=fields.get("description") or "",
+                    platforms=list(fields.get("platforms_json") or []),
+                    needs_vlm=bool(payload.get("needs_vlm")),
+                    implementations=impls,
+                    visible_to=list(fields.get("visible_to_json") or ["case", "system"]),
+                    params=list(payload.get("params") or []) if isinstance(payload.get("params"), list) else [],
+                    ui=payload.get("ui") if isinstance(payload.get("ui"), dict) else {},
+                )
             return
     except ValidationError as exc:
         raise CatalogWriteError(str(exc)) from exc

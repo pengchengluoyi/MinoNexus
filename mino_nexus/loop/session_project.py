@@ -6,6 +6,93 @@ from typing import Any
 from mino_nexus.services import session_store
 
 
+def resolve_session_id(run_id: str, *, case_id: str = "") -> str:
+    return session_store.resolve_session_id(run_id, case_id=case_id)
+
+
+def _is_valid_thumb(thumb: str) -> bool:
+    """Session log 旧版会把 thumb 截断成 ...(+N)，拼 data URL 会 ERR_INVALID_URL。"""
+    s = str(thumb or "").strip()
+    if not s:
+        return False
+    if "(+" in s:
+        return False
+    raw = s.split(",", 1)[-1] if s.startswith("data:") else s
+    return len(raw) >= 64
+
+
+def _normalize_thumb(thumb: str) -> str:
+    s = str(thumb or "").strip()
+    if not _is_valid_thumb(s):
+        return ""
+    if s.startswith("data:"):
+        return s.split(",", 1)[-1]
+    return s
+
+
+def _observe_thumbs_by_turn(events: list[dict[str, Any]]) -> dict[int, str]:
+    out: dict[int, str] = {}
+    for row in events:
+        if str(row.get("type") or "") != "observe/screen":
+            continue
+        turn = int(row.get("turn") or 0)
+        if turn <= 0:
+            continue
+        thumb = _normalize_thumb(str((row.get("payload") or {}).get("thumb") or ""))
+        if thumb:
+            out[turn] = thumb
+    return out
+
+
+def _resolve_event_thumb(
+    payload: dict[str, Any],
+    *,
+    turn: int,
+    observe_thumbs: dict[int, str],
+) -> None:
+    thumb = _normalize_thumb(str(payload.get("thumb") or ""))
+    if not thumb and turn > 0:
+        thumb = observe_thumbs.get(turn) or ""
+    if thumb:
+        payload["thumb"] = thumb
+    elif payload.get("thumb"):
+        payload["thumb"] = ""
+
+
+def merge_engine_thumbs(
+    engine_steps: list[dict[str, Any]] | None,
+    ui_events: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """把 session 事件里的 thumb 合并进 engine_steps，结束后详情页才能看图。"""
+    steps = [dict(x) for x in (engine_steps or []) if isinstance(x, dict)]
+    if not steps:
+        return steps
+    by_seq: dict[int, str] = {}
+    for ev in ui_events or []:
+        if not isinstance(ev, dict):
+            continue
+        thumb = _normalize_thumb(str(ev.get("thumb") or ""))
+        if not thumb:
+            continue
+        step = ev.get("step")
+        if isinstance(step, int) and step > 0:
+            by_seq.setdefault(step, thumb)
+    if not by_seq:
+        for row in steps:
+            row["thumb"] = _normalize_thumb(str(row.get("thumb") or ""))
+        return steps
+    for row in steps:
+        existing = _normalize_thumb(str(row.get("thumb") or ""))
+        seq = row.get("seq")
+        if existing:
+            row["thumb"] = existing
+        elif isinstance(seq, int) and seq in by_seq:
+            row["thumb"] = by_seq[seq]
+        else:
+            row["thumb"] = ""
+    return steps
+
+
 def _turn_sidecars(
     events: list[dict[str, Any]],
 ) -> tuple[dict[int, str], dict[int, dict], dict[int, dict], list[dict[str, Any]]]:
@@ -230,7 +317,7 @@ def project_turns(session_id: str) -> dict[str, Any] | None:
 
 def project_trajectory(session_id: str) -> dict[str, Any] | None:
     """投影为 agent_stream 兼容形状；优先用于 Studio 回放。"""
-    sid = str(session_id or "").strip()
+    sid = resolve_session_id(session_id)
     if not sid:
         return None
     meta = session_store.get_meta(sid)
@@ -239,6 +326,7 @@ def project_trajectory(session_id: str) -> dict[str, Any] | None:
         return None
 
     dispatch, slots_by_turn, menus_by_turn, inspections = _turn_sidecars(events)
+    observe_thumbs = _observe_thumbs_by_turn(events)
     stream_rows = [e for e in events if e.get("type") == "stream/emit"]
     start = next((e for e in events if e.get("type") == "session/start"), None)
     end = next((e for e in reversed(events) if e.get("type") == "session/end"), None)
@@ -262,6 +350,7 @@ def project_trajectory(session_id: str) -> dict[str, Any] | None:
                 menus=menus_by_turn,
                 inspections=inspections,
             )
+            _resolve_event_thumb(payload, turn=turn, observe_thumbs=observe_thumbs)
             if payload.get("goal") and not goal:
                 goal = str(payload.get("goal") or "")
             if payload.get("skill_id"):
@@ -334,7 +423,9 @@ def _structured_to_ui(
                 "phase": "observe",
                 "step": turn,
                 "loop_phase": phase,
-                "thumb": payload.get("thumb") or payload.get("thumb_ref") or "",
+                "thumb": _normalize_thumb(
+                    str(payload.get("thumb") or payload.get("thumb_ref") or "")
+                ),
             }
         elif typ == "tool/call":
             base = {

@@ -36,6 +36,9 @@ def _hash_text(text: str) -> str:
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
+_THUMB_CAP = 65536
+
+
 def _clip_value(val: Any, cap: int = _PAYLOAD_CAP) -> Any:
     if val is None or isinstance(val, (bool, int, float)):
         return val
@@ -58,8 +61,19 @@ def _clip_value(val: Any, cap: int = _PAYLOAD_CAP) -> Any:
 
 
 def _sanitize_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    clean = _clip_value(dict(payload or {}))
-    return clean if isinstance(clean, dict) else {"value": clean}
+    out: dict[str, Any] = {}
+    for key, val in (payload or {}).items():
+        cap = _THUMB_CAP if str(key) == "thumb" else _PAYLOAD_CAP
+        clipped = _clip_value(val, cap=cap)
+        if isinstance(clipped, dict):
+            inner: dict[str, Any] = {}
+            for ik, iv in clipped.items():
+                icap = _THUMB_CAP if str(ik) == "thumb" else min(cap, _SLOT_CAP)
+                inner[str(ik)] = _clip_value(iv, cap=icap)
+            out[str(key)] = inner
+        else:
+            out[str(key)] = clipped
+    return out
 
 
 def active_writer() -> Optional["SessionWriter"]:

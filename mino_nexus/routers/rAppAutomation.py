@@ -232,7 +232,7 @@ def qa_tick(app_id: str, body: QaProcessTickBody, _sess: dict = Depends(current_
     threading.Thread(
         target=_tick_in_background,
         kwargs={
-            "app_id": app_id,
+            "project_id": str(app.get("project_id") or ""),
             "qa_process": cfg.get("qa_process") or {},
             "cases": cases,
             "job_id": job.id,
@@ -280,7 +280,7 @@ def qa_cancel(job_id: str, _sess: dict = Depends(current_session)):
 
 def _tick_in_background(
     *,
-    app_id: str,
+    project_id: str,
     qa_process: dict,
     cases: list,
     job_id: str,
@@ -304,7 +304,7 @@ def _tick_in_background(
         result = tick(
             qa_process=qa_process,
             cases=cases,
-            app_id=app_id,
+            project_id=project_id,
             requirement_id=requirement_id,
             user_note=user_note,
             force=force,
@@ -339,7 +339,7 @@ def qa_import(app_id: str, body: CoverImportBody, _sess: dict = Depends(current_
     try:
         result = import_cover(
             qa_process=cfg.get("qa_process") or {},
-            app_id=app_id,
+            project_id=str(app.get("project_id") or ""),
             requirement_id=body.requirement_id,
             kind=body.kind,
             text=body.text,

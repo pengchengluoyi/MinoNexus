@@ -3,23 +3,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from mino_nexus.loop.registry import PREDICATES
-
 
 class JobRenderError(ValueError):
     pass
 
 
-def _block_enabled(block: dict[str, Any], flags: dict[str, bool]) -> bool:
-    if block.get("enabled") is False:
-        return False
-    when = str(block.get("when") or "").strip()
-    if not when:
-        return True
-    pred = PREDICATES.get(when)
-    if pred is None:
-        raise JobRenderError(f"未知谓词：{when}")
-    return bool(pred(flags))
+def _block_enabled(block: dict[str, Any]) -> bool:
+    return block.get("enabled") is not False
 
 
 def _slot_text(block: dict[str, Any], slots: dict[str, str]) -> str:
@@ -55,12 +45,12 @@ def _slot_text(block: dict[str, Any], slots: dict[str, str]) -> str:
     return text
 
 
-def _render_side(blocks: list[dict[str, Any]], slots: dict[str, str], flags: dict[str, bool]) -> str:
+def _render_side(blocks: list[dict[str, Any]], slots: dict[str, str]) -> str:
     parts: list[str] = []
     for block in blocks or []:
         if not isinstance(block, dict):
             continue
-        if not _block_enabled(block, flags):
+        if not _block_enabled(block):
             continue
         chunk = _slot_text(block, slots)
         if chunk:
@@ -68,14 +58,14 @@ def _render_side(blocks: list[dict[str, Any]], slots: dict[str, str], flags: dic
     return "\n\n".join(parts).strip()
 
 
-def render_job(row: dict[str, Any], slots: dict[str, str], flags: dict[str, bool]) -> tuple[list[dict], dict]:
+def render_job(row: dict[str, Any], slots: dict[str, str]) -> tuple[list[dict], dict]:
     if not row:
         raise JobRenderError("job 不存在")
     if not row.get("enabled", True):
         raise JobRenderError(f"job 已禁用：{row.get('id')}")
 
-    system = _render_side(list(row.get("system_blocks") or []), slots, flags)
-    user_text = _render_side(list(row.get("user_blocks") or []), slots, flags)
+    system = _render_side(list(row.get("system_blocks") or []), slots)
+    user_text = _render_side(list(row.get("user_blocks") or []), slots)
     if not system.strip():
         raise JobRenderError(f"job {row.get('id')} system 为空")
 
@@ -110,14 +100,15 @@ def render_job(row: dict[str, Any], slots: dict[str, str], flags: dict[str, bool
         "role_id": str(row.get("role_id") or ""),
         "output_schema": str(row.get("output_schema") or ""),
         "call": dict(row.get("call") or {}),
+        "prompt_version": int(row.get("prompt_version") or 1),
     }
     return messages, meta
 
 
-def render(job_id: str, slots: dict[str, str], flags: dict[str, bool] | None = None) -> tuple[list[dict], dict]:
+def render(job_id: str, slots: dict[str, str]) -> tuple[list[dict], dict]:
     from mino_nexus.services.job_store import get_job
 
     row = get_job(job_id)
     if not row:
         raise JobRenderError(f"llm_jobs 里没有 {job_id}")
-    return render_job(row, slots, dict(flags or {}))
+    return render_job(row, slots)

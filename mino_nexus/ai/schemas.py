@@ -393,7 +393,7 @@ class AgentDecision(BaseModel):
     thought: str = Field("", description="当前屏幕分析 + 为什么选这一步")
     action: Optional[AgentAction] = Field(None, description="status=continue/ask_human 时必填")
     expected_after: str = Field("", description="执行后预期出现的状态，供下一步自检")
-    status: Literal["continue", "done", "give_up", "ask_human"] = "continue"
+    status: Literal["continue", "done", "give_up", "ask_human", "skip"] = "continue"
     confidence: float = Field(0.0, ge=0.0, le=1.0)
     remember: list[str] = Field(default_factory=list, description="本步要写入短期记忆的事实")
     checkpoint_ids: list[str] = Field(default_factory=list, description="本步正在验证/已达成的检查点 id")
