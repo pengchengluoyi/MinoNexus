@@ -214,6 +214,7 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
     if not doc:
         return
     try:
+        env_brief = str(doc.get("env_brief") or "")
         for case_seq, case in enumerate(list(doc.get("cases") or [])):
             if run_store.cancel_requested(run_id):
                 break
@@ -240,7 +241,10 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
                 cancel_check=lambda: run_store.cancel_requested(run_id),
                 case_seq=case_seq,
                 playwright_headless=bool(doc.get("playwright_headless", True)),
+                run_env_brief=env_brief,
             )
+            doc = run_store.get(run_id) or doc
+            env_brief = str(doc.get("env_brief") or env_brief)
             # 用例 steps/expected 是原文。执行轨迹只能写 engine_steps，写进 steps 会让详情页变成 [object Object]。
             run_store.patch_case(
                 run_id, cid,

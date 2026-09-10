@@ -185,6 +185,52 @@ def _guard_skip_repeat_read_device(ctx: dict[str, Any]) -> Optional[str]:
     return format_skip_repeat_read_device_message(prev)
 
 
+def _menu_has_cap(ctx: dict[str, Any], cap_id: str) -> bool:
+    menu = ctx.get("menu") or []
+    if isinstance(menu, list):
+        return any(str((m or {}).get("id") or "") == cap_id for m in menu)
+    return False
+
+
+def _leased_account(ctx: dict[str, Any]) -> bool:
+    brief = str(ctx.get("accounts_brief") or "").strip()
+    if not brief or brief.startswith("（未租") or "未租" in brief[:12]:
+        return False
+    return True
+
+
+def _guard_action_fuse(ctx: dict[str, Any]) -> Optional[str]:
+    step_cursor = ctx.get("step_cursor")
+    if step_cursor is None:
+        return None
+    gate = getattr(step_cursor, "progress_gate", None) or getattr(step_cursor, "action_fuse", None)
+    if gate is None:
+        return None
+    cap_id = str(ctx.get("cap_id") or "")
+    return gate.check(
+        phase=str(ctx.get("phase") or ""),
+        cap_id=cap_id,
+        params=dict(ctx.get("params") or {}),
+        screen_fp=str(ctx.get("screen_fp") or ""),
+        has_get_otp=_menu_has_cap(ctx, "get_otp"),
+        leased=_leased_account(ctx),
+    )
+
+
+def _guard_skip_repeat_check_run_env(ctx: dict[str, Any]) -> Optional[str]:
+    if str(ctx.get("phase") or "") != "prep":
+        return None
+    if str(ctx.get("cap_id") or "") != "check_run_env":
+        return None
+    brief = str(ctx.get("run_env_brief") or "").strip()
+    if not brief:
+        return None
+    return (
+        f"已拒绝重复 check_run_env（本任务已确认：{brief[:80]}）。"
+        f"请直接 signal_done 结束前置；后续用例执行会沿用该环境。"
+    )
+
+
 def _guard_skip_repeat_tap(ctx: dict[str, Any]) -> Optional[str]:
     phase = str(ctx.get("phase") or "")
     cap_id = str(ctx.get("cap_id") or "")
@@ -233,6 +279,8 @@ def apply_force_case_expectation(params: dict[str, Any], ctx: dict[str, Any]) ->
 GUARDS: dict[str, GuardFn] = {
     "deny_mutate": _guard_deny_mutate,
     "skip_repeat_read_device": _guard_skip_repeat_read_device,
+    "skip_repeat_check_run_env": _guard_skip_repeat_check_run_env,
+    "action_fuse": _guard_action_fuse,
     "skip_repeat_tap": _guard_skip_repeat_tap,
     "limit_advise_recovery": _guard_limit_advise_recovery,
     "stuck_alternation": _guard_stuck_alternation,

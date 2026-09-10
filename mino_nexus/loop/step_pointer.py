@@ -7,15 +7,17 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from mino_nexus.ai.case_text import parse_numbered_items_rules
+from mino_nexus.loop.action_fuse import ProgressGate
 from mino_nexus.services.run_store import spec_lines
 
 _POINTER_TEMPLATES: dict[str, str] = {
     "prep_header": "【执行纪律：先完成前置检查，禁止进入操作步骤，禁止校验预期。】",
     "prep_current": "【当前只做前置】{precondition}",
     "prep_tail": (
-        "前置满足后立刻 signal_done；禁止重复 read_device_data（history 已有 sim=READY 即满足）。"
-        "锁屏/黑屏用 recover_*，不要用 prep 工具唤醒。登录态未确认时不要 signal_done。"
-        "禁止进步骤、禁止验预期。"
+        "每任务仅需一次 check_run_env（history 已有 env= 即满足）；"
+        "禁止重复 read_device_data（history 已有 sim=READY 即满足）。"
+        "前置满足后立刻 signal_done。锁屏/黑屏用 recover_*，不要用 prep 工具唤醒。"
+        "登录态未确认时不要 signal_done。禁止进步骤、禁止验预期。"
     ),
     "do_header": "【执行纪律：严格按步骤编号。禁止跳到后面的步骤，禁止提前验后面的预期。】",
     "do_current": "【当前只做步骤 {n}】{instruction}",
@@ -302,6 +304,8 @@ class StepCursor:
         self.step_ops: int = 0
         self.advise_recovery_counts: dict[str, int] = {}
         self.login_session_hint: str = ""
+        self.otp_prep_hint: str = ""
+        self.progress_gate: ProgressGate = ProgressGate()
         self.guest_entry_tapped: bool = False
         if self.phase != "prep":
             self._sync()
@@ -323,6 +327,7 @@ class StepCursor:
         self.step_checked = False
         self.step_ops = 0
         self.reset_guest_entry()
+        self.progress_gate.reset_milestone("do", 1 if self.nodes else 0)
         self._sync()
 
     def record_step_op(self) -> None:
@@ -374,6 +379,8 @@ class StepCursor:
         if self.index >= len(self.nodes):
             self.phase = "done"
             return False
+        n = self.nodes[self.index].n if self.nodes else 0
+        self.progress_gate.reset_milestone("do", n)
         self._sync()
         return True
 
@@ -387,6 +394,7 @@ class StepCursor:
             return
         self.phase = "check"
         self.step_checked = False
+        self.progress_gate.reset_milestone("check", cur.n if cur else 0)
 
     def mark_checked(self) -> None:
         self.step_checked = True
@@ -426,6 +434,11 @@ class StepCursor:
             for node in self.nodes:
                 lines.append(_pt("step_future", n=node.n, instruction=node.instruction or "（无操作）"))
             lines.append(_pt("prep_current", precondition=self.precondition))
+            if self.otp_prep_hint:
+                lines.append(self.otp_prep_hint)
+            warn = str(getattr(self.progress_gate, "warning_hint", "") or "").strip()
+            if warn:
+                lines.append(warn)
             lines.append(_pt("prep_tail"))
             return "\n".join(lines)
 
@@ -465,6 +478,9 @@ class StepCursor:
             )
             if guest_hint:
                 lines.append(guest_hint)
+            warn = str(getattr(self.progress_gate, "warning_hint", "") or "").strip()
+            if warn:
+                lines.append(warn)
             lines.append(_pt("do_tail"))
         else:
             lines.append(_pt("check_current", n=cur.n, expected=cur.expected or "（无预期，无法执行校验）"))

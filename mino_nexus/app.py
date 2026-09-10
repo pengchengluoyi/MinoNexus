@@ -20,7 +20,6 @@ from mino_nexus.core.client_gate import ClientGateMiddleware
 from mino_nexus.core.log import SLog
 from mino_nexus.loop.router_proxy import RouterProxy, is_local_cap
 from mino_nexus.services.node_registry import get_registry
-from pathlib import Path
 
 from mino_nexus.core.paths import data_dir
 from mino_nexus.routers import (
@@ -127,9 +126,6 @@ def create_app() -> FastAPI:
     uploads = data_dir() / "uploads"
     uploads.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(uploads)), name="static")
-    studio_static = Path(__file__).resolve().parent / "static"
-    studio_static.mkdir(parents=True, exist_ok=True)
-    app.mount("/studio-static", StaticFiles(directory=str(studio_static)), name="studio-static")
 
     @app.get("/health")
     def health() -> dict[str, Any]:

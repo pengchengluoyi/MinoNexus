@@ -41,6 +41,11 @@ def bootstrap() -> None:
         an = upgrade_account_capabilities()
         if an:
             SLog.i(TAG, f"account capabilities upgraded {an}")
+        from mino_nexus.catalog.recovery_seed import upgrade_check_run_env_capability
+
+        cn = upgrade_check_run_env_capability()
+        if cn:
+            SLog.i(TAG, f"check_run_env capability upgraded {cn}")
         from mino_nexus.services.job_store import upgrade_jobs_prompt_version, upgrade_jobs_strip_when
 
         jn = upgrade_jobs_strip_when()

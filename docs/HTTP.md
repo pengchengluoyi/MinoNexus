@@ -80,8 +80,6 @@ HITL 问人界面、排期 cron、基线库、从设计稿/定位抽登录图标
 | DELETE | `/project/{project_id}/cases/{case_id}` | 删除单条用例 |
 | POST | `/project/{project_id}/cases/delete` | 批量删除；body `{ case_ids: [] }` |
 
-参考 UI：`/studio-static/case_import.html`（开发用导入向导）。
-
 旧 `POST /app-automation/qa-process/import/{app_id}` 的 `kind=cases` 已停用，请走上述 preview/commit。
 
 ## Jobs（LLM prompt 真源）

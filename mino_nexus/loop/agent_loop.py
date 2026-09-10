@@ -9,6 +9,7 @@ from mino_nexus.ai.knowledge_hint import (
     pick_auto_knowledge_body,
     should_auto_inject_do_body,
 )
+from mino_nexus.loop.action_fuse import fuseable_cap
 from mino_nexus.loop.step_pointer import cap_clears_repeat_tap
 from mino_nexus.ai.planner import decide_next_action
 from mino_nexus.ai.schemas import AgentAction, AgentDecision
@@ -22,6 +23,7 @@ from mino_nexus.loop.inspections import (
 )
 from mino_nexus.runtime.session_gate import (
     compile_login_session_hint,
+    compile_otp_prep_hint,
     ensure_case_scene,
     is_login_module_case,
 )
@@ -170,6 +172,7 @@ def run_case(
     playwright_headless: bool = True,
     parent_session_id: str = "",
     fork_state: dict[str, Any] | None = None,
+    run_env_brief: str = "",
 ) -> dict[str, Any]:
     from mino_nexus.ai import dispatch_log as dispatch
 
@@ -191,6 +194,18 @@ def run_case(
     scout_run_id = stream_id
     ctx.scout_run_id = scout_run_id
     ctx.case_seq = case_seq
+    env_brief = str(run_env_brief or "").strip()
+    if env_brief:
+        ctx.env_label = env_brief
+        ctx.env_fact = {"brief": env_brief, "confirmed": True}
+    try:
+        from mino_nexus.services import run_store as _rs
+
+        _doc = _rs.get(run_id)
+        if _doc:
+            ctx.env_profile = str(_doc.get("env_profile") or ctx.env_profile or "test")
+    except Exception:
+        pass
     proxy = RouterProxy(
         sn,
         run_id=scout_run_id,
@@ -276,6 +291,7 @@ def run_case(
                     case_seq=case_seq,
                     writer=writer,
                     fork_state=fork_state,
+                    run_env_brief=env_brief,
                 )
             return outcome
     except Exception as exc:
@@ -415,6 +431,7 @@ def _run_loop(
     case_seq: int = 0,
     writer: SessionWriter | None = None,
     fork_state: dict[str, Any] | None = None,
+    run_env_brief: str = "",
 ) -> dict[str, Any]:
     from mino_nexus.runtime.menu import available_menu_brief
     from mino_nexus.services.skill_store import get_skill
@@ -438,6 +455,13 @@ def _run_loop(
     last_phase_seen = ""
     ctx.case_scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
     login_module_case = is_login_module_case(case=case, scene=ctx.case_scene)
+    task_env_brief = str(run_env_brief or getattr(ctx, "env_label", "") or "").strip()
+    if task_env_brief:
+        history.append(f"0. program → info: 本任务运行环境已确认：{task_env_brief}")
+    cursor.progress_gate.reset_milestone(
+        cursor.phase,
+        0 if cursor.phase == "prep" else (cursor.current().n if cursor.current() else 0),
+    )
 
     def _phase_cfg() -> dict[str, Any]:
         return phase_for_id(phases, cursor.phase)
@@ -732,6 +756,14 @@ def _run_loop(
                     "cap_ids": [str(c.get("id") or "") for c in menu if c.get("id")],
                 },
             )
+        cursor.otp_prep_hint = ""
+        if cursor.phase == "prep":
+            cursor.otp_prep_hint = compile_otp_prep_hint(
+                accounts_brief=str(getattr(ctx, "accounts_brief", "") or ""),
+                session_block=str(inspect_slots.get("session_block") or ""),
+                hierarchy_text=str(inspect_slots.get("hierarchy_text") or ""),
+                has_get_otp=any(str(c.get("id") or "") == "get_otp" for c in menu),
+            )
         in_prep = cursor.phase == "prep"
         in_check = cursor.phase == "check"
         scripted_check = bool(in_check and cur and str(cur.expected or "").strip())
@@ -846,6 +878,7 @@ def _run_loop(
         turn_decision_cap = cap_id or ("signal_done" if decision.status == "done" else "")
         turn_decision_status = str(decision.status or "")
         params = dict(action.params or {}) if action else {}
+        screen_fp = _screen_fp(shot, inspect_slots.get("hierarchy_text") or "")
         guard_ctx = {
             "phase": cursor.phase,
             "cap_id": cap_id,
@@ -853,10 +886,13 @@ def _run_loop(
             "cursor": cur,
             "step_cursor": cursor,
             "last_tap": cursor.last_tap,
-            "screen_fp": _screen_fp(shot, inspect_slots.get("hierarchy_text") or ""),
+            "screen_fp": screen_fp,
             "guards": list(phase_cfg.get("guards") or []),
             "history_lines": list(history[-12:]),
             "tap_summary": str(params.get("selector_text") or thought or ""),
+            "menu": menu,
+            "accounts_brief": str(getattr(ctx, "accounts_brief", "") or ""),
+            "run_env_brief": task_env_brief,
         }
         params = apply_force_case_expectation(params, guard_ctx)
         pending_mutate = bool(decision.status == "done" and cap_id in MUTATE_CAPS and action)
@@ -938,6 +974,10 @@ def _run_loop(
                 skip_cap = "stuck_alternation"
             elif "访客入口" in skip_reason or "游客入口" in skip_reason:
                 skip_cap = "block_login_after_guest"
+            elif "【熔断" in skip_reason:
+                skip_cap = "action_fuse"
+            elif "check_run_env" in skip_reason:
+                skip_cap = "skip_repeat_check_run_env"
             if writer:
                 writer.append(
                     "guard/block",
@@ -953,10 +993,30 @@ def _run_loop(
                 summary=skip_reason,
                 thumb=thumb,
             )
+            stop_msg = None
+            if skip_cap == "action_fuse":
+                stop_msg = cursor.progress_gate.record_fuse_block(skip_reason)
             if writer:
                 writer.append(
                     "turn/end",
                     {"decision_cap": skip_cap, "decision_status": "skipped", "guard": True},
+                )
+                if stop_msg:
+                    writer.append(
+                        "progress/stop",
+                        {
+                            "reason": stop_msg,
+                            "fuse_block_streak": cursor.progress_gate.fuse_block_streak,
+                        },
+                    )
+            if stop_msg:
+                return _finish(
+                    emit,
+                    status="blocked",
+                    summary=stop_msg,
+                    steps=steps,
+                    t0=t0,
+                    pack=_pack,
                 )
             continue
 
@@ -1074,11 +1134,24 @@ def _run_loop(
         if status_val == "pass" and cap_id in MUTATE_CAPS and not str(cap_id).startswith(RECOVER_PREFIX):
             cursor.record_step_op()
 
-        if cap_id == "tap_element" and getattr(result, "status", None) == EventStatus.PASS:
+        post_fp = ""
+        if status_val == "pass" and fuseable_cap(cap_id):
             post_shot = proxy.observe("screenshot", force_fresh=True)
+            post_fp = _screen_fp(post_shot, inspect_slots.get("hierarchy_text") or "")
+            cursor.progress_gate.record_pass(
+                cap_id=cap_id,
+                params=params,
+                pre_fp=screen_fp,
+                post_fp=post_fp,
+            )
+
+        if cap_id == "tap_element" and getattr(result, "status", None) == EventStatus.PASS:
+            if not post_fp:
+                post_shot = proxy.observe("screenshot", force_fresh=True)
+                post_fp = _screen_fp(post_shot, inspect_slots.get("hierarchy_text") or "")
             cursor.remember_tap(
                 params,
-                screen_fp=_screen_fp(post_shot, inspect_slots.get("hierarchy_text") or ""),
+                screen_fp=post_fp,
                 selector_text=str(params.get("selector_text") or ""),
             )
             cursor.mark_guest_entry(summary)

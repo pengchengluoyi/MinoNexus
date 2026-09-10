@@ -146,6 +146,11 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
             "intent": {"type": "string", "description": "对齐登录态：看当前屏决定登入或退出"},
         },
     },
+    "check_run_env": {
+        "type": "object",
+        "properties": {},
+        "description": "确认本任务运行环境（env/platform/otp 通道），每任务仅需一次",
+    },
     "lease_account": {
         "type": "object",
         "properties": {

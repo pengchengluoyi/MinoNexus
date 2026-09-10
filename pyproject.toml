@@ -1,6 +1,6 @@
 [project]
 name = "mino-nexus"
-version = "0.1.6"
+version = "0.1.7"
 description = "MinoNexus — 服务端：与大模型交互、持有能力目录与数据、驱动执行循环"
 requires-python = ">=3.12"
 

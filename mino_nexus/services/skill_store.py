@@ -137,12 +137,15 @@ def upgrade_run_case_sop_guards() -> int:
                 continue
             want_guards = [str(g).strip() for g in (spec.get("guards") or []) if str(g).strip()]
             guards = [str(g).strip() for g in (phase.get("guards") or []) if str(g).strip()]
+            deprecated = {"skip_repeat_tap", "stuck_alternation"}
+            guards = [g for g in guards if g not in deprecated]
             for g in want_guards:
                 if g not in guards:
                     guards.append(g)
                     changed = True
             if guards != list(phase.get("guards") or []):
                 phase["guards"] = guards
+                changed = True
             want_kinds = [str(k).strip() for k in (spec.get("tool_kinds") or []) if str(k).strip()]
             kinds = [str(k).strip() for k in (phase.get("tool_kinds") or []) if str(k).strip()]
             for k in want_kinds:

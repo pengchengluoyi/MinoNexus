@@ -261,11 +261,17 @@ def ensure_case_scene(
     if raw is None and isinstance(case.get("scene"), dict):
         raw = case.get("scene")
     merged: dict[str, Any] = {**(ctx_scene or {}), **(raw or {})}
+    pre = str(case.get("precondition") or merged.get("precondition") or "").strip()
+    if pre and re.search(r"登录成功|已登录", pre):
+        if str(merged.get("required_session") or "any") in ("", "any"):
+            merged["required_session"] = "logged_in"
+        if str(merged.get("session_prep") or "skip") == "skip":
+            merged["session_prep"] = "relogin"
     if (
         str(merged.get("required_session") or "") in _REQUIRED
         and str(merged.get("session_prep") or "") in _SESSION_PREP
     ):
-        return clamp_case_scene(merged)
+        return clamp_case_scene({**merged, **({"precondition": pre} if pre else {})})
     if is_login_module_case(case, merged):
         return clamp_case_scene({
             **merged,
@@ -273,10 +279,34 @@ def ensure_case_scene(
             "required_session": "guest",
             "device_need": merged.get("device_need") or "app",
         })
-    pre = str(case.get("precondition") or merged.get("precondition") or "").strip()
     if merged:
         return clamp_case_scene({**merged, "precondition": pre} if pre else merged)
     return fallback_case_scene(precondition=pre)
+
+
+def compile_otp_prep_hint(
+    *,
+    accounts_brief: str = "",
+    session_block: str = "",
+    hierarchy_text: str = "",
+    has_get_otp: bool = False,
+) -> str:
+    """前置：已租号且处于验证码页时，引导 get_otp 而非盲填固定码。"""
+    brief = str(accounts_brief or "").strip()
+    if not brief or "未租" in brief or brief.startswith("（未租"):
+        return ""
+    blob = f"{session_block}\n{hierarchy_text}"
+    if not re.search(r"验证码|短信|OTP|sms", blob, re.I):
+        return ""
+    if has_get_otp:
+        return (
+            "【验证码】已租号且屏上为验证码/短信流程：优先 get_otp 取码填入，"
+            "禁止盲填知识库固定码；取码失败再 signal_ask_human。"
+        )
+    return (
+        "【验证码】已租号且屏上为验证码流程：勿重复 input_text 固定码，"
+        "请 signal_ask_human 获取验证码。"
+    )
 
 
 def format_required_session_brief(scene: Optional[dict[str, Any]] = None) -> str:

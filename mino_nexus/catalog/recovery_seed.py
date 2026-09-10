@@ -292,6 +292,50 @@ def upgrade_recovery_rules() -> int:
     return updated
 
 
+CHECK_RUN_ENV_DESCRIPTION = (
+    "确认本任务运行环境（env/platform/otp 通道），摘要形如 env=test; platform=android; otp_via=get_otp。"
+    "每任务仅需一次；history 已有 env= 则 signal_done。"
+)
+
+
+def upgrade_check_run_env_capability() -> int:
+    """补 prep 能力 check_run_env（Nexus 本地执行）。"""
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.catalog import CatalogEntry
+
+    updated = 0
+    with session_scope() as db:
+        row = (
+            db.query(CatalogEntry)
+            .filter(CatalogEntry.kind == "prep", CatalogEntry.id == "check_run_env")
+            .first()
+        )
+        if row:
+            if str(row.description or "").strip() != CHECK_RUN_ENV_DESCRIPTION:
+                row.description = CHECK_RUN_ENV_DESCRIPTION
+                updated = 1
+            return updated
+        db.add(
+            CatalogEntry(
+                kind="prep",
+                id="check_run_env",
+                display_name="确认运行环境",
+                description=CHECK_RUN_ENV_DESCRIPTION,
+                enabled=True,
+                lifecycle="active",
+                platforms_json=["android", "ios", "web"],
+                payload_json={},
+                sort_order=5,
+            )
+        )
+        updated = 1
+    if updated:
+        from mino_nexus.catalog.loader import force_reload
+
+        force_reload()
+    return updated
+
+
 def upgrade_account_capabilities() -> int:
     """更新 recovery 原子能力 lease_account 的菜单摘要（旧文案写「开跑前」易误导）。"""
     from mino_nexus.core.database import session_scope

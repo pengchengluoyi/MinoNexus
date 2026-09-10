@@ -57,6 +57,7 @@ LOCAL_CAPS = frozenset({
     "wait_screen_ready",
     "relogin",
     "lease_account",
+    "check_run_env",
 })
 
 
