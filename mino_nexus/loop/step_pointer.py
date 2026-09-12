@@ -94,8 +94,6 @@ def tap_summary_is_login_entry(summary: str) -> bool:
     text = str(summary or "")
     if _GUEST_ENTRY_RE.search(text):
         return False
-    if re.search(r"我的", text):
-        return True
     return bool(_LOGIN_ENTRY_RE.search(text))
 
 
@@ -303,6 +301,7 @@ class StepCursor:
         self.tap_epoch: int = 0
         self.step_ops: int = 0
         self.advise_recovery_counts: dict[str, int] = {}
+        self.recovery_fail_counts: dict[str, int] = {}
         self.login_session_hint: str = ""
         self.otp_prep_hint: str = ""
         self.progress_gate: ProgressGate = ProgressGate()
@@ -337,6 +336,12 @@ class StepCursor:
         rid = str(rule_id or "").strip()
         n = int(self.advise_recovery_counts.get(rid, 0)) + 1
         self.advise_recovery_counts[rid] = n
+        return n
+
+    def bump_recovery_fail(self, rule_id: str) -> int:
+        rid = str(rule_id or "").strip()
+        n = int(self.recovery_fail_counts.get(rid, 0)) + 1
+        self.recovery_fail_counts[rid] = n
         return n
 
     def mark_guest_entry(self, summary: str = "") -> None:

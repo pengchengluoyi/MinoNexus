@@ -216,6 +216,86 @@ def seed_recovery_rules() -> int:
     return added
 
 
+_SYSTEM_PERMISSION_WHILE_USING_DETERMINISTIC: dict[str, Any] = {
+    "when": "顶层窗口是系统权限控制器，屏上出现「仅在使用该应用时允许 / 仅在使用中允许 / While using the app」",
+    "mode": "deterministic",
+    "match": {
+        "evidence": {"app_foreground": "no"},
+        "screen_text_any": [
+            "允许",
+            "仅在使用该应用时允许",
+            "仅在使用中允许",
+            "使用时允许",
+            "While using the app",
+            "Allow while using the app",
+        ],
+        "top_window_pkg_prefix": [
+            "com.android.permissioncontroller",
+            "com.android.packageinstaller",
+            "com.miui.securitycenter",
+            "com.lbe.security.miui",
+        ],
+    },
+    "actions": [
+        {"capability": "tap_element", "params": {}, "target": {"text": "仅在使用中允许"}, "fallback_xy": []},
+        {"capability": "wait_ms", "params": {"ms": 350}, "target": {}, "fallback_xy": []},
+        {"capability": "tap_element", "params": {}, "target": {"text": "仅在使用该应用时允许"}, "fallback_xy": []},
+        {"capability": "wait_ms", "params": {"ms": 350}, "target": {}, "fallback_xy": []},
+        {"capability": "tap_element", "params": {}, "target": {"text": "使用时允许"}, "fallback_xy": []},
+        {"capability": "wait_ms", "params": {"ms": 350}, "target": {}, "fallback_xy": []},
+        {"capability": "tap_element", "params": {}, "target": {"text": "允许"}, "fallback_xy": []},
+        {"capability": "wait_ms", "params": {"ms": 350}, "target": {}, "fallback_xy": []},
+        {"capability": "tap_element", "params": {}, "target": {"text": "While using the app"}, "fallback_xy": []},
+        {"capability": "wait_ms", "params": {"ms": 400}, "target": {}, "fallback_xy": []},
+        {"capability": "tap_element", "params": {}, "target": {"text": "Allow while using the app"}, "fallback_xy": []},
+        {"capability": "wait_ms", "params": {"ms": 600}, "target": {}, "fallback_xy": []},
+    ],
+    "verify": {
+        "evidence": {"app_foreground": "yes"},
+        "screen_text_any": [],
+        "top_window_pkg_prefix": [],
+    },
+    "forbid": {"text_any": ["拒绝", "不允许", "禁止", "Deny"]},
+    "prompt_snippet": "",
+    "priority": 65,
+    "max_attempts": 2,
+    "evidence_notes": [
+        "MIUI/HyperOS 常见文案「仅在使用中允许」与 AOSP「仅在使用该应用时允许」并存，actions 须都覆盖。",
+        "连续失败后 agent 应改用 tap_element 直点或 signal_give_up（limit_recovery_retry 守卫）。",
+    ],
+}
+
+
+def upgrade_system_permission_recovery_rules() -> int:
+    """升级系统权限弹窗 deterministic 规则：补 MIUI 文案与 match 变体。"""
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.catalog import CatalogEntry
+
+    want = dict(_SYSTEM_PERMISSION_WHILE_USING_DETERMINISTIC)
+    updated = 0
+    with session_scope() as db:
+        row = (
+            db.query(CatalogEntry)
+            .filter(
+                CatalogEntry.kind == "recovery",
+                CatalogEntry.id == "system_permission_dialog_while_using_deterministic",
+            )
+            .first()
+        )
+        if not row:
+            return 0
+        cur = dict(row.payload_json or {})
+        if cur == want:
+            return 0
+        row.payload_json = want
+        updated = 1
+    if updated:
+        from mino_nexus.catalog.loader import force_reload
+
+        force_reload()
+    return updated
+
+
 def upgrade_recovery_rules() -> int:
     """已有库：screen_asleep v3 match + 补新 L0 规则 + read_device_data 摘要。"""
     from mino_nexus.core.database import session_scope
@@ -326,6 +406,56 @@ def upgrade_check_run_env_capability() -> int:
                 platforms_json=["android", "ios", "web"],
                 payload_json={},
                 sort_order=5,
+            )
+        )
+        updated = 1
+    if updated:
+        from mino_nexus.catalog.loader import force_reload
+
+        force_reload()
+    return updated
+
+
+FSM_NAVIGATE_DESCRIPTION = (
+    "按已发布 NavFSM 路线图规划最短路：传入当前屏与目标屏（state_id 或 Tab 文案如「首页」），"
+    "返回本步应走的 nav 边序列。跨 Tab 迷路时先恢复设备态，再逐步执行返回的边。"
+)
+
+_FSM_NAVIGATE_PAYLOAD: dict[str, Any] = {
+    "caller": "nexus_fsm_navigate",
+    "mode": "advise",
+}
+
+
+def upgrade_fsm_navigate_capability() -> int:
+    """recovery 扩展：FSM 导航路径规划（Nexus 本地，读 nav_fsm 表）。"""
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.catalog import CatalogEntry
+
+    updated = 0
+    with session_scope() as db:
+        row = (
+            db.query(CatalogEntry)
+            .filter(CatalogEntry.kind == "recovery", CatalogEntry.id == "fsm_navigate")
+            .first()
+        )
+        if row:
+            if str(row.description or "").strip() != FSM_NAVIGATE_DESCRIPTION:
+                row.description = FSM_NAVIGATE_DESCRIPTION
+                row.payload_json = dict(_FSM_NAVIGATE_PAYLOAD)
+                updated = 1
+            return updated
+        db.add(
+            CatalogEntry(
+                kind="recovery",
+                id="fsm_navigate",
+                display_name="FSM 导航路径",
+                description=FSM_NAVIGATE_DESCRIPTION,
+                enabled=True,
+                lifecycle="active",
+                platforms_json=["android", "ios"],
+                payload_json=dict(_FSM_NAVIGATE_PAYLOAD),
+                sort_order=30,
             )
         )
         updated = 1

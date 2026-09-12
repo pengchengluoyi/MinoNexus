@@ -338,7 +338,10 @@ def get_playbook(app: dict) -> dict[str, Any]:
 
 
 def save_playbook(app: dict, playbook: dict[str, Any]) -> dict[str, Any]:
-    cfg = save_automation_config(app, {"playbook": playbook if isinstance(playbook, dict) else {}})
+    """合并写入 playbook 字段，避免只改一个开关时抹掉其它键。"""
+    incoming = playbook if isinstance(playbook, dict) else {}
+    merged = {**get_playbook(app), **incoming}
+    cfg = save_automation_config(app, {"playbook": merged})
     return cfg.get("playbook") or {}
 
 

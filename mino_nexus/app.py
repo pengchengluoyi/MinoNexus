@@ -28,6 +28,7 @@ from mino_nexus.routers import (
     rCaseRunner,
     rDevice,
     rMe,
+    rNavFsm,
     rPacks,
     rProject,
     rProjectCases,
@@ -118,6 +119,7 @@ def create_app() -> FastAPI:
     app.include_router(rProject.router)
     app.include_router(rProjectCases.router)
     app.include_router(rAppAutomation.router)
+    app.include_router(rNavFsm.router)
     app.include_router(rTask.router)
 
     node_ws.register_routes(app)

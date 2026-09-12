@@ -33,6 +33,7 @@ from mino_nexus.core.log import SLog
 from mino_nexus.loop.agent_stream import emit_agent_event, make_thumb
 from mino_nexus.loop.session_log import SessionWriter, bind_writer, open_session
 from mino_nexus.loop.local_executors import dispatch_local, is_local_cap
+from mino_nexus.loop.nav_runtime import NavRuntime
 from mino_nexus.loop.recovery import apply_rule, ensure_target_app_foreground, recover_if_needed, RuleMatch
 from mino_nexus.loop.router_proxy import RouterProxy
 from mino_nexus.loop.skill_trace import envelope as skill_envelope
@@ -139,6 +140,7 @@ def _log_context_slots(
                 "hierarchy_text": inspect_slots.get("hierarchy_text") or "",
                 "knowledge_hint": inspect_slots.get("knowledge_hint") or "",
                 "knowledge_body": inspect_slots.get("knowledge_body") or "",
+                "nav_assist": inspect_slots.get("nav_assist") or "",
                 "history_block": _history(history),
                 "tool_kinds": list(phase_tool_kinds or []),
                 "menu_count": len(menu),
@@ -198,12 +200,15 @@ def run_case(
     if env_brief:
         ctx.env_label = env_brief
         ctx.env_fact = {"brief": env_brief, "confirmed": True}
+    run_type = "manual"
     try:
         from mino_nexus.services import run_store as _rs
 
         _doc = _rs.get(run_id)
         if _doc:
             ctx.env_profile = str(_doc.get("env_profile") or ctx.env_profile or "test")
+            # GuardGate stop 时 ask_human 还是 give_up 取决于它（设计稿 §11.5）
+            run_type = str(_doc.get("run_type") or "manual").lower()
     except Exception:
         pass
     proxy = RouterProxy(
@@ -292,6 +297,7 @@ def run_case(
                     writer=writer,
                     fork_state=fork_state,
                     run_env_brief=env_brief,
+                    run_type=run_type,
                 )
             return outcome
     except Exception as exc:
@@ -432,6 +438,7 @@ def _run_loop(
     writer: SessionWriter | None = None,
     fork_state: dict[str, Any] | None = None,
     run_env_brief: str = "",
+    run_type: str = "manual",
 ) -> dict[str, Any]:
     from mino_nexus.runtime.menu import available_menu_brief
     from mino_nexus.services.skill_store import get_skill
@@ -450,7 +457,32 @@ def _run_loop(
     )
     inspect_slots: dict[str, str] = {
         "session_block": "", "hierarchy_text": "", "knowledge_hint": "", "knowledge_body": "",
+        "nav_assist": "",
     }
+    # 开关关着 / 没配 NavFSM 时为 None，主循环下面三处调用全部跳过（loop/nav_runtime.py 顶部注释）
+    nav = NavRuntime.for_run(
+        ctx=ctx,
+        case=case,
+        run_type=run_type,
+        run_id=scout_run_id,
+        provider_id=provider_id,
+    )
+
+    def _leave(*, status: str, summary: str, pack=None):
+        if nav is not None:
+            nav.shutdown(writer=writer, status=status, summary=summary)
+        return _finish(emit, status=status, summary=summary, steps=steps, t0=t0, pack=pack or _pack)
+
+    def _leave_case(cursor):
+        result = _finish_case(emit, cursor=cursor, steps=steps, t0=t0, pack=_pack)
+        if nav is not None:
+            nav.shutdown(
+                writer=writer,
+                status=str(result.get("status") or ""),
+                summary=str(result.get("summary") or ""),
+            )
+        return result
+
     ran_case_start_inspection = False
     last_phase_seen = ""
     ctx.case_scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
@@ -515,11 +547,11 @@ def _run_loop(
 
     if not ctx.has_control_channel:
         summary = "没有可用设备通道。请确认 Scout 在线并已上报这台设备。"
-        return _finish(emit, status="fail", summary=summary, steps=steps, t0=t0, pack=_pack)
+        return _leave(status="fail", summary=summary)
 
     if not cursor.nodes:
         summary = "用例没有可执行的步骤。"
-        return _finish(emit, status="fail", summary=summary, steps=steps, t0=t0, pack=_pack)
+        return _leave(status="fail", summary=summary)
 
     reset_before_case(proxy, ctx, run_id=scout_run_id, case_seq=case_seq, case=case)
     cold_started = reset_native_app_before_case(
@@ -564,7 +596,7 @@ def _run_loop(
         if opened.get("fatal"):
             summary = opened.get("summary") or "打开页面失败"
             emit("observe", thought=summary, step=0, status="fail")
-            return _finish(emit, status="fail", summary=summary, steps=steps, t0=t0, pack=_pack)
+            return _leave(status="fail", summary=summary)
 
     from mino_nexus.loop.recovery import recover_if_needed
 
@@ -662,10 +694,10 @@ def _run_loop(
                 },
             )
         if cancel_check and cancel_check():
-            return _finish(emit, status="cancelled", summary="任务已取消", steps=steps, t0=t0, pack=_pack)
+            return _leave(status="cancelled", summary="任务已取消")
 
         if cursor.done:
-            return _finish_case(emit, cursor=cursor, steps=steps, t0=t0, pack=_pack)
+            return _leave_case(cursor)
 
         shot = proxy.observe("screenshot", force_fresh=True)
         thumb = make_thumb(shot.image_base64) if shot.has_image() else ""
@@ -685,7 +717,7 @@ def _run_loop(
             if "没有打开的页面" in summary:
                 summary = "浏览器还没有打开页面。请确认应用填了 Web 地址，或在前置里先打开网址。"
             emit("observe", thought=summary, step=seq, status="fail")
-            return _finish(emit, status="fail", summary=summary, steps=steps, t0=t0, pack=_pack)
+            return _leave(status="fail", summary=summary)
 
         if login_module_case and cursor.phase in ("prep", "do"):
             refresh_session_block(
@@ -734,9 +766,27 @@ def _run_loop(
             inspect_slots.get("session_block") or "",
         )
 
+        # hierarchy 通道 + NavFSM（设计稿 §10.0.2）。失败只降级，本 turn 照常走。
+        if nav is not None:
+            nav.observe(
+                proxy,
+                turn_id=seq,
+                slot_sink=inspect_slots,
+                session_block=inspect_slots.get("session_block") or "",
+                screenshot_turn_id=seq,
+                writer=writer,
+                screenshot=shot,
+            )
+            blocked = nav.preflight_block()
+            if blocked:
+                reason = str(blocked.get("reason") or "租号初态与用例要求不一致")
+                if writer:
+                    writer.append("turn/end", {"decision_cap": "nav_precondition", "decision_status": "blocked"})
+                return _leave(status="blocked", summary=reason)
+
         cur = cursor.current()
         if cur is None:
-            return _finish_case(emit, cursor=cursor, steps=steps, t0=t0, pack=_pack)
+            return _leave_case(cursor)
 
         phase_cfg = _phase_cfg()
         phase_tool_kinds = merge_phase_tool_kinds(phase_cfg, sop)
@@ -747,6 +797,11 @@ def _run_loop(
             platform=str(getattr(ctx, "platform", "") or ""),
             tool_kinds=phase_tool_kinds or None,
         )
+        if nav is None or not nav.active:
+            menu = [
+                c for c in menu
+                if str(c.get("id") or "") not in ("fsm_navigate", "recover_fsm_navigate")
+            ]
         if writer:
             writer.append(
                 "context/menu",
@@ -792,7 +847,7 @@ def _run_loop(
             history=history,
         )
         if cancel_check and cancel_check():
-            return _finish(emit, status="cancelled", summary="任务已取消", steps=steps, t0=t0, pack=_pack)
+            return _leave(status="cancelled", summary="任务已取消")
         if scripted_check:
             exp = enrich_assert_expectation(cur.instruction, cur.expected)
             assert_params: dict[str, Any] = {"expectation": exp}
@@ -825,6 +880,7 @@ def _run_loop(
                     hierarchy_text=inspect_slots.get("hierarchy_text") or "",
                     knowledge_hint=inspect_slots.get("knowledge_hint") or "",
                     knowledge_body=inspect_slots.get("knowledge_body") or "",
+                    nav_assist=inspect_slots.get("nav_assist") or "",
                 )
 
             decision = _decide()
@@ -848,6 +904,8 @@ def _run_loop(
             confidence=decision.confidence,
             **trace,
         )
+        if nav is not None and decision.screen_layout:
+            nav.attach_turn_layout(seq, decision.screen_layout)
 
         if decision.status in ("give_up", "ask_human", "skip"):
             if decision.status == "skip":
@@ -856,7 +914,7 @@ def _run_loop(
                 if writer:
                     writer.append("decision/skip", {"thought": thought, "phase": cursor.phase})
                     writer.append("turn/end", {"decision_cap": "signal_skip", "decision_status": st})
-                return _finish(emit, status=st, summary=summary, steps=steps, t0=t0, pack=_pack)
+                return _leave(status=st, summary=summary)
             st = "blocked" if decision.status == "ask_human" else "fail"
             summary = thought or ("需要人介入" if st == "blocked" else "模型放弃")
             if writer:
@@ -871,7 +929,7 @@ def _run_loop(
                     },
                 )
                 writer.append("turn/end", {"decision_cap": "", "decision_status": st})
-            return _finish(emit, status=st, summary=summary, steps=steps, t0=t0, pack=_pack)
+            return _leave(status=st, summary=summary)
 
         action = decision.action
         cap_id = str(action.capability_id) if action and action.capability_id else ""
@@ -920,7 +978,7 @@ def _run_loop(
                 emit("result", thought=thought, step=seq, capability_id="signal_done",
                      status="skipped", summary=f"步骤 {cur.n} 校验通过", thumb=thumb)
                 if not cursor.advance():
-                    return _finish_case(emit, cursor=cursor, steps=steps, t0=t0, pack=_pack)
+                    return _leave_case(cursor)
                 _log_turn_end(writer, cap="signal_done", status="skipped")
                 continue
             do_work_reason = run_guards(
@@ -957,7 +1015,47 @@ def _run_loop(
 
         if not cap_id:
             summary = thought or "模型没有给出下一步动作"
-            return _finish(emit, status="fail", summary=summary, steps=steps, t0=t0, pack=_pack)
+            return _leave(status="fail", summary=summary)
+
+        # GuardGate 与 ProgressGate 并行独立计数（§8.2），所以放在 phase guards 之前单独判。
+        if nav is not None:
+            verdict = nav.check(cap_id=cap_id, params=params)
+            if verdict.action == "stop":
+                st = "blocked" if verdict.stop_signal == "ask_human" else "fail"
+                if writer:
+                    writer.append(
+                        "nav/guard_stop",
+                        {
+                            "guard_id": verdict.guard_id,
+                            "strength": verdict.strength,
+                            "reason": verdict.reason,
+                            "run_type": run_type,
+                            "signal": verdict.stop_signal,
+                        },
+                    )
+                    writer.append("turn/end", {"decision_cap": "nav_guard_stop", "decision_status": st})
+                return _leave(status=st, summary=verdict.reason)
+            if verdict.action in ("steer", "block"):
+                nav_cap = f"nav_guard_{verdict.action}"
+                note = nav.steer_line(verdict) if verdict.action == "steer" else verdict.reason
+                if writer:
+                    writer.append(
+                        "nav/guard_block" if verdict.action == "block" else "nav/guard_steer",
+                        {
+                            "capability_id": cap_id,
+                            "guard_id": verdict.guard_id,
+                            "strength": verdict.strength,
+                            "ladder": verdict.ladder,
+                            "reason": verdict.reason,
+                        },
+                    )
+                rec(seq, capability_id=nav_cap, status="skipped", summary=note,
+                    thought=thought, thumb=thumb)
+                emit("result", thought=thought, step=seq, capability_id=nav_cap,
+                     status="skipped", summary=note, thumb=thumb)
+                # steer **不计** no_progress_streak（§8.2）—— 这里刻意不碰 cursor.progress_gate
+                _log_turn_end(writer, cap=nav_cap, status="skipped", guard_id=verdict.guard_id)
+                continue
 
         skip_reason = run_guards(list(phase_cfg.get("guards") or []), guard_ctx)
         if skip_reason:
@@ -968,8 +1066,8 @@ def _run_loop(
                 skip_cap = "skip_repeat_read_device"
             elif "缺少 script_id" in skip_reason or "exec_script" in skip_reason:
                 skip_cap = "exec_script_params"
-            elif "同类 advise" in skip_reason:
-                skip_cap = "limit_advise_recovery"
+            elif "同类恢复" in skip_reason or "同类 advise" in skip_reason:
+                skip_cap = "limit_recovery_retry"
             elif "重复切换" in skip_reason or "⇄" in skip_reason:
                 skip_cap = "stuck_alternation"
             elif "访客入口" in skip_reason or "游客入口" in skip_reason:
@@ -1010,14 +1108,7 @@ def _run_loop(
                         },
                     )
             if stop_msg:
-                return _finish(
-                    emit,
-                    status="blocked",
-                    summary=stop_msg,
-                    steps=steps,
-                    t0=t0,
-                    pack=_pack,
-                )
+                return _leave(status="blocked", summary=stop_msg)
             continue
 
         emit(
@@ -1056,10 +1147,16 @@ def _run_loop(
             elapsed_ms = 0
             error = result.error or ""
             executor_used = "recovery"
-            if str(getattr(result, "mode", "") or "") == "advise":
-                rid = str(getattr(result, "rule_id", "") or "").strip()
-                if rid:
+            rid = str(getattr(result, "rule_id", "") or "").strip()
+            if not rid and cap_id.startswith(RECOVER_PREFIX):
+                rid = cap_id[len(RECOVER_PREFIX):]
+            if rid:
+                if result.recovered:
+                    pass
+                elif str(getattr(result, "mode", "") or "") == "advise":
                     cursor.bump_advise_recovery(rid)
+                else:
+                    cursor.bump_recovery_fail(rid)
         else:
             status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
             summary = result.summary or ""
@@ -1118,12 +1215,19 @@ def _run_loop(
                         "executor_used": executor_used,
                     },
                 )
-            return _finish(emit, status="blocked", summary=error or summary or "被阻塞", steps=steps, t0=t0, pack=_pack)
+            return _leave(status="blocked", summary=error or summary or "被阻塞")
         if hasattr(result, "status") and result.status in (EventStatus.FAIL, EventStatus.DECLINED):
             SLog.w(TAG, f"[{scout_run_id[:8]}] step {seq} {event.capability_id} {status_val}: {error or summary}")
             if in_check and cap_id == "assert_visual":
                 fail_summary = f"步骤 {cur.n} 预期未成立：{cur.expected}。{summary}".strip()
-                return _finish(emit, status="fail", summary=fail_summary, steps=steps, t0=t0, pack=_pack)
+                return _leave(status="fail", summary=fail_summary)
+
+        if nav is not None:
+            nav.after_execute(cap_id=cap_id, params=params, status=status_val, writer=writer)
+            if cap_id == "assert_visual":
+                layout = dict((getattr(result, "vlm_meta", None) or {}).get("screen_layout") or {})
+                if layout:
+                    nav.attach_turn_layout(seq, layout)
 
         if (
             status_val == "pass"
@@ -1159,7 +1263,7 @@ def _run_loop(
         if cap_id == "assert_visual" and status_val == "pass":
             cursor.mark_checked()
             if not cursor.advance():
-                return _finish_case(emit, cursor=cursor, steps=steps, t0=t0, pack=_pack)
+                return _leave_case(cursor)
             _log_turn_end(writer, cap=cap_id, status=status_val)
             continue
 
@@ -1168,7 +1272,7 @@ def _run_loop(
                 cursor.finish_prep()
             elif in_check:
                 if cursor.step_checked and not cursor.advance():
-                    return _finish_case(emit, cursor=cursor, steps=steps, t0=t0, pack=_pack)
+                    return _leave_case(cursor)
             else:
                 cursor.enter_check()
             _log_turn_end(writer, cap=turn_decision_cap or cap_id, status=turn_decision_status or status_val)
@@ -1177,7 +1281,7 @@ def _run_loop(
         _log_turn_end(writer, cap=cap_id, status=status_val)
 
     summary = f"超过 {max_steps} 步仍未完成"
-    return _finish(emit, status="fail", summary=summary, steps=steps, t0=t0, pack=_pack)
+    return _leave(status="fail", summary=summary)
 
 
 def _finish_case(emit, *, cursor: StepCursor, steps: list, t0: float, pack=None) -> dict[str, Any]:

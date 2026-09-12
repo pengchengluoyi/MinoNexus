@@ -160,6 +160,28 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "fsm_navigate": {
+        "type": "object",
+        "properties": {
+            "from_state": {
+                "type": "string",
+                "description": "当前屏 state_id 或 Tab 文案（如「首页」）",
+            },
+            "to_state": {
+                "type": "string",
+                "description": "目标屏 state_id 或 Tab 文案",
+            },
+            "current_state": {
+                "type": "string",
+                "description": "同 from_state",
+            },
+            "expected_state": {
+                "type": "string",
+                "description": "同 to_state",
+            },
+        },
+        "description": "按 NavFSM 路线图规划最短路（底栏 Tab 切换等）",
+    },
 }
 
 SIGNAL_DONE = "signal_done"

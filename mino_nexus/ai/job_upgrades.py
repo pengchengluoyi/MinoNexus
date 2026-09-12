@@ -7,6 +7,26 @@ from typing import Any
 
 AGENT_DECIDE_V5_MARKER = "prompt_version >= 5（批跑 recovery / prep 收工）"
 AGENT_DECIDE_V6_MARKER = "prompt_version >= 6（signal_skip / 迷路重启）"
+AGENT_DECIDE_V7_MARKER = "prompt_version >= 7（NavFSM RouteAssist / 导航守卫）"
+AGENT_DECIDE_V8_MARKER = "prompt_version >= 8（screen_layout 布局线框）"
+ASSERT_VISION_V2_MARKER = "prompt_version >= 2（screen_layout 布局线框）"
+NAV_ASSIST_SLOT = "nav_assist"
+
+_SCREEN_LAYOUT_JSON_HINT = """
+### screen_layout（与 action 同轮输出，必填对象）
+
+除决策 JSON 外，**必须**附带 `screen_layout`，描述当前屏**内容区**布局（顶/底系统栏与 Tab 栏不要画进 regions）：
+- 坐标一律 **0~1 归一化**（相对整屏宽高），与 hierarchy 并行、互不替代。
+- `chrome.top` / `chrome.bottom`：内容区上下边界（0~1）。
+- `regions[]`：每项 `{"id":"r1","label":"简短语义","role":"banner|feed|dialog|form|...","clickable":true,"rect":{"x":0.05,"y":0.12,"w":0.9,"h":0.08}}`
+
+```json
+"screen_layout": {
+  "chrome": {"top": 0.06, "bottom": 0.88},
+  "regions": [{"id":"r1","label":"引流条","role":"banner","clickable":true,"rect":{"x":0,"y":0.08,"w":1,"h":0.1}}]
+}
+```
+"""
 
 
 def _patch_agent_decide_v5(text: str) -> str:
@@ -225,5 +245,325 @@ def upgrade_agent_decide_to_v6() -> int:
             db_row.user_blocks_json = list(merged.get("user_blocks") or [])
             db_row.prompt_version = 6
             db_row.overrides_json = dict(merged.get("overrides_json") or {})
+        db.flush()
+    return 1
+
+
+def _patch_agent_decide_v7(text: str) -> str:
+    """V6 → V7：告诉模型怎么用【导航 assist】。
+
+    只加「怎么读这段」的规则，**不写任何被测 App 的文案** —— assist 正文全部由
+    `nav_compiler` 按 DB 配置现编（设计稿 §0：代码中不得硬编码 App 内容）。
+    """
+    out = str(text or "")
+
+    nav_block = """### 导航 assist（有【导航 assist】段时必守）
+
+- 这段来自按本应用校准过的导航图，比你从截图里的猜测更可靠。**有它就照它走。**
+- 【建议边】给的是下一步转移。没有特殊理由就执行它列出的动作。
+- 【本步允许】是本步的点击白名单：要点东西就**从里面选**。点别的元素守卫会拦（恢复动作、signal_* 不受此限）。
+- 【禁止】里的动作**不要试**。被拦一次会 steer，两次会 block，三次整案停 —— 换路径，不要重试。
+- 【锚点】说目标不在当前屏时：先按它说的方向滑动，再执行建议边。**不要**跳过滑动直接点。
+- 置信度低（loc 后的括号里数值小）时只用恢复类动作回到已知界面，不要盲点。
+- 没有【导航 assist】段就照常按截图与步骤决策 —— 这段缺席是正常的（多数应用还没配导航图）。
+
+"""
+    anchor = "### 前台不是被测 App"
+    if anchor in out and "### 导航 assist" not in out:
+        out = out.replace(anchor, nav_block + anchor, 1)
+    elif "### 导航 assist" not in out:
+        out = out.rstrip() + "\n\n" + nav_block
+
+    if AGENT_DECIDE_V7_MARKER not in out:
+        out = out.rstrip() + f"\n\n<!-- {AGENT_DECIDE_V7_MARKER} -->\n"
+    return out
+
+
+def _ensure_nav_assist_slot(merged: dict[str, Any]) -> None:
+    """声明槽 + 挂用户块。`_validate_job` 会拒绝引用未声明槽的块，所以两件事必须一起做。"""
+    slots = [dict(s) for s in (merged.get("slots") or []) if isinstance(s, dict)]
+    if not any(str(s.get("name") or "") == NAV_ASSIST_SLOT for s in slots):
+        slots.append({"name": NAV_ASSIST_SLOT, "kind": "text", "desc": "NavFSM RouteAssist（可空）"})
+    merged["slots"] = slots
+
+    blocks = [dict(b) for b in (merged.get("user_blocks") or []) if isinstance(b, dict)]
+    if not any(str(b.get("slot") or "") == NAV_ASSIST_SLOT for b in blocks):
+        blocks.append(
+            {
+                "id": "nav_assist",
+                "slot": NAV_ASSIST_SLOT,
+                "heading": "==== 导航 assist（按本应用导航图编译，优先于你的猜测）====",
+                # 没配导航图 / 开关关着时槽为空，整块跳过，prompt 一个字都不多
+                "skip_if_empty": True,
+                "enabled": True,
+                "max_chars": 2400,
+            }
+        )
+    merged["user_blocks"] = blocks
+
+
+def upgrade_agent_decide_to_v7() -> int:
+    """已有 agent-decide 且 prompt_version < 7 时，加 nav_assist 槽与用法说明。"""
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    ver = int(row.get("prompt_version") or 1)
+    if ver >= 7:
+        return 0
+    if ver < 6:
+        upgrade_agent_decide_to_v6()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_agent_decide_v7(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    _ensure_nav_assist_slot(merged)
+
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 6),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": f"v{row.get('prompt_version')} before program upgrade to v7",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 7
+    _set_revisions(merged, revisions)
+
+    _validate_job(merged)
+    _smoke_render(merged)
+
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+    from mino_nexus.services.job_store import _to_row
+
+    with session_scope() as db:
+        db_row = db.query(LlmJob).filter(LlmJob.id == "agent-decide").first()
+        if db_row is None:
+            db.add(_to_row({**merged, "id": "agent-decide", "builtin": True}))
+        else:
+            db_row.system_blocks_json = list(merged.get("system_blocks") or [])
+            db_row.user_blocks_json = list(merged.get("user_blocks") or [])
+            db_row.slots_json = list(merged.get("slots") or [])
+            db_row.prompt_version = 7
+            db_row.overrides_json = dict(merged.get("overrides_json") or {})
+        db.flush()
+    return 1
+
+
+def _patch_agent_decide_v8(text: str) -> str:
+    out = str(text or "")
+    if "### screen_layout" in out:
+        return out
+    anchor = AGENT_DECIDE_V7_MARKER
+    if anchor in out:
+        out = out.replace(anchor, _SCREEN_LAYOUT_JSON_HINT.strip() + "\n\n<!-- " + anchor + " -->\n")
+    else:
+        out = out.rstrip() + "\n\n" + _SCREEN_LAYOUT_JSON_HINT.strip() + f"\n\n<!-- {AGENT_DECIDE_V8_MARKER} -->\n"
+    return out
+
+
+def upgrade_agent_decide_to_v8() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 8:
+        return 0
+    if int(row.get("prompt_version") or 1) < 7:
+        upgrade_agent_decide_to_v7()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_agent_decide_v8(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 7),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": f"v{row.get('prompt_version')} before program upgrade to v8",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 8
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+    from mino_nexus.services.job_store import _to_row
+
+    with session_scope() as db:
+        db_row = db.query(LlmJob).filter(LlmJob.id == "agent-decide").first()
+        if db_row is None:
+            db.add(_to_row({**merged, "id": "agent-decide", "builtin": True}))
+        else:
+            db_row.system_blocks_json = list(merged.get("system_blocks") or [])
+            db_row.prompt_version = 8
+        db.flush()
+    return 1
+
+
+def _patch_assert_vision_v2(text: str) -> str:
+    out = str(text or "")
+    if "### screen_layout" in out:
+        return out
+    return out.rstrip() + "\n\n" + _SCREEN_LAYOUT_JSON_HINT.strip() + f"\n\n<!-- {ASSERT_VISION_V2_MARKER} -->\n"
+
+
+def upgrade_assert_vision_to_v2() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("assert-vision")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 2:
+        return 0
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_assert_vision_v2(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "before program upgrade to v2 screen_layout",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 2
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+    from mino_nexus.services.job_store import _to_row
+
+    with session_scope() as db:
+        db_row = db.query(LlmJob).filter(LlmJob.id == "assert-vision").first()
+        if db_row is None:
+            db.add(_to_row({**merged, "id": "assert-vision", "builtin": True}))
+        else:
+            db_row.system_blocks_json = list(merged.get("system_blocks") or [])
+            db_row.prompt_version = 2
+        db.flush()
+    return 1
+
+
+def _repair_nav_widget_state_slots(row: dict[str, Any]) -> int:
+    """历史 seed 误用 slots[].id，启动时归一成 name。"""
+    fixed: list[dict[str, Any]] = []
+    changed = False
+    for spec in row.get("slots") or []:
+        if not isinstance(spec, dict):
+            continue
+        name = str(spec.get("name") or spec.get("id") or "").strip()
+        if not name:
+            continue
+        entry = {"name": name, "kind": str(spec.get("kind") or "text")}
+        if spec.get("name") != name or spec.get("id"):
+            changed = True
+        fixed.append(entry)
+    if not changed:
+        return 0
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+    from mino_nexus.services.job_store import _validate_job
+
+    row["slots"] = fixed
+    _validate_job(row)
+    with session_scope() as db:
+        db_row = db.query(LlmJob).filter(LlmJob.id == "nav-widget-state").first()
+        if db_row is None:
+            return 0
+        db_row.slots_json = fixed
+        db.flush()
+    return 1
+
+
+def ensure_nav_widget_state_job() -> int:
+    """可选 job：hierarchy 判不出控件态时 VLM 兜底（设计稿 §2.2）。缺了不报错，只是兜底不开。"""
+    from mino_nexus.services.job_store import get_job, _to_row
+
+    jid = "nav-widget-state"
+    existing = get_job(jid)
+    if existing:
+        return _repair_nav_widget_state_slots(existing)
+    spec = {
+        "id": jid,
+        "label": "Nav 控件态判定",
+        "summary": "单控件 VLM 兜底：空心/实心等，非整屏分类",
+        "engine": "text_chat",
+        "enabled": True,
+        "builtin": True,
+        "prompt_version": 1,
+        "output_schema": "json",
+        "slots": [
+            {"name": "widget", "kind": "text"},
+            {"name": "candidate_states", "kind": "text"},
+            {"name": "hint", "kind": "text"},
+            {"name": "image_base64", "kind": "image"},
+            {"name": "image_mime", "kind": "text"},
+        ],
+        "system_blocks": [
+            {
+                "id": "main",
+                "text": (
+                    "你是 UI 控件态判定器。只看截图里指定控件处于哪个态。\n"
+                    "候选态：{{candidate_states}}\n"
+                    "控件：{{widget}}\n"
+                    "{{hint}}\n"
+                    "只输出 JSON：{\"state\":\"候选之一\",\"confidence\":0-1,\"reason\":\"\"}"
+                ),
+            }
+        ],
+        "user_blocks": [{"id": "img", "kind": "image", "slot": "image_base64", "mime_slot": "image_mime"}],
+        "call": {"temperature": 0.0, "max_tokens": 200, "timeout_sec": 30, "json_mode": True},
+        "flags": ["case_execution_use"],
+    }
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+
+    with session_scope() as db:
+        if db.query(LlmJob).filter(LlmJob.id == jid).first():
+            return 0
+        db.add(_to_row(spec))
         db.flush()
     return 1

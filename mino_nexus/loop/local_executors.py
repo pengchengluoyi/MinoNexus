@@ -16,7 +16,16 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _result(event: PlanEvent, *, status: EventStatus, summary: str, elapsed_ms: int = 0, error: str = "", executor: str = "internal") -> EventResult:
+def _result(
+    event: PlanEvent,
+    *,
+    status: EventStatus,
+    summary: str,
+    elapsed_ms: int = 0,
+    error: str = "",
+    executor: str = "internal",
+    vlm_meta: dict[str, Any] | None = None,
+) -> EventResult:
     return EventResult(
         seq=event.seq,
         capability_id=event.capability_id,
@@ -28,6 +37,7 @@ def _result(event: PlanEvent, *, status: EventStatus, summary: str, elapsed_ms: 
         error=error,
         ai_reasoning=event.ai_reasoning or "",
         plan_event=event.model_dump(exclude_none=True),
+        vlm_meta=dict(vlm_meta or {}),
         started_at=_now(),
         finished_at=_now(),
     )
@@ -43,6 +53,16 @@ def dispatch_local(
 ) -> EventResult:
     cap = event.capability_id
     t0 = time.time()
+    if cap == "signal_nav_calib_step":
+        key = str((event.params or {}).get("step_key") or "").strip()
+        summary = f"校准里程碑 {key}" if key else "校准里程碑（未给 step_key）"
+        return _result(
+            event,
+            status=EventStatus.PASS if key else EventStatus.FAIL,
+            summary=summary,
+            error="" if key else "missing step_key",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
     if cap == "wait_ms":
         ms = int((event.params or {}).get("duration_ms") or (event.params or {}).get("ms") or 500)
         ms = max(0, min(ms, 60_000))
@@ -95,6 +115,9 @@ def dispatch_local(
         summary = (res.evidence or res.ai_reasoning or "").strip() or (
             "预期成立" if ok else "预期未成立"
         )
+        vlm_meta: dict[str, Any] = {}
+        if res.screen_layout:
+            vlm_meta["screen_layout"] = res.screen_layout
         return _result(
             event,
             status=EventStatus.PASS if ok else EventStatus.FAIL,
@@ -102,6 +125,7 @@ def dispatch_local(
             error="" if ok else summary,
             executor="vlm",
             elapsed_ms=int((time.time() - t0) * 1000),
+            vlm_meta=vlm_meta,
         )
     if cap == "relogin":
         from mino_nexus.ai.planner import inspect_session
@@ -160,6 +184,8 @@ def dispatch_local(
         )
     if cap == "check_run_env":
         return _check_run_env(event, ctx=ctx, t0=t0)
+    if cap in ("fsm_navigate", "recover_fsm_navigate"):
+        return _fsm_navigate(event, ctx=ctx, t0=t0)
     if cap == "lease_account":
         params = dict(event.params or {})
         row, err = lease_for_context(
@@ -197,6 +223,71 @@ def dispatch_local(
         status=EventStatus.DECLINED,
         summary=f"未知本地能力 {cap}",
         error=f"cap={cap} 标为本地但没有 executor",
+    )
+
+
+def _fsm_navigate(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
+    """recovery 扩展：当前屏 → 目标屏，返回 NavFSM 最短路。"""
+    from mino_nexus.services import nav_route
+
+    params = dict(event.params or {})
+    from_state = str(
+        params.get("from_state")
+        or params.get("current_state")
+        or params.get("from")
+        or ""
+    ).strip()
+    to_state = str(
+        params.get("to_state")
+        or params.get("expected_state")
+        or params.get("goal_state")
+        or params.get("to")
+        or ""
+    ).strip()
+    app_id = str(params.get("app_id") or getattr(ctx, "app_id", "") or "").strip()
+    if not app_id:
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary="缺少 app_id，无法查路线图",
+            error="missing app_id",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    if not from_state or not to_state:
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary="需要 from_state/current_state 与 to_state/expected_state",
+            error="missing from_state or to_state",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    plan = nav_route.plan_route_for_app(app_id, from_state=from_state, to_state=to_state)
+    if not plan.get("ok"):
+        err = str(plan.get("error") or "无路径")
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary=err,
+            error=err,
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    hops = int(plan.get("hop_count") or 0)
+    summary = str(plan.get("summary") or "")
+    if hops == 0:
+        msg = f"已在目标屏 {plan.get('to_state')}"
+    else:
+        first = (plan.get("steps") or [{}])[0]
+        msg = (
+            f"规划 {hops} 步：{summary}；本步执行 {first.get('edge_id') or ''} "
+            f"→ {first.get('to') or ''}"
+        )
+    return _result(
+        event,
+        status=EventStatus.PASS,
+        summary=msg,
+        executor="internal",
+        elapsed_ms=int((time.time() - t0) * 1000),
+        error="",
     )
 
 

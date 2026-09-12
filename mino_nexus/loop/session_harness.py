@@ -137,6 +137,27 @@ def project_eval(
             c = str(cap or "").strip()
             if c:
                 checks[f"menu_has_{c}"] = bool(metrics["menu_caps"].get(c))
+        # §9 的门槛也能当断言用；指标为 None（没样本）时记 None 而不是 False —— 没测过不算不通过
+        nav_metrics = metrics.get("nav") or {}
+        for key, cmp_fn in (
+            ("min_edge_success_rate", lambda got, want: got >= want),
+            ("max_guard_fp", lambda got, want: got <= want),
+            ("max_guard_fn", lambda got, want: got <= want),
+        ):
+            if key not in exp:
+                continue
+            field = {"min_edge_success_rate": "edge_success_rate",
+                     "max_guard_fp": "guard_fp", "max_guard_fn": "guard_fn"}[key]
+            got = nav_metrics.get(field)
+            try:
+                checks[key] = None if got is None else cmp_fn(float(got), float(exp[key]))
+            except (TypeError, ValueError):
+                checks[key] = None
+
+    # NavFSM 指标（设计稿 §9）。没跑导航图的 session 这里全是 0 / None，不影响原有字段。
+    from mino_nexus.services.nav_telemetry import aggregate_session
+
+    metrics["nav"] = aggregate_session(sid, events=events)
 
     metrics["expect"] = exp
     metrics["checks"] = checks

@@ -88,7 +88,14 @@ def get_job(job_id: str) -> dict[str, Any] | None:
 
 
 def _slot_names(row: dict[str, Any]) -> set[str]:
-    return {str(s.get("name") or "") for s in (row.get("slots") or []) if isinstance(s, dict)}
+    out: set[str] = set()
+    for s in row.get("slots") or []:
+        if not isinstance(s, dict):
+            continue
+        key = str(s.get("name") or s.get("id") or "").strip()
+        if key:
+            out.add(key)
+    return out
 
 
 def _strip_when_blocks(row: dict[str, Any]) -> bool:
@@ -163,7 +170,7 @@ def _fake_slots(row: dict[str, Any]) -> dict[str, str]:
     for spec in row.get("slots") or []:
         if not isinstance(spec, dict):
             continue
-        name = str(spec.get("name") or "")
+        name = str(spec.get("name") or spec.get("id") or "")
         kind = str(spec.get("kind") or "text")
         if kind == "json":
             out[name] = "{}"

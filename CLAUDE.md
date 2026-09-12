@@ -78,10 +78,12 @@ mino_nexus/
 ├── routers/              HTTP 入口，沿用上游 r* 命名 + deps.py
 ├── websocket/            observers.py（UI /ws）· node.py（Scout /node）
 ├── loop/                 agent_loop · case_runner · router_proxy · local_executors
+│                         hierarchy_slots（UI 层级）· nav_runtime（NavFSM 编排）· guard_gate
 ├── ai/                   planner · prompt_render · job_store · llm_client · …
 ├── catalog/              能力目录 loader / registry（读 catalog_entries）
 ├── runtime/              run_context · menu · session_gate
 └── services/             业务（项目 / 设备 / 跑批 / 设置 / QA / 集成插件）
+                          nav_fsm* / nav_localize / nav_compiler / nav_telemetry（导航图，见 docs/NAVIGATION_ATLAS.md）
 ```
 
 命名沿用上游：router 用 `r*`，websocket handler 用 `w*`。
@@ -110,6 +112,7 @@ mino_nexus/
 | 派单 / 设备归属 / 多节点 | [docs/NODE_REGISTRY.md](docs/NODE_REGISTRY.md) |
 | 动数据模型 | [docs/DATA_MODEL.md](docs/DATA_MODEL.md) |
 | 打通 Console / Studio | [docs/HTTP.md](docs/HTTP.md) |
+| 动导航图 / 守卫 / hierarchy | [docs/NAVIGATION_ATLAS.md](docs/NAVIGATION_ATLAS.md)。配置在 `nav_fsm*` 表，**代码里不得硬编码被测 App 的文案或包名** |
 | 从上游搬代码 | [docs/MIGRATION.md](docs/MIGRATION.md) |
 
 ---

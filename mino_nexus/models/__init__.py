@@ -7,6 +7,7 @@ from mino_nexus.models.dispatch import DispatchCall
 from mino_nexus.models.knowledge import KnowledgeEntry
 from mino_nexus.models.llm_job import LlmJob
 from mino_nexus.models.nav import StudioNav
+from mino_nexus.models.nav_fsm import NavFsm, NavFsmEdge, NavFsmState
 from mino_nexus.models.node import Node, Studio
 from mino_nexus.models.plugin import PluginPolicy, UserPluginSecret
 from mino_nexus.models.project import App, Project
@@ -33,6 +34,9 @@ __all__ = [
     "InstallToken",
     "MCaseBaseline",
     "MCaseRunTrace",
+    "NavFsm",
+    "NavFsmEdge",
+    "NavFsmState",
     "Node",
     "PluginPolicy",
     "Project",

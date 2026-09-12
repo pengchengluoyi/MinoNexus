@@ -40,6 +40,7 @@ UI **只**打 MinoNexus。没有公网域名时用内网名 `mino.local`：Nexus
 | `/runtime/nodes/install-token` | 403 | 允许 |
 | `/runtime/nodes/{id}/command` | 403 | 允许 |
 | `/project` `/app-automation` `/task` 写 | 403 | 允许 |
+| `/nav-fsm` 写 | 403 | 允许 |
 | `/case-runner` 写 | 403 | 允许 |
 
 ## Scout 安装
@@ -135,3 +136,51 @@ Console **Jobs** 页读写下列 API。Studio 写入口经 `client_gate` 拦截�
 ```bash
 pip install -e .    # 或 uv sync
 ```
+
+## NavFSM（导航图配置与校准证据）
+
+配置真源是 `mino.db` 的 `nav_fsm` / `nav_fsm_states` / `nav_fsm_edges`；校准证据是
+`{data_dir}/nav/calibration/{app_id}/{calibration_id}/` 下的文件。方案见
+[NAVIGATION_ATLAS.md](NAVIGATION_ATLAS.md)。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/nav-fsm` | 列出已配导航图的应用（摘要） |
+| `GET` | `/nav-fsm/{app_id}` | 取整份配置。额外回 `runtime_ready` / `runtime_reason` —— **草稿里带 `__CALIBRATE__` 不是错误**，那是等着校准后补录的部分，编辑口照常返回 |
+| `PUT` | `/nav-fsm/{app_id}` | 整份替换。校验不过回 **422**（残留 `__CALIBRATE__`、边引用了不存在的 state、`project_id` 与 `apps` 不一致） |
+| `DELETE` | `/nav-fsm/{app_id}` | 删一份（可带 `?version=`） |
+| `GET` | `/nav-fsm/{app_id}/captures` | v2.5：被动采集 session 列表 |
+| `GET` | `/nav-fsm/{app_id}/captures/{session_id}` | 该 session 的 turn 索引 |
+| `GET` | `/nav-fsm/{app_id}/captures/{session_id}/turn/{turn_id}` | 单 turn hierarchy 样本 |
+| `GET` | `/nav-fsm/{app_id}/calibration-report` | 采集报告 + 待审候选数 |
+| `GET` | `/nav-fsm/{app_id}/candidates` | 当前候选包 |
+| `POST` | `/nav-fsm/{app_id}/candidates/compile` | 从采集生成候选（不进正式库） |
+| `POST` | `/nav-fsm/{app_id}/candidates/{id}/review` | 接受/拒绝候选 |
+| `POST` | `/nav-fsm/{app_id}/candidates/apply-to-draft` | 已接受候选合并进 draft |
+| `POST` | `/nav-fsm/{app_id}/feedback` | 失败点反馈 → 定点候选 |
+| `GET` | `/nav-fsm/{app_id}/calibration` | 【遗留】walkthrough 批次列表 |
+| `GET` | `/nav-fsm/{app_id}/calibration/{calibration_id}` | manifest + walkthrough |
+| `GET` | `/nav-fsm/{app_id}/calibration/{calibration_id}/step/{index}` | 单步 hierarchy 片段（正文可能很大，按需取） |
+| `GET` | `/nav-fsm/{app_id}/template` | 产待校准骨架 JSON（**不落库**，可含 `__CALIBRATE__`） |
+| `GET/PUT/DELETE` | `/nav-fsm/{app_id}/draft` | 半成品草稿（落在 `data_dir`，允许占位符） |
+| `POST` | `/nav-fsm/{app_id}/draft/promote` | 草稿校验通过后写进 `nav_fsm*` 表 |
+| `POST` | `/nav-fsm/{app_id}/calibration` | 【遗留】手动 walkthrough 批次 |
+| `POST` | `/nav-fsm/{app_id}/calibration/{id}/step` | 【遗留】记一步 |
+| `POST` | `/nav-fsm/{app_id}/calibration/{id}/finish` | 【遗留】收工 |
+| `GET` | `/nav-fsm/{app_id}/metrics` | §9 指标（`guard_fp`/`guard_fn` 为 null 表示没样本） |
+| `GET` | `/nav-fsm/{app_id}/reviews` | 待人工标注的 guard 事件 |
+| `POST` | `/nav-fsm/{app_id}/annotate` | QA 标注 fp/fn（body：`session_id`, `target_seq`, `verdict`） |
+
+**Playbook 开关**（`apps` automation config）：
+
+| 键 | 说明 |
+|---|---|
+| `observe_hierarchy` | 每 turn 拉 hierarchy **并被动采集**（env `MINO_OBSERVE_HIERARCHY=1`） |
+| `nav_calibration` | 【遗留】walkthrough 高密度模式，新流程不必开 |
+
+CLI 等价：`mino-nexus nav start|step|finish|draft-save|draft-promote|metrics …`
+
+**runtime 与编辑口的门禁不同**：`GET` 给的是可编辑的原样内容，跑批走的是
+`nav_fsm_store.load()` —— 后者还会校验校准账号与本次租号一致（否则 hierarchy 是别的
+账号采的，`resource-id` 与控件态都可能不同）。所以「Studio 里能打开」不等于「跑批能用」，
+看 `runtime_ready`。

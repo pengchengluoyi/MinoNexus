@@ -28,6 +28,7 @@ def assemble_agent_decide_slots(
     knowledge_hint: str = "",
     knowledge_body: str = "",
     session_block: str = "",
+    nav_assist: str = "",
     accounts_brief: str = "",
     image_base64: str = "",
     image_mime: str = "image/png",
@@ -53,6 +54,8 @@ def assemble_agent_decide_slots(
         "knowledge_hint": (knowledge_hint or "").strip(),
         "knowledge_body": (knowledge_body or "").strip(),
         "hierarchy_text": (hierarchy_text or "").strip(),
+        # NavFSM 的 RouteAssist。空串时 agent-decide 里那一块整块跳过（skip_if_empty）
+        "nav_assist": (nav_assist or "").strip(),
         "image_base64": image_base64 or "",
         "image_mime": image_mime or "image/png",
     }
@@ -100,3 +103,25 @@ def assemble_inspect_session_slots(
 
 def assemble_json_chat_slots(*, user_payload: str) -> dict[str, str]:
     return {"user_payload": user_payload or "{}"}
+
+
+def assemble_widget_state_slots(
+    *,
+    widget: str,
+    candidate_states: list[str],
+    hint: str = "",
+    image_base64: str = "",
+    image_mime: str = "image/png",
+) -> dict[str, str]:
+    """`nav/widget_state` 的槽（设计稿 §2.2、§8.3）。
+
+    **只判一个控件处于哪个态，不做整屏分类** —— 整屏分类又慢又容易错，而且 localize
+    本来就有规则信号在做。候选态由 `nav_fsm*` 配置给出，代码里不含任何 App 词汇。
+    """
+    return {
+        "widget": (widget or "").strip(),
+        "candidate_states": "、".join(str(s).strip() for s in candidate_states if str(s).strip()),
+        "hint": (hint or "").strip(),
+        "image_base64": image_base64 or "",
+        "image_mime": image_mime or "image/png",
+    }

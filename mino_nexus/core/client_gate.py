@@ -17,6 +17,7 @@ _CONSOLE_DENY: list[tuple[str, set[str]]] = [
     (r"^/hitl(/|$)", {"POST", "PUT", "DELETE"}),
     (r"^/schedule(/|$)", {"POST", "PUT", "DELETE"}),
     (r"^/app-automation(/|$)", {"POST", "PUT", "PATCH", "DELETE"}),
+    (r"^/nav-fsm(/|$)", {"POST", "PUT", "PATCH", "DELETE"}),
     (r"^/task(/|$)", {"POST", "PUT", "DELETE"}),
     (r"^/runtime/nodes/install-token$", {"POST"}),
     (r"^/runtime/nodes/[^/]+/command$", {"POST"}),

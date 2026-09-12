@@ -260,6 +260,10 @@ class AssertResult(BaseModel):
     confidence: float = Field(0.0, ge=0.0, le=1.0)
     ai_reasoning: str = Field(..., description="判断依据")
     evidence: str = Field("", description="截图中观察到的关键证据描述")
+    screen_layout: dict[str, Any] = Field(
+        default_factory=dict,
+        description="断言时的屏面布局线框（归一化坐标）",
+    )
     raw_llm: dict[str, Any] = Field(default_factory=dict)
     parse_warnings: list[str] = Field(default_factory=list)
 
@@ -400,5 +404,9 @@ class AgentDecision(BaseModel):
     knowledge_ids: list[str] = Field(default_factory=list, description="本步要点名展开的知识 id，不点名则不展开正文")
     subflow: str = Field("none", description="none | create_publish，创作发布子流程中不占主预算")
     published: dict[str, Any] = Field(default_factory=dict, description="发布成功时的内容指纹")
+    screen_layout: dict[str, Any] = Field(
+        default_factory=dict,
+        description="本屏布局线框（归一化坐标），与 hierarchy 并行采集",
+    )
     raw_llm: dict[str, Any] = Field(default_factory=dict)
     parse_warnings: list[str] = Field(default_factory=list)

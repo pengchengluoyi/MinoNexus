@@ -1,7 +1,8 @@
 # UI 导航图 + LLM Wiki — 方案（v3.0）
 
 > **v3.0**：**程序作用域键**（`project_id` / `app_id` / …）、**证据落 `data_dir()`**（与 `mino.db` 同根）、配置直接落库。  
-> **状态：方案设计完成，暂不落代码**。设计文档仅此文件；校准证据不进 git，见 §0。
+> **状态：0.4 / 0.6 / 1 / 2–6 / B1–B3 工具链已落代码**（见 §18）；**运营模型 v2.5**（§19）将取代「先 walkthrough 再手填」为主路径；当前代码仍含 W1–W5 / `__CALIBRATE__` 手填流程（兼容期保留）。
+> 设计文档仅此文件；校准证据不进 git，见 §0。
 
 ---
 
@@ -104,7 +105,7 @@ CREATE TABLE nav_fsm_edges (
   "evidence_rel_path": "nav/calibration/{app_id}/{calibration_id}",
   "account_id": "<picked_account.id>",
   "project_id": "<apps.project_id>",
-  "hierarchy_format": "flat_text",
+  "hierarchy_format": "accessibility_json",
   "hierarchy_result_key": "hierarchy_text",
   "follow_filled_detectable": "id",
   "guard_recheck_on_anchor_hit": true
@@ -131,14 +132,14 @@ def nav_calibration_dir(app_id: str, calibration_id: str) -> Path:
     step_001.txt
 ```
 
-Studio / API 通过 `GET /api/nav-fsm/{app_id}/calibration/{calibration_id}` 读磁盘（或 manifest 摘要进 DB JSON 指针）。**不把** `docs/` 仓库路径写进 `meta`。
+Studio / API 通过 `GET /nav-fsm/{app_id}/calibration/{calibration_id}` 读磁盘（或 manifest 摘要进 DB JSON 指针）。**不把** `docs/` 仓库路径写进 `meta`。
 
 ### 0.2.3 运行时读写
 
 | 角色 | 方式 |
 |------|------|
 | **Nexus 循环** | `nav_fsm_store.load(app_id)`；`project_id` 校验与 `apps` 一致 |
-| **Studio / Console** | `GET/PUT /api/nav-fsm/{app_id}` |
+| **Studio / Console** | `GET/PUT /nav-fsm/{app_id}` |
 | **校准导入** | walkthrough 完成 → 写 `data_dir` 证据 + `PUT` 更新 `nav_fsm*` |
 | **校验** | `validate_nav_fsm`：无 `__CALIBRATE__`、边引用、`project_id`/`app_id` 必填 |
 
@@ -388,21 +389,21 @@ ProgressGate → 无进展 / 熔断空转（与 GuardGate 联动）
 
 
 
-## 7. 数据回流（图谱不自动膨胀）
+## 7. 数据回流（不自动合并，但自动生成候选）
 
-**NavFSM 配置已在 DB**（§0）；本节指 **导航图谱候选边** 不从失败 session 自动合并。
+**NavFSM 正式配置已在 DB**（§0）；**runtime 仍禁止**未经审核的字段直接进入 `nav_fsm*`（`validate_nav_fsm` 不变）。
 
-**循环依赖**：`effect_assert` 依赖 localize → localize 不准则无法自动判成功 → **不开 `atlas_patch` 自动入库**。
+**v2.5 改动**（详见 §19）：失败 / 成功 session 均可 **被动采集** hierarchy 与遥测；离线 **自动生成候选**（`detect` / `effect_assert` / 新边提议），人工 **审核后** 才写入 draft 或正式库。**不**自动合并进 runtime，但 **不再要求** 运营先跑独立 walkthrough 再手填 `__CALIBRATE__`。
+
+**循环依赖**（仍存在）：`effect_assert` 判边成功依赖 hierarchy 稳定元素 → localize 极不准时 **候选置信度降级**，只进待审队列，不进库。
 
 边 `effect_assert` 使用 **强断言**（不依赖 localize 高置信）：
 
 - `resource_id` / `accessibility_id` 在 hierarchy 中出现
-- `text_landmarks`：校准时实测的 Tab / 按钮 / 弹窗文案
+- `text_landmarks`：从多轮采集 **投票** 出的 Tab / 按钮 / 弹窗文案（候选）
 - `effect_assert.state_delta`：如 `dialog` 从 null → `unfollow_confirm`
 
-人工：QA 在 Console 标注 10–20 条 localize 抽检；session `nav_telemetry` 导出 CSV。
-
-后续再开候选管道（confidence + 回归 + `atlas_patches` 回滚）。
+人工职责从「录入」变为 **审核候选 + 失败点标注**（Console / Studio 待办列表）；localize / guard 抽检仍保留（§9）。
 
 ---
 
@@ -556,7 +557,9 @@ ProgressGate → 无进展 / 熔断空转（与 GuardGate 联动）
 | 容器特征                | 列表行 / 弹窗容器 id | `{package}:id/dialog_container`       |
 
 
-另记 `hierarchy_format`：`flat_text` | `xml_dump` | `accessibility_json`（**须与** `docs/PROTOCOL.md` **§4.4.2 一致**）。若 Scout 短期无法结构化导出，首期 **只支持 `flat_text`**，`detect.match_any` 仅用 `hierarchy_contains`。
+`hierarchy_format` **已钉死为 `accessibility_json`**（`docs/PROTOCOL.md` §4.4.2）：Scout 回的是结构化节点数组，
+不是纯文本。所以 `detect.match_any` 从第一天起就能用 `resource_id_regex`，不必先凑合 `hierarchy_contains`。
+扁平文本仍会派生一份（`hierarchy_slots.flatten`）注入 prompt，但**判定一律走结构化节点**。
 
 #### 8.4.3 校准判定规则
 
@@ -631,23 +634,22 @@ QA 对 `nav/guard_miss_candidate` 事件标 `confirmed_fn: true/false`，再算 
 
 未完成以下两项，**禁止**录入 NavFSM 实测配置 / 写 `guard_gate` 业务逻辑——否则 guard / localize / `effect_assert` 全是空中楼阁。
 
-#### 10.0.1 步骤 0.4 — 协议对齐（Scout + `docs/PROTOCOL.md`）
+#### 10.0.1 步骤 0.4 — 协议对齐（**已完成**）
 
-**Nexus owner（单点）**：开仓内 issue `nav/hierarchy-protocol`，由 **`loop/router_proxy` + `agent_loop` 接入 PR 的 assignee** 担任；负责催 Scout 对齐、在截止日触发 fallback、把决议写入 PROTOCOL。
+原方案设计了「开 issue → 等 Scout 3 个工作日 → 逾期降级 `flat_text`」的流程。**这套流程没有执行的必要**：
+排查时发现 Scout 早就实现了 `hierarchy`（`MinoScout/mino_scout/core.py:254`），返回的是结构化节点数组。
+于是 0.4 变成「把既成事实写进协议」，而不是「等一个决定」。
 
-| 项 | 责任 | 交付 |
-|----|------|------|
-| hierarchy 在 `RESULT` 中的 **key** | Scout 实现 + Nexus owner 确认 | 写入 `docs/PROTOCOL.md` §4.4.2（两仓同步） |
-| **格式** | 同上 | `flat_text` / `xml_dump` / `accessibility_json` 选一 |
-| **决策窗口** | Nexus owner | **3 个工作日**（从 issue 开工日计） |
+| 项 | 结论 |
+|----|------|
+| RESULT 里的 key | `data["nodes"]`（`extra["nodes"]` 是镜像，读任一即可） |
+| 格式 | `accessibility_json` —— 每个节点 `resource_id` / `text` / `content_desc` / `class` / `clickable` / `bounds` / `center` |
+| 坐标体系 | `bounds` / `center` 是**设备像素**，与 `EXECUTE.params` 的千分比**不是同一个体系** |
+| 通道 | 目前只有 adb；web 槽与非 adb 序列号回 `fail`，Nexus 按 §10.0.2 降级 |
+| 落点 | `docs/PROTOCOL.md` §4.4.2（两仓字节相同）+ `tests/fixtures/protocol/{execute,result}_hierarchy.json` |
+| 门禁 | `tests/test_protocol_fixtures.py`（两仓各一份）：全 fixture round-trip + 目录哈希对齐文档 §8 |
 
-**硬规则 — 逾期未对齐的 fallback**（Nexus owner 在 issue 到期日 **主动触发**，不等 Scout「再等等」）：
-
-1. 按默认开工：`hierarchy_format: flat_text`；`detect.match_any` **仅** `hierarchy_contains`（substring）。
-2. `resource_id_regex` / `node_query` 推到后续版本；不阻塞首期主链。
-3. 在 `docs/PROTOCOL.md` §4.4.2 记 **provisional** 约定；Scout 后续对齐时走协议同步 PR。
-
-**不要**只在 `NAVIGATION_ATLAS.md` 里记口头约定；协议（含 provisional）是真源。
+**没有 provisional 约定，也没有 fallback**。协议改动的四步流程见 `CLAUDE.md` §5。
 
 #### 10.0.2 步骤 0.6 — hierarchy 通道打通（`agent_loop`）
 
@@ -692,7 +694,7 @@ QA 对 `nav/guard_miss_candidate` 事件标 `confirmed_fn: true/false`，再算 
 | 步骤      | 交付物                            | 说明                                                                                                   |
 | ------- | ------------------------------ | ---------------------------------------------------------------------------------------------------- |
 | **0**   | 测试数据规范（§11）                    | `project_id` / `app_id` / `lease_account` / `case.nav_anchor` 与校准 manifest 一致                               |
-| **0.4** | **协议对齐**（阻塞）                   | Scout 确认 RESULT key/format → `docs/PROTOCOL.md` §4.4.2；默认 `flat_text`                                |
+| **0.4** | **协议对齐** ✅ 已完成                  | `data["nodes"]` + `accessibility_json` → `docs/PROTOCOL.md` §4.4.2 + fixtures（两仓同步）                 |
 | **0.6** | **hierarchy 通道**（阻塞）           | `agent_loop` 每 turn `observe("hierarchy")` → `inspect_slots["hierarchy_text"]`                      |
 | **0.5** | **真机 walkthrough**（§8.4）       | W1–W5 → `{data_dir}/nav/calibration/{app_id}/{calibration_id}/manifest.json` + `walkthrough.json`                               |
 | **1**   | **DB + 配置录入**                  | migration；`nav_fsm_store` + `validate_nav_fsm`；seed 或 Studio **直接写库**（§0.2）                         |
@@ -705,7 +707,7 @@ QA 对 `nav/guard_miss_candidate` 事件标 `confirmed_fn: true/false`，再算 
 | **8**   | 评估                             | `session_harness` + guard_fp/fn 人工抽检                                                                   |
 
 
-**存储**：运行时 **`nav_fsm_store.load(app_id)`** 读 `mino.db`；Studio `PUT /api/nav-fsm/{app_id}` 写同一表。证据 Markdown **不**进 `apps.env`。
+**存储**：运行时 **`nav_fsm_store.load(app_id)`** 读 `mino.db`；Studio `PUT /nav-fsm/{app_id}` 写同一表。证据 Markdown **不**进 `apps.env`。
 
 ### 10.1 `effect_assert` 契约（写入 `nav_fsm_edges.effect_assert`）
 
@@ -740,7 +742,7 @@ QA 对 `nav/guard_miss_candidate` 事件标 `confirmed_fn: true/false`，再算 
 
 `resource_id_regex` / profile 头 id 在 **步骤 1** walkthrough 后录入 DB；录入前可只写 `text_landmarks`。
 
-### 10.2 `GET /api/nav-fsm/{app_id}` 响应形状（设计稿）
+### 10.2 `GET /nav-fsm/{app_id}` 响应形状（设计稿）
 
 与 §0.2 表结构一致；`guard_catalog` 可放 `meta.guard_catalog`。
 
@@ -755,7 +757,7 @@ QA 对 `nav/guard_miss_candidate` 事件标 `confirmed_fn: true/false`，再算 
       "evidence_rel_path": "nav/calibration/<apps.id>/20260910T120000Z",
       "account_id": "<picked_account.id>",
       "follow_filled_detectable": "id",
-      "hierarchy_format": "flat_text",
+      "hierarchy_format": "accessibility_json",
       "hierarchy_result_key": "hierarchy_text",
       "guard_recheck_on_anchor_hit": true
     },
@@ -833,7 +835,7 @@ QA 对 `nav/guard_miss_candidate` 事件标 `confirmed_fn: true/false`，再算 
 
 ### 10.5 `validate_nav_fsm`（PUT / load 门禁）
 
-`nav_fsm_store.load()` 与 `PUT /api/nav-fsm/{app_id}` **之前**递归检查：任意字段值含 `__CALIBRATE__` → **422 / raise**，不进入 runtime。
+`nav_fsm_store.load()` 与 `PUT /nav-fsm/{app_id}` **之前**递归检查：任意字段值含 `__CALIBRATE__` → **422 / raise**，不进入 runtime。
 
 ```python
 def validate_nav_fsm(obj, path=""):
@@ -972,7 +974,7 @@ seed 草稿可含占位符；**对 dev DB 执行 seed 前**必须通过 `validat
 | **Nexus** `nav_fsm*` **表 + telemetry**                     | **主路径** | 配置在 DB；证据在 `data_dir()/nav/calibration/`                                      |
 | [kaeawc/auto-mobile](https://github.com/kaeawc/auto-mobile) | **可选、离线**  | 在 **Scout/真机** 侧做探索建图，导出 JSON → `atlas_patch` 人工审核；**不能**进 Nexus 循环（违反不碰设备） |
 | compose-nav-graph                                           | 不采用        | 仅 Compose 应用；本被测 App 未必适用                                                   |
-| 从 session 自动提议边                                             | **后续**   | 禁止失败 session 自动入库                                                           |
+| 从 session 自动提议边                                             | **v2.5**   | 自动生成 **候选**（`nav_candidates`）；**禁止**未经审核合并进 `nav_fsm*`（§19）              |
 
 
 
@@ -1043,7 +1045,7 @@ seed 草稿可含占位符；**对 dev DB 执行 seed 前**必须通过 `validat
 | 基线 | ProgressGate；GuardGate + 允许动作集 |
 | 一期 | hierarchy 通道；`nav_fsm*` 落库；`data_dir` 校准；telemetry |
 | 二期 | EdgeAssist；VLM 低置信可选；菜单硬裁剪 |
-| 三期 | 候选管道 + `atlas_patches` + Studio 图谱 UI |
+| 三期（v2.5） | 被动采集 + 候选生成 + 人工审核入库 + Studio 图谱 UI（§19） |
 | 四期 | 模块子图 + 覆盖率报告 |
 
 
@@ -1065,7 +1067,13 @@ seed 草稿可含占位符；**对 dev DB 执行 seed 前**必须通过 `validat
 
 ### 17.1 `tab_bar.selected` 可能无结构化字段
 
-§10.1 中 `tab_bar.selected` 取决于 hierarchy 是否暴露 `selected` 属性。校准时应对每个 Tab 采样本；若无 `selected`，`effect_assert` 退化为 `text_landmarks` + `require_none`。
+**已确认 Scout 的节点里没有 `selected` 属性**（`UiNode.to_brief` 只有 7 个字段）。实现按此处理：
+
+- `effect_assert` 的 `tab_bar` 条件退化为文案存在性；
+- localize 的 `tab_bar` 信号：命中校准出的 `selected_resource_id_regex` 才算强证据（1.0），
+  只对上文案则折价（0.6）—— 折价是刻意的，别让「文案在屏上」冒充「这个 Tab 是选中的」。
+
+将来 Scout 若补上 `selected` 字段，`_eval_tab_bar` 会自动改用它，无需改配置。
 
 ### 17.2 `CapturedScreen` 需承载 hierarchy 正文
 
@@ -1073,4 +1081,151 @@ seed 草稿可含占位符；**对 dev DB 执行 seed 前**必须通过 `validat
 
 ### 17.3 当前代码态（为何 0.6 必须先做）
 
-`agent_loop` **现状**仅 `observe("screenshot")`，`hierarchy_text` 恒空——这是 **债务**，不是可选项。§10.0.2 为还债的明确工单。
+~~`agent_loop` 现状仅 `observe("screenshot")`，`hierarchy_text` 恒空。~~ **债已还**：`loop/hierarchy_slots.py` + `loop/nav_runtime.py` 在 `MINO_OBSERVE_HIERARCHY` / `playbook.observe_hierarchy` 打开时每 turn 取一帧层级，写 `inspect_slots["hierarchy_text"]`，失败按 §10.0.2 降级。默认关。
+
+---
+
+## 18. 实现落点（代码索引）
+
+| 设计稿 | 代码 |
+|--------|------|
+| §0.6 hierarchy 通道 | `loop/hierarchy_slots.py`（采集 / 派生文本 / 匹配原语）、`loop/agent_loop.py` 三处调用点 |
+| §0.2 表结构 | `models/nav_fsm.py`、`core/migration.py` |
+| §0.2.2 证据落盘 | `core/paths.nav_calibration_dir`、`services/nav_calibration_store.py` |
+| §0.2.3 / §10.5 读写与门禁 | `services/nav_fsm_store.py`（`load_with_reason` / `save` / `validate_nav_fsm`） |
+| §10.2 API | `routers/rNavFsm.py`（前缀 `/nav-fsm`，本仓 router 不带 `/api`） |
+| §2 localize | `services/nav_localize.py` |
+| §3 / §10.4 状态与选边 | `services/nav_fsm.py` |
+| §10.1 effect_assert | `services/nav_fsm.evaluate_effect_assert` |
+| §5 / §6 RouteAssist + Wiki 分档 | `services/nav_compiler.py` |
+| §8 GuardGate | `loop/guard_gate.py` |
+| §10.6 遥测 | `services/nav_telemetry.py` |
+| 编排 | `loop/nav_runtime.py`（设计稿未列；把七件事收在一处，免得冲垮 `agent_loop`） |
+| prompt 注入 | `ai/job_slots.py` 的 `nav_assist` 槽 + `ai/job_upgrades.upgrade_agent_decide_to_v7` |
+| seed | `scripts/nav_fsm_seed.py` |
+| 测试 | `tests/test_nav_hierarchy.py` / `test_nav_fsm_store.py` / `test_nav_localize.py` / `test_guard_gate.py` / `test_nav_compiler.py` / `test_protocol_fixtures.py` |
+
+**两处按本仓约定偏离设计稿**（已在上文回改）：路由用 `/nav-fsm` 而非 `/api/nav-fsm`；
+`hierarchy_format` 用 `accessibility_json` 而非 `flat_text`。
+
+**开关全关时零行为变化**：`observe_hierarchy` 默认 `false`，且现存应用都没有 `nav_fsm` 行 →
+`nav_fsm_store.load()` 返回 `None` → `NavRuntime.for_run` 返回 `None` → 主循环三个调用点全部跳过。
+
+---
+
+## 19. 运营模型 v2.5 — 自动采集 + 人工审核（取代 walkthrough 为主路径）
+
+> **v3.0** 钉的是存储、协议、runtime 契约；**v2.5** 钉的是 **人怎么少动手**。二者不冲突：schema 不变，变的是 **证据从哪来、怎么进库**。
+
+### 19.1 原则对照
+
+| v3.0 / 旧运营（v2.5 前） | v2.5 目标 |
+|--------------------------|-----------|
+| **0.5** 专人 walkthrough W1–W5，顺序固定 | **0.5** 删为主路径；**正常跑最短路径用例**时自动采集 |
+| **1a/1b** 人眼对照 hierarchy 填 `__CALIBRATE__` | 从采集 **自动生成候选字段**，人只 **审核 diff** |
+| **M1** 不自动入库 | **仍不自动合并进 runtime**；但 **自动写候选**，审核后才 `PUT` / promote |
+| 校准表人工记录 | **`校准报告`** 自动生成（覆盖率、缺口、置信度、账号一致性） |
+| §7 禁止自动入库 | 改为 **禁止自动合并**；**允许** 自动生成候选 |
+| Studio 首次引导 / 模板必填 | **可选**；可 **零配置开跑**，图从 session 慢慢长出来 |
+
+**硬约束不变**：
+
+1. `validate_nav_fsm`：**正式 runtime 拒绝** `__CALIBRATE__` 与未审核候选直写库。
+2. `account_id`：写入 `detect` 的实测 id 必须来自 **与跑批一致的租号** 上的采集；跨账号候选标 `rejected` 或降权。
+3. Nexus **不碰设备**；采集仍只走 `observe("hierarchy")` + telemetry。
+
+### 19.2 新主路径（无独立 walkthrough）
+
+```
+应用首次跑用例（observe_hierarchy 默认开，或 playbook 默认 true）
+    ↓
+每 turn：hierarchy 快照 + nav_telemetry（已有 0.6 / §10.6）
+    ↓
+nav_capture_store 追加样本（按 app_id / account_id / session / turn / cap / localize 状态）
+    ↓
+nav_candidate_compiler（离线或定时）：聚类 → 填 detect / identify / effect_assert 候选
+    ↓
+Studio / Console「待审核候选」列表（diff 视图）
+    ↓
+人工 accept / reject（可批量）
+    ↓
+合并进 draft → promote → nav_fsm*（仍过 validate_nav_fsm）
+```
+
+**不再需要**：
+
+- 先开「校准批次」再跑（`nav_calibration` 可降级为「显式高密度采集模式」，非必开）
+- W1–W5 固定步标（保留为 **可选** 锚点，供回归对比）
+- 进 NavFSM 页必须先载入模板（模板仅作 **冷启动加速**）
+
+### 19.3 失败驱动修正（你要的「出问题再改」）
+
+用例跑挂 / 人标问题时，不重新 walkthrough，而是 **定点反馈**：
+
+| 反馈类型 | 触发 | 系统动作 |
+|----------|------|----------|
+| `localize_wrong` | 当前屏判错 | 取该 `turn_id` hierarchy，提议 `identify.required` 候选 |
+| `guard_false_positive` | 误拦 | 已有 `annotate`；生成 `detect.match_none` 或降 `strength` 候选 |
+| `guard_false_negative` | 漏拦 | 已有 `annotate`；生成新 guard / 加强 `match_any` 候选 |
+| `edge_fail` | `effect_assert` 失败 | 提议 `require_any` / `scroll_into_view` 候选 |
+| `missing_edge` | 人指「应能从这里到那里」 | 提议新 `edge`（**始终**待审，不自动进图） |
+
+API 形状（拟）：
+
+```http
+POST /nav-fsm/{app_id}/feedback
+{ "session_id", "turn_id", "kind", "note", "expected_state_id?", "expected_edge_id?" }
+→ 202 { "candidate_ids": ["..."] }
+```
+
+编译器 **只写候选**，不碰正式表。
+
+### 19.4 候选与报告（落盘）
+
+| 产物 | 位置 | 说明 |
+|------|------|------|
+| 原始样本 | `data_dir/nav/capture/{app_id}/{session_id}/turn_{n}.json` | hierarchy 子集 + 元数据 |
+| 候选包 | `data_dir/nav/candidates/{app_id}/{candidate_batch_id}.json` | 字段级 diff，带 `confidence` / `evidence_turns` |
+| 校准报告 | `GET /nav-fsm/{app_id}/calibration-report` | 已见屏态、未覆盖边、待审数、`account_id` 是否一致 |
+
+候选单条形状（示例）：
+
+```json
+{
+  "candidate_id": "cand.detect.page.list.tab_bar",
+  "path": "states[id=page.feed.list].identify.required[0].match.selected",
+  "proposed_value": "关注",
+  "confidence": 0.86,
+  "evidence": [{ "session_id": "...", "turn_id": 4 }],
+  "status": "pending"
+}
+```
+
+`POST /nav-fsm/{app_id}/candidates/{id}/review` → `accepted` | `rejected`；批量 accept 后写入 **draft**，再由既有 `draft/promote` 进库。
+
+### 19.5 与现有实现的兼容
+
+| 已有 | v2.5 期处理 |
+|------|-------------|
+| `nav_calibration_store` + W1–W5 | 保留；视为 **高密度采集模式**，非默认 |
+| `__CALIBRATE__` + 模板 | 保留；冷启动 / 导出用；**非**运营主路径 |
+| `nav_telemetry` + `annotate` | **复用**；作为候选编译器输入 |
+| Studio 图形 / 一键初始化 | 保留；默认 **观察模式**，不阻塞跑用例 |
+| `load_with_reason` 无配置 | runtime 仍可无 FSM；**采集与候选不依赖** 已有 `nav_fsm` 行 |
+
+### 19.6 实施分期（在 §15 三期之上细化）
+
+| 子阶段 | 交付 | 用户可见效果 |
+|--------|------|----------------|
+| **v2.5a** | `nav_capture_store`；`observe_hierarchy` 开即每 turn 落样本 | 跑用例即有数据，Console 可下样本 |
+| **v2.5b** | `nav_candidate_compiler` v0（landmarks / resource_id 投票） | 待审核候选列表，一键写入 draft |
+| **v2.5c** | `calibration-report` + `feedback` API | 失败点标注 → 自动出修补候选 |
+| **v2.5d** | 边提议 + 回归门禁 | 新边仍人工审；通过后 promote |
+
+### 19.7 风险与边界
+
+- **单 session 不足以定图结构**：states/edges 拓扑仍建议 **首屏从极简模板或首条成功路径推断**，边提议 **必须** 低置信 + 人工审。
+- **账号状态漂移**：取消关注类用例跑完，后续采集污染 guard 候选 → 报告里标 `account_state_dirty`，不自动 accept。
+- **自动改配置**：v2.5 **只做候选**；「自动修改」= 自动 **生成** 修改提议，**合并** 仍人工一键或批量审。
+
+**结论**：你要的方向与 v3.0 技术栈一致 —— **把成本从「采集+录入」搬到「审核」**；walkthrough 与模板降级为可选加速器，而不是入门门票。

@@ -36,6 +36,11 @@ def bootstrap() -> None:
         un = upgrade_recovery_rules()
         if un:
             SLog.i(TAG, f"recovery rules upgraded {un}")
+        from mino_nexus.catalog.recovery_seed import upgrade_system_permission_recovery_rules
+
+        pn = upgrade_system_permission_recovery_rules()
+        if pn:
+            SLog.i(TAG, f"system permission recovery rules upgraded {pn}")
         from mino_nexus.catalog.recovery_seed import upgrade_account_capabilities
 
         an = upgrade_account_capabilities()
@@ -46,6 +51,11 @@ def bootstrap() -> None:
         cn = upgrade_check_run_env_capability()
         if cn:
             SLog.i(TAG, f"check_run_env capability upgraded {cn}")
+        from mino_nexus.catalog.recovery_seed import upgrade_fsm_navigate_capability
+
+        fn = upgrade_fsm_navigate_capability()
+        if fn:
+            SLog.i(TAG, f"fsm_navigate capability upgraded {fn}")
         from mino_nexus.services.job_store import upgrade_jobs_prompt_version, upgrade_jobs_strip_when
 
         jn = upgrade_jobs_strip_when()
@@ -54,11 +64,19 @@ def bootstrap() -> None:
         pv = upgrade_jobs_prompt_version()
         if pv:
             SLog.i(TAG, f"llm_jobs prompt_version migrated {pv}")
-        from mino_nexus.ai.job_upgrades import upgrade_agent_decide_to_v6
+        from mino_nexus.ai.job_upgrades import upgrade_agent_decide_to_v8, upgrade_assert_vision_to_v2
 
-        v6 = upgrade_agent_decide_to_v6()
-        if v6:
-            SLog.i(TAG, "agent-decide upgraded to prompt v6")
+        v8 = upgrade_agent_decide_to_v8()
+        if v8:
+            SLog.i(TAG, "agent-decide upgraded to prompt v8")
+        av2 = upgrade_assert_vision_to_v2()
+        if av2:
+            SLog.i(TAG, "assert-vision upgraded to prompt v2")
+        from mino_nexus.ai.job_upgrades import ensure_nav_widget_state_job
+
+        nw = ensure_nav_widget_state_job()
+        if nw:
+            SLog.i(TAG, "nav-widget-state job seeded")
         db.commit()
     except Exception:
         db.rollback()

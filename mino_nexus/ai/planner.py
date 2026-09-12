@@ -17,6 +17,7 @@ from typing import Any, Optional
 from pydantic import ValidationError
 from mino_nexus.core.log import SLog
 from mino_nexus.ai.job_slots import (
+    assemble_widget_state_slots,
     assemble_agent_decide_slots,
     assemble_assert_vision_slots,
     assemble_inspect_session_slots,
@@ -199,7 +200,14 @@ def _parse_replan_result(raw: dict[str, Any], menu_index: dict[str, set[str]]) -
         raw_llm=raw,
         parse_warnings=warnings,
     )
-def _parse_assert_result(raw: dict[str, Any]) -> AssertResult:
+def _parse_assert_result(
+    raw: dict[str, Any],
+    *,
+    width: int = 1080,
+    height: int = 1920,
+) -> AssertResult:
+    from mino_nexus.services.nav_screen_layout import normalize_vision_layout
+
     warnings: list[str] = []
     passed = bool(raw.get("passed"))
     confidence = float(raw.get("confidence") or 0.0)
@@ -207,11 +215,18 @@ def _parse_assert_result(raw: dict[str, Any]) -> AssertResult:
     evidence = str(raw.get("evidence") or "").strip()
     if not evidence:
         warnings.append("evidence 为空，模型未遵守约束")
+    raw_layout = raw.get("screen_layout")
+    screen_layout = (
+        normalize_vision_layout(raw_layout, screen_w=width, screen_h=height)
+        if isinstance(raw_layout, dict)
+        else {}
+    )
     return AssertResult(
         passed=passed,
         confidence=confidence,
         ai_reasoning=str(raw.get("ai_reasoning") or "").strip() or "（模型未给出 reasoning）",
         evidence=evidence,
+        screen_layout=screen_layout,
         raw_llm=raw,
         parse_warnings=warnings,
     )
@@ -444,6 +459,14 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
         published = {k: v for k, v in raw_pub.items() if v not in (None, "", [])}
     elif isinstance(raw_pub, str) and raw_pub.strip() and raw_pub.strip().lower() not in {"null", "none"}:
         published = {"note": raw_pub.strip()}
+    from mino_nexus.services.nav_screen_layout import normalize_vision_layout
+
+    raw_layout = raw.get("screen_layout")
+    screen_layout = (
+        normalize_vision_layout(raw_layout, screen_w=width, screen_h=height)
+        if isinstance(raw_layout, dict)
+        else {}
+    )
     return AgentDecision(
         thought=str(raw.get("thought") or "").strip(),
         action=action,
@@ -455,6 +478,7 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
         knowledge_ids=_as_str_list(raw.get("knowledge_ids") or raw.get("knowledge_id")),
         subflow=subflow,
         published=published,
+        screen_layout=screen_layout,
         raw_llm=raw,
         parse_warnings=warnings,
     )
@@ -474,6 +498,7 @@ def decide_next_action(
     knowledge_hint: str = "",
     knowledge_body: str = "",
     session_block: str = "",
+    nav_assist: str = "",
     provider_id: Optional[str] = None,
     timeout_sec: int = 90,
     menu_ids: Optional[set[str]] = None,
@@ -523,6 +548,7 @@ def decide_next_action(
         knowledge_hint=knowledge_hint,
         knowledge_body=knowledge_body,
         session_block=session_block,
+        nav_assist=nav_assist,
         accounts_brief=accounts_brief,
         phase=phase,
         case_scene=getattr(run_context, "case_scene", None) or {},
@@ -685,5 +711,79 @@ def _parse_inspect_env_raw(raw: dict[str, Any]) -> dict[str, Any]:
         "env": env,
         "seen": str(raw.get("seen") or "").strip()[:200],
         "reason": str(raw.get("reason") or "").strip()[:240],
+        "ok": True,
+    }
+
+
+def judge_widget_state(
+    *,
+    widget: str,
+    candidate_states: list[str],
+    image_base64: str,
+    image_mime: str = "image/png",
+    hint: str = "",
+    provider_id: Optional[str] = None,
+    timeout_sec: int = 30,
+) -> dict[str, Any]:
+    """VLM 兜底：hierarchy 判不出这个控件是什么态时，看图判一下（设计稿 §2.2）。
+
+    刻意做成**轻量单控件**判定，不是整屏分类。调用方必须自己控制预算 —— 这里不做缓存，
+    也不做重试：判不出来就判不出来，主链有规则信号顶着。
+
+    返回 `{state, confidence, reason, ok}`；`ok=False` 表示这轮没有可用结论
+    （没配 job / 没启用 provider / 模型没给出候选态之一）。
+
+    **结论永远不得用来 block**（§8.2：guard 违反只认 hierarchy + 规则）—— 由 `nav_runtime`
+    把 VLM 判出的态标成不可 block 的强度。
+    """
+    from mino_nexus.ai.job_slots import assemble_widget_state_slots
+
+    empty = {"state": "", "confidence": 0.0, "reason": "", "ok": False}
+    wanted = [str(s).strip() for s in (candidate_states or []) if str(s).strip()]
+    if not image_base64 or not wanted:
+        empty["reason"] = "无截图或无候选态"
+        return empty
+    provider, gate = resolve_regression_provider(provider_id)
+    if provider is None:
+        empty["reason"] = f"未启用 AI：{gate.get('reason')}"
+        return empty
+    slots = assemble_widget_state_slots(
+        widget=widget,
+        candidate_states=wanted,
+        hint=hint,
+        image_base64=image_base64,
+        image_mime=image_mime,
+    )
+    try:
+        messages, job_meta = render("nav-widget-state", slots)
+    except JobRenderError as e:
+        # 没配这个 job 是**正常状态**：VLM 兜底默认不开，Console 里也不一定建了它
+        empty["reason"] = str(e)
+        return empty
+    call = job_meta.get("call") or {}
+    raw, meta = _chat(
+        job="nav-widget-state",
+        provider=provider, messages=messages,
+        job_meta=job_meta,
+        temperature=float(call.get("temperature", 0.0)),
+        max_tokens=int(call.get("max_tokens", 200)),
+        timeout_sec=int(call.get("timeout_sec", timeout_sec)),
+        json_mode=bool(call.get("json_mode", True)),
+    )
+    if not isinstance(raw, dict):
+        empty["reason"] = str((meta or {}).get("error") or "").strip() or "LLM 返回空/解析失败"
+        return empty
+    state = str(raw.get("state") or "").strip()
+    if state not in wanted:
+        empty["reason"] = f"模型给的 {state!r} 不在候选态里"
+        return empty
+    try:
+        conf = max(0.0, min(1.0, float(raw.get("confidence") or 0.0)))
+    except (TypeError, ValueError):
+        conf = 0.0
+    return {
+        "state": state,
+        "confidence": conf,
+        "reason": str(raw.get("reason") or "").strip()[:200],
         "ok": True,
     }

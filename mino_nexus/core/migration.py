@@ -40,6 +40,14 @@ def run_auto_migration() -> None:
         _ensure_column("llm_jobs", "overrides_json", "overrides_json JSON")
         _ensure_column("llm_jobs", "prompt_version", "prompt_version INTEGER DEFAULT 1")
         _drop_table_if_exists("app_cases")
+        # NavFSM：新库靠 create_all；若有人按 docs/NAVIGATION_ATLAS.md §0.2.1 的 DDL 手建过表，
+        # 这里把本仓多出来的列补上（设计稿 DDL 没有 scroll_into_view，见 §10.4）。
+        _ensure_column("nav_fsm_edges", "scroll_into_view", "scroll_into_view JSON")
+        _ensure_column("nav_fsm", "test_data", "test_data JSON")
+        _ensure_column("nav_fsm", "updated_by", "updated_by TEXT")
+        _ensure_column("nav_fsm", "updated_at", "updated_at INTEGER DEFAULT 0")
+        _ensure_column("nav_fsm_states", "entry", "entry INTEGER DEFAULT 0")
+        _ensure_column("nav_fsm_states", "role", "role TEXT DEFAULT ''")
     except Exception as exc:
         SLog.w(TAG, f"migration skipped: {exc}")
     SLog.i(TAG, "schema ready")

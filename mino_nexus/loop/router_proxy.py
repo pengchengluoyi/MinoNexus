@@ -58,6 +58,8 @@ LOCAL_CAPS = frozenset({
     "relogin",
     "lease_account",
     "check_run_env",
+    "signal_nav_calib_step",
+    "fsm_navigate",  # NavFSM 最短路在 Nexus 算，不经 Scout（local_executors._fsm_navigate）
 })
 
 

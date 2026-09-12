@@ -35,6 +35,7 @@ def _guard_deny_mutate(ctx: dict[str, Any]) -> Optional[str]:
 
 RECOVER_PREFIX = "recover_"
 ADVISE_RECOVERY_MAX = 2
+RECOVERY_FAIL_MAX = 2
 
 
 def _recovery_rule_id(cap_id: str) -> str:
@@ -58,6 +59,10 @@ def _guard_exec_script_params(ctx: dict[str, Any]) -> Optional[str]:
 
 
 def _guard_limit_advise_recovery(ctx: dict[str, Any]) -> Optional[str]:
+    return _guard_limit_recovery_retry(ctx)
+
+
+def _guard_limit_recovery_retry(ctx: dict[str, Any]) -> Optional[str]:
     cap_id = str(ctx.get("cap_id") or "")
     rule_id = _recovery_rule_id(cap_id)
     if not rule_id:
@@ -68,15 +73,19 @@ def _guard_limit_advise_recovery(ctx: dict[str, Any]) -> Optional[str]:
         rule = catalog.get_recovery_rule(rule_id)
     except Exception:
         rule = None
-    if rule is None or str(getattr(rule, "mode", "") or "") != "advise":
-        return None
+    mode = str(getattr(rule, "mode", "") or "") if rule is not None else ""
     step_cursor = ctx.get("step_cursor")
-    used = int(getattr(step_cursor, "advise_recovery_counts", {}).get(rule_id, 0) or 0)
-    if used < ADVISE_RECOVERY_MAX:
+    if mode == "advise":
+        used = int(getattr(step_cursor, "advise_recovery_counts", {}).get(rule_id, 0) or 0)
+        cap = ADVISE_RECOVERY_MAX
+    else:
+        used = int(getattr(step_cursor, "recovery_fail_counts", {}).get(rule_id, 0) or 0)
+        cap = RECOVERY_FAIL_MAX
+    if used < cap:
         return None
     return (
-        f"已拒绝重复 recover_{rule_id}：同类 advise 已提示 {used} 次。"
-        f"请按 history 改用 hierarchy、input_text、signal_ask_human 或 signal_give_up，勿再调 wake/同 rule。"
+        f"已拒绝重复 recover_{rule_id}：同类恢复已失败/已提示 {used} 次。"
+        f"请改用 tap_element 直接点授权按钮、press_key(BACK)、signal_ask_human 或 signal_give_up。"
     )
 
 
@@ -283,6 +292,7 @@ GUARDS: dict[str, GuardFn] = {
     "action_fuse": _guard_action_fuse,
     "skip_repeat_tap": _guard_skip_repeat_tap,
     "limit_advise_recovery": _guard_limit_advise_recovery,
+    "limit_recovery_retry": _guard_limit_recovery_retry,
     "stuck_alternation": _guard_stuck_alternation,
     "block_login_after_guest": _guard_block_login_after_guest,
     "exec_script_params": _guard_exec_script_params,

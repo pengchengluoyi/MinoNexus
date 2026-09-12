@@ -53,6 +53,7 @@ mino_nexus/
 | 4 | 看图决策 ≠ 视觉校验 | 两个 job，两套 prompt |
 | 5 | 结构化输出过 `schemas.py` | LLM 会乱填 |
 | 6 | 配置 key 必须来自 `loop/registry.py` 闭集 | 禁止 JSON 表达式 |
+| 7 | NavFSM 的 assist 正文由 `nav_compiler` 现编，**不进 prompt 模板** | 被测 App 的文案属于 `nav_fsm*` 表，硬编码进 job 就没法按 app 隔离 |
 
 ## 5. 成本与落痕
 
@@ -65,3 +66,22 @@ python tests/test_prompts.py
 python scripts/verify_no_prompt_literals.py
 python scripts/e2e_jobs_smoke.py
 ```
+
+## 6. `nav_assist` 槽（agent-decide v7）
+
+NavFSM 每轮把「你在哪、下一步走哪条边、本步允许/禁止什么」编译成一段文本注入
+`agent-decide`。正文由 `services/nav_compiler.py` 按 `nav_fsm*` 表现编，
+**模板里只有一个空槽**，一个 App 字样都不该出现在 job 正文里。
+
+| 项 | 值 |
+|---|---|
+| 槽名 | `nav_assist`（`kind: text`） |
+| 生产者 | `loop/nav_runtime.NavRuntime.observe` → `ai/job_slots.assemble_agent_decide_slots` |
+| 块配置 | `user_blocks` 末尾一块，`skip_if_empty: true`，`max_chars: 2400` |
+| 空值行为 | **整块跳过** —— 没配导航图或开关关着时，prompt 与 v6 逐字相同 |
+| 升级入口 | `ai/job_upgrades.upgrade_agent_decide_to_v7()`，启动时由 `core/bootstrap` 调用；幂等 |
+
+v7 同时往 system 块插了一节「导航 assist」，讲**怎么读这段**（照建议边走、只从允许集里选、
+被拦了换路径而不是重试）。规则是框架措辞，具体文案仍来自 DB。
+
+升级会把 v6 正文存进 `overrides_json.revisions`，Console 可以 `{"activate_version": 6}` 回退。

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from mino_nexus.core.log import SLog
 
@@ -135,12 +136,170 @@ def _session_cli(argv: list[str]) -> int:
     return 0
 
 
+
+def _nav_cli(argv: list[str]) -> int:
+    """NavFSM 配置与校准。没有 Studio 时的等价入口（docs/NAVIGATION_ATLAS.md §8.4、§8.5）。"""
+    import json
+
+    ap = argparse.ArgumentParser(prog="mino-nexus nav", description="NavFSM 配置与真机校准")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p_show = sub.add_parser("show", help="看一个 app 的配置与 runtime 可用性")
+    p_show.add_argument("app_id")
+
+    sub.add_parser("list", help="列出已配导航图的应用")
+
+    p_tpl = sub.add_parser("template", help="产一份待校准骨架 JSON 到 stdout")
+    p_tpl.add_argument("app_id")
+
+    p_start = sub.add_parser("start", help="开一批 walkthrough")
+    p_start.add_argument("app_id")
+    p_start.add_argument("--account-id", required=True, help="**跑批将用的租号**，不是开发机账号（§11.4）")
+    p_start.add_argument("--calibration-id", default="")
+
+    p_step = sub.add_parser("step", help="记一步 walkthrough")
+    p_step.add_argument("app_id")
+    p_step.add_argument("calibration_id")
+    p_step.add_argument("--step-key", required=True, help="如 W1 / W2")
+    p_step.add_argument("--file", default="", help="hierarchy 文本文件；缺省从 stdin 读")
+    p_step.add_argument("--run-id", default="")
+    p_step.add_argument("--case-id", default="")
+    p_step.add_argument("--turn-id", type=int, default=0)
+    p_step.add_argument("--note", default="")
+
+    p_fin = sub.add_parser("finish", help="收工并记结论")
+    p_fin.add_argument("app_id")
+    p_fin.add_argument("calibration_id")
+    p_fin.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                       help="结论，如 --set follow_filled_detectable=id")
+
+    p_cl = sub.add_parser("calibrations", help="列出某 app 的校准批次")
+    p_cl.add_argument("app_id")
+
+    p_ev = sub.add_parser("evidence", help="看一批证据（manifest + walkthrough）")
+    p_ev.add_argument("app_id")
+    p_ev.add_argument("calibration_id")
+    p_ev.add_argument("--step", type=int, default=0, help="给了就只打这一步的 hierarchy 正文")
+
+    p_ds = sub.add_parser("draft-save", help="把 JSON 文件存成待校准草稿")
+    p_ds.add_argument("app_id")
+    p_ds.add_argument("path")
+
+    p_dp = sub.add_parser("draft-promote", help="草稿校验通过后写进库")
+    p_dp.add_argument("app_id")
+
+    p_m = sub.add_parser("metrics", help="按 app / run 聚合 nav 指标（§9）")
+    p_m.add_argument("app_id")
+    p_m.add_argument("--run-id", default="")
+    p_m.add_argument("--limit", type=int, default=50)
+
+    args = ap.parse_args(argv)
+
+    from mino_nexus.core.database import ensure_db
+    from mino_nexus.services import nav_calibration_store as calib
+    from mino_nexus.services import nav_fsm_store as store
+
+    ensure_db()
+
+    def dump(obj) -> int:
+        print(json.dumps(obj, ensure_ascii=False, indent=2, default=str))
+        return 0
+
+    if args.cmd == "show":
+        raw = store.read_raw(args.app_id)
+        if raw is None:
+            print(f"app_id={args.app_id} 没有 nav_fsm 配置。先 `nav template {args.app_id}` 取骨架。")
+            return 1
+        _, reason = store.load_with_reason(args.app_id)
+        return dump({**raw, "runtime_ready": not reason, "runtime_reason": reason})
+
+    if args.cmd == "list":
+        return dump(store.list_apps())
+
+    if args.cmd == "template":
+        from mino_nexus.services import nav_fsm_template as tpl
+        from mino_nexus.services import project_store as ps
+
+        app = ps.find_app(args.app_id)
+        return dump(tpl.build_template(args.app_id, project_id=str((app or {}).get("project_id") or "")))
+
+    if args.cmd == "start":
+        from mino_nexus.services import project_store as ps
+
+        app = ps.find_app(args.app_id)
+        manifest = calib.start(
+            args.app_id,
+            project_id=str((app or {}).get("project_id") or ""),
+            account_id=args.account_id,
+            calibration_id=args.calibration_id,
+        )
+        SLog.i(TAG, f"walkthrough 开始：{manifest['calibration_id']}（顺序即语义，跳步补采无效）")
+        return dump(manifest)
+
+    if args.cmd == "step":
+        text = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
+        return dump(calib.append_step(
+            args.app_id, args.calibration_id,
+            step_key=args.step_key, hierarchy_text=text,
+            run_id=args.run_id, case_id=args.case_id, turn_id=args.turn_id, note=args.note,
+        ))
+
+    if args.cmd == "finish":
+        conclusions: dict = {}
+        for item in args.set:
+            key, _, val = str(item).partition("=")
+            if key:
+                conclusions[key.strip()] = val.strip()
+        return dump(calib.finish(args.app_id, args.calibration_id, conclusions=conclusions))
+
+    if args.cmd == "calibrations":
+        return dump(calib.list_calibrations(args.app_id))
+
+    if args.cmd == "evidence":
+        if args.step:
+            print(calib.read_step(args.app_id, args.calibration_id, args.step))
+            return 0
+        row = calib.read(args.app_id, args.calibration_id)
+        if row is None:
+            print("没有这批证据")
+            return 1
+        return dump(row)
+
+    if args.cmd == "draft-save":
+        doc = json.loads(Path(args.path).read_text(encoding="utf-8"))
+        calib.save_draft(args.app_id, doc)
+        from mino_nexus.services import nav_fsm_template as tpl
+
+        pending = tpl.pending_marks(doc)
+        print(f"草稿已存。还差 {len(pending)} 个待校准字段" if pending else "草稿已存，且没有待校准字段")
+        for row in pending[:20]:
+            print("  -", row)
+        return 0
+
+    if args.cmd == "draft-promote":
+        try:
+            saved = calib.promote_draft(args.app_id, updated_by="cli")
+        except store.NavFsmInvalid as exc:
+            print(f"未写库：{exc}")
+            return 1
+        return dump({"app_id": saved["app_id"], "states": len(saved["states"]), "edges": len(saved["edges"])})
+
+    if args.cmd == "metrics":
+        from mino_nexus.services.nav_telemetry import aggregate_app
+
+        return dump(aggregate_app(args.app_id, run_id=args.run_id, limit=args.limit))
+
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "catalog":
         return _catalog_cli(argv[1:])
     if argv and argv[0] == "session":
         return _session_cli(argv[1:])
+    if argv and argv[0] == "nav":
+        return _nav_cli(argv[1:])
 
     ap = argparse.ArgumentParser(prog="mino-nexus", description="MinoNexus 服务端")
     ap.add_argument("--host", default="0.0.0.0", help="监听地址；局域网要 0.0.0.0 才能解析 mino.local")

@@ -16,7 +16,7 @@ MENU_ATOMIC_KINDS: Tuple[str, ...] = CAPABILITY_KINDS + (RECOVERY_KIND,)
 
 # 无 implementations、由 Nexus 本地编排的能力。Scout 不执行。
 LOCAL_ORCH_IDS = frozenset({
-    "relogin", "lease_account", "get_otp", "get_phone", "release_account",
+    "relogin", "lease_account", "get_otp", "get_phone", "release_account", "fsm_navigate",
 })
 
 KIND_META: Dict[str, Dict[str, str]] = {
