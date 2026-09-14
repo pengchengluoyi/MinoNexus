@@ -16,6 +16,8 @@ _CASE_TERMINAL = {
     "untestable", "unverifiable", "unexecutable",
 }
 
+_TASK_LIVE = frozenset({"running", "queued"})
+
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -358,17 +360,37 @@ def summary_for_apps(app_ids: list[str]) -> list[dict[str, Any]]:
     return out
 
 
-def busy_task_for_sn(sn: str) -> str:
+def task_is_live(doc: dict[str, Any] | None) -> bool:
+    return str((doc or {}).get("status") or "") in _TASK_LIVE
+
+
+def _run_matches_sn(row: dict[str, Any], sn: str) -> bool:
     want = str(sn or "").strip()
     if not want:
-        return ""
-    for row in list_runs(limit=80):
+        return False
+    sns = [str(x) for x in (row.get("sns") or [])]
+    return want == str(row.get("sn") or "") or want in sns
+
+
+def running_run_ids_for_sn(sn: str, *, limit: int = 400) -> list[str]:
+    """Nexus 侧在途任务（不依赖 Scout active_runs 上报）。"""
+    want = str(sn or "").strip()
+    if not want:
+        return []
+    out: list[str] = []
+    for row in list_runs(limit=limit):
         if row.get("status") != "running":
             continue
-        sns = [str(x) for x in (row.get("sns") or [])]
-        if want == row.get("sn") or want in sns:
-            return str(row.get("run_id") or "")
-    return ""
+        if _run_matches_sn(row, want):
+            rid = str(row.get("run_id") or "")
+            if rid:
+                out.append(rid)
+    return out
+
+
+def busy_task_for_sn(sn: str) -> str:
+    ids = running_run_ids_for_sn(sn, limit=80)
+    return ids[0] if ids else ""
 
 
 def request_cancel(run_id: str) -> dict[str, Any]:
@@ -390,6 +412,37 @@ def cancel_requested(run_id: str) -> bool:
 def clear_cancel(run_id: str) -> None:
     with _LOCK:
         _CANCEL.discard(run_id)
+
+
+def cancel_run(run_id: str, *, reason: str = "已取消") -> dict[str, Any]:
+    """用户取消：立刻落库为 cancelled，后台线程不得再覆盖终态。"""
+    doc = get(run_id)
+    if not doc:
+        return {"ok": False, "code": 404, "reason": "任务不存在"}
+    if not task_is_live(doc):
+        clear_cancel(run_id)
+        return {"ok": True, "already": True, "code": 200, "doc": doc}
+    with _LOCK:
+        _CANCEL.add(run_id)
+    finished = finish(run_id, status="cancelled", error=reason)
+    return {"ok": True, "code": 200, "doc": finished}
+
+
+def reconcile_stale_running_runs(*, reason: str = "Nexus 重启，任务中断") -> list[str]:
+    """启动时清扫僵尸 running（线程已死、仅 DB 残留）。"""
+    done: list[str] = []
+    for row in list_runs(limit=400):
+        if str(row.get("status") or "") != "running":
+            continue
+        rid = str(row.get("run_id") or "").strip()
+        if not rid:
+            continue
+        try:
+            finish(rid, status="failed", error=reason)
+            done.append(rid)
+        except KeyError:
+            pass
+    return done
 
 
 def patch_case(run_id: str, case_id: str, **fields: Any) -> dict[str, Any]:
@@ -443,17 +496,40 @@ def _close_open_sessions(doc: dict[str, Any], *, summary: str = "") -> None:
 
 
 def interrupt_runs(run_ids: list[str], *, reason: str) -> list[str]:
-    """节点断开 / shutting_down：在途 run 立刻失败，不重派。"""
+    """节点断开 / 设备丢失：在途 run 立刻失败，不重派。"""
+    from mino_nexus.loop.agent_stream import emit_testing_task
+    from mino_nexus.loop.web_env import release_devices_for_run
+
     done: list[str] = []
+    seen: set[str] = set()
     for raw in run_ids or []:
         rid = str(raw or "").strip()
-        if not rid:
+        if not rid or rid in seen:
             continue
+        seen.add(rid)
         request_cancel(rid)
         doc = get(rid)
-        if not doc or doc.get("status") != "running":
+        if not doc or not task_is_live(doc):
             continue
-        finish(rid, status="failed", error=reason)
+        finished = finish(rid, status="failed", error=reason)
+        sns = [str(x) for x in (finished.get("sns") or []) if str(x).strip()]
+        head = str(finished.get("sn") or "").strip()
+        if head and head not in sns:
+            sns = [head, *sns]
+        release_devices_for_run(
+            rid,
+            sns=sns,
+            platforms_by_sn=finished.get("platforms_by_sn")
+            if isinstance(finished.get("platforms_by_sn"), dict)
+            else {},
+        )
+        emit_testing_task({
+            "event": "task_finished",
+            "run_id": rid,
+            "task_id": rid,
+            "status": finished.get("status") or "failed",
+            "app_id": str(finished.get("app_id") or ""),
+        })
         done.append(rid)
     return done
 
@@ -462,6 +538,9 @@ def finish(run_id: str, *, status: str = "done", error: str = "") -> dict[str, A
     doc = get(run_id)
     if not doc:
         raise KeyError(run_id)
+    if not task_is_live(doc):
+        clear_cancel(run_id)
+        return doc
     if status in ("failed", "cancelled"):
         for case in doc.get("cases") or []:
             if str(case.get("status") or "") in ("pending", "running"):

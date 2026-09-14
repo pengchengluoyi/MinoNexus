@@ -185,7 +185,7 @@ def dispatch_local(
     if cap == "check_run_env":
         return _check_run_env(event, ctx=ctx, t0=t0)
     if cap in ("fsm_navigate", "recover_fsm_navigate"):
-        return _fsm_navigate(event, ctx=ctx, t0=t0)
+        return _fsm_navigate(event, ctx=ctx, t0=t0, router=router)
     if cap == "lease_account":
         params = dict(event.params or {})
         row, err = lease_for_context(
@@ -226,8 +226,14 @@ def dispatch_local(
     )
 
 
-def _fsm_navigate(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
-    """recovery 扩展：当前屏 → 目标屏，返回 NavFSM 最短路。"""
+def _fsm_navigate(
+    event: PlanEvent,
+    *,
+    ctx: Any,
+    t0: float,
+    router: Any = None,
+) -> EventResult:
+    """当前屏 → 目标屏：规划最短路并执行第一步 tap（非仅 advise）。"""
     from mino_nexus.services import nav_route
 
     params = dict(event.params or {})
@@ -235,6 +241,7 @@ def _fsm_navigate(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
         params.get("from_state")
         or params.get("current_state")
         or params.get("from")
+        or getattr(ctx, "nav_localized_state", "")
         or ""
     ).strip()
     to_state = str(
@@ -245,6 +252,11 @@ def _fsm_navigate(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
         or ""
     ).strip()
     app_id = str(params.get("app_id") or getattr(ctx, "app_id", "") or "").strip()
+    project_id = str(
+        params.get("project_id")
+        or getattr(ctx, "nav_project_id", "")
+        or ""
+    ).strip()
     if not app_id:
         return _result(
             event,
@@ -253,41 +265,122 @@ def _fsm_navigate(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
             error="missing app_id",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
-    if not from_state or not to_state:
+    if not to_state:
         return _result(
             event,
             status=EventStatus.FAIL,
-            summary="需要 from_state/current_state 与 to_state/expected_state",
-            error="missing from_state or to_state",
+            summary="需要 to_state/expected_state（目标 Tab 或 state_id）",
+            error="missing to_state",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
-    plan = nav_route.plan_route_for_app(app_id, from_state=from_state, to_state=to_state)
-    if not plan.get("ok"):
-        err = str(plan.get("error") or "无路径")
-        return _result(
-            event,
-            status=EventStatus.FAIL,
-            summary=err,
-            error=err,
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    hops = int(plan.get("hop_count") or 0)
-    summary = str(plan.get("summary") or "")
-    if hops == 0:
-        msg = f"已在目标屏 {plan.get('to_state')}"
+    fsm_doc, _ = nav_route.load_fsm_doc(app_id, project_id=project_id)
+    fsm = fsm_doc or {}
+    if not from_state:
+        plan_msg = f"未提供当前屏，直接尝试点击目标 Tab「{to_state}」"
+        tap_params = nav_route.direct_tab_tap_params(fsm, to_state)
+        if tap_params and router is not None:
+            pass  # 跳到执行段
+        else:
+            return _result(
+                event,
+                status=EventStatus.FAIL,
+                summary="需要 from_state/current_state，或提供可识别的目标 Tab 文案",
+                error="missing from_state",
+                elapsed_ms=int((time.time() - t0) * 1000),
+            )
     else:
-        first = (plan.get("steps") or [{}])[0]
-        msg = (
-            f"规划 {hops} 步：{summary}；本步执行 {first.get('edge_id') or ''} "
-            f"→ {first.get('to') or ''}"
+        plan = nav_route.plan_route_for_app(
+            app_id,
+            from_state=from_state,
+            to_state=to_state,
+            project_id=project_id,
+        )
+        fsm = plan.get("fsm") if isinstance(plan.get("fsm"), dict) else fsm
+        tap_params = {}
+        plan_msg = ""
+        if plan.get("ok"):
+            hops = int(plan.get("hop_count") or 0)
+            summary = str(plan.get("summary") or "")
+            if hops == 0:
+                plan_msg = f"已在目标屏 {plan.get('to_state')}"
+                return _result(
+                    event,
+                    status=EventStatus.PASS,
+                    summary=plan_msg,
+                    executor="internal",
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                )
+            else:
+                first = (plan.get("steps") or [{}])[0]
+                tap_params = nav_route.tap_params_for_edge(fsm, first)
+                plan_msg = (
+                    f"规划 {hops} 步：{summary}；本步 {first.get('edge_id') or ''} "
+                    f"→ {first.get('to') or ''}"
+                )
+        else:
+            err = str(plan.get("error") or "无路径")
+            tap_params = nav_route.direct_tab_tap_params(fsm, to_state)
+            if not tap_params:
+                return _result(
+                    event,
+                    status=EventStatus.FAIL,
+                    summary=err,
+                    error=err,
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                )
+            plan_msg = f"{err}；尝试直接点击 Tab「{tap_params.get('selector_text') or ''}」"
+
+    if not tap_params:
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary=f"{plan_msg or '无路径'}（边未配置 target_tab，无法执行）",
+            error="missing tap params",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    if router is None:
+        return _result(
+            event,
+            status=EventStatus.PASS,
+            summary=f"{plan_msg}；未连接设备，仅返回规划",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+
+    from mino_nexus.loop.web_env import agent_step_idx
+
+    tap_event = PlanEvent(
+        seq=event.seq,
+        capability_id="tap_element",
+        event_kind="tap_element",
+        params=tap_params,
+        ai_reasoning=str(event.ai_reasoning or plan_msg or "fsm_navigate"),
+        label=f"FSM→{tap_params.get('selector_text') or 'tap'}",
+    )
+    scout_run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
+    case_seq = int(getattr(ctx, "case_seq", 0) or 0)
+    tap_result = router.dispatch(
+        tap_event,
+        run_id=scout_run_id,
+        step_idx=agent_step_idx(case_seq, event.seq),
+    )
+    tap_st = tap_result.status.value if hasattr(tap_result.status, "value") else str(tap_result.status)
+    tap_summary = str(tap_result.summary or tap_result.error or "")
+    if tap_st in ("pass", "done"):
+        return _result(
+            event,
+            status=EventStatus.PASS,
+            summary=f"{plan_msg}；已点击「{tap_params.get('selector_text') or ''}」",
+            executor="internal+adb",
+            elapsed_ms=int((time.time() - t0) * 1000),
         )
     return _result(
         event,
-        status=EventStatus.PASS,
-        summary=msg,
-        executor="internal",
+        status=EventStatus.FAIL,
+        summary=f"{plan_msg}；点击失败：{tap_summary}",
+        error=tap_summary or "tap failed",
+        executor="internal+adb",
         elapsed_ms=int((time.time() - t0) * 1000),
-        error="",
     )
 
 

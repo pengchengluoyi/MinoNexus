@@ -6,6 +6,7 @@ from typing import Any
 
 _PRICE_RE = re.compile(r"^[\d.]+$|^¥|^#")
 _VOLATILE_RE = re.compile(r"^\d+(\.\d+)?$|^#.+$|^\d+分钟|^\d+小时")
+_CLOCK_RE = re.compile(r"^\d{1,2}:\d{2}$")
 _BACK_RID_RE = re.compile(r"back|navigate_up|up_button", re.I)
 _WIDGET_ORDER = (
     "search_bar",
@@ -40,7 +41,7 @@ def is_volatile_text(text: str) -> bool:
     val = str(text or "").strip()
     if len(val) < 2 or len(val) > 64:
         return True
-    if _PRICE_RE.match(val) or _VOLATILE_RE.match(val):
+    if _PRICE_RE.match(val) or _VOLATILE_RE.match(val) or _CLOCK_RE.match(val):
         return True
     if val.startswith("#") and len(val) > 12:
         return True

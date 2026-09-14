@@ -193,6 +193,7 @@ class NavRuntime:
         self.gate.observe(self.plan.guards, hierarchy_ok=bool(nodes))
         slot_sink["nav_assist"] = nav_compiler.compile_assist(
             self.plan,
+            fsm=self.fsm,
             app_id=self.app_id,
             project_id=self.project_id,
             run_type=self.run_type,

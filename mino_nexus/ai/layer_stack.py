@@ -117,6 +117,8 @@ DEFAULT_TRIGGER_SKILLS: dict[str, dict[str, str]] = {
     "im_chat": {"dialogue": "im-dialogue", "defect": "im-defect"},
     "qa_tick": {"default": ""},
     "case_run": {"default": "run-case"},
+    "app_explore": {"default": "explore-app"},
+    "explore_run": {"default": "explore-app"},
     "settings_chat": {"default": ""},
 }
 

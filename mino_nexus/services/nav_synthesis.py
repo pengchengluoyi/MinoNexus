@@ -32,6 +32,24 @@ def _is_tab_candidate_text(text: str) -> bool:
     return True
 
 
+def _is_bad_tab_slot_label(text: str) -> bool:
+    """非底栏 Tab 文案：顶栏分段、电量/百分比、多行 feed 等。"""
+    val = str(text or "").strip()
+    if not val:
+        return True
+    if "\n" in val or len(val) > 12:
+        return True
+    if "%" in val or "％" in val:
+        return True
+    if re.match(r"^\d+[\s.]", val):
+        return True
+    if re.match(r"^\d+[%％]?$", val):
+        return True
+    if not _is_tab_candidate_text(val) and val not in ("icon", "ImageView"):
+        return True
+    return False
+
+
 def _bounds_bottom(node: dict[str, Any]) -> int:
     b = node.get("bounds") or []
     if isinstance(b, (list, tuple)) and len(b) >= 4:
@@ -57,12 +75,18 @@ def _tab_bar_y_min(samples: list[dict[str, Any]], *, bottom_ratio: float = 0.14)
     return int(height * (1.0 - bottom_ratio))
 
 
-def _pick_home_tab(tab_labels: list[str], tab_turns: dict[str, list[dict[str, Any]]]) -> str:
-    """Recover 默认回到底栏最左 Tab（结构约定），不按 App 文案猜。"""
+def _pick_home_tab(tab_labels: list[str], tab_turns: dict[str, list[dict[str, Any]]], *, app_id: str = "") -> str:
+    """冷启动首页 Tab：读 nav_fsm 配置，不用 tab_labels[0] 当应用逻辑首页。"""
     if not tab_labels:
         return ""
     if len(tab_labels) == 1:
         return tab_labels[0]
+    if str(app_id or "").strip():
+        from mino_nexus.services.nav_tab_prefs import resolve_home_tab_label
+
+        resolved = resolve_home_tab_label(str(app_id).strip(), tab_labels)
+        if resolved:
+            return resolved
     return tab_labels[0]
 
 
@@ -110,36 +134,205 @@ def _horizontal_tab_row_labels(turn: dict[str, Any]) -> list[str]:
     return [t for t in row if _is_tab_candidate_text(t)]
 
 
-def extract_tab_bar_labels(
+def _center_tab_slot_label(nodes: list[dict[str, Any]], side_labels: list[str]) -> str:
+    """两侧有文案、中间为图标槽时，用 content_desc / resource-id 作 Tab 标签。"""
+    from mino_nexus.services.nav_screen_layout import _button_items, infer_tab_bar_band
+
+    sides = {str(t or "").strip() for t in side_labels if str(t or "").strip()}
+    if len(sides) < 2 or not nodes:
+        return ""
+    band = infer_tab_bar_band(nodes)
+    y0 = int(band.get("band_top_px") or 0)
+    items = [row for row in _button_items(nodes) if row[3] >= y0 - 8]
+    side_items = sorted([row for row in items if row[4] in sides], key=lambda r: r[0])
+    if len(side_items) < 2:
+        return ""
+    left, right = side_items[0], side_items[-1]
+    for row in items:
+        if row[4] in sides:
+            continue
+        if row[0] <= left[2] + 4 or row[2] >= right[0] - 4:
+            continue
+        if row[1] < y0 - 12:
+            continue
+        # 取该槽位下最深子节点的可读名
+        for node in nodes or []:
+            b = node.get("bounds") or []
+            if len(b) < 4:
+                continue
+            if int(b[0]) < row[0] - 4 or int(b[2]) > row[2] + 4:
+                continue
+            if int(b[1]) < y0 - 12:
+                continue
+            for field in ("content_desc", "text"):
+                val = str(node.get(field) or "").strip()
+                if val and _is_tab_candidate_text(val):
+                    return val
+            rid = str(node.get("resource_id") or "").split("/")[-1].strip()
+            if rid and _is_tab_candidate_text(rid):
+                return rid
+    return ""
+
+
+def extract_tab_bar_slots(
     samples: list[dict[str, Any]],
     *,
     scope: Any = None,
-) -> list[str]:
-    """从底栏水平 Tab 行推断标签；权限弹窗竖排按钮不计入 Tab。"""
+    app_id: str = "",
+) -> list[dict[str, Any]]:
+    """底栏槽位（含图标槽），顺序仅几何从左到右；频次只用于挑「哪一帧」最完整。"""
     from mino_nexus.services.nav_capture_store import synthesis_turns
-    from mino_nexus.services.nav_screen_layout import infer_tab_bar_band
+    from mino_nexus.services.nav_tab_slots import find_bottom_tab_slots, tab_labels_from_slots
+
+    from mino_nexus.services.nav_screen_layout import is_modal_button_stack
 
     app_samples = synthesis_turns(samples, scope=scope)
     if not app_samples:
         return []
-    counts: dict[str, int] = {}
+    best: list[dict[str, Any]] = []
+    best_score = -1
     for sample in app_samples:
-        row = _horizontal_tab_row_labels(sample)
+        nodes = sample.get("nodes") or []
+        if is_modal_button_stack(nodes):
+            continue
+        from mino_nexus.services.nav_screen_layout import infer_tab_bar_band, screen_size
+
+        sh = screen_size(nodes)[1] or 1920
+        band = infer_tab_bar_band(nodes)
+        band_top = int(band.get("band_top_px") or 0)
+        band_bottom = int(band.get("band_bottom_px") or 0)
+        if band_bottom < int(sh * 0.88):
+            continue
+        if band_top < int(sh * 0.78):
+            continue
+        slots = find_bottom_tab_slots(nodes)
+        if len(slots) < 2:
+            continue
+        clean_slots = [
+            s
+            for s in slots
+            if not _is_bad_tab_slot_label(str(s.get("label") or ""))
+            or str(s.get("kind") or "") == "icon"
+        ]
+        if len(clean_slots) < 2:
+            continue
+        slots = clean_slots[:6]
+        score = 0
+        if band_bottom >= int(sh * 0.96):
+            score += 24
+        score += min(len(slots), 5) * 3
+        text_slots = 0
+        for s in slots:
+            lab = str(s.get("label") or "")
+            if lab in ("ImageView", "icon", "AppCompatImageView", ""):
+                continue
+            if _is_tab_candidate_text(lab) and not _is_bad_tab_slot_label(lab):
+                text_slots += 1
+                score += 18
+            elif str(s.get("kind") or "") == "icon":
+                score += 2
+        if text_slots < 1:
+            score -= 40
+        if score > best_score or (score == best_score and len(slots) > len(best)):
+            best = slots
+            best_score = score
+    if len(best) < 2:
+        return []
+    if str(app_id or "").strip():
+        from mino_nexus.services.nav_tab_prefs import load_tab_bar_prefs, merge_configured_tab_labels
+
+        prefs = load_tab_bar_prefs(str(app_id).strip())
+        configured = list(prefs.get("labels") or [])
+        extracted = tab_labels_from_slots(best)
+        merged = merge_configured_tab_labels(extracted, configured)
+        if configured and merged != extracted:
+            # 用配置补全中间图标槽文案，保留几何顺序
+            by_x = {int(s["center_x"]): s for s in best}
+            ordered_x = sorted(by_x.keys())
+            out: list[dict[str, Any]] = []
+            for i, label in enumerate(merged[: len(ordered_x)]):
+                base = by_x.get(ordered_x[i]) if i < len(ordered_x) else None
+                if base:
+                    row = dict(base)
+                    if label and label not in ("图标 Tab", "icon"):
+                        row["label"] = label
+                        row["display"] = label
+                    out.append(row)
+                else:
+                    out.append(
+                        {
+                            "slot_id": f"cfg{i}",
+                            "label": label,
+                            "display": label,
+                            "kind": "text",
+                            "center_x": ordered_x[i] if i < len(ordered_x) else i * 200,
+                            "bounds": [],
+                            "parts": [label],
+                        }
+                    )
+            if len(merged) > len(out):
+                for label in merged[len(out) :]:
+                    out.append(
+                        {
+                            "slot_id": f"cfg{len(out)}",
+                            "label": label,
+                            "display": label,
+                            "kind": "text",
+                            "center_x": (out[-1]["center_x"] if out else 0) + 200,
+                            "bounds": [],
+                            "parts": [label],
+                        }
+                    )
+            return out[:12]
+    return best[:12]
+
+
+def extract_tab_bar_labels(
+    samples: list[dict[str, Any]],
+    *,
+    scope: Any = None,
+    app_id: str = "",
+) -> list[str]:
+    from mino_nexus.services.nav_capture_store import synthesis_turns
+    from mino_nexus.services.nav_screen_layout import find_bottom_horizontal_tab_row, infer_tab_bar_band, screen_size
+    from mino_nexus.services.nav_tab_slots import tab_labels_from_slots
+
+    slots = extract_tab_bar_slots(samples, scope=scope, app_id=app_id)
+    labels = tab_labels_from_slots(slots) if len(slots) >= 2 else []
+    labels = [l for l in labels if not _is_bad_tab_slot_label(l) and l not in ("ImageView", "icon", "图标 Tab")]
+    if len(labels) >= 2:
+        return labels[:12]
+
+    app_samples = synthesis_turns(samples, scope=scope)
+    best_row: list[str] = []
+    best_score = -1
+    for sample in app_samples:
+        nodes = sample.get("nodes") or []
+        if not nodes:
+            continue
+        sh = screen_size(nodes)[1] or 1920
+        band = infer_tab_bar_band(nodes)
+        if int(band.get("band_bottom_px") or 0) < int(sh * 0.88):
+            continue
+        row = [
+            str(x).strip()
+            for x in find_bottom_horizontal_tab_row(nodes)
+            if str(x).strip() and not _is_bad_tab_slot_label(str(x))
+        ]
         if len(row) < 2:
             continue
-        for text in row:
-            counts[text] = counts.get(text, 0) + 1
-    if not counts:
-        return []
-    tabs = [t for t, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])) if c >= 2]
-    if len(tabs) < 2:
-        tabs = [t for t, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])) if c >= 1][:8]
-    if len(tabs) < 2:
-        return []
-    band = infer_tab_bar_band(app_samples[0].get("nodes") or [])
-    y_min = int(band.get("band_top_px") or band.get("content_bottom_px") or 0)
-    tabs = _order_tabs_left_to_right(tabs[:8], app_samples, y_min=y_min)
-    return tabs[:8]
+        score = len(row) * 10 + (20 if int(band.get("band_bottom_px") or 0) >= int(sh * 0.96) else 0)
+        if score > best_score:
+            best_score = score
+            best_row = row
+    if len(best_row) >= 2:
+        labels = best_row
+    if str(app_id or "").strip():
+        from mino_nexus.services.nav_tab_prefs import load_tab_bar_prefs, merge_configured_tab_labels
+
+        configured = list(load_tab_bar_prefs(str(app_id).strip()).get("labels") or [])
+        labels = merge_configured_tab_labels(labels, configured)
+    return labels[:12]
 
 
 def _content_fingerprint(sample: dict[str, Any], *, y_max: int, exclude: set[str]) -> set[str]:
@@ -271,6 +464,12 @@ def infer_selected_tab_label(
     selected = _tab_labels_from_selection(nodes, tab_labels, band_top=band_top)
     if len(selected) == 1:
         return selected[0]
+    if len(selected) > 1:
+        for label in selected:
+            st = _bottom_tab_node_states(turn, tab_labels, band_top=band_top).get(label, ())
+            if st and (st[0] or st[1]):
+                return label
+        return selected[0]
     return prev_tab or fallback
 
 
@@ -350,33 +549,62 @@ def assign_turn_tabs(
     band_top, _ = _tab_bar_band(turns)
     sig_to_tab: dict[tuple[str, str, tuple[str, ...]], str] = {}
     out: list[str] = []
-    prev_tab = home_tab
+    prev_tab = ""
+    shell_tab = ""
 
     for i, turn in enumerate(turns):
-        tab = infer_selected_tab_label(
-            turn,
-            tab_labels,
-            band_top=band_top,
-            fallback="",
-            prev_tab="",
-        )
-        if not tab and i > 0:
-            tab = _infer_tab_from_bottom_diff(turns[i - 1], turn, tab_labels, band_top=band_top)
         sig = _segment_signature(turn, y_tab=y_tab, exclude=exclude)
-        if not tab:
-            tab = sig_to_tab.get(sig, "")
-        if not tab:
-            tab = prev_tab or home_tab
+        bar_labels = _horizontal_tab_row_labels(turn)
+        tab_bar_visible = len(bar_labels) >= 2
+        tab = ""
+        if tab_bar_visible:
+            tab = infer_selected_tab_label(
+                turn,
+                tab_labels,
+                band_top=band_top,
+                fallback="",
+                prev_tab="",
+            )
+            if not tab and i > 0:
+                tab = _infer_tab_from_bottom_diff(turns[i - 1], turn, tab_labels, band_top=band_top)
+            if not tab:
+                cur_states = _bottom_tab_node_states(turn, tab_labels, band_top=band_top)
+                picked = [
+                    label
+                    for label in tab_labels
+                    if cur_states.get(label, ()) and (cur_states[label][0] or cur_states[label][1])
+                ]
+                if len(picked) == 1:
+                    tab = picked[0]
+            if not tab:
+                tab = sig_to_tab.get(sig, "")
+            if not tab and shell_tab:
+                tab = shell_tab
+            if not tab and prev_tab:
+                tab = prev_tab
+            if not tab:
+                tab = home_tab
+            if tab:
+                shell_tab = tab
+        else:
+            # 二级页/全屏：无底栏时继承最近 shell Tab，不强行回到 home_tab
+            tab = sig_to_tab.get(sig, "") or shell_tab or prev_tab
+            if not tab and i == 0:
+                tab = home_tab
+                shell_tab = tab
 
         if infer_selected_tab_label(turn, tab_labels, band_top=band_top, fallback="", prev_tab="") or (
             i > 0 and _infer_tab_from_bottom_diff(turns[i - 1], turn, tab_labels, band_top=band_top)
         ):
             sig_to_tab[sig] = tab
-        elif sig not in sig_to_tab:
+        elif sig not in sig_to_tab and tab:
             sig_to_tab[sig] = tab
 
+        if tab and tab not in tab_labels:
+            tab = prev_tab or shell_tab or home_tab or tab_labels[0]
         out.append(tab)
-        prev_tab = tab
+        if tab:
+            prev_tab = tab
     return out
 
 
@@ -439,7 +667,7 @@ def build_from_tab_bar(
 
     scope = resolve_app_target_scope(app_id)
     app_turns = synthesis_turns(ordered, scope=scope)
-    tab_labels = extract_tab_bar_labels(app_turns or ordered, scope=scope)
+    tab_labels = extract_tab_bar_labels(app_turns or ordered, scope=scope, app_id=app_id)
     if len(tab_labels) < 2:
         return None
 
@@ -449,7 +677,7 @@ def build_from_tab_bar(
     bands = infer_content_bands(sample_nodes)
     y_tab = int(bands.get("content_bottom_px") or _tab_bar_y_min(ordered, bottom_ratio=0.14))
     exclude_tabs = set(tab_labels)
-    home_tab = _pick_home_tab(tab_labels, {})
+    home_tab = _pick_home_tab(tab_labels, {}, app_id=app_id)
 
     login_turns: list[dict[str, Any]] = []
     main_turns: list[dict[str, Any]] = []

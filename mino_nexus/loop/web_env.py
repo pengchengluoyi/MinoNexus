@@ -145,3 +145,26 @@ def release_web_for_run(
         if not is_web_slot(sn, plat):
             continue
         release_run(RouterProxy(sn, run_id=run_id), run_id=run_id)
+
+
+def release_devices_for_run(
+    run_id: str,
+    *,
+    sns: Optional[list[str]] = None,
+    platforms_by_sn: Optional[dict[str, str]] = None,
+) -> None:
+    """任务结束/取消：Web 关页 + 各平台通知 Scout cancel_run。"""
+    release_web_for_run(run_id, sns=sns, platforms_by_sn=platforms_by_sn)
+    seen: set[str] = set()
+    for sn in sns or []:
+        sn = str(sn or "").strip()
+        if not sn or sn in seen:
+            continue
+        seen.add(sn)
+        plat = (platforms_by_sn or {}).get(sn, "")
+        if is_web_slot(sn, plat):
+            continue
+        try:
+            RouterProxy(sn, run_id=run_id).notify_scout_cancel_run(run_id)
+        except Exception as exc:
+            SLog.w(TAG, f"cancel_run sn={sn}: {exc!r}")

@@ -9,6 +9,8 @@ AGENT_DECIDE_V5_MARKER = "prompt_version >= 5（批跑 recovery / prep 收工）
 AGENT_DECIDE_V6_MARKER = "prompt_version >= 6（signal_skip / 迷路重启）"
 AGENT_DECIDE_V7_MARKER = "prompt_version >= 7（NavFSM RouteAssist / 导航守卫）"
 AGENT_DECIDE_V8_MARKER = "prompt_version >= 8（screen_layout 布局线框）"
+AGENT_DECIDE_V9_MARKER = "prompt_version >= 9（文档库 doc_context 摘录）"
+DOC_CONTEXT_SLOT = "doc_context"
 ASSERT_VISION_V2_MARKER = "prompt_version >= 2（screen_layout 布局线框）"
 NAV_ASSIST_SLOT = "nav_assist"
 
@@ -257,15 +259,18 @@ def _patch_agent_decide_v7(text: str) -> str:
     """
     out = str(text or "")
 
-    nav_block = """### 导航 assist（有【导航 assist】段时必守）
+    nav_block = """### 导航 assist（出现「==== 导航 assist」块时必守）
 
-- 这段来自按本应用校准过的导航图，比你从截图里的猜测更可靠。**有它就照它走。**
-- 【建议边】给的是下一步转移。没有特殊理由就执行它列出的动作。
-- 【本步允许】是本步的点击白名单：要点东西就**从里面选**。点别的元素守卫会拦（恢复动作、signal_* 不受此限）。
-- 【禁止】里的动作**不要试**。被拦一次会 steer，两次会 block，三次整案停 —— 换路径，不要重试。
-- 【锚点】说目标不在当前屏时：先按它说的方向滑动，再执行建议边。**不要**跳过滑动直接点。
-- 置信度低（loc 后的括号里数值小）时只用恢复类动作回到已知界面，不要盲点。
-- 没有【导航 assist】段就照常按截图与步骤决策 —— 这段缺席是正常的（多数应用还没配导航图）。
+- 正文由导航图编译，比凭截图猜路更可靠；**有块就按块里写的做**。
+- **【导航】**：当前在哪一屏（中文名 + id + 置信度）。置信低时先 recover / 问人，勿乱点。
+- **【路线】** 三种情况要分清：
+  - 「下一步：…」→ 按写的点击去下一屏（仅用于赶路，与用例步骤冲突时以用例为准）。
+  - 「已在用例导航目标屏」→ 不必再切 Tab，按用例步骤继续。
+  - 「路线图未覆盖」→ **没有已发布的跳转能到用例目标**；不要编造 Tab/返回；按用例步骤点控件，或 signal_ask_human / signal_give_up。
+- **【本步允许】**：本步点击白名单（`tap_element` 仅用于【路线】或用例步骤里的控件）。`signal_*` 不受守卫限。
+- **【禁止】**：列出的 tap **不要试**（steer → block → 停案）。
+- **【滚动】**：锚点不在屏上时先滑再走路线。
+- 没有导航 assist 块 → 照常按截图与步骤（多数应用未配图时正常）。
 
 """
     anchor = "### 前台不是被测 App"
@@ -426,6 +431,98 @@ def upgrade_agent_decide_to_v8() -> int:
         else:
             db_row.system_blocks_json = list(merged.get("system_blocks") or [])
             db_row.prompt_version = 8
+        db.flush()
+    return 1
+
+
+def _patch_agent_decide_v9(text: str) -> str:
+    out = str(text or "")
+    doc_block = """### 文档摘录（有【文档摘录】段时）
+
+- 来自上传的 PRD / 说明文档，**仅供参考**；与当前屏或步骤冲突时以截图和步骤原文为准。
+- 只采纳能在界面上**验证**的口径（耗时、数量、文案、流程分支）。
+- 摘录不完整时不要臆造；需要更多上下文可继续按步骤操作或 signal_ask_human。
+
+"""
+    anchor = AGENT_DECIDE_V8_MARKER
+    if anchor in out and "### 文档摘录" not in out:
+        out = out.replace(anchor, doc_block + "<!-- " + anchor + " -->\n")
+    elif "### 文档摘录" not in out:
+        out = out.rstrip() + "\n\n" + doc_block + f"<!-- {AGENT_DECIDE_V9_MARKER} -->\n"
+    return out
+
+
+def _ensure_doc_context_slot(merged: dict[str, Any]) -> None:
+    slots = [dict(s) for s in (merged.get("slots") or []) if isinstance(s, dict)]
+    if not any(str(s.get("name") or "") == DOC_CONTEXT_SLOT for s in slots):
+        slots.append({"name": DOC_CONTEXT_SLOT, "kind": "text", "desc": "文档库 FTS 摘录（可空）"})
+    merged["slots"] = slots
+    blocks = [dict(b) for b in (merged.get("user_blocks") or []) if isinstance(b, dict)]
+    if not any(str(b.get("slot") or "") == DOC_CONTEXT_SLOT for b in blocks):
+        blocks.append({
+            "id": "doc_context",
+            "slot": DOC_CONTEXT_SLOT,
+            "heading": "==== 文档摘录（上传文档检索，仅供参考）====",
+            "skip_if_empty": True,
+            "enabled": True,
+            "max_chars": 1400,
+        })
+    merged["user_blocks"] = blocks
+
+
+def upgrade_agent_decide_to_v9() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 9:
+        return 0
+    if int(row.get("prompt_version") or 1) < 8:
+        upgrade_agent_decide_to_v8()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_agent_decide_v9(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    _ensure_doc_context_slot(merged)
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 8),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": f"v{row.get('prompt_version')} before program upgrade to v9",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 9
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+    from mino_nexus.services.job_store import _to_row
+
+    with session_scope() as db:
+        db_row = db.query(LlmJob).filter(LlmJob.id == "agent-decide").first()
+        if db_row is None:
+            db.add(_to_row({**merged, "id": "agent-decide", "builtin": True}))
+        else:
+            db_row.system_blocks_json = list(merged.get("system_blocks") or [])
+            db_row.user_blocks_json = list(merged.get("user_blocks") or [])
+            db_row.slots_json = list(merged.get("slots") or [])
+            db_row.prompt_version = 9
         db.flush()
     return 1
 

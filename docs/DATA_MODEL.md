@@ -16,12 +16,15 @@
 | 节点 / 工作台归属 | `nodes` / `studios` | 活连接在内存 `NodeRegistry` |
 | 账号 / 会话 | `users` / `sessions` / `auth_state` | UI 登录 |
 | 设置 / 知识机审开关 | `settings` | UI |
-| 知识条目 | `knowledge_entries` | UI / 学习沉淀 |
+| 文档库元数据 / 分片 | `doc_sources`（含 `source_kind`/`source_url`）/ `doc_chunks` + FTS | 上传 / 飞书同步；见 [DOC_LIBRARY.md](DOC_LIBRARY.md) |
+| 原始文档文件 | `{data_dir}/docs/{app_id}/{source_id}/` | 与 `mino.db` 同根 |
+| 执行知识条目 | `knowledge_entries` | UI / 跑批沉淀 / DOC_LEARN（二期） |
 | 调度流水 | `dispatch_calls` | LLM / pipeline |
 | Session 轨迹 | `session_events` / `session_meta` | Agent 循环双写 |
 | 能力目录 | `catalog_entries`（`kind` 区分五类） | 空库不灌；只经 Console `/packs` 写入 |
 | NavFSM（导航图配置） | `nav_fsm` / `nav_fsm_states` / `nav_fsm_edges` | Studio / `PUT /nav-fsm/{app_id}`；见 [NAVIGATION_ATLAS.md](NAVIGATION_ATLAS.md)。键：`app_id` + `project_id`（来自 `apps`） |
 | NavFSM 校准证据（文件） | `{data_dir}/nav/calibration/{app_id}/{calibration_id}/` | 与 `mino.db` 同根；不进 git、不进 ORM 正文 |
+| AppIntel 关联（规划） | `app_intel_links`（P1 可选） | 导航 / 知识 / 文档交叉引用；投影层见 [9月12日_AppIntel信息基座.md](9月12日_AppIntel信息基座.md) |
 | 技能 | `skills`（角色 + SOP + prompt + `view.id`） | builtin 从代码灌种一次，之后以库为准；坏行回退 `ai/skill_defs.py` |
 | 图谱别名 | `m_atlas_alias` | UI |
 | 集成插件策略 / 用户密钥 | `plugin_policies` / `user_plugin_secrets` | UI |

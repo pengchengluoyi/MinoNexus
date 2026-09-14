@@ -64,11 +64,18 @@ def bootstrap() -> None:
         pv = upgrade_jobs_prompt_version()
         if pv:
             SLog.i(TAG, f"llm_jobs prompt_version migrated {pv}")
-        from mino_nexus.ai.job_upgrades import upgrade_agent_decide_to_v8, upgrade_assert_vision_to_v2
+        from mino_nexus.ai.job_upgrades import (
+            upgrade_agent_decide_to_v8,
+            upgrade_agent_decide_to_v9,
+            upgrade_assert_vision_to_v2,
+        )
 
         v8 = upgrade_agent_decide_to_v8()
         if v8:
             SLog.i(TAG, "agent-decide upgraded to prompt v8")
+        v9 = upgrade_agent_decide_to_v9()
+        if v9:
+            SLog.i(TAG, "agent-decide upgraded to prompt v9")
         av2 = upgrade_assert_vision_to_v2()
         if av2:
             SLog.i(TAG, "assert-vision upgraded to prompt v2")

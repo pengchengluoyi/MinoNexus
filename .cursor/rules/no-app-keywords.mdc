@@ -1,0 +1,13 @@
+---
+description: 禁止在导航相关代码中硬编码被测 App 的 UI 文案或 Tab 关键字
+globs: mino_nexus/services/nav_*.py,mino_nexus/loop/nav_*.py,mino_nexus/models/nav_*.py
+alwaysApply: false
+---
+
+# 禁止 App 文案硬编码
+
+写或改本规则覆盖范围内的文件时，**不得**引入针对特定 App 的文案白名单、Tab 名列表或登录/协议类中文正则。
+
+Tab、页面角色、登录屏识别只能依赖：底栏几何带、`selected`/`checked`、resource-id 结构、layout framework、内容指纹、输入框结构。
+
+发现 `_TAB_HINTS`、`_HOME_ORDER`、`_LOGIN_RE`、`_SKIP_RE` 等模式时立即删除并改为结构推断。详见 `.cursor/skills/no-app-keywords/SKILL.md`。

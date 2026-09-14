@@ -14,6 +14,7 @@ CATEGORIES = ("flow", "device", "channel", "sync")
 ALIASES = {
     "agent-decide": "run-case",
     "agent_do": "run-case",
+    "explore-decide": "explore-app",
 }
 
 DEFAULT_SOP = {
@@ -98,6 +99,38 @@ def builtin_skills() -> list[dict[str, Any]]:
             },
             view_id="case-three-column",
             sort_order=10,
+        ),
+        _skill(
+            id="explore-app",
+            label="应用探索",
+            summary="在 App 内自由探索，被动采集拓展 Screen Atlas。",
+            category="device",
+            role_id="test-engineer",
+            role_label="测试工程师",
+            engine="agent_loop",
+            triggers=["app_explore", "explore_run"],
+            sop={
+                "phases": [
+                    {
+                        "id": "do",
+                        "job": "agent-decide",
+                        "tool_kinds": ["do", "generic", "recovery"],
+                        "guards": ["action_fuse", "limit_recovery_retry", "block_login_after_guest"],
+                        "advance_on": "signal_done",
+                    },
+                ],
+                "inspections": [],
+                "pointer": "none",
+                "tool_kinds": ["do", "generic", "recovery"],
+                "max_steps": 80,
+                "max_idle_steps": 15,
+            },
+            input_spec={
+                "type": "instruction",
+                "map": {"goal": "case.steps_raw", "success": "case.success_criteria"},
+            },
+            view_id="job-timeline",
+            sort_order=11,
         ),
         _skill(
             id="analyze_req",

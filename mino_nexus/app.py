@@ -24,9 +24,11 @@ from mino_nexus.services.node_registry import get_registry
 from mino_nexus.core.paths import data_dir
 from mino_nexus.routers import (
     rAppAutomation,
+    rAppIntel,
     rAuth,
     rCaseRunner,
     rDevice,
+    rDocs,
     rMe,
     rNavFsm,
     rPacks,
@@ -54,8 +56,12 @@ async def lifespan(app: FastAPI):
 
     ensure_db()
     from mino_nexus.services.auth_store import ensure_seed_users
+    from mino_nexus.services.run_store import reconcile_stale_running_runs
 
     ensure_seed_users()
+    stale = reconcile_stale_running_runs()
+    if stale:
+        SLog.w(TAG, f"启动清扫 {len(stale)} 条僵尸 running 任务: {stale[:5]}")
     configure_proxy_bypass()
     loop = asyncio.get_running_loop()
     ui_ws.set_loop(loop)
@@ -64,7 +70,22 @@ async def lifespan(app: FastAPI):
     set_main_loop(loop)
     handle = await register_beacon()
     app.state.mdns = handle
+
+    async def _doc_sync_loop() -> None:
+        while True:
+            await asyncio.sleep(60)
+            try:
+                from mino_nexus.services.doc_sync import doc_sync_tick
+
+                n = doc_sync_tick()
+                if n:
+                    SLog.i(TAG, f"飞书文档定时同步 {n} 条")
+            except Exception as exc:
+                SLog.w(TAG, f"doc sync tick: {exc}")
+
+    doc_sync_task = asyncio.create_task(_doc_sync_loop())
     yield
+    doc_sync_task.cancel()
     await unregister_beacon(handle)
 
 
@@ -115,11 +136,13 @@ def create_app() -> FastAPI:
     app.include_router(rDevice.router)
     app.include_router(rCaseRunner.router)
     app.include_router(rSettings.router)
+    app.include_router(rDocs.router)
     app.include_router(rPacks.router)
     app.include_router(rProject.router)
     app.include_router(rProjectCases.router)
     app.include_router(rAppAutomation.router)
     app.include_router(rNavFsm.router)
+    app.include_router(rAppIntel.router)
     app.include_router(rTask.router)
 
     node_ws.register_routes(app)

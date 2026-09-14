@@ -29,6 +29,7 @@ def assemble_agent_decide_slots(
     knowledge_body: str = "",
     session_block: str = "",
     nav_assist: str = "",
+    doc_context: str = "",
     accounts_brief: str = "",
     image_base64: str = "",
     image_mime: str = "image/png",
@@ -56,6 +57,7 @@ def assemble_agent_decide_slots(
         "hierarchy_text": (hierarchy_text or "").strip(),
         # NavFSM 的 RouteAssist。空串时 agent-decide 里那一块整块跳过（skip_if_empty）
         "nav_assist": (nav_assist or "").strip(),
+        "doc_context": (doc_context or "").strip(),
         "image_base64": image_base64 or "",
         "image_mime": image_mime or "image/png",
     }

@@ -10,11 +10,26 @@ from mino_nexus.services import project_store as ps
 from mino_nexus.services import run_store
 from mino_nexus.core.http_util import ok
 from mino_nexus.loop import agent_stream, case_runner as cr
-from mino_nexus.loop.web_env import release_web_for_run
+from mino_nexus.loop.agent_stream import emit_testing_task
+from mino_nexus.loop.web_env import release_devices_for_run
 from mino_nexus.routers.deps import current_session
 from mino_nexus.services.ui_devices import ui_devices
 
 router = APIRouter(prefix="/case-runner", tags=["CaseRunner"])
+
+
+class ExploreRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    app_id: str = ""
+    sn: str = ""
+    platform: str = "android"
+    async_exec: bool = True
+    instruction: str = ""
+    provider_id: str = ""
+    max_steps: int = 80
+    max_idle_steps: int = 15
+    playwright_headless: bool = True
 
 
 class RunRequest(BaseModel):
@@ -126,6 +141,36 @@ def run_cases(body: RunRequest, _sess: dict = Depends(current_session)):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/explore")
+def run_explore(body: ExploreRequest, _sess: dict = Depends(current_session)):
+    if not str(body.app_id or "").strip():
+        raise HTTPException(status_code=400, detail="缺少 app_id")
+    try:
+        app = ps.require_app(body.app_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="App not found") from exc
+    try:
+        snapshot = cr.run_explore(
+            app,
+            sn=body.sn,
+            max_steps=int(body.max_steps or 80),
+            max_idle_steps=int(body.max_idle_steps or 15),
+            instruction=str(body.instruction or "").strip(),
+            provider_id=str(body.provider_id or "").strip(),
+            async_exec=bool(body.async_exec),
+            platform=body.platform or "android",
+            playwright_headless=bool(body.playwright_headless),
+        )
+        return ok(snapshot, msg="应用探索已启动")
+    except cr.DeviceBusy as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "device busy", "busy_task_id": exc.busy_task_id, "sn": exc.sn},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/runs")
 def list_runs(limit: int = Query(30), app_id: str = "", _sess: dict = Depends(current_session)):
     rows = run_store.list_runs(limit=limit, app_id=(app_id or "").strip())
@@ -167,22 +212,29 @@ def get_task(task_id: str, _sess: dict = Depends(current_session)):
 
 @router.post("/tasks/{task_id}/cancel")
 def cancel_task(task_id: str, _sess: dict = Depends(current_session)):
-    result = run_store.request_cancel(task_id)
+    result = run_store.cancel_run(task_id, reason="已取消")
     if not result.get("ok"):
         raise HTTPException(status_code=int(result.get("code") or 404), detail=result.get("reason") or "cancel failed")
+    doc = result.get("doc") or run_store.get(task_id) or {}
     if result.get("already"):
         return ok(result, msg="任务已结束")
-    doc = run_store.get(task_id) or {}
     sns = list(doc.get("sns") or [])
     head = str(doc.get("sn") or "").strip()
     if head and head not in sns:
         sns = [head, *sns]
-    release_web_for_run(
+    release_devices_for_run(
         task_id,
         sns=sns,
         platforms_by_sn=doc.get("platforms_by_sn") if isinstance(doc.get("platforms_by_sn"), dict) else {},
     )
-    return ok(result, msg="已请求取消，当前步骤结束后停止")
+    emit_testing_task({
+        "event": "task_finished",
+        "run_id": task_id,
+        "task_id": task_id,
+        "status": doc.get("status") or "cancelled",
+        "app_id": str(doc.get("app_id") or ""),
+    })
+    return ok(result, msg="任务已取消")
 
 
 @router.post("/tasks/{task_id}/retry-failed")

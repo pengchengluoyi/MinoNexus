@@ -113,6 +113,7 @@ mino_nexus/
 | 动数据模型 | [docs/DATA_MODEL.md](docs/DATA_MODEL.md) |
 | 打通 Console / Studio | [docs/HTTP.md](docs/HTTP.md) |
 | 动导航图 / 守卫 / hierarchy | [docs/NAVIGATION_ATLAS.md](docs/NAVIGATION_ATLAS.md)。配置在 `nav_fsm*` 表，**代码里不得硬编码被测 App 的文案或包名** |
+| 动三渠道统一检索 / context-pack | [docs/9月12日_AppIntel信息基座.md](docs/9月12日_AppIntel信息基座.md)（规划真源） |
 | 从上游搬代码 | [docs/MIGRATION.md](docs/MIGRATION.md) |
 
 ---

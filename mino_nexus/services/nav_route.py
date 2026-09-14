@@ -117,15 +117,13 @@ def plan_route(
     }
 
 
-def plan_route_for_app(
+def load_fsm_doc(
     app_id: str,
     *,
-    from_state: str,
-    to_state: str,
     version: str = store.DEFAULT_VERSION,
     use_live: bool = True,
     project_id: str = "",
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any] | None, str]:
     doc: dict[str, Any] | None = None
     source = "published"
     if use_live:
@@ -141,9 +139,71 @@ def plan_route_for_app(
     if not doc:
         doc = store.read_raw(app_id, version=version) or store.read_raw(app_id, version=store.DRAFT_VERSION)
         source = "published"
+    return doc, source
+
+
+def tab_label_for_state(fsm: dict[str, Any], state_id: str) -> str:
+    """目标屏对应的底栏 Tab 文案（用于直接 tap_element）。"""
+    sid = resolve_state_ref(fsm, state_id)
+    if not sid:
+        return ""
+    meta = fsm.get("meta") if isinstance(fsm.get("meta"), dict) else {}
+    tab_bar = meta.get("tab_bar") if isinstance(meta.get("tab_bar"), dict) else {}
+    labels = tab_bar.get("labels") if isinstance(tab_bar.get("labels"), dict) else {}
+    if sid in labels:
+        return str(labels[sid] or "").strip()
+    st = F.state_by_id(fsm, sid)
+    if not st:
+        return ""
+    identify = st.get("identify") or {}
+    required = identify.get("required")
+    blocks = required if isinstance(required, list) else ([required] if required else [])
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        if block.get("signal") == "tab_bar":
+            return str((block.get("match") or {}).get("selected") or "").strip()
+    return ""
+
+
+def tap_params_for_edge(fsm: dict[str, Any], edge: dict[str, Any]) -> dict[str, Any]:
+    """把 nav 边编译成 tap_element 参数。"""
+    exe = dict(edge.get("execute") or {})
+    target_tab = str(exe.get("target_tab") or "").strip()
+    if target_tab:
+        return {"selector_text": target_tab, "text": target_tab}
+    dst = str(edge.get("to") or "").strip()
+    label = tab_label_for_state(fsm, dst)
+    if label:
+        return {"selector_text": label, "text": label}
+    short = dst.split(".")[-1]
+    if short and short not in ("home", "unknown"):
+        return {"selector_text": short, "text": short}
+    return {}
+
+
+def direct_tab_tap_params(fsm: dict[str, Any], to_state_ref: str) -> dict[str, Any]:
+    """无路可走时，尝试按目标 Tab 文案直点。"""
+    label = tab_label_for_state(fsm, to_state_ref) or str(to_state_ref or "").strip()
+    if label:
+        return {"selector_text": label, "text": label}
+    return {}
+
+
+def plan_route_for_app(
+    app_id: str,
+    *,
+    from_state: str,
+    to_state: str,
+    version: str = store.DEFAULT_VERSION,
+    use_live: bool = True,
+    project_id: str = "",
+) -> dict[str, Any]:
+    doc, source = load_fsm_doc(app_id, version=version, use_live=use_live, project_id=project_id)
     if not doc:
         return {"ok": False, "error": f"app_id={app_id} 没有 nav_fsm 配置", "steps": [], "edge_ids": []}
     out = plan_route(doc, from_state=from_state, to_state=to_state)
     out["app_id"] = app_id
     out["source"] = source
+    out["fsm"] = doc
     return out

@@ -85,3 +85,14 @@ v7 同时往 system 块插了一节「导航 assist」，讲**怎么读这段**�
 被拦了换路径而不是重试）。规则是框架措辞，具体文案仍来自 DB。
 
 升级会把 v6 正文存进 `overrides_json.revisions`，Console 可以 `{"activate_version": 6}` 回退。
+
+## 7. `doc_context` 槽（agent-decide v9）
+
+文档库每步 FTS 检索结果注入跑批 prompt。见 [DOC_LIBRARY.md](DOC_LIBRARY.md)。
+
+| 项 | 值 |
+|---|---|
+| 槽名 | `doc_context` |
+| 生产者 | `loop/inspections.match_step_docs` → `assemble_agent_decide_slots` |
+| 块配置 | `skip_if_empty: true`，`max_chars: 1400` |
+| 升级 | `upgrade_agent_decide_to_v9()`，启动时 bootstrap 幂等调用 |

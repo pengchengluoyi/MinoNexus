@@ -38,7 +38,7 @@ ACTION_BLOCK = "block"
 ACTION_STOP = "stop"
 
 # 有人值守 → 问人；无人值守 → 放弃（§11.5）
-_ATTENDED_RUN_TYPES = frozenset({"manual", "copilot"})
+_ATTENDED_RUN_TYPES = frozenset({"manual", "copilot", "explore"})
 
 # 只有点击类 cap 会踩 tap_forbidden。其它 cap 不进 guard 判定，免得误伤。
 _TAP_CAPS = frozenset({"tap_element", "multi_tap", "long_press_element"})

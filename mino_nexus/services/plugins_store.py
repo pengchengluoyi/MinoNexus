@@ -592,6 +592,21 @@ def list_robot_integrations(user_id: str = "") -> list[dict[str, Any]]:
     return [_robot_public(x) for x in _robot_rows(user_id)]
 
 
+def resolve_lark_credentials(bot_id: str = "", user_id: str = "") -> dict[str, str]:
+    """服务端拉飞书 API 用，含 app_secret。"""
+    rows = _robot_rows(user_id)
+    found = None
+    bid = str(bot_id or "").strip()
+    if bid:
+        found = next((x for x in rows if str(x.get("id") or "") == bid), None)
+    if found is None:
+        found = next((x for x in rows if str(x.get("platform") or "") == "lark"), None)
+    if found is None:
+        return {}
+    creds = found.get("credentials") if isinstance(found.get("credentials"), dict) else {}
+    return {str(k): str(v).strip() for k, v in creds.items() if str(v or "").strip()}
+
+
 def create_robot_integration(
     *,
     user_id: str = "",

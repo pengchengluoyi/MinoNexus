@@ -24,6 +24,7 @@ from mino_nexus.services import nav_fsm_humanize as humanize
 from mino_nexus.services import nav_fsm_store as store
 from mino_nexus.services import nav_fsm_template as tpl
 from mino_nexus.services import nav_live_graph
+from mino_nexus.services import nav_screen_registry
 from mino_nexus.services import nav_route
 from mino_nexus.services import nav_telemetry as telemetry
 
@@ -197,6 +198,22 @@ def clear_captures(
     if also_config:
         result["config_deleted"] = store.delete(app_id)
     return ok(result)
+
+
+@router.get("/{app_id}/screen-atlas")
+def get_screen_atlas(
+    app_id: str,
+    project_id: str = "",
+    session_id: str = "",
+    _sess: dict = Depends(current_session),
+):
+    """Screen Atlas：证据聚类图（screen.{hash} + 线框），不跑 Tab 合成。"""
+    row = nav_screen_registry.build_atlas(
+        app_id,
+        project_id=project_id,
+        session_id=str(session_id or "").strip(),
+    )
+    return ok(row)
 
 
 @router.get("/{app_id}/live-graph")

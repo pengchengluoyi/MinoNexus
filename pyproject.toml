@@ -1,6 +1,6 @@
 [project]
 name = "mino-nexus"
-version = "0.1.8"
+version = "0.1.9"
 description = "MinoNexus — 服务端：与大模型交互、持有能力目录与数据、驱动执行循环"
 requires-python = ">=3.12"
 
@@ -21,6 +21,7 @@ dependencies = [
   "APScheduler>=3.11",
   "pillow>=12.0",         # make_thumb
   "python-multipart>=0.0.20",
+  "pypdf>=5.0",
   "lark-oapi>=1.7",       # 飞书
   "zeroconf>=0.148",      # mDNS：给 Scout 发现用
 ]

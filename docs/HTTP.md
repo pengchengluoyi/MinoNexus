@@ -108,9 +108,26 @@ Console **Jobs** 页读写下列 API。Studio 写入口经 `client_gate` 拦截�
 | GET | `/settings/ai/roles` | 仍返回产品角色；`skills` 字段已是技能表 |
 | PUT | `/settings/ai/roles/{id}/prompt` | 兼容旧入口；技能 id 会写进 `skills` 表 |
 
-## 知识库
+## 文档库（PDF / Markdown 全文检索）
 
-条目落 `knowledge_entries`。Console「能力 → 知识库」与 Studio 测试页共用 `/settings/knowledge*`。
+真源见 [DOC_LIBRARY.md](DOC_LIBRARY.md)。原始文件上传、分片、FTS 检索；**不是**下面的执行知识条。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/settings/docs` | 列表。`app_id` 必填 |
+| POST | `/settings/docs/upload` | `multipart`：`file` + `app_id` + 可选 `project_id` / `title` |
+| GET | `/settings/docs/search` | 全文检索。`q` + `app_id`；可选 `vector=1` 启用 query embedding |
+| GET | `/settings/docs/{source_id}` | 元数据 |
+| GET | `/settings/docs/{source_id}/chunks` | 分片列表 |
+| DELETE | `/settings/docs/{source_id}` | 删除文档及索引 |
+| POST | `/settings/docs/{source_id}/extract` | DOC_LEARN：抽取执行知识条（`review_status=pending`）。query：`app_id` / `project_id` |
+| PATCH | `/settings/docs/{source_id}/sync` | 飞书文档定时同步开关。body：`auto_sync` / `sync_interval_sec`（≥300） |
+| POST | `/settings/docs/{source_id}/sync-now` | 立即重拉飞书正文 |
+| POST | `/settings/docs/sync-feishu` | 从飞书 wiki/docx 链接同步。body：`url` + `app_id` + 可选 `bot_id` |
+
+## 执行知识库
+
+短条口径落 `knowledge_entries`（手填 / 跑批沉淀 / 守卫 `wiki_ref`）。Console「能力 → 知识库」与 Studio 测试页「知识」共用 `/settings/knowledge*`。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -136,6 +153,24 @@ Console **Jobs** 页读写下列 API。Studio 写入口经 `client_gate` 拦截�
 ```bash
 pip install -e .    # 或 uv sync
 ```
+
+## AppIntel（三渠道统一信息基座）
+
+前缀 `/apps/{app_id}/intel`。设计稿见 [9月12日_AppIntel信息基座.md](9月12日_AppIntel信息基座.md)。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/search` | 统一检索。`q` + `kinds=nav,knowledge,doc`；可选 `state_id` / `project_id` |
+| POST | `/context-pack` | 跑批/调试用 context 编排。body：`intent` / `state_id` / `policy`（默认 `wiki_first`）/ `budgets` |
+| GET | `/route` | Nav 路径规划。`from_state` + `to_state`；返回沿途 `wiki_along_route` |
+| POST | `/ask` | 检索 + LLM 问答（须带 `citations`）。body：`question` |
+| GET | `/graph` | 以 `center=nav:page.x` 为中心的子图（邻接边 + 挂接知识） |
+| GET | `/gaps` | 缺口扫描：无 `wiki_ref` 的 state、空文档库等 |
+| GET/POST | `/proposals` | 待审队列（`nav_patch` / `knowledge_draft` / `doc_learn_batch` 等） |
+| POST | `/proposals/{id}/review` | 审核提案。body：`status`（`approved` / `rejected`） |
+| GET/POST | `/links` | 跨渠道关联边（补充 `wiki_ref`，不替代 guards 内权威挂接） |
+
+跑批每步由 `agent_loop` 调 `context_pack_for_step`（`wiki_first`），session log 事件 `intel/context_pack`。
 
 ## NavFSM（导航图配置与校准证据）
 

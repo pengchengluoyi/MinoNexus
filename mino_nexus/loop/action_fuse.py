@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 # --- 阈值（可后续抽到 sop）---
 NO_PROGRESS_THRESHOLD = 3
-FUSE_BLOCK_STOP_THRESHOLD = 3
+FUSE_BLOCK_STOP_THRESHOLD = 2
 STATE_WINDOW = 10
 STATE_MAX_UNIQUE = 2
 STATE_MIN_SAMPLES = 6
@@ -149,6 +149,7 @@ class ProgressGate:
     def __init__(self) -> None:
         self.no_progress_streak: int = 0
         self.fuse_block_streak: int = 0
+        self.total_fuse_blocks: int = 0
         self._post_states: list[str] = []
         self._coarse_actions: list[str] = []
         self._milestone: str = ""
@@ -164,6 +165,7 @@ class ProgressGate:
         self.milestone_turns = 0
         self.no_progress_streak = 0
         self.fuse_block_streak = 0
+        self.total_fuse_blocks = 0
         self.warning_hint = ""
         self.last_intervention = ""
 
@@ -174,18 +176,20 @@ class ProgressGate:
             self.fuse_block_streak = 0
             return None
         self.fuse_block_streak += 1
+        self.total_fuse_blocks += 1
+        self.milestone_turns += 1
         self.last_intervention = "block"
         n = self.fuse_block_streak
-        if n >= 2:
+        if n >= 1:
             self.warning_hint = (
                 f"【熔断·强制转向】已连续 {n} 次同类操作被拒绝；"
-                f"禁止再 swipe/tap/input，必须 signal_ask_human 或 signal_give_up。"
+                f"禁止再 swipe/tap/input，必须 signal_give_up（勿再盲点）。"
             )
-        if n >= FUSE_BLOCK_STOP_THRESHOLD:
+        if n >= FUSE_BLOCK_STOP_THRESHOLD or self.total_fuse_blocks >= 6:
             self.last_intervention = "stop"
             return (
                 f"连续 {n} 次熔断拦截后仍重复尝试，判定陷入死循环。"
-                f"请人工介入。最近：{text[:160]}"
+                f"请 signal_give_up 结束本步。最近：{text[:160]}"
             )
         return None
 
@@ -201,6 +205,17 @@ class ProgressGate:
     ) -> Optional[str]:
         if not fuseable_cap(cap_id):
             return None
+
+        if self.fuse_block_streak >= FUSE_BLOCK_STOP_THRESHOLD:
+            return (
+                f"【熔断·强制停止】已连续 {self.fuse_block_streak} 次被拦截，"
+                f"禁止再尝试 {cap_id}；必须 signal_give_up。"
+            )
+        if self.total_fuse_blocks >= 6:
+            return (
+                f"【熔断·强制停止】本阶段已累计 {self.total_fuse_blocks} 次熔断，"
+                f"必须 signal_give_up。"
+            )
 
         budget = int(MILESTONE_BUDGET.get(str(phase or "do"), 10))
         if self.milestone_turns >= budget:

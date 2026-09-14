@@ -48,6 +48,15 @@ def run_auto_migration() -> None:
         _ensure_column("nav_fsm", "updated_at", "updated_at INTEGER DEFAULT 0")
         _ensure_column("nav_fsm_states", "entry", "entry INTEGER DEFAULT 0")
         _ensure_column("nav_fsm_states", "role", "role TEXT DEFAULT ''")
+        _ensure_column("doc_sources", "source_kind", "source_kind TEXT DEFAULT 'upload'")
+        _ensure_column("doc_sources", "source_url", "source_url TEXT DEFAULT ''")
+        _ensure_column("doc_sources", "feishu_bot_id", "feishu_bot_id TEXT DEFAULT ''")
+        _ensure_column("doc_sources", "auto_sync", "auto_sync INTEGER DEFAULT 0")
+        _ensure_column("doc_sources", "sync_interval_sec", "sync_interval_sec INTEGER DEFAULT 3600")
+        _ensure_column("doc_chunks", "embedding_json", "embedding_json JSON")
+        from mino_nexus.services.doc_store import ensure_fts
+
+        ensure_fts()
     except Exception as exc:
         SLog.w(TAG, f"migration skipped: {exc}")
     SLog.i(TAG, "schema ready")

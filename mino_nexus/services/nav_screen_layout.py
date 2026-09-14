@@ -47,6 +47,82 @@ def sanitize_chrome(chrome: dict[str, Any] | None) -> dict[str, float]:
     return {"top": round(top, 4), "bottom": round(bottom, 4)}
 
 
+def _merge_band_regions(
+    regions: list[dict[str, Any]],
+    *,
+    band: str,
+    y_min: float,
+    y_max: float,
+) -> list[dict[str, Any]]:
+    """把状态栏/底栏带内细碎节点收成一条 FrameLayout（与底栏展示一致）。"""
+    kept: list[dict[str, Any]] = []
+    band_rects: list[dict[str, float]] = []
+    for r in regions:
+        rect = r.get("rect") if isinstance(r.get("rect"), dict) else {}
+        try:
+            ry = float(rect.get("y") or 0)
+            rh = float(rect.get("h") or 0)
+        except (TypeError, ValueError):
+            kept.append(r)
+            continue
+        cy = ry + rh * 0.5
+        if y_min <= cy <= y_max:
+            band_rects.append(rect)
+            continue
+        kept.append(r)
+    if not band_rects:
+        return regions
+    x0 = min(float(r.get("x") or 0) for r in band_rects)
+    y0 = min(float(r.get("y") or 0) for r in band_rects)
+    x1 = max(float(r.get("x") or 0) + float(r.get("w") or 0) for r in band_rects)
+    y1 = max(float(r.get("y") or 0) + float(r.get("h") or 0) for r in band_rects)
+    kept.append(
+        {
+            "id": f"chrome_{band}",
+            "source": "hierarchy",
+            "label": "FrameLayout",
+            "class_name": "FrameLayout",
+            "clickable": False,
+            "is_image": False,
+            "rect": {
+                "x": round(max(0.0, x0), 4),
+                "y": round(max(0.0, y0), 4),
+                "w": round(max(0.01, min(1.0, x1) - x0), 4),
+                "h": round(max(0.01, min(1.0, y1) - y0), 4),
+            },
+        }
+    )
+    return kept
+
+
+def collapse_system_chrome_regions(wf: dict[str, Any]) -> dict[str, Any]:
+    """仅合并顶栏系统区；底栏 Tab 保留可点分区（用于展示与跳转锚点）。"""
+    out = dict(wf or {})
+    chrome = sanitize_chrome(out.get("chrome"))
+    top = float(chrome.get("top") or 0.06)
+    regions = list(out.get("regions") or [])
+    if not regions:
+        out["chrome"] = chrome
+        return out
+    regions = _merge_band_regions(regions, band="top", y_min=0.0, y_max=top)
+    out["regions"] = regions
+    out["chrome"] = chrome
+    return out
+
+
+def _is_frame_layout_region(region: dict[str, Any]) -> bool:
+    label = str(region.get("label") or "").strip()
+    cls = str(region.get("class_name") or "").strip()
+    return label == "FrameLayout" or cls == "FrameLayout"
+
+
+def strip_frame_layout_regions(wf: dict[str, Any]) -> dict[str, Any]:
+    out = dict(wf or {})
+    regions = [r for r in (out.get("regions") or []) if not _is_frame_layout_region(r)]
+    out["regions"] = regions
+    return out
+
+
 def sanitize_wireframe(wf: dict[str, Any] | None) -> dict[str, Any]:
     out = dict(wf or {})
     out["chrome"] = sanitize_chrome(out.get("chrome"))
@@ -54,7 +130,8 @@ def sanitize_wireframe(wf: dict[str, Any] | None) -> dict[str, Any]:
     out["regions"] = list(regions) if isinstance(regions, list) else []
     if "screen" not in out:
         out["screen"] = {"w": 1080, "h": 1920}
-    return out
+    out = collapse_system_chrome_regions(out)
+    return strip_frame_layout_regions(out)
 
 
 def infer_content_bands(nodes: list[dict[str, Any]]) -> dict[str, Any]:
@@ -240,12 +317,17 @@ def infer_tab_bar_band(nodes: list[dict[str, Any]]) -> dict[str, Any]:
     labels = find_bottom_horizontal_tab_row(nodes)
     items = _button_items(nodes)
     row_items = [row for row in items if row[4] in set(labels)] if labels else []
+    content_bottom = int(bands.get("content_bottom_px") or 0)
     if row_items:
         band_top = min(row[1] for row in row_items)
         band_bottom = max(row[3] for row in row_items)
         source = "horizontal_row"
+        if band_top < max(content_bottom - 24, int(sh * 0.72)):
+            band_top = max(content_bottom, int(sh * 0.84))
+            band_bottom = sh
+            source = "content_bottom_fallback"
     else:
-        band_top = int(bands.get("content_bottom_px") or 0)
+        band_top = max(content_bottom, int(sh * 0.84))
         band_bottom = sh
         source = "content_bottom_px"
     return {

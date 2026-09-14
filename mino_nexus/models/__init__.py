@@ -1,9 +1,11 @@
+from mino_nexus.models.app_intel import AppIntelLink, AppIntelProposal
 from mino_nexus.models.atlas import AtlasAlias
 from mino_nexus.models.auth import AuthSession, AuthState, User
 from mino_nexus.models.case import ProjectCase
 from mino_nexus.models.catalog import CatalogEntry, CatalogMeta
 from mino_nexus.models.device import Device
 from mino_nexus.models.dispatch import DispatchCall
+from mino_nexus.models.doc_library import DocChunk, DocSource
 from mino_nexus.models.knowledge import KnowledgeEntry
 from mino_nexus.models.llm_job import LlmJob
 from mino_nexus.models.nav import StudioNav
@@ -19,6 +21,8 @@ from mino_nexus.models.task import Task
 from mino_nexus.models.token import InstallToken
 
 __all__ = [
+    "AppIntelLink",
+    "AppIntelProposal",
     "App",
     "ProjectCase",
     "AppRegressionRun",
@@ -29,6 +33,8 @@ __all__ = [
     "CatalogMeta",
     "Device",
     "DispatchCall",
+    "DocChunk",
+    "DocSource",
     "KnowledgeEntry",
     "LlmJob",
     "InstallToken",

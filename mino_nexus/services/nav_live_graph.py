@@ -463,7 +463,7 @@ def _index_capture_wireframes(
     )
 
     filtered = filter_app_turns(ordered)
-    fresh_tabs = extract_tab_bar_labels(filtered)
+    fresh_tabs = extract_tab_bar_labels(filtered, app_id=app_id)
     labels_map = (doc.get("meta") or {}).get("tab_bar", {}).get("labels") or {}
     tab_labels = fresh_tabs if len(fresh_tabs) >= 2 else list(labels_map.values())
     turn_tabs: list[str] = []

@@ -213,6 +213,117 @@ def match_step_knowledge(
     return rows
 
 
+def match_step_docs(
+    *,
+    ctx,
+    case: dict[str, Any],
+    cursor,
+    history: list[str],
+    steps: list[dict[str, Any]],
+    hierarchy_text: str = "",
+    limit: int = 3,
+) -> str:
+    """本步文档库 FTS 检索 → doc_context 块。无 app 或无文档时返回空串。"""
+    from mino_nexus.ai.knowledge_hint import (
+        build_case_intent,
+        build_query,
+        build_step_focus,
+    )
+    from mino_nexus.services.doc_match import match_step_docs as _match
+
+    app_id, _project_id = resolve_knowledge_scope(ctx)
+    if not app_id:
+        return ""
+    intent = build_case_intent(
+        case_name=str(case.get("name") or ""),
+        goal=cursor.decide_goal(),
+        steps_text=cursor.prompt_block(),
+        precondition=str(case.get("precondition") or ""),
+        success_criteria=cursor.decide_success(),
+    )
+    last = ""
+    if steps:
+        tail = steps[-1] or {}
+        last = " ".join(str(x) for x in (
+            tail.get("capability_id") or "",
+            tail.get("thought") or "",
+            tail.get("summary") or "",
+        ) if x)
+    query = build_query(
+        case_intent=intent,
+        step_focus=build_step_focus(cursor),
+        last_action=last,
+        history="\n".join(history[-6:]) if history else "",
+        screen=str(hierarchy_text or "")[:1600],
+    )
+    query_vec = getattr(ctx, "doc_query_vec", None)
+    if not isinstance(query_vec, list):
+        query_vec = None
+    try:
+        hits, block = _match(query, app_id=app_id, limit=limit, query_vec=query_vec)
+    except Exception as exc:
+        _log_doc_match(error=f"{type(exc).__name__}: {exc}", app_id=app_id)
+        return ""
+    _log_doc_match(hits=hits, app_id=app_id, query=query[:400])
+    return block
+
+
+def match_stuck_docs(
+    *,
+    ctx,
+    case: dict[str, Any],
+    cursor,
+    history: list[str],
+    steps: list[dict[str, Any]],
+    hierarchy_text: str = "",
+) -> str:
+    """遇阻文档检索：屏文案权重更高。"""
+    from mino_nexus.ai.knowledge_hint import build_case_intent, build_query, build_step_focus
+    from mino_nexus.services.doc_match import match_stuck_docs as _stuck
+
+    app_id, _ = resolve_knowledge_scope(ctx)
+    if not app_id:
+        return ""
+    intent = build_case_intent(
+        case_name=str(case.get("name") or ""),
+        goal=cursor.decide_goal(),
+        steps_text=cursor.prompt_block(),
+        precondition=str(case.get("precondition") or ""),
+        success_criteria=cursor.decide_success(),
+    )
+    last = ""
+    if steps:
+        tail = steps[-1] or {}
+        last = " ".join(str(x) for x in (
+            tail.get("capability_id") or "",
+            tail.get("thought") or "",
+            tail.get("summary") or "",
+        ) if x)
+    query = build_query(
+        case_intent=intent,
+        step_focus=build_step_focus(cursor),
+        last_action=last,
+        history="\n".join(history[-4:]) if history else "",
+        screen="",
+    )
+    query_vec = getattr(ctx, "doc_query_vec", None)
+    if not isinstance(query_vec, list):
+        query_vec = None
+    try:
+        block = _stuck(
+            query,
+            app_id=app_id,
+            screen_text=hierarchy_text,
+            query_vec=query_vec,
+        )
+    except Exception as exc:
+        _log_doc_match(error=f"stuck:{type(exc).__name__}: {exc}", app_id=app_id)
+        return ""
+    if block:
+        _log_doc_match(app_id=app_id, query=f"stuck:{query[:200]}")
+    return block
+
+
 def expand_named_knowledge(
     decision,
     rows: list[dict[str, Any]],
@@ -279,6 +390,40 @@ def _log_knowledge(
                     for r in (rows or [])
                 ],
                 "named": list(named or []),
+                "error": error,
+            },
+        )
+    except Exception:
+        pass
+
+
+def _log_doc_match(
+    *,
+    hits: list[dict[str, Any]] | None = None,
+    error: str = "",
+    app_id: str = "",
+    query: str = "",
+) -> None:
+    try:
+        from mino_nexus.loop.session_log import active_writer
+
+        writer = active_writer()
+        if writer is None:
+            return
+        writer.append(
+            "doc/match",
+            {
+                "app_id": str(app_id or ""),
+                "query": str(query or "")[:400],
+                "hits": [
+                    {
+                        "chunk_id": str(h.get("chunk_id") or ""),
+                        "source_id": str(h.get("source_id") or ""),
+                        "title": str(h.get("title") or "")[:80],
+                        "heading": str(h.get("heading") or "")[:80],
+                    }
+                    for h in (hits or [])
+                ],
                 "error": error,
             },
         )

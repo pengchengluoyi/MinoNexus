@@ -74,6 +74,7 @@ class NavPlan:
     scroll_hint: dict[str, Any] = field(default_factory=dict)
     goal_state_id: str = ""
     route_edge_ids: list[str] = field(default_factory=list)
+    route_uncovered: bool = False
 
 
 # ---------------- 取配置 ----------------
@@ -98,13 +99,8 @@ def recover_edges(fsm: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def recover_target_state(fsm: dict[str, Any], case: dict[str, Any] | None = None) -> str:
-    """迷路后的目标页（运行时路径规划终点，不画在路线图里）。"""
-    return navigation_goal_state(fsm, case)
-
-
 def navigation_goal_state(fsm: dict[str, Any], case: dict[str, Any] | None = None) -> str:
-    """本用例导航目标：case 字段优先，否则应用默认首页。"""
+    """本用例导航目标：仅 case 字段 + meta 默认；不含 recover 边（避免把「回家」当成赶路终点）。"""
     meta = fsm.get("meta") if isinstance(fsm.get("meta"), dict) else {}
     recover = meta.get("recover") if isinstance(meta.get("recover"), dict) else {}
     for field in (
@@ -117,6 +113,12 @@ def navigation_goal_state(fsm: dict[str, Any], case: dict[str, Any] | None = Non
             if val:
                 return val
     goal = str(recover.get("default_goal_state_id") or recover.get("default_state_id") or "").strip()
+    return goal
+
+
+def recover_target_state(fsm: dict[str, Any], case: dict[str, Any] | None = None) -> str:
+    """迷路后的目标页（运行时路径规划终点，不画在路线图里）。"""
+    goal = navigation_goal_state(fsm, case)
     if goal:
         return goal
     for ed in recover_edges(fsm):
@@ -211,9 +213,10 @@ def choose_edge_toward_goal(
     case: dict[str, Any] | None = None,
     success_rate: dict[str, float] | None = None,
 ) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]], bool, str]:
-    """朝目标页选本步 nav 边：最短路第一步；无路则退回 choose_edge。"""
+    """朝目标页选本步 nav 边：最短路第一步；无路则不给边（由 compiler 提示路线图未覆盖）。"""
     goal = str(goal_state_id or "").strip()
-    if goal and goal != str(state_id or "").strip():
+    cur = str(state_id or "").strip()
+    if goal and goal != cur:
         path = shortest_nav_path(fsm, state_id, goal)
         if path:
             edge = path[0]
@@ -221,6 +224,9 @@ def choose_edge_toward_goal(
             if ok:
                 return edge, path, missing, ""
             return None, path, missing, why or "最短路第一步 guard 未满足"
+        return None, [], False, "路线图未覆盖：当前屏到用例目标没有已发布的跳转边"
+    if goal and goal == cur:
+        return None, [], False, ""
     edge, missing, reason = choose_edge(
         fsm,
         state_id=state_id,
@@ -433,6 +439,13 @@ def build_plan(
         plan.edge = edge
         plan.anchor_missing = anchor_missing
         plan.edge_reason = reason
+        plan.route_uncovered = bool(
+            goal
+            and goal != str(state_id or "").strip()
+            and not path
+            and not edge
+            and "路线图未覆盖" in str(reason or "")
+        )
         plan.route_edge_ids = [str(e.get("id") or "") for e in path if e and e.get("id")]
         if edge:
             plan.allow.extend(str(s) for s in ((edge.get("execute") or {}).get("steps") or []))

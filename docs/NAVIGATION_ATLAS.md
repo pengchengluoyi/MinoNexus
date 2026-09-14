@@ -361,8 +361,9 @@ ProgressGate → 无进展 / 熔断空转（与 GuardGate 联动）
 
 
 
-## 6. Wiki（本仓实现，不引入外部 llm-wiki 运行时）
+## 6. 执行知识条与 `wiki_ref`（≠ 文档库）
 
+> **文档库**（上传 PDF/Markdown、FTS 全文检索）见 **[DOC_LIBRARY.md](DOC_LIBRARY.md)**。本节只描述跑批时注入的**短条知识**，不是原始文档。
 
 | 能力    | 本仓真源                                              |
 | ----- | ------------------------------------------------- |
@@ -371,19 +372,20 @@ ProgressGate → 无进展 / 熔断空转（与 GuardGate 联动）
 | 执行检索  | `knowledge_match` + `match_step_knowledge`        |
 | 路径类识别 | `is_path_item()` in `knowledge_hint.py`           |
 
+**`wiki_ref` 注入**（`nav_compiler.wiki_block`）：
 
-**做法**：不部署独立 [llm-wiki](https://github.com/) 服务；采纳其 **wiki_ref 链接 + 编译式摘要** 思路：
-
-- FSM 上 `wiki_ref: "knowledge:<entry_id>"`（与 `knowledge_entries` + `project_id`/`app_id` scope 一致）
-- 注入时按 `knowledge_situation.need` **分档截断**（`nav_compiler` 读条目元数据，不一刀切）：
-  - `howto`：≤ **800** 字（路径类，如个人页取消关注 + 确认弹窗）
-  - `judge`：≤ **300** 字（断言/判别提示）
-  - `exception`：≤ **500** 字（异常/恢复说明）
+- FSM 守卫上 `wiki_ref: "knowledge:<entry_id>"`（scope 与 `knowledge_entries.app_ids` 一致）
+- 按 `knowledge_situation.need` **分档截断**：
+  - `howto`：≤ **800** 字
+  - `judge`：≤ **300** 字
+  - `exception`：≤ **500** 字
   - 默认：≤ **400** 字
 - 超长部分链到 Console 知识详情，prompt 只注入摘要
-- `propose_atlas` / QA 流程可提议新 knowledge 条目，人审后挂到 guard
+- `propose_atlas` / QA 流程可提议新条目，人审后挂到 guard
 
-每个 `app_id` 在 `knowledge_entries` 中配置与 guards 绑定的 Wiki（按 `project_id` / `app_id` scope），例如：列表 assert 参考、列表已关注须进个人页、个人页二次确认流程。
+**不部署**独立 [llm-wiki](https://github.com/) 服务；仅借鉴「链接 + 编译式摘要」模式。原始 PRD/接口文档走 **文档库** ingest，经 DOC_LEARN 再落成 `knowledge_entries`。
+
+三渠道（NavFSM / 执行知识 / 文档库）统一查询与 `context-pack` 编排见 **[9月12日_AppIntel信息基座.md](9月12日_AppIntel信息基座.md)**。
 
 ---
 
@@ -979,13 +981,14 @@ seed 草稿可含占位符；**对 dev DB 执行 seed 前**必须通过 `validat
 
 
 
-### 第二层 Wiki
+### 第二层 知识（执行条 + 文档库，勿混称 Wiki）
 
 
 | 方案                                              | 是否采用    | 说明                      |
 | ----------------------------------------------- | ------- | ----------------------- |
-| `knowledge_entries` **+** `knowledge_situation` | **采用**  | 已在生产路径；`wiki_ref` 挂 FSM |
-| 开源 llm-wiki 项目                                  | **不部署** | 借鉴链接/摘要模式；内容留在 sqlite   |
+| **文档库** `doc_sources` + FTS5（[DOC_LIBRARY.md](DOC_LIBRARY.md)） | **采用**  | 上传 PDF/Markdown；离线分片 + 全文检索 |
+| `knowledge_entries` **+** `knowledge_situation` | **采用**  | 跑批短条；`wiki_ref` 挂 FSM |
+| 开源 llm-wiki 项目                                  | **不部署** | 不当作文档 RAG 运行时；摘要模式已内化 |
 
 
 

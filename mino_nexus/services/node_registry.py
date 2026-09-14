@@ -323,6 +323,9 @@ class NodeRegistry:
                 else:
                     for ch in node.devices[sn].channels:
                         node.devices[sn].channels[ch] = "disconnected"
+                from mino_nexus.services.run_store import running_run_ids_for_sn
+
+                interrupted.extend(running_run_ids_for_sn(sn))
             elif event == "device_found" and sn:
                 if sn not in node.devices:
                     node.devices[sn] = P.DeviceManifest(
@@ -350,6 +353,11 @@ class NodeRegistry:
             node = self._nodes.pop(node_id, None)
             runs = list(node.active_runs) if node is not None else []
             if node is not None:
+                from mino_nexus.services.run_store import running_run_ids_for_sn
+
+                for dev_sn in list(node.devices.keys()):
+                    runs.extend(running_run_ids_for_sn(dev_sn))
+                runs = list(dict.fromkeys(runs))
                 node.persist_snapshot()
             self._purge_orphaned_legacy_web_slots()
         if node is not None:

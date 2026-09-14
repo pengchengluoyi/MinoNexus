@@ -387,6 +387,7 @@ def get_ai_provider_credentials(provider_id: str | None = None) -> dict[str, Any
         "model": str(raw.get("model") or (preset or {}).get("default_model") or "").strip(),
         "api_type": str(raw.get("api_type") or (preset or {}).get("api_type") or "openai").strip(),
         "case_execution_use": bool(raw.get("case_execution_use")) if api_key else False,
+        "embedding_model": str(raw.get("embedding_model") or "").strip(),
         "plan_compress_ratio": float(raw.get("plan_compress_ratio") or 3.0),
         "web_compress_ratio": float(raw.get("web_compress_ratio") or 2.0),
     }

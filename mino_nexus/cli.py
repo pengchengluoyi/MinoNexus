@@ -319,6 +319,14 @@ def main(argv: list[str] | None = None) -> int:
     for e in errs:
         SLog.e(TAG, f"目录加载错误 {e.kind} {e.path}: {e.message}")
 
+    try:
+        import pypdf  # noqa: F401
+    except ImportError:
+        SLog.w(
+            TAG,
+            "文档库 PDF 不可用：当前 Python 未安装 pypdf，请在本环境执行 pip install -e . 后重启",
+        )
+
     SLog.i(TAG, f"MinoNexus 对外 {http_origin(args.port)}")
     SLog.i(TAG, f"  UI  → HTTP + WS /ws    Scout → {node_ws_url(args.port)}")
     uvicorn.run("mino_nexus.app:app", host=args.host, port=args.port, log_level="warning")

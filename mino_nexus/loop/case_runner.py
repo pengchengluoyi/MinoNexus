@@ -12,7 +12,7 @@ from mino_nexus.services import ui_devices
 from mino_nexus.ai.llm_client import resolve_regression_provider
 from mino_nexus.core.log import SLog
 from mino_nexus.loop.agent_stream import emit_testing_task
-from mino_nexus.loop.web_env import release_web_for_run
+from mino_nexus.loop.web_env import release_devices_for_run
 from mino_nexus.loop.persist_run_finish import persist_run_finish
 from mino_nexus.runtime.run_context import device_platform_kind
 
@@ -207,16 +207,21 @@ def run_cases(
     return run_store.to_task_json(doc)
 
 
+def _task_still_running(run_id: str) -> bool:
+    doc = run_store.get(run_id)
+    return run_store.task_is_live(doc)
+
+
 def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id: str) -> None:
     from mino_nexus.loop.agent_loop import run_case
 
     doc = run_store.get(run_id)
-    if not doc:
+    if not doc or not run_store.task_is_live(doc):
         return
     try:
         env_brief = str(doc.get("env_brief") or "")
         for case_seq, case in enumerate(list(doc.get("cases") or [])):
-            if run_store.cancel_requested(run_id):
+            if not _task_still_running(run_id):
                 break
             cid = str(case.get("case_id") or "")
             sn = str(case.get("sn") or doc.get("sn") or "")
@@ -243,6 +248,8 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
                 playwright_headless=bool(doc.get("playwright_headless", True)),
                 run_env_brief=env_brief,
             )
+            if not _task_still_running(run_id):
+                break
             doc = run_store.get(run_id) or doc
             env_brief = str(doc.get("env_brief") or env_brief)
             # 用例 steps/expected 是原文。执行轨迹只能写 engine_steps，写进 steps 会让详情页变成 [object Object]。
@@ -265,13 +272,12 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
                 "status": result.get("status"),
                 "app_id": str(doc.get("app_id") or ""),
             })
+        if not _task_still_running(run_id):
+            return
         latest = run_store.get(run_id) or doc
-        if run_store.cancel_requested(run_id):
-            finished = run_store.finish(run_id, status="cancelled", error="已取消")
-        else:
-            failed = int(latest.get("failed") or 0) + int(latest.get("blocked") or 0)
-            status = "failed" if failed else "done"
-            finished = run_store.finish(run_id, status=status, error=latest.get("error") or "")
+        failed = int(latest.get("failed") or 0) + int(latest.get("blocked") or 0)
+        status = "failed" if failed else "done"
+        finished = run_store.finish(run_id, status=status, error=latest.get("error") or "")
         persist_run_finish(finished)
         emit_testing_task({
             "event": "task_finished",
@@ -283,8 +289,9 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
     except Exception as exc:
         SLog.e(TAG, f"run {run_id} crashed: {exc}")
         try:
-            finished = run_store.finish(run_id, status="failed", error=str(exc)[:240])
-            persist_run_finish(finished)
+            if _task_still_running(run_id):
+                finished = run_store.finish(run_id, status="failed", error=str(exc)[:240])
+                persist_run_finish(finished)
         except Exception:
             pass
     finally:
@@ -293,11 +300,113 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
         head = str(latest.get("sn") or "").strip()
         if head and head not in sns:
             sns = [head, *sns]
-        release_web_for_run(
+        release_devices_for_run(
             run_id,
             sns=sns,
             platforms_by_sn=latest.get("platforms_by_sn") if isinstance(latest.get("platforms_by_sn"), dict) else {},
         )
+
+
+def run_explore(
+    app: dict[str, Any],
+    *,
+    sn: str = "",
+    max_steps: int = 80,
+    max_idle_steps: int = 15,
+    instruction: str = "",
+    provider_id: str = "",
+    async_exec: bool = True,
+    platform: str = "android",
+    playwright_headless: bool = True,
+) -> dict[str, Any]:
+    """发起应用探索：LLM 自由操作，被动采集拓展 Screen Atlas。"""
+    from mino_nexus.loop.explore_case import build_explore_case
+
+    device_sns = _normalize_sns(sn, None)
+    if not device_sns:
+        device_sns = _pick_online_sns()[:1]
+    for dsn in device_sns:
+        busy = run_store.busy_task_for_sn(dsn)
+        if busy:
+            raise DeviceBusy(dsn, busy)
+
+    explore_case = build_explore_case(
+        instruction=str(instruction or "").strip(),
+        max_steps=max_steps,
+        max_idle_steps=max_idle_steps,
+    )
+    cfg = aas.get_automation_config(app)
+    package = aas.package_for_app(app, platform=platform if platform in ("android", "ios", "web") else "android")
+    playbook = aas.get_playbook(app)
+    run_id = run_store.new_run_id()
+    seeded = run_store.seed_case(run_id, explore_case, 0, sn=device_sns[0] if device_sns else "", coverage="once")
+    provider, gate = resolve_regression_provider(str(provider_id or "").strip() or None)
+    doc: dict[str, Any] = {
+        "run_id": run_id,
+        "task_id": run_id,
+        "engine": "agent",
+        "run_type": "explore",
+        "session_kind": "explore",
+        "app_id": str(app.get("id") or ""),
+        "app_name": str(app.get("name") or ""),
+        "sn": device_sns[0] if device_sns else "",
+        "sns": device_sns,
+        "coverage": "once",
+        "platform": platform,
+        "env_profile": cfg.get("env_profile") or "test",
+        "package": package,
+        "playbook": playbook if isinstance(playbook, dict) else {},
+        "provider_id": (provider or {}).get("id") or gate.get("provider_id") or "",
+        "provider_name": (provider or {}).get("name") or "",
+        "model_name": (provider or {}).get("model") or "",
+        "playwright_headless": bool(playwright_headless),
+        "status": "running",
+        "started_at": _now(),
+        "finished_at": None,
+        "cases": [seeded],
+        "error": "",
+        "total": 1,
+        "completed": 0,
+        "passed": 0,
+        "failed": 0,
+        "explore": {
+            "max_steps": int(explore_case.get("max_steps") or 80),
+            "max_idle_steps": int(explore_case.get("max_idle_steps") or 15),
+        },
+    }
+    run_store.put(doc)
+    persist_run_finish(doc)
+    emit_testing_task({"event": "task_created", "run_id": run_id, "task_id": run_id, "app_id": doc["app_id"], "kind": "explore"})
+
+    fail_reason = ""
+    if not device_sns:
+        fail_reason = "没有在线设备。请在 Studio 连接 Scout 后再发起探索。"
+    elif device_sns and not any(
+        d.get("status") == "online" and d.get("sn") == device_sns[0]
+        for d in ui_devices.ui_devices()
+    ):
+        fail_reason = f"设备 {device_sns[0]} 已离线，请连接 Scout 后重试。"
+    elif not provider:
+        fail_reason = gate.get("reason") or "未配置用例执行大模型（Studio → 密钥 → 大模型 Key）"
+
+    if fail_reason:
+        run_store.patch_case(run_id, explore_case["case_id"], status="fail", summary=fail_reason, error=fail_reason)
+        finished = run_store.finish(run_id, status="failed", error=fail_reason)
+        persist_run_finish(finished)
+        return run_store.to_task_json(finished)
+
+    worker = threading.Thread(
+        target=_run_in_background,
+        kwargs={"run_id": run_id, "package": package, "playbook": playbook, "provider_id": doc["provider_id"]},
+        daemon=True,
+        name=f"explore-run-{run_id}",
+    )
+    worker.start()
+    if not async_exec:
+        worker.join(timeout=1200)
+        latest = run_store.get(run_id) or doc
+        return run_store.to_task_json(latest)
+    return run_store.to_task_json(doc)
 
 
 def retry_failed(task_id: str, *, sn: str = "") -> dict[str, Any]:

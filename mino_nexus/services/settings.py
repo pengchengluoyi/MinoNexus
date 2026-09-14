@@ -28,6 +28,7 @@
     MINO_AI_API_KEY    有它才触发覆盖
     MINO_AI_BASE_URL   缺省用 settings_store 预设里的
     MINO_AI_MODEL      缺省同上
+    MINO_EMBEDDING_MODEL  文档库向量模型（可选，火山方舟常填接入点 ep-… 或 doubao-embedding）
 """
 from __future__ import annotations
 
@@ -47,7 +48,11 @@ def _env_override() -> tuple[str, dict[str, str]]:
         return "", {}
     pid = (os.environ.get("MINO_AI_PROVIDER") or "openai").strip().lower()
     patch = {"api_key": key}
-    for env_name, field in (("MINO_AI_BASE_URL", "base_url"), ("MINO_AI_MODEL", "model")):
+    for env_name, field in (
+        ("MINO_AI_BASE_URL", "base_url"),
+        ("MINO_AI_MODEL", "model"),
+        ("MINO_EMBEDDING_MODEL", "embedding_model"),
+    ):
         val = os.environ.get(env_name, "").strip()
         if val:
             patch[field] = val

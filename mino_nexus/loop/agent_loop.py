@@ -4,11 +4,6 @@ from __future__ import annotations
 import time
 from typing import Any, Optional
 
-from mino_nexus.ai.knowledge_hint import (
-    build_index_text,
-    pick_auto_knowledge_body,
-    should_auto_inject_do_body,
-)
 from mino_nexus.loop.action_fuse import fuseable_cap
 from mino_nexus.loop.step_pointer import cap_clears_repeat_tap
 from mino_nexus.ai.planner import decide_next_action
@@ -17,10 +12,11 @@ from mino_nexus.catalog.exec_classes import MUTATE_CAPS
 from mino_nexus.loop.registry import apply_force_case_expectation, run_guards
 from mino_nexus.loop.inspections import (
     expand_named_knowledge,
-    match_step_knowledge,
+    match_stuck_docs,
     refresh_session_block,
     run_inspections,
 )
+from mino_nexus.services.app_intel import context_pack_for_step, log_context_pack
 from mino_nexus.runtime.session_gate import (
     compile_login_session_hint,
     compile_otp_prep_hint,
@@ -141,6 +137,7 @@ def _log_context_slots(
                 "knowledge_hint": inspect_slots.get("knowledge_hint") or "",
                 "knowledge_body": inspect_slots.get("knowledge_body") or "",
                 "nav_assist": inspect_slots.get("nav_assist") or "",
+                "doc_context": inspect_slots.get("doc_context") or "",
                 "history_block": _history(history),
                 "tool_kinds": list(phase_tool_kinds or []),
                 "menu_count": len(menu),
@@ -182,7 +179,12 @@ def run_case(
     stream_id = str(case.get("report_run_id") or "").strip() or (
         report_run_id(run_id, cid) if cid else run_id
     )
-    overview = _case_overview(case)
+    is_explore_case = str(case.get("source") or "") == "explore"
+    overview = (
+        str(case.get("steps_raw") or (case.get("steps") or ["应用探索"])[0]).strip()
+        if is_explore_case
+        else _case_overview(case)
+    )
     t0 = time.time()
     ctx = build_run_context(
         sn,
@@ -209,6 +211,8 @@ def run_case(
             ctx.env_profile = str(_doc.get("env_profile") or ctx.env_profile or "test")
             # GuardGate stop 时 ask_human 还是 give_up 取决于它（设计稿 §11.5）
             run_type = str(_doc.get("run_type") or "manual").lower()
+            if run_type == "explore":
+                is_explore_case = True
     except Exception:
         pass
     proxy = RouterProxy(
@@ -232,10 +236,10 @@ def run_case(
         emit_agent_event(payload)
 
     tok = dispatch.bind(
-        trigger="case_run",
-        source="case_run",
+        trigger="app_explore" if is_explore_case else "case_run",
+        source="explore_run" if is_explore_case else "case_run",
         role="test-engineer",
-        skill="run-case",
+        skill="explore-app" if is_explore_case else "run-case",
         app_id=app_id,
         app_name=app_name,
         pipeline_id=stream_id,
@@ -443,22 +447,47 @@ def _run_loop(
     from mino_nexus.runtime.menu import available_menu_brief
     from mino_nexus.services.skill_store import get_skill
 
-    skill = get_skill("run-case") or {}
+    is_explore = str(run_type).lower() == "explore" or str(case.get("source") or "") == "explore"
+    skill_id = "explore-app" if is_explore else "run-case"
+    skill = get_skill(skill_id) or get_skill("run-case") or {}
     sop = skill.get("sop") if isinstance(skill.get("sop"), dict) else {}
     phases = normalize_phases(sop.get("phases"))
     inspections = normalize_inspections(sop.get("inspections") if "inspections" in sop else None)
     try:
-        max_steps = max(1, min(80, int(sop.get("max_steps") or _MAX_STEPS)))
+        cap = 200 if is_explore else 80
+        max_steps = max(1, min(cap, int(case.get("max_steps") or sop.get("max_steps") or _MAX_STEPS)))
     except (TypeError, ValueError):
-        max_steps = _MAX_STEPS
-    cursor = StepCursor(
-        build_seq_nodes(case),
-        precondition=str(case.get("precondition") or "").strip(),
-    )
+        max_steps = 200 if is_explore else _MAX_STEPS
+    if is_explore:
+        from mino_nexus.loop.explore_cursor import ExploreCursor
+
+        goal = str(case.get("steps_raw") or (case.get("steps") or [""])[0] or overview).strip()
+        cursor = ExploreCursor(
+            goal=goal,
+            success_criteria=str(case.get("success_criteria") or "").strip(),
+            max_steps=max_steps,
+            max_idle_steps=int(case.get("max_idle_steps") or sop.get("max_idle_steps") or 15),
+        )
+    else:
+        cursor = StepCursor(
+            build_seq_nodes(case),
+            precondition=str(case.get("precondition") or "").strip(),
+        )
     inspect_slots: dict[str, str] = {
         "session_block": "", "hierarchy_text": "", "knowledge_hint": "", "knowledge_body": "",
-        "nav_assist": "",
+        "nav_assist": "", "doc_context": "",
     }
+    try:
+        from mino_nexus.services.doc_embed import bootstrap_case_doc_query
+
+        _app_id = str(getattr(ctx, "app_id", "") or "").strip()
+        _qvec = bootstrap_case_doc_query(case=case, app_id=_app_id)
+        if _qvec:
+            setattr(ctx, "doc_query_vec", _qvec)
+    except Exception:
+        pass
+    doc_stuck_used = 0
+    doc_stuck_budget = 2
     # 开关关着 / 没配 NavFSM 时为 None，主循环下面三处调用全部跳过（loop/nav_runtime.py 顶部注释）
     nav = NavRuntime.for_run(
         ctx=ctx,
@@ -663,6 +692,9 @@ def _run_loop(
     if fg_out:
         _log_preflight_recovery(fg_out, source="preflight_fg")
 
+    if cancel_check and cancel_check():
+        return _leave(status="cancelled", summary="任务已取消")
+
     if login_module_case and preflight_shot and preflight_shot.has_image():
         refresh_session_block(
             shot=preflight_shot,
@@ -777,15 +809,50 @@ def _run_loop(
                 writer=writer,
                 screenshot=shot,
             )
+            if is_explore:
+                if nav is not None and nav.snapshot.usable():
+                    cursor.note_observation(nav.snapshot.nodes)
+                else:
+                    # hierarchy 不可用时仍计 idle，避免跑满 max_steps 空烧 LLM
+                    cursor.note_observation([])
+                if cursor.done:
+                    return _finish(
+                        emit,
+                        status="pass",
+                        summary=cursor.summary(),
+                        steps=steps,
+                        t0=t0,
+                        pack=_pack(),
+                    )
             blocked = nav.preflight_block()
             if blocked:
                 reason = str(blocked.get("reason") or "租号初态与用例要求不一致")
                 if writer:
                     writer.append("turn/end", {"decision_cap": "nav_precondition", "decision_status": "blocked"})
                 return _leave(status="blocked", summary=reason)
+        elif is_explore:
+            cursor.note_observation([])
+            if cursor.done:
+                return _finish(
+                    emit,
+                    status="pass",
+                    summary=cursor.summary(),
+                    steps=steps,
+                    t0=t0,
+                    pack=_pack(),
+                )
 
         cur = cursor.current()
         if cur is None:
+            if is_explore:
+                return _finish(
+                    emit,
+                    status="pass",
+                    summary=cursor.summary(),
+                    steps=steps,
+                    t0=t0,
+                    pack=_pack(),
+                )
             return _leave_case(cursor)
 
         phase_cfg = _phase_cfg()
@@ -797,6 +864,9 @@ def _run_loop(
             platform=str(getattr(ctx, "platform", "") or ""),
             tool_kinds=phase_tool_kinds or None,
         )
+        if nav is not None:
+            setattr(ctx, "nav_localized_state", str(nav.localized.get("chosen") or ""))
+            setattr(ctx, "nav_project_id", str(nav.project_id or ""))
         if nav is None or not nav.active:
             menu = [
                 c for c in menu
@@ -822,21 +892,42 @@ def _run_loop(
         in_prep = cursor.phase == "prep"
         in_check = cursor.phase == "check"
         scripted_check = bool(in_check and cur and str(cur.expected or "").strip())
-        know_rows = match_step_knowledge(
+        intel_pack = context_pack_for_step(
             ctx=ctx,
             case=case,
             cursor=cursor,
             history=history,
             steps=steps,
             hierarchy_text=inspect_slots.get("hierarchy_text") or "",
+            state_id=str(getattr(ctx, "nav_localized_state", "") or ""),
+            policy="wiki_first",
+            scripted_check=scripted_check,
         )
-        inspect_slots["knowledge_hint"] = build_index_text(know_rows)
-        auto_knowledge_body = ""
-        if scripted_check:
-            auto_knowledge_body = pick_auto_knowledge_body(know_rows)
-        elif should_auto_inject_do_body(know_rows):
-            auto_knowledge_body = pick_auto_knowledge_body(know_rows)
-        inspect_slots["knowledge_body"] = auto_knowledge_body
+        inspect_slots.update(intel_pack.to_slots())
+        know_rows = intel_pack.know_rows
+        auto_knowledge_body = intel_pack.knowledge_body
+        log_context_pack(writer, intel_pack)
+        pg = getattr(cursor, "progress_gate", None)
+        stuck_signal = False
+        if pg is not None:
+            if int(getattr(pg, "fuse_block_streak", 0) or 0) > 0:
+                stuck_signal = True
+            if int(getattr(pg, "no_progress_streak", 0) or 0) >= 2:
+                stuck_signal = True
+        if stuck_signal and doc_stuck_used < doc_stuck_budget:
+            stuck_block = match_stuck_docs(
+                ctx=ctx,
+                case=case,
+                cursor=cursor,
+                history=history,
+                steps=steps,
+                hierarchy_text=inspect_slots.get("hierarchy_text") or "",
+            )
+            if stuck_block:
+                doc_stuck_used += 1
+                base = inspect_slots.get("doc_context") or ""
+                merged = f"{base}\n\n【遇阻文档提示】\n{stuck_block}".strip() if base else stuck_block
+                inspect_slots["doc_context"] = merged[:2400]
 
         _log_context_slots(
             writer,
@@ -851,8 +942,10 @@ def _run_loop(
         if scripted_check:
             exp = enrich_assert_expectation(cur.instruction, cur.expected)
             assert_params: dict[str, Any] = {"expectation": exp}
-            if auto_knowledge_body:
-                assert_params["knowledge_context"] = auto_knowledge_body
+            ctx_bits = [auto_knowledge_body, inspect_slots.get("doc_context") or ""]
+            merged_ctx = "\n\n".join(b for b in ctx_bits if b).strip()
+            if merged_ctx:
+                assert_params["knowledge_context"] = merged_ctx
             decision = AgentDecision(
                 status="continue",
                 thought=f"校验步骤 {cur.n}：{cur.expected}",
@@ -881,6 +974,7 @@ def _run_loop(
                     knowledge_hint=inspect_slots.get("knowledge_hint") or "",
                     knowledge_body=inspect_slots.get("knowledge_body") or "",
                     nav_assist=inspect_slots.get("nav_assist") or "",
+                    doc_context=inspect_slots.get("doc_context") or "",
                 )
 
             decision = _decide()
@@ -1108,7 +1202,7 @@ def _run_loop(
                         },
                     )
             if stop_msg:
-                return _leave(status="blocked", summary=stop_msg)
+                return _leave(status="fail", summary=stop_msg)
             continue
 
         emit(
@@ -1239,12 +1333,12 @@ def _run_loop(
             cursor.record_step_op()
 
         post_fp = ""
-        if status_val == "pass" and fuseable_cap(cap_id):
+        if status_val == "pass" and (fuseable_cap(cap_id) or cap_id in ("fsm_navigate", "recover_fsm_navigate")):
             post_shot = proxy.observe("screenshot", force_fresh=True)
             post_fp = _screen_fp(post_shot, inspect_slots.get("hierarchy_text") or "")
             cursor.progress_gate.record_pass(
-                cap_id=cap_id,
-                params=params,
+                cap_id="tap_element" if cap_id in ("fsm_navigate", "recover_fsm_navigate") else cap_id,
+                params=params if fuseable_cap(cap_id) else {},
                 pre_fp=screen_fp,
                 post_fp=post_fp,
             )
@@ -1268,6 +1362,16 @@ def _run_loop(
             continue
 
         if decision.status == "done":
+            if is_explore:
+                cursor.mark_explore_done()
+                return _finish(
+                    emit,
+                    status="pass",
+                    summary=cursor.summary(),
+                    steps=steps,
+                    t0=t0,
+                    pack=_pack(),
+                )
             if in_prep:
                 cursor.finish_prep()
             elif in_check:
@@ -1280,6 +1384,15 @@ def _run_loop(
 
         _log_turn_end(writer, cap=cap_id, status=status_val)
 
+    if is_explore:
+        return _finish(
+            emit,
+            status="pass",
+            summary=cursor.summary(),
+            steps=steps,
+            t0=t0,
+            pack=_pack(),
+        )
     summary = f"超过 {max_steps} 步仍未完成"
     return _leave(status="fail", summary=summary)
 
