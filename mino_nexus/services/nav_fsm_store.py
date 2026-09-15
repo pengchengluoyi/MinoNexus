@@ -205,6 +205,16 @@ def load_with_reason(
     finally:
         db.close()
 
+    from mino_nexus.services.nav_layout import drop_volatile_landmark_states
+
+    cleaned, dropped = drop_volatile_landmark_states(doc)
+    if dropped:
+        try:
+            save(app_id, cleaned, updated_by="noise_scrub", allow_calibrate=True)
+            doc = cleaned
+        except Exception:
+            doc = cleaned
+
     reason = _scope_reason(doc, expected_account_id=expected_account_id)
     if reason:
         return None, reason

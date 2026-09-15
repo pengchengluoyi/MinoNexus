@@ -128,6 +128,11 @@ def compile_assist(
 ) -> str:
     if plan is None or not plan.state_id:
         return ""
+    if str(run_type or "").lower() == "explore":
+        return ""
+
+    if not getattr(plan, "case_navigation_goal", False):
+        return _head(plan, fsm).strip()
 
     parts: list[str] = [_head(plan, fsm)]
 

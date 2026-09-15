@@ -50,7 +50,9 @@ from mino_nexus.core.schemas import EventResult, PlanEvent
 TAG = "AgentLoop"
 _MAX_STEPS = 24
 RECOVER_PREFIX = "recover_"
-_NON_FATAL_LOCAL_REASONS = frozenset({"local_cap_misrouted", "cap_not_in_catalog", "no_impl_for_device"})
+_NON_FATAL_LOCAL_REASONS = frozenset(
+    {"local_cap_misrouted", "cap_not_in_catalog", "no_impl_for_device", "fsm_degraded"}
+)
 
 
 def _case_overview(case: dict[str, Any]) -> str:
@@ -68,6 +70,24 @@ def _case_overview(case: dict[str, Any]) -> str:
 
 def _history(rows: list[str]) -> str:
     return "\n".join(rows[-12:]) if rows else "（还没有动作）"
+
+
+def _history_line(
+    seq: int,
+    capability_id: str,
+    status: str,
+    summary: str,
+    error: str,
+    extra: Optional[dict[str, Any]] = None,
+) -> str:
+    text = str(summary or error or "")
+    sel = str((extra or {}).get("selector_text") or "").strip()
+    if capability_id == "tap_element" and sel and ("「?」" in text or sel not in text):
+        tail = text
+        if tail.startswith("点击 "):
+            tail = tail[3:].lstrip()
+        return f"{seq}. {capability_id} → {status}: 点击「{sel}」→ {tail}"
+    return f"{seq}. {capability_id} → {status}: {text}"
 
 
 def _screen_fp(shot, hierarchy_text: str = "") -> str:
@@ -124,11 +144,14 @@ def _log_context_slots(
 ) -> None:
     if writer is None:
         return
+    cur_node = cursor.current()
+    case_step = 0 if cursor.phase == "prep" else (int(cur_node.n) if cur_node else 0)
     writer.append(
         "context/slots",
         {
             "slots": {
                 "phase": cursor.phase,
+                "case_step": case_step,
                 "goal": cursor.decide_goal(),
                 "checkpoints_block": cursor.prompt_block(),
                 "success_criteria": cursor.decide_success(),
@@ -251,6 +274,7 @@ def run_case(
         app_id=app_id,
         provider_id=provider_id,
         sn=sn,
+        sop_id="explore-app" if is_explore_case else "run-case",
         extra={
             "goal": overview,
             "seq_node_count": len(build_seq_nodes(case)),
@@ -351,10 +375,20 @@ def _record(
         "thought": thought,
         "thumb": str(thumb or ""),
     }
+    hist_extra = dict(extra or {})
     if extra:
         row.update(extra)
     steps.append(row)
-    history.append(f"{seq}. {capability_id} → {status}: {summary or error}")
+    history.append(
+        _history_line(
+            seq,
+            capability_id,
+            status,
+            summary,
+            error,
+            hist_extra,
+        )
+    )
     return row
 
 
@@ -758,6 +792,7 @@ def _run_loop(
                 case=case,
                 provider_id=provider_id,
                 slot_sink=inspect_slots,
+                force=bool(last_phase_seen and last_phase_seen != cursor.phase),
             )
             ran_case_start_inspection = True
         else:
@@ -816,14 +851,7 @@ def _run_loop(
                     # hierarchy 不可用时仍计 idle，避免跑满 max_steps 空烧 LLM
                     cursor.note_observation([])
                 if cursor.done:
-                    return _finish(
-                        emit,
-                        status="pass",
-                        summary=cursor.summary(),
-                        steps=steps,
-                        t0=t0,
-                        pack=_pack(),
-                    )
+                    return _leave(status="pass", summary=cursor.summary(), pack=_pack())
             blocked = nav.preflight_block()
             if blocked:
                 reason = str(blocked.get("reason") or "租号初态与用例要求不一致")
@@ -833,26 +861,47 @@ def _run_loop(
         elif is_explore:
             cursor.note_observation([])
             if cursor.done:
-                return _finish(
-                    emit,
-                    status="pass",
-                    summary=cursor.summary(),
-                    steps=steps,
-                    t0=t0,
-                    pack=_pack(),
+                return _leave(status="pass", summary=cursor.summary(), pack=_pack())
+
+        screen_fp_turn = _screen_fp(shot, inspect_slots.get("hierarchy_text") or "")
+        if not is_explore and isinstance(cursor, StepCursor):
+            if cursor.phase == "do" and not cursor.step_start_fp:
+                cursor.refresh_step_start_fp(screen_fp_turn)
+            cur_probe = cursor.current()
+            probe_nodes: list[dict[str, Any]] = []
+            if nav is not None and nav.snapshot.usable():
+                probe_nodes = list(nav.snapshot.nodes or [])
+            if (
+                cursor.phase == "do"
+                and cur_probe
+                and str(cur_probe.expected or "").strip()
+                and probe_nodes
+            ):
+                from mino_nexus.loop import step_effect as step_effect_mod
+                from mino_nexus.services import nav_telemetry
+
+                hit, keywords = step_effect_mod.probe(cur_probe.expected, probe_nodes)
+                nav_telemetry.step_effect(
+                    turn_id=seq,
+                    run_id=scout_run_id,
+                    case_id=cid,
+                    step_n=cur_probe.n,
+                    probe_hit=hit,
+                    model_done=False,
+                    keywords=keywords,
                 )
+                if hit:
+                    cursor.note_step_effect_hit(keywords)
+                    if cursor.step_effect_hit_streak >= 2 and cursor.phase == "do":
+                        cursor.enter_check()
+                        cursor.correction_hint = ""
+                else:
+                    cursor.reset_step_effect_streak()
 
         cur = cursor.current()
         if cur is None:
             if is_explore:
-                return _finish(
-                    emit,
-                    status="pass",
-                    summary=cursor.summary(),
-                    steps=steps,
-                    t0=t0,
-                    pack=_pack(),
-                )
+                return _leave(status="pass", summary=cursor.summary(), pack=_pack())
             return _leave_case(cursor)
 
         phase_cfg = _phase_cfg()
@@ -866,6 +915,8 @@ def _run_loop(
         )
         if nav is not None:
             setattr(ctx, "nav_localized_state", str(nav.localized.get("chosen") or ""))
+            setattr(ctx, "nav_localized_confidence", float(nav.localized.get("confidence") or 0.0))
+            setattr(ctx, "nav_localized", dict(nav.localized or {}))
             setattr(ctx, "nav_project_id", str(nav.project_id or ""))
         if nav is None or not nav.active:
             menu = [
@@ -1001,7 +1052,39 @@ def _run_loop(
         if nav is not None and decision.screen_layout:
             nav.attach_turn_layout(seq, decision.screen_layout)
 
+        screen_fp = _screen_fp(shot, inspect_slots.get("hierarchy_text") or "")
+
         if decision.status in ("give_up", "ask_human", "skip"):
+            if (
+                decision.status == "give_up"
+                and not is_explore
+                and isinstance(cursor, StepCursor)
+            ):
+                cur_give = cursor.current()
+                if (
+                    cursor.phase == "do"
+                    and cur_give
+                    and str(cur_give.expected or "").strip()
+                    and cursor.step_ops > 0
+                    and cursor.step_start_fp
+                    and screen_fp != cursor.step_start_fp
+                ):
+                    cursor.enter_check()
+                    cursor.correction_hint = (
+                        "【纠偏】你在本步已执行过操作且界面已发生变化。"
+                        "先按本步预期校验一次（assert_visual），再决定是否放弃。"
+                    )
+                    cursor.reset_step_effect_streak()
+                    if writer:
+                        writer.append(
+                            "decision/give_up_rejected",
+                            {
+                                "thought": thought,
+                                "case_step": cur_give.n,
+                                "phase": cursor.phase,
+                            },
+                        )
+                    continue
             if decision.status == "skip":
                 st = "skip"
                 summary = thought or "当前渠道跳过本条用例"
@@ -1030,7 +1113,18 @@ def _run_loop(
         turn_decision_cap = cap_id or ("signal_done" if decision.status == "done" else "")
         turn_decision_status = str(decision.status or "")
         params = dict(action.params or {}) if action else {}
-        screen_fp = _screen_fp(shot, inspect_slots.get("hierarchy_text") or "")
+        fg_nodes: list[dict[str, Any]] = []
+        if nav is not None and getattr(nav, "snapshot", None) is not None:
+            snap_nodes = getattr(nav.snapshot, "nodes", None) or []
+            if snap_nodes:
+                fg_nodes = list(snap_nodes)
+        from mino_nexus.services.nav_capture_store import run_guard_foreground
+
+        fg_ctx = run_guard_foreground(
+            fg_nodes,
+            target_package=target_pkg,
+            platform=str(getattr(ctx, "platform", "") or ""),
+        )
         guard_ctx = {
             "phase": cursor.phase,
             "cap_id": cap_id,
@@ -1045,11 +1139,41 @@ def _run_loop(
             "menu": menu,
             "accounts_brief": str(getattr(ctx, "accounts_brief", "") or ""),
             "run_env_brief": task_env_brief,
+            "app_foreground": fg_ctx.get("app_foreground") or "",
+            "system_overlay": fg_ctx.get("system_overlay") or "",
         }
         params = apply_force_case_expectation(params, guard_ctx)
+        if cap_id == "tap_element":
+            tap_nodes: list[dict[str, Any]] = []
+            if nav is not None and nav.snapshot.usable():
+                tap_nodes = list(nav.snapshot.nodes or [])
+            from mino_nexus.loop.tap_enrich import enrich_tap_params
+
+            params = enrich_tap_params(params, tap_nodes)
         pending_mutate = bool(decision.status == "done" and cap_id in MUTATE_CAPS and action)
 
         if decision.status == "done" and not pending_mutate:
+            if is_explore:
+                cursor.mark_explore_done()
+                rec(
+                    seq,
+                    capability_id="signal_done",
+                    status="pass",
+                    summary=thought or cursor.summary(),
+                    thought=thought,
+                    thumb=thumb,
+                )
+                emit(
+                    "result",
+                    thought=thought,
+                    step=seq,
+                    capability_id="signal_done",
+                    status="pass",
+                    summary=cursor.summary(),
+                    thumb=thumb,
+                )
+                _log_turn_end(writer, cap="signal_done", status="pass")
+                return _leave(status="pass", summary=cursor.summary(), pack=_pack())
             if in_prep:
                 summary = thought or "前置检查完成，进入操作步骤"
                 rec(seq, capability_id="signal_done", status="skipped",
@@ -1075,10 +1199,12 @@ def _run_loop(
                     return _leave_case(cursor)
                 _log_turn_end(writer, cap="signal_done", status="skipped")
                 continue
-            do_work_reason = run_guards(
-                ["require_do_work"],
-                {**guard_ctx, "intent": "signal_done"},
-            )
+            do_work_reason = None
+            if "require_do_work" in list(phase_cfg.get("guards") or []):
+                do_work_reason = run_guards(
+                    ["require_do_work"],
+                    {**guard_ctx, "intent": "signal_done"},
+                )
             if do_work_reason:
                 rec(
                     seq,
@@ -1099,6 +1225,25 @@ def _run_loop(
                 )
                 _log_turn_end(writer, cap="require_do_work", status="skipped")
                 continue
+            from mino_nexus.loop import step_effect as step_effect_mod
+            from mino_nexus.services import nav_telemetry
+
+            probe_nodes_done: list[dict[str, Any]] = []
+            if nav is not None and nav.snapshot.usable():
+                probe_nodes_done = list(nav.snapshot.nodes or [])
+            probe_hit = False
+            kw_done: list[str] = []
+            if str(cur.expected or "").strip() and probe_nodes_done:
+                probe_hit, kw_done = step_effect_mod.probe(cur.expected, probe_nodes_done)
+            nav_telemetry.step_effect(
+                turn_id=seq,
+                run_id=scout_run_id,
+                case_id=cid,
+                step_n=cur.n,
+                probe_hit=probe_hit,
+                model_done=True,
+                keywords=kw_done,
+            )
             rec(seq, capability_id="signal_done", status="skipped",
                     summary=thought or f"步骤 {cur.n} 操作结束，进入校验", thought=thought, thumb=thumb)
             emit("result", thought=thought, step=seq, capability_id="signal_done",
@@ -1235,12 +1380,19 @@ def _run_loop(
             case_seq=case_seq,
             seq=seq,
         )
+        recovery_extra: dict[str, Any] = {}
         if hasattr(result, "recovered"):
             status_val = "pass" if result.recovered else ("fail" if result.applied else "skipped")
             summary = result.summary() if callable(getattr(result, "summary", None)) else str(getattr(result, "error", "") or "")
             elapsed_ms = 0
             error = result.error or ""
             executor_used = "recovery"
+            actions = getattr(result, "actions", None)
+            if isinstance(actions, list) and actions:
+                recovery_extra["recovery_actions"] = actions
+            ev_brief = str(getattr(result, "evidence", "") or "").strip()
+            if ev_brief and not result.recovered:
+                error = f"{error}; {ev_brief}".strip("; ")
             rid = str(getattr(result, "rule_id", "") or "").strip()
             if not rid and cap_id.startswith(RECOVER_PREFIX):
                 rid = cap_id[len(RECOVER_PREFIX):]
@@ -1258,18 +1410,30 @@ def _run_loop(
             error = result.error or ""
             executor_used = result.executor_used or ""
 
+        raw_resp = getattr(result, "raw_response", None) if not hasattr(result, "recovered") else {}
+        if isinstance(raw_resp, dict):
+            if str(raw_resp.get("local_reason") or "") == "fsm_degraded":
+                hint = str(raw_resp.get("correction_hint") or "").strip()
+                if hint and isinstance(cursor, StepCursor):
+                    cursor.correction_hint = hint
+            nav_attempt = raw_resp.get("nav_attempt")
+            if isinstance(nav_attempt, dict) and writer:
+                writer.append("nav/attempt", nav_attempt)
+
         if writer:
-            writer.append(
-                "tool/result",
-                {
-                    "capability_id": cap_id,
-                    "status": status_val,
-                    "summary": summary,
-                    "error": error,
-                    "executor_used": executor_used,
-                    "elapsed_ms": elapsed_ms,
-                },
-            )
+            payload = {
+                "capability_id": cap_id,
+                "status": status_val,
+                "summary": summary,
+                "error": error,
+                "executor_used": executor_used,
+                "elapsed_ms": elapsed_ms,
+            }
+            if isinstance(raw_resp, dict) and raw_resp.get("nav_attempt"):
+                payload["nav_attempt"] = raw_resp.get("nav_attempt")
+            if recovery_extra:
+                payload.update(recovery_extra)
+            writer.append("tool/result", payload)
         if writer and hasattr(result, "recovered"):
             writer.append(
                 "recovery/match",
@@ -1281,9 +1445,17 @@ def _run_loop(
                     "recovered": bool(getattr(result, "recovered", False)),
                 },
             )
-        extra = {}
+        extra: dict[str, Any] = {}
         if cap_id == "assert_visual":
             extra = {"case_step_index": cur.n, "expectation": cur.expected}
+        elif cap_id == "tap_element":
+            sel = str(params.get("selector_text") or "").strip()
+            if sel:
+                extra["selector_text"] = sel
+        if recovery_extra:
+            extra = {**(extra or {}), **recovery_extra}
+        if isinstance(raw_resp, dict) and raw_resp.get("nav_attempt"):
+            extra = {**(extra or {}), "nav_attempt": raw_resp.get("nav_attempt")}
         rec(
             seq,
             capability_id=event.capability_id, status=status_val,
@@ -1364,14 +1536,7 @@ def _run_loop(
         if decision.status == "done":
             if is_explore:
                 cursor.mark_explore_done()
-                return _finish(
-                    emit,
-                    status="pass",
-                    summary=cursor.summary(),
-                    steps=steps,
-                    t0=t0,
-                    pack=_pack(),
-                )
+                return _leave(status="pass", summary=cursor.summary(), pack=_pack())
             if in_prep:
                 cursor.finish_prep()
             elif in_check:
@@ -1385,14 +1550,7 @@ def _run_loop(
         _log_turn_end(writer, cap=cap_id, status=status_val)
 
     if is_explore:
-        return _finish(
-            emit,
-            status="pass",
-            summary=cursor.summary(),
-            steps=steps,
-            t0=t0,
-            pack=_pack(),
-        )
+        return _leave(status="pass", summary=cursor.summary(), pack=_pack())
     summary = f"超过 {max_steps} 步仍未完成"
     return _leave(status="fail", summary=summary)
 

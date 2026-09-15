@@ -334,7 +334,12 @@ def apply_rule(match: RuleMatch, ctx, router, *, target_package: str = "") -> Re
             SLog.i(TAG, f"[{rule.id}] 恢复成功（第 {attempt} 次）：{ev.brief()}")
             return out
         SLog.w(TAG, f"[{rule.id}] 第 {attempt}/{max_attempts} 次后仍未通过 verify：{ev.brief()}")
+        out.evidence = ev.brief()
+        if not out.error:
+            out.error = f"verify 未通过：{ev.brief()}"
 
+    if not out.recovered and out.evidence and out.error and out.evidence not in out.error:
+        out.error = f"{out.error}; {out.evidence}"
     return out
 
 

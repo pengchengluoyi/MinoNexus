@@ -146,7 +146,8 @@ def _detect_action_pattern_cycle(keys: list[str]) -> bool:
 class ProgressGate:
     """状态进展熔断器 + 分级干预（block → steer → stop）。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, profile: str = "case") -> None:
+        self.profile = str(profile or "case").strip().lower() or "case"
         self.no_progress_streak: int = 0
         self.fuse_block_streak: int = 0
         self.total_fuse_blocks: int = 0
@@ -217,7 +218,8 @@ class ProgressGate:
                 f"必须 signal_give_up。"
             )
 
-        budget = int(MILESTONE_BUDGET.get(str(phase or "do"), 10))
+        explore = self.profile == "explore"
+        budget = 80 if explore else int(MILESTONE_BUDGET.get(str(phase or "do"), 10))
         if self.milestone_turns >= budget:
             hint = fuse_hint(cap_id, params, has_get_otp=has_get_otp, leased=leased, reason="milestone")
             return f"【熔断·里程碑】{phase} 阶段已用 {self.milestone_turns} 步仍未收工。{hint}"
@@ -225,7 +227,7 @@ class ProgressGate:
         pre_fp = str(screen_fp or "").strip() or "_"
 
         states = self._post_states
-        if len(states) >= STATE_MIN_SAMPLES:
+        if not explore and len(states) >= STATE_MIN_SAMPLES:
             recent = states[-STATE_WINDOW:]
             uniq = len(set(recent))
             if uniq <= STATE_MAX_UNIQUE:
@@ -235,13 +237,14 @@ class ProgressGate:
                     f"{hint}"
                 )
 
-        cycle = _detect_state_cycle(states)
-        if cycle is not None:
-            period, _pat = cycle
-            hint = fuse_hint(cap_id, params, has_get_otp=has_get_otp, leased=leased, reason="state_cycle")
-            return (
-                f"【熔断·状态循环】界面在 {period} 个状态间循环重复。{hint}"
-            )
+        if not explore:
+            cycle = _detect_state_cycle(states)
+            if cycle is not None:
+                period, _pat = cycle
+                hint = fuse_hint(cap_id, params, has_get_otp=has_get_otp, leased=leased, reason="state_cycle")
+                return (
+                    f"【熔断·状态循环】界面在 {period} 个状态间循环重复。{hint}"
+                )
 
         if _detect_action_pattern_cycle(self._coarse_actions):
             hint = fuse_hint(cap_id, params, has_get_otp=has_get_otp, leased=leased, reason="state_domination")

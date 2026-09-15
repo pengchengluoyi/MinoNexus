@@ -743,6 +743,9 @@ def finalize_for_publish(app_id: str, draft: dict[str, Any]) -> dict[str, Any]:
         if isinstance(e, dict) and str(e.get("kind") or "nav") == "nav"
     ]
     doc = scrub_calibrate_marks(doc, landmark=top_text, resource_re=top_rid)
+    from mino_nexus.services.nav_layout import drop_volatile_landmark_states
+
+    doc, _dropped = drop_volatile_landmark_states(doc)
     return ensure_unique_state_ids(doc)
 
 
@@ -1179,6 +1182,9 @@ def merge_synthesized_doc(
             meta["recover"] = {**recover, "default_state_id": home_id}
     meta["capture_merge_at"] = int(__import__("time").time())
     out["meta"] = meta
+    from mino_nexus.services.nav_layout import drop_volatile_landmark_states
+
+    out, _dropped = drop_volatile_landmark_states(out)
     return ensure_unique_state_ids(out)
 
 
@@ -1216,6 +1222,9 @@ def prepare_publish(
                 cand_store.review_candidate(app_id, cid, status="rejected", note="system_ui")
             continue
         if str(row.get("status") or "") == "pending":
+            evidence = int(row.get("evidence_count") or 0)
+            if evidence < int(auto_accept_min or _AUTO_ACCEPT_MIN):
+                continue
             cand_store.review_candidate(app_id, cid, status="accepted", note="auto")
 
     applied = 0

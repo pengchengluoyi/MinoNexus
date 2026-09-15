@@ -25,6 +25,7 @@ def _result(
     error: str = "",
     executor: str = "internal",
     vlm_meta: dict[str, Any] | None = None,
+    raw_response: dict[str, Any] | None = None,
 ) -> EventResult:
     return EventResult(
         seq=event.seq,
@@ -38,9 +39,16 @@ def _result(
         ai_reasoning=event.ai_reasoning or "",
         plan_event=event.model_dump(exclude_none=True),
         vlm_meta=dict(vlm_meta or {}),
+        raw_response=dict(raw_response or {}),
         started_at=_now(),
         finished_at=_now(),
     )
+
+
+_FSM_DEGRADE_HINT = (
+    "【导航降级】路线图未能从当前屏执行跳转。请用 tap_element / press_back 按用例步骤操作，"
+    "必要时 recover_restart_target_app；勿重复盲目调用 fsm_navigate。"
+)
 
 
 def dispatch_local(
@@ -235,28 +243,61 @@ def _fsm_navigate(
 ) -> EventResult:
     """当前屏 → 目标屏：规划最短路并执行第一步 tap（非仅 advise）。"""
     from mino_nexus.services import nav_route
+    from mino_nexus.services.nav_state_resolve import plan_route_resolved
 
     params = dict(event.params or {})
-    from_state = str(
+    from_raw = str(
         params.get("from_state")
         or params.get("current_state")
         or params.get("from")
-        or getattr(ctx, "nav_localized_state", "")
         or ""
     ).strip()
-    to_state = str(
+    to_raw = str(
         params.get("to_state")
         or params.get("expected_state")
         or params.get("goal_state")
         or params.get("to")
         or ""
     ).strip()
+    localized = getattr(ctx, "nav_localized", None)
+    if not isinstance(localized, dict):
+        localized = {}
+    conf = float(getattr(ctx, "nav_localized_confidence", 0) or 0)
+    chosen = str(getattr(ctx, "nav_localized_state", "") or "").strip()
+    if not from_raw and chosen and conf >= 0.35:
+        from_raw = chosen
     app_id = str(params.get("app_id") or getattr(ctx, "app_id", "") or "").strip()
     project_id = str(
         params.get("project_id")
         or getattr(ctx, "nav_project_id", "")
         or ""
     ).strip()
+
+    def _attempt(**kw: Any) -> dict[str, Any]:
+        base = {
+            "from": from_raw,
+            "to": to_raw,
+            "degraded": False,
+        }
+        base.update(kw)
+        return base
+
+    def _degrade(summary: str, error: str, attempt: dict[str, Any]) -> EventResult:
+        attempt["degraded"] = True
+        return _result(
+            event,
+            status=EventStatus.DECLINED,
+            summary=summary,
+            error=error,
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+            raw_response={
+                "local_reason": "fsm_degraded",
+                "correction_hint": _FSM_DEGRADE_HINT,
+                "nav_attempt": attempt,
+            },
+        )
+
     if not app_id:
         return _result(
             event,
@@ -265,7 +306,7 @@ def _fsm_navigate(
             error="missing app_id",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
-    if not to_state:
+    if not to_raw:
         return _result(
             event,
             status=EventStatus.FAIL,
@@ -275,69 +316,85 @@ def _fsm_navigate(
         )
     fsm_doc, _ = nav_route.load_fsm_doc(app_id, project_id=project_id)
     fsm = fsm_doc or {}
-    if not from_state:
-        plan_msg = f"未提供当前屏，直接尝试点击目标 Tab「{to_state}」"
-        tap_params = nav_route.direct_tab_tap_params(fsm, to_state)
-        if tap_params and router is not None:
-            pass  # 跳到执行段
-        else:
-            return _result(
-                event,
-                status=EventStatus.FAIL,
-                summary="需要 from_state/current_state，或提供可识别的目标 Tab 文案",
-                error="missing from_state",
-                elapsed_ms=int((time.time() - t0) * 1000),
-            )
-    else:
-        plan = nav_route.plan_route_for_app(
-            app_id,
-            from_state=from_state,
-            to_state=to_state,
-            project_id=project_id,
+    if not fsm:
+        return _degrade(
+            "没有 NavFSM 配置，无法规划路线",
+            "missing fsm",
+            _attempt(plan_ok=False, plan_error="missing fsm"),
         )
-        fsm = plan.get("fsm") if isinstance(plan.get("fsm"), dict) else fsm
-        tap_params = {}
-        plan_msg = ""
+
+    plan_msg = ""
+    tap_params: dict[str, Any] = {}
+    nav_attempt = _attempt()
+
+    if from_raw:
+        plan = plan_route_resolved(
+            fsm,
+            from_ref=from_raw,
+            to_ref=to_raw,
+            localized=localized,
+        )
+        resolve = plan.get("resolve") if isinstance(plan.get("resolve"), dict) else {}
+        nav_attempt.update(
+            {
+                "resolved_from": resolve.get("resolved_from") or "",
+                "resolved_to": resolve.get("resolved_to") or "",
+                "name_score": {
+                    "from": resolve.get("from_name_score"),
+                    "to": resolve.get("to_name_score"),
+                },
+                "screen_score": resolve.get("from_screen_score"),
+            }
+        )
         if plan.get("ok"):
             hops = int(plan.get("hop_count") or 0)
             summary = str(plan.get("summary") or "")
+            nav_attempt["plan_ok"] = True
             if hops == 0:
                 plan_msg = f"已在目标屏 {plan.get('to_state')}"
+                nav_attempt["plan_error"] = ""
                 return _result(
                     event,
                     status=EventStatus.PASS,
                     summary=plan_msg,
                     executor="internal",
                     elapsed_ms=int((time.time() - t0) * 1000),
+                    raw_response={"nav_attempt": nav_attempt},
                 )
-            else:
-                first = (plan.get("steps") or [{}])[0]
-                tap_params = nav_route.tap_params_for_edge(fsm, first)
-                plan_msg = (
-                    f"规划 {hops} 步：{summary}；本步 {first.get('edge_id') or ''} "
-                    f"→ {first.get('to') or ''}"
-                )
+            first = (plan.get("steps") or [{}])[0]
+            tap_params = nav_route.tap_params_for_edge(fsm, first)
+            plan_msg = (
+                f"规划 {hops} 步：{summary}；本步 {first.get('edge_id') or ''} "
+                f"→ {first.get('to') or ''}"
+            )
         else:
             err = str(plan.get("error") or "无路径")
-            tap_params = nav_route.direct_tab_tap_params(fsm, to_state)
-            if not tap_params:
-                return _result(
-                    event,
-                    status=EventStatus.FAIL,
-                    summary=err,
-                    error=err,
-                    elapsed_ms=int((time.time() - t0) * 1000),
-                )
-            plan_msg = f"{err}；尝试直接点击 Tab「{tap_params.get('selector_text') or ''}」"
+            nav_attempt["plan_ok"] = False
+            nav_attempt["plan_error"] = err
+            tap_params = nav_route.direct_tab_tap_params(fsm, resolve.get("resolved_to") or to_raw)
+            if tap_params:
+                plan_msg = f"{err}；尝试直接点击 Tab「{tap_params.get('selector_text') or ''}」"
+                nav_attempt["fallback_tab"] = tap_params.get("selector_text") or ""
+            else:
+                return _degrade(err, err, nav_attempt)
+    else:
+        plan_msg = f"未提供当前屏，直接尝试点击目标 Tab「{to_raw}」"
+        tap_params = nav_route.direct_tab_tap_params(fsm, to_raw)
+        nav_attempt["plan_ok"] = False
+        nav_attempt["plan_error"] = "missing from_state"
+        if not tap_params:
+            return _degrade(
+                "需要 from_state/current_state，或提供可识别的目标 Tab 文案",
+                "missing from_state",
+                nav_attempt,
+            )
 
     if not tap_params:
-        return _result(
-            event,
-            status=EventStatus.FAIL,
-            summary=f"{plan_msg or '无路径'}（边未配置 target_tab，无法执行）",
-            error="missing tap params",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
+        msg = f"{plan_msg or '无路径'}（边未配置 target_tab，无法执行）"
+        nav_attempt["plan_ok"] = False
+        nav_attempt.setdefault("plan_error", "missing tap params")
+        return _degrade(msg, "missing tap params", nav_attempt)
+
     if router is None:
         return _result(
             event,
@@ -345,6 +402,7 @@ def _fsm_navigate(
             summary=f"{plan_msg}；未连接设备，仅返回规划",
             executor="internal",
             elapsed_ms=int((time.time() - t0) * 1000),
+            raw_response={"nav_attempt": nav_attempt},
         )
 
     from mino_nexus.loop.web_env import agent_step_idx
@@ -366,6 +424,8 @@ def _fsm_navigate(
     )
     tap_st = tap_result.status.value if hasattr(tap_result.status, "value") else str(tap_result.status)
     tap_summary = str(tap_result.summary or tap_result.error or "")
+    nav_attempt["tap_status"] = tap_st
+    nav_attempt["fallback_tab"] = tap_params.get("selector_text") or ""
     if tap_st in ("pass", "done"):
         return _result(
             event,
@@ -373,14 +433,12 @@ def _fsm_navigate(
             summary=f"{plan_msg}；已点击「{tap_params.get('selector_text') or ''}」",
             executor="internal+adb",
             elapsed_ms=int((time.time() - t0) * 1000),
+            raw_response={"nav_attempt": nav_attempt},
         )
-    return _result(
-        event,
-        status=EventStatus.FAIL,
-        summary=f"{plan_msg}；点击失败：{tap_summary}",
-        error=tap_summary or "tap failed",
-        executor="internal+adb",
-        elapsed_ms=int((time.time() - t0) * 1000),
+    return _degrade(
+        f"{plan_msg}；点击失败：{tap_summary}",
+        tap_summary or "tap failed",
+        nav_attempt,
     )
 
 

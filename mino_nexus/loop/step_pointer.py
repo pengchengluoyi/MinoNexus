@@ -20,17 +20,20 @@ _POINTER_TEMPLATES: dict[str, str] = {
         "登录态未确认时不要 signal_done。禁止进步骤、禁止验预期。"
     ),
     "do_header": "【执行纪律：严格按步骤编号。禁止跳到后面的步骤，禁止提前验后面的预期。】",
-    "do_current": "【当前只做步骤 {n}】{instruction}",
+    "do_current": "【当前只做步骤 {n}】{instruction}\n【本步达成信号】{achievement}",
     "do_tail": (
         "做完本步操作后调 signal_done，表示本步操作结束（不是整案结束）。"
-        "目标已在屏上达成时也须 signal_done，禁止用 signal_give_up 表示本步完成。"
+        "达成信号一旦在屏上出现，即视为本步完成，立刻 signal_done。"
+        "跳转类步骤成功后，原操作对象（入口/tab/按钮）会从屏上消失，这是达成的正常表现，"
+        "不构成未达成，禁止因此 signal_give_up。"
         "业务入口弹出登录弹窗时先完成登录，禁止只关弹窗反复点同一入口。禁止去做后面步骤。"
     ),
+    "do_no_expected": "【本步无预期】做完操作即视为完成，不要试图找校验依据。",
     "check_current": "【当前只验步骤 {n}】{expected}",
     "check_tail": "只看当前截图判断预期。调 assert_visual；通过后再 signal_done。禁止点击、滑动、输入来改界面凑绿。",
     "step_future": "[ ] 步骤 {n} 未到，禁止执行：{instruction}",
     "step_done": "[x] 步骤 {n} 已完成：{instruction}",
-    "step_active_do": "[>] 步骤 {n} 操作中：{instruction}",
+    "step_active_do": "[>] 步骤 {n} 操作中：{instruction} ｜ 达成信号：{achievement}",
     "step_active_check": "[>] 步骤 {n} 校验中：{instruction} ｜ 预期：{expected}",
     "step_pending_check": "[ ] 步骤 {n} 未到，禁止执行：{instruction} ｜ 做完后校验",
     "all_done": "全部步骤已完成。不要再操作设备。",
@@ -39,6 +42,11 @@ _POINTER_TEMPLATES: dict[str, str] = {
 
 def _pointer_templates() -> dict[str, str]:
     return _POINTER_TEMPLATES
+
+
+def _achievement_label(expected: str) -> str:
+    exp = str(expected or "").strip()
+    return exp if exp else "本步无预期（做完即过）"
 
 
 def _pt(key: str, **kwargs: Any) -> str:
@@ -306,6 +314,10 @@ class StepCursor:
         self.otp_prep_hint: str = ""
         self.progress_gate: ProgressGate = ProgressGate()
         self.guest_entry_tapped: bool = False
+        self.step_start_fp: str = ""
+        self.step_effect_hit_streak: int = 0
+        self.step_effect_hint: str = ""
+        self.correction_hint: str = ""
         if self.phase != "prep":
             self._sync()
 
@@ -326,8 +338,26 @@ class StepCursor:
         self.step_checked = False
         self.step_ops = 0
         self.reset_guest_entry()
+        self.step_effect_hit_streak = 0
+        self.step_effect_hint = ""
+        self.correction_hint = ""
         self.progress_gate.reset_milestone("do", 1 if self.nodes else 0)
         self._sync()
+        self.step_start_fp = ""
+
+    def refresh_step_start_fp(self, fp: str) -> None:
+        if self.phase == "do":
+            self.step_start_fp = str(fp or "").strip()
+
+    def note_step_effect_hit(self, keywords: list[str]) -> None:
+        from mino_nexus.loop.step_effect import achievement_hint
+
+        self.step_effect_hit_streak += 1
+        self.step_effect_hint = achievement_hint(keywords)
+
+    def reset_step_effect_streak(self) -> None:
+        self.step_effect_hit_streak = 0
+        self.step_effect_hint = ""
 
     def record_step_op(self) -> None:
         self.step_ops += 1
@@ -370,6 +400,10 @@ class StepCursor:
         self.phase = "do"
         self.step_checked = False
         self.step_ops = 0
+        self.step_effect_hit_streak = 0
+        self.step_effect_hint = ""
+        self.correction_hint = ""
+        self.step_start_fp = ""
 
     def _skip_empty(self) -> str:
         if not self.advance():
@@ -381,6 +415,10 @@ class StepCursor:
         self.step_checked = False
         self.step_ops = 0
         self.reset_guest_entry()
+        self.step_effect_hit_streak = 0
+        self.step_effect_hint = ""
+        self.correction_hint = ""
+        self.step_start_fp = ""
         if self.index >= len(self.nodes):
             self.phase = "done"
             return False
@@ -454,7 +492,12 @@ class StepCursor:
             if i < self.index:
                 bit = _pt("step_done", n=node.n, instruction=node.instruction or "（无操作）")
             elif i == self.index and self.phase == "do":
-                bit = _pt("step_active_do", n=node.n, instruction=node.instruction or "（无操作）")
+                bit = _pt(
+                    "step_active_do",
+                    n=node.n,
+                    instruction=node.instruction or "（无操作）",
+                    achievement=_achievement_label(node.expected),
+                )
             elif i == self.index:
                 bit = _pt(
                     "step_active_check",
@@ -474,7 +517,16 @@ class StepCursor:
             lines.append(_pt("all_done"))
             return "\n".join(lines)
         if self.phase == "do":
-            lines.append(_pt("do_current", n=cur.n, instruction=cur.instruction))
+            lines.append(
+                _pt(
+                    "do_current",
+                    n=cur.n,
+                    instruction=cur.instruction,
+                    achievement=_achievement_label(cur.expected),
+                )
+            )
+            if not str(cur.expected or "").strip():
+                lines.append(_pt("do_no_expected"))
             if self.login_session_hint:
                 lines.append(self.login_session_hint)
             guest_hint = compile_guest_entry_hint(
@@ -486,6 +538,10 @@ class StepCursor:
             warn = str(getattr(self.progress_gate, "warning_hint", "") or "").strip()
             if warn:
                 lines.append(warn)
+            if self.step_effect_hint:
+                lines.append(self.step_effect_hint)
+            if self.correction_hint:
+                lines.append(self.correction_hint)
             lines.append(_pt("do_tail"))
         else:
             lines.append(_pt("check_current", n=cur.n, expected=cur.expected or "（无预期，无法执行校验）"))
@@ -516,7 +572,13 @@ class StepCursor:
                 f"步骤 {cur.n} 的预期成立：{cur.expected}。"
                 "用 assert_visual 判断当前屏。不要操作设备。"
             )
+        exp = str(cur.expected or "").strip()
+        if exp:
+            return (
+                f"完成步骤 {cur.n} 的操作：{cur.instruction}。"
+                f"达成信号：{exp}。以达成信号为准，不以操作对象是否可见为准。"
+            )
         return (
             f"完成步骤 {cur.n} 的操作：{cur.instruction}。"
-            "不要用整案成功标准，也不要为了后面的字去改界面。"
+            "【本步无预期】做完操作即视为完成，不要试图找校验依据。"
         )

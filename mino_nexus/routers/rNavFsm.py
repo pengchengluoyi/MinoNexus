@@ -83,11 +83,47 @@ class CandidateReviewBody(BaseModel):
     note: str = ""
 
 
+class AtlasManualEdgesBody(BaseModel):
+    edges: list[dict[str, Any]] = []
+    project_id: str = ""
+
+
 class NavRouteBody(BaseModel):
     from_state: str = ""
     to_state: str = ""
     version: str = store.DEFAULT_VERSION
     use_live: bool = True
+    project_id: str = ""
+
+
+class StateLabelsBody(BaseModel):
+    display_name: str = ""
+    aliases: list[str] = []
+    tab: str = ""
+    page_role: str = ""
+    chrome_texts: list[str] = []
+    header_title: str = ""
+    version: str = store.DRAFT_VERSION
+
+
+class AtlasMergeStatesBody(BaseModel):
+    canonical_id: str = ""
+    merge_ids: list[str] = []
+    project_id: str = ""
+
+
+class AtlasPinCaptureBody(BaseModel):
+    session_id: str = ""
+    turn_id: int = 0
+    state_id: str = ""
+    project_id: str = ""
+
+
+class AtlasSplitCaptureBody(BaseModel):
+    session_id: str = ""
+    turn_id: int = 0
+    tab: str = ""
+    display_name: str = ""
     project_id: str = ""
 
 
@@ -136,6 +172,21 @@ def delete_nav_fsm(app_id: str, version: str = store.DEFAULT_VERSION, _sess: dic
     return ok({"deleted": store.delete(app_id, version=version)})
 
 
+@router.put("/{app_id}/atlas-manual-edges")
+def put_atlas_manual_edges(app_id: str, body: AtlasManualEdgesBody, sess: dict = Depends(current_session)):
+    """架构页只保存手动跳转，不覆盖正式 NavFSM states/edges。"""
+    try:
+        row = nav_screen_registry.save_atlas_manual_edges(
+            app_id,
+            list(body.edges or []),
+            project_id=body.project_id,
+            updated_by=str(sess.get("username") or sess.get("user_id") or ""),
+        )
+    except store.NavFsmInvalid as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ok(row)
+
+
 @router.post("/{app_id}/route")
 def plan_nav_route(app_id: str, body: NavRouteBody, _sess: dict = Depends(current_session)):
     """路线图最短路（与 recovery 能力 fsm_navigate 同一逻辑）。"""
@@ -148,6 +199,157 @@ def plan_nav_route(app_id: str, body: NavRouteBody, _sess: dict = Depends(curren
         project_id=body.project_id,
     )
     return ok(result)
+
+
+@router.patch("/{app_id}/states/{state_id}/labels")
+def patch_state_labels(
+    app_id: str,
+    state_id: str,
+    body: StateLabelsBody,
+    sess: dict = Depends(current_session),
+):
+    """屏面展示名、别名、顶栏文案等。写入 draft NavFSM（架构 state 可 upsert）。"""
+    sid = str(state_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=422, detail="state_id 不能为空")
+    doc = store.read_raw(app_id, version=body.version or store.DRAFT_VERSION)
+    if not doc:
+        doc = calib.read_draft(app_id)
+    if not doc:
+        doc = {
+            "app_id": app_id,
+            "version": store.DRAFT_VERSION,
+            "meta": {"screen_atlas": True},
+            "states": [],
+            "edges": [],
+        }
+    states = list(doc.get("states") or [])
+    hit = False
+    for st in states:
+        if str(st.get("id") or "") != sid:
+            continue
+        meta = dict(st.get("meta") or {})
+        dn = str(body.display_name or "").strip()
+        if dn:
+            meta["display_name"] = dn
+        aliases = [str(a).strip() for a in (body.aliases or []) if str(a).strip()]
+        if body.aliases is not None:
+            meta["aliases"] = aliases
+        tab = str(body.tab or "").strip()
+        if tab:
+            meta["tab"] = tab
+        role = str(body.page_role or "").strip()
+        if body.page_role is not None:
+            if role:
+                meta["page_role"] = role
+            elif "page_role" in meta:
+                del meta["page_role"]
+        chrome = [str(c).strip() for c in (body.chrome_texts or []) if str(c).strip()]
+        if body.chrome_texts is not None:
+            meta["chrome_texts"] = chrome[:8]
+        ht = str(body.header_title or "").strip()
+        if ht:
+            meta["header_title"] = ht
+        st["meta"] = meta
+        hit = True
+        break
+    if not hit:
+        meta: dict[str, Any] = {"screen_atlas": True}
+        dn = str(body.display_name or "").strip()
+        if dn:
+            meta["display_name"] = dn
+        aliases = [str(a).strip() for a in (body.aliases or []) if str(a).strip()]
+        if aliases:
+            meta["aliases"] = aliases
+        tab = str(body.tab or "").strip()
+        if tab:
+            meta["tab"] = tab
+        role = str(body.page_role or "").strip()
+        if role:
+            meta["page_role"] = role
+        chrome = [str(c).strip() for c in (body.chrome_texts or []) if str(c).strip()]
+        if chrome:
+            meta["chrome_texts"] = chrome[:8]
+        ht = str(body.header_title or "").strip()
+        if ht:
+            meta["header_title"] = ht
+        states.append(
+            {
+                "id": sid,
+                "kind": "page",
+                "entry": False,
+                "identify": {},
+                "guards": {},
+                "meta": meta,
+            }
+        )
+    doc["states"] = states
+    saved = store.save_draft(
+        app_id,
+        doc,
+        updated_by=str(sess.get("username") or sess.get("user_id") or ""),
+    )
+    return ok(saved)
+
+
+@router.post("/{app_id}/atlas-merge-states")
+def post_atlas_merge_states(
+    app_id: str,
+    body: AtlasMergeStatesBody,
+    sess: dict = Depends(current_session),
+):
+    """架构页：将多个 state 合并展示到 canonical_id（meta.atlas_state_remap）。"""
+    row = nav_screen_registry.save_atlas_state_merge(
+        app_id,
+        canonical_id=body.canonical_id,
+        merge_ids=list(body.merge_ids or []),
+        project_id=body.project_id,
+        updated_by=str(sess.get("username") or sess.get("user_id") or ""),
+    )
+    if not row.get("ok"):
+        raise HTTPException(status_code=422, detail=str(row.get("reason") or "合并失败"))
+    return ok(row)
+
+
+@router.post("/{app_id}/atlas-pin-capture")
+def post_atlas_pin_capture(
+    app_id: str,
+    body: AtlasPinCaptureBody,
+    sess: dict = Depends(current_session),
+):
+    """将单条采集钉到指定 architecture state（刷新 atlas 后生效）。"""
+    row = nav_screen_registry.save_atlas_capture_pin(
+        app_id,
+        session_id=body.session_id,
+        turn_id=int(body.turn_id or 0),
+        state_id=body.state_id,
+        project_id=body.project_id,
+        updated_by=str(sess.get("username") or sess.get("user_id") or ""),
+    )
+    if not row.get("ok"):
+        raise HTTPException(status_code=422, detail=str(row.get("reason") or "钉死失败"))
+    return ok(row)
+
+
+@router.post("/{app_id}/atlas-split-capture")
+def post_atlas_split_capture(
+    app_id: str,
+    body: AtlasSplitCaptureBody,
+    sess: dict = Depends(current_session),
+):
+    """按采集帧强制拆成独立 state（meta.atlas_capture_pins）。"""
+    row = nav_screen_registry.save_atlas_capture_split(
+        app_id,
+        session_id=body.session_id,
+        turn_id=int(body.turn_id or 0),
+        tab=body.tab,
+        display_name=body.display_name,
+        project_id=body.project_id,
+        updated_by=str(sess.get("username") or sess.get("user_id") or ""),
+    )
+    if not row.get("ok"):
+        raise HTTPException(status_code=422, detail=str(row.get("reason") or "拆分失败"))
+    return ok(row)
 
 
 # ---------------- v2.5 被动采集 + 候选（§19） ----------------

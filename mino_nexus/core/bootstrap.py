@@ -41,6 +41,11 @@ def bootstrap() -> None:
         pn = upgrade_system_permission_recovery_rules()
         if pn:
             SLog.i(TAG, f"system permission recovery rules upgraded {pn}")
+        from mino_nexus.catalog.recovery_seed import upgrade_system_media_picker_recovery_rules
+
+        mn = upgrade_system_media_picker_recovery_rules()
+        if mn:
+            SLog.i(TAG, f"system media picker recovery rules upgraded {mn}")
         from mino_nexus.catalog.recovery_seed import upgrade_account_capabilities
 
         an = upgrade_account_capabilities()

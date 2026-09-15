@@ -137,23 +137,58 @@ def capture(proxy: Any, *, turn_id: int, screenshot_turn_id: int | None = None) 
     )
 
 
+_STATUS_BAR_MAX_Y = 80
+_SYSTEMUI_MARKERS = ("com.android.systemui",)
+_SYSTEM_BLOB_RE = re.compile(
+    r"通知：|通知:|信号强度|正在充电|已完成百分之|WLAN|Wi[-\s]?Fi|4G|5G|"
+    r"KB/s|MB/s|Android\s*系统|电量|蓝牙",
+    re.I,
+)
+_PERCENT_TEXT_RE = re.compile(r"^\d{1,3}%$")
+_CLOCK_TEXT_RE = re.compile(r"^\d{1,2}:\d{2}$")
+
+
+def is_system_ui_noise(node: dict[str, Any]) -> bool:
+    """状态栏 / 通知栏节点，不参与层级判据与采集聚类。"""
+    rid = str(node.get("resource_id") or "")
+    if any(m in rid for m in _SYSTEMUI_MARKERS):
+        return True
+    bounds = node.get("bounds") or [0, 0, 0, 0]
+    try:
+        top = int(bounds[1])
+        bottom = int(bounds[3])
+    except (TypeError, ValueError, IndexError):
+        top, bottom = 0, 0
+    if bottom > 0 and bottom <= _STATUS_BAR_MAX_Y:
+        return True
+    text = str(node.get("text") or "").strip()
+    desc = str(node.get("content_desc") or "").strip()
+    blob = f"{text} {desc}"
+    if _SYSTEM_BLOB_RE.search(blob):
+        return True
+    if _PERCENT_TEXT_RE.match(text) or _CLOCK_TEXT_RE.match(text):
+        return True
+    return False
+
+
 def normalize_nodes(raw: Any) -> list[dict[str, Any]]:
     """协议节点 → 内部形状。缺字段按空值补齐，未知字段丢弃（协议 §7 允许对方加字段）。"""
     out: list[dict[str, Any]] = []
     for item in raw or []:
         if not isinstance(item, dict):
             continue
-        out.append(
-            {
-                "resource_id": str(item.get("resource_id") or ""),
-                "text": str(item.get("text") or ""),
-                "content_desc": str(item.get("content_desc") or ""),
-                "class": str(item.get("class") or item.get("cls") or ""),
-                "clickable": bool(item.get("clickable")),
-                "bounds": [int(x) for x in (item.get("bounds") or [0, 0, 0, 0])[:4]],
-                "center": [int(x) for x in (item.get("center") or [0, 0])[:2]],
-            }
-        )
+        row = {
+            "resource_id": str(item.get("resource_id") or ""),
+            "text": str(item.get("text") or ""),
+            "content_desc": str(item.get("content_desc") or ""),
+            "class": str(item.get("class") or item.get("cls") or ""),
+            "clickable": bool(item.get("clickable")),
+            "bounds": [int(x) for x in (item.get("bounds") or [0, 0, 0, 0])[:4]],
+            "center": [int(x) for x in (item.get("center") or [0, 0])[:2]],
+        }
+        if is_system_ui_noise(row):
+            continue
+        out.append(row)
     return out
 
 
@@ -169,11 +204,17 @@ def _cls_short(cls: str) -> str:
 
 def flatten(nodes: list[dict[str, Any]]) -> str:
     """节点 → 供 prompt 的紧凑文本。只留有语义的节点，纯布局容器不进。"""
+    from mino_nexus.services.nav_layout import is_status_bar_chrome_text
+
     lines: list[str] = []
     for node in nodes or []:
+        if is_system_ui_noise(node):
+            continue
         rid = rid_short(node.get("resource_id", ""))
         text = str(node.get("text") or "").strip()
         desc = str(node.get("content_desc") or "").strip()
+        if is_status_bar_chrome_text(text) or is_status_bar_chrome_text(desc):
+            continue
         if not (rid or text or desc):
             continue
         bits = []

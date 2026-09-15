@@ -53,6 +53,12 @@ _OVERLAY_PKG_HINTS = (
     "lbe.security",
     "securitycenter",
     "packageinstaller",
+    "documentsui",
+    "providers.media",
+    "gallery",
+    "photos",
+    "filepicker",
+    "mediapicker",
 )
 _OVERLAY_RID_HINTS = frozenset(
     {
@@ -62,6 +68,30 @@ _OVERLAY_RID_HINTS = frozenset(
         "alerttitle",
     }
 )
+
+
+def run_guard_foreground(
+    nodes: list[dict[str, Any]] | None,
+    *,
+    target_package: str = "",
+    platform: str = "",
+    target_scope: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """跑批 guard：是否被测 App 前台 / 系统挡屏（权限、相册选择器等）。"""
+    turn = {"nodes": list(nodes or [])}
+    overlay = is_overlay_screen(turn)
+    pkg = infer_screen_package(
+        turn.get("nodes") or [],
+        target_package=target_package,
+        platform=platform,
+        target_scope=target_scope,
+    )
+    kind = str(pkg.get("screen_kind") or "").strip()
+    if overlay:
+        return {"app_foreground": "no", "system_overlay": "yes"}
+    if kind in ("foreign", "launcher"):
+        return {"app_foreground": "no", "system_overlay": "no"}
+    return {"app_foreground": "yes", "system_overlay": "no"}
 
 
 def is_overlay_screen(turn: dict[str, Any]) -> bool:
@@ -96,20 +126,17 @@ def is_system_screen(
     from mino_nexus.services.nav_target_scope import TargetScope, turn_matches_scope
 
     scoped = scope if isinstance(scope, TargetScope) else TargetScope.from_dict(scope)
+    stored = TargetScope.from_dict(
+        turn.get("target_scope") if isinstance(turn.get("target_scope"), dict) else None
+    )
+
+    if str(turn.get("screen_kind") or "").strip() == "launcher":
+        return True
+
     if scoped and not turn_matches_scope(turn, scoped):
         return True
-    kind = str(turn.get("screen_kind") or "").strip()
-    if kind in ("launcher", "foreign"):
-        return True
-    if kind == "app":
-        return False
-    pkg = infer_screen_package(
-        turn.get("nodes") or [],
-        target_package=str(turn.get("target_package") or ""),
-        platform=str(turn.get("platform") or ""),
-        target_scope=turn.get("target_scope") if isinstance(turn.get("target_scope"), dict) else None,
-    )
-    return pkg.get("screen_kind") in ("launcher", "foreign")
+
+    return str(turn.get("screen_kind") or "").strip() in ("launcher", "foreign")
 
 
 def synthesis_turns(
@@ -198,7 +225,9 @@ def append_turn(
 
     from mino_nexus.services.nav_target_scope import TargetScope, scope_from_values
 
-    store_nodes = list(nodes or [])
+    from mino_nexus.loop.hierarchy_slots import normalize_nodes
+
+    store_nodes = normalize_nodes(nodes or [])
     scope = TargetScope.from_dict(target_scope) if target_scope else scope_from_values(platform, target_package)
     screen_pkg = infer_screen_package(
         store_nodes,
@@ -310,19 +339,32 @@ def read_turn(app_id: str, session_id: str, turn_id: int) -> dict[str, Any] | No
         return None
     nodes = _read_json(root / f"{stem}.nodes.json", [])
     row = {**meta, "nodes": nodes}
-    if not meta.get("foreground_package"):
-        pkg = infer_screen_package(
-            nodes,
-            target_package=str(meta.get("target_package") or ""),
-            platform=str(meta.get("platform") or ""),
-            target_scope=meta.get("target_scope") if isinstance(meta.get("target_scope"), dict) else None,
-        )
-        row.update(pkg)
-    from mino_nexus.services.nav_screen_layout import merge_layout_views, wireframe_from_hierarchy
+    from mino_nexus.services.nav_target_scope import resolve_app_target_scope
+
+    scope = resolve_app_target_scope(app_id)
+    target_scope_dict = (
+        scope.as_dict()
+        if scope
+        else (meta.get("target_scope") if isinstance(meta.get("target_scope"), dict) else None)
+    )
+    pkg = infer_screen_package(
+        nodes,
+        target_package=str(
+            meta.get("target_package") or (scope.target_id if scope else "")
+        ),
+        platform=str(meta.get("platform") or (scope.platform if scope else "")),
+        target_scope=target_scope_dict,
+    )
+    row.update(pkg)
+    from mino_nexus.services.nav_screen_layout import (
+        merge_layout_views,
+        sanitize_wireframe,
+        wireframe_from_hierarchy,
+    )
 
     h_layout = wireframe_from_hierarchy(nodes) if nodes else {}
     v_layout = meta.get("layout_vision") if isinstance(meta.get("layout_vision"), dict) else {}
-    wf = merge_layout_views(h_layout, v_layout)
+    wf = sanitize_wireframe(merge_layout_views(h_layout, v_layout))
     wf["capture"] = {
         "app_id": str(meta.get("app_id") or app_id),
         "session_id": str(session_id or ""),
@@ -353,6 +395,29 @@ def patch_turn_layout(
     if not meta:
         return None
     meta["layout_vision"] = dict(layout_vision)
+    _write_json(meta_path, meta)
+    return meta
+
+
+def patch_turn_action(
+    app_id: str,
+    session_id: str,
+    turn_id: int,
+    *,
+    cap_id: str = "",
+    selector_text: str = "",
+) -> dict[str, Any] | None:
+    """把本 turn 实际执行的动作写回 meta，供 atlas 跳转标签使用。"""
+    root = _session_root(app_id, session_id)
+    stem = f"turn_{int(turn_id):04d}"
+    meta_path = root / f"{stem}.meta.json"
+    meta = _read_json(meta_path, None)
+    if not meta:
+        return None
+    if cap_id:
+        meta["cap_id"] = str(cap_id)
+    if selector_text:
+        meta["selector_text"] = str(selector_text)[:80]
     _write_json(meta_path, meta)
     return meta
 

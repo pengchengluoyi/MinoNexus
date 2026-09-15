@@ -75,6 +75,7 @@ class NavPlan:
     goal_state_id: str = ""
     route_edge_ids: list[str] = field(default_factory=list)
     route_uncovered: bool = False
+    case_navigation_goal: bool = False
 
 
 # ---------------- 取配置 ----------------
@@ -99,8 +100,8 @@ def recover_edges(fsm: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def navigation_goal_state(fsm: dict[str, Any], case: dict[str, Any] | None = None) -> str:
-    """本用例导航目标：仅 case 字段 + meta 默认；不含 recover 边（避免把「回家」当成赶路终点）。"""
+def goal_from_case_fields(fsm: dict[str, Any], case: dict[str, Any] | None = None) -> str:
+    """用例显式声明的导航目标（不含 meta.recover 默认回家）。"""
     meta = fsm.get("meta") if isinstance(fsm.get("meta"), dict) else {}
     recover = meta.get("recover") if isinstance(meta.get("recover"), dict) else {}
     for field in (
@@ -112,8 +113,17 @@ def navigation_goal_state(fsm: dict[str, Any], case: dict[str, Any] | None = Non
             val = str(case.get(field) or "").strip()
             if val:
                 return val
-    goal = str(recover.get("default_goal_state_id") or recover.get("default_state_id") or "").strip()
-    return goal
+    return ""
+
+
+def navigation_goal_state(fsm: dict[str, Any], case: dict[str, Any] | None = None) -> str:
+    """迷路恢复终点：case 字段优先，否则 meta.recover 默认 state。"""
+    goal = goal_from_case_fields(fsm, case)
+    if goal:
+        return goal
+    meta = fsm.get("meta") if isinstance(fsm.get("meta"), dict) else {}
+    recover = meta.get("recover") if isinstance(meta.get("recover"), dict) else {}
+    return str(recover.get("default_goal_state_id") or recover.get("default_state_id") or "").strip()
 
 
 def recover_target_state(fsm: dict[str, Any], case: dict[str, Any] | None = None) -> str:
@@ -423,14 +433,15 @@ def build_plan(
         if hit.wiki_ref:
             plan.wiki_refs.append(hit.wiki_ref)
 
-    goal = navigation_goal_state(fsm, case)
-    plan.goal_state_id = goal
+    case_goal = goal_from_case_fields(fsm, case)
+    plan.case_navigation_goal = bool(case_goal)
+    plan.goal_state_id = case_goal
 
-    if band != "recover":
+    if band != "recover" and case_goal:
         edge, path, anchor_missing, reason = choose_edge_toward_goal(
             fsm,
             state_id=state_id,
-            goal_state_id=goal,
+            goal_state_id=case_goal,
             hits=hits,
             nodes=nodes,
             case=case,
@@ -440,8 +451,8 @@ def build_plan(
         plan.anchor_missing = anchor_missing
         plan.edge_reason = reason
         plan.route_uncovered = bool(
-            goal
-            and goal != str(state_id or "").strip()
+            case_goal
+            and case_goal != str(state_id or "").strip()
             and not path
             and not edge
             and "路线图未覆盖" in str(reason or "")

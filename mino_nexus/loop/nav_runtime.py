@@ -94,10 +94,14 @@ class NavRuntime:
 
         app_id, project_id = resolve_knowledge_scope(ctx)
         account_id = str((getattr(ctx, "picked_account", None) or {}).get("id") or "")
-        fsm, reason = store.load_with_reason(app_id, expected_account_id=account_id)
-        if reason:
-            level = SLog.w if "没有 nav_fsm 配置" not in reason else SLog.d
-            level(TAG, f"NavFSM 不可用 app_id={app_id}: {reason}")
+        run_kind = str(run_type or "manual").lower()
+        if run_kind == "explore":
+            fsm, reason = None, "explore_capture_only"
+        else:
+            fsm, reason = store.load_with_reason(app_id, expected_account_id=account_id)
+            if reason:
+                level = SLog.w if "没有 nav_fsm 配置" not in reason else SLog.d
+                level(TAG, f"NavFSM 不可用 app_id={app_id}: {reason}")
         inst = cls(
             app_id=app_id,
             project_id=project_id,
@@ -334,16 +338,6 @@ class NavRuntime:
             )
             if meta:
                 self._captures_recorded += 1
-                try:
-                    from mino_nexus.services import nav_live_graph
-
-                    nav_live_graph.sync_on_new_capture(
-                        self.app_id,
-                        project_id=self.project_id,
-                        updated_by="capture",
-                    )
-                except Exception as sync_exc:  # noqa: BLE001
-                    SLog.w(TAG, f"采集后导航合成失败（跑批继续）：{type(sync_exc).__name__}: {sync_exc}")
         except Exception as exc:  # noqa: BLE001
             SLog.w(TAG, f"被动采集失败（跑批继续）：{type(exc).__name__}: {exc}")
             return
@@ -362,7 +356,19 @@ class NavRuntime:
                 pass
 
     def shutdown(self, *, writer: Any = None, status: str = "", summary: str = "") -> dict[str, Any] | None:
-        """跑批结束摘要（v2.5 无 walkthrough 收工）。"""
+        """跑批结束摘要；采集结束后再合成一次草稿（不自动 promote）。"""
+        if self.app_id and self._captures_recorded > 0:
+            try:
+                from mino_nexus.services import nav_live_graph
+
+                nav_live_graph.get_live_graph(
+                    self.app_id,
+                    project_id=self.project_id,
+                    updated_by="capture",
+                    sync=False,
+                )
+            except Exception as sync_exc:  # noqa: BLE001
+                SLog.w(TAG, f"收工合成导航草稿失败（忽略）：{type(sync_exc).__name__}: {sync_exc}")
         if self._captures_recorded <= 0:
             return None
         payload = {
@@ -428,7 +434,11 @@ class NavRuntime:
             hits=self.plan.guards,
             hierarchy_ok=hierarchy_ok,
             allowed=self.plan.allow,
-            enforce_allowed=bool(self.plan.band == "high" and self.plan.edge),
+            enforce_allowed=bool(
+                self.run_type not in ("explore",)
+                and self.plan.band == "high"
+                and self.plan.edge
+            ),
         )
         self._log_verdict(verdict, cap_id=cap_id, params=params)
         return verdict
@@ -460,7 +470,33 @@ class NavRuntime:
                 hierarchy_snippet=self.snapshot.text[:600],
             )
 
+    def _patch_capture_action(
+        self,
+        *,
+        cap_id: str,
+        params: dict[str, Any] | None,
+        status: str,
+    ) -> None:
+        """把本 turn 实际执行的点击文案写回采集，供 atlas 边标签使用。"""
+        if not self.session_id or not self.app_id:
+            return
+        if str(status or "").lower() != "pass":
+            return
+        from mino_nexus.services import nav_capture_store as cap_store
+
+        try:
+            cap_store.patch_turn_action(
+                self.app_id,
+                self.session_id,
+                int(self._turn_id),
+                cap_id=str(cap_id or ""),
+                selector_text=str((params or {}).get("selector_text") or ""),
+            )
+        except Exception as exc:  # noqa: BLE001
+            SLog.w(TAG, f"回写采集动作失败（忽略）：{type(exc).__name__}: {exc}")
+
     def after_execute(self, *, cap_id: str, params: dict[str, Any] | None, status: str, writer: Any = None) -> None:
+        self._patch_capture_action(cap_id=cap_id, params=params, status=status)
         if not self.active or self.plan is None or not self.plan.edge:
             return
         if str(status or "").lower() != "pass":

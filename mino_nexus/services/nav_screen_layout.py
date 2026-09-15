@@ -47,6 +47,29 @@ def sanitize_chrome(chrome: dict[str, Any] | None) -> dict[str, float]:
     return {"top": round(top, 4), "bottom": round(bottom, 4)}
 
 
+def _drop_band_regions(
+    regions: list[dict[str, Any]],
+    *,
+    y_min: float,
+    y_max: float,
+) -> list[dict[str, Any]]:
+    """丢弃纵坐标落在带内的 region（用于去掉系统状态栏，不参与预览/聚类展示）。"""
+    kept: list[dict[str, Any]] = []
+    for r in regions:
+        rect = r.get("rect") if isinstance(r.get("rect"), dict) else {}
+        try:
+            ry = float(rect.get("y") or 0)
+            rh = float(rect.get("h") or 0)
+        except (TypeError, ValueError):
+            kept.append(r)
+            continue
+        cy = ry + rh * 0.5
+        if y_min <= cy <= y_max:
+            continue
+        kept.append(r)
+    return kept
+
+
 def _merge_band_regions(
     regions: list[dict[str, Any]],
     *,
@@ -54,7 +77,7 @@ def _merge_band_regions(
     y_min: float,
     y_max: float,
 ) -> list[dict[str, Any]]:
-    """把状态栏/底栏带内细碎节点收成一条 FrameLayout（与底栏展示一致）。"""
+    """把底栏带内细碎节点收成一条 FrameLayout（顶栏已改为直接丢弃）。"""
     kept: list[dict[str, Any]] = []
     band_rects: list[dict[str, float]] = []
     for r in regions:
@@ -96,15 +119,17 @@ def _merge_band_regions(
 
 
 def collapse_system_chrome_regions(wf: dict[str, Any]) -> dict[str, Any]:
-    """仅合并顶栏系统区；底栏 Tab 保留可点分区（用于展示与跳转锚点）。"""
+    """顶栏系统状态区从线框中剔除；底栏 Tab 仍合并保留可点分区。"""
     out = dict(wf or {})
     chrome = sanitize_chrome(out.get("chrome"))
     top = float(chrome.get("top") or 0.06)
+    bottom = float(chrome.get("bottom") or 0.88)
     regions = list(out.get("regions") or [])
     if not regions:
         out["chrome"] = chrome
         return out
-    regions = _merge_band_regions(regions, band="top", y_min=0.0, y_max=top)
+    regions = _drop_band_regions(regions, y_min=0.0, y_max=top)
+    regions = _merge_band_regions(regions, band="bottom", y_min=bottom, y_max=1.0)
     out["regions"] = regions
     out["chrome"] = chrome
     return out

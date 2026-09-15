@@ -7,7 +7,15 @@ from typing import Any
 _PRICE_RE = re.compile(r"^[\d.]+$|^¥|^#")
 _VOLATILE_RE = re.compile(r"^\d+(\.\d+)?$|^#.+$|^\d+分钟|^\d+小时")
 _CLOCK_RE = re.compile(r"^\d{1,2}:\d{2}$")
+_PERCENT_RE = re.compile(r"^\d{1,3}%$")
+_NUMERIC_PAGE_ID_RE = re.compile(r"^page\.\d+(?:_\d+)?$")
 _BACK_RID_RE = re.compile(r"back|navigate_up|up_button", re.I)
+_STATUS_BAR_TEXT_RE = re.compile(
+    r"通知|信号强度|正在充电|已完成百分之|WLAN|Wi[-\s]?Fi|4G|5G|KB/s|MB/s|"
+    r"中国移动|中国联通|中国电信|电量|剩余|蓝牙|NFC|VPN|闹钟|"
+    r"加载\d*%|疯狂加载|Android\s*系统",
+    re.I,
+)
 _WIDGET_ORDER = (
     "search_bar",
     "carousel",
@@ -36,12 +44,59 @@ def _screen_width(nodes: list[dict[str, Any]]) -> int:
     return w or 1080
 
 
+def is_status_bar_chrome_text(text: str) -> bool:
+    """系统状态栏 / 通知头：不得参与聚类、拆分、预览标题。"""
+    val = str(text or "").strip()
+    if not val:
+        return True
+    if _STATUS_BAR_TEXT_RE.search(val):
+        return True
+    if val.endswith("通知：") or val.endswith("通知:"):
+        return True
+    if _CLOCK_RE.match(val) or _PERCENT_RE.match(val):
+        return True
+    return False
+
+
+def _chrome_vertical_px(
+    sample: dict[str, Any],
+    *,
+    y_tab_max: int,
+) -> tuple[int, int]:
+    """App 顶栏 chrome 纵坐标带：排除状态栏（content_top 以上）。"""
+    from mino_nexus.services.nav_screen_layout import infer_content_bands
+
+    nodes = sample.get("nodes") or []
+    bands = infer_content_bands(nodes)
+    screen_h = int(bands.get("screen_h") or 0) or 1920
+    top = int(bands.get("content_top_px") or 0)
+    if top < 48:
+        top = 80
+    header_h = max(100, int(screen_h * 0.11))
+    y_min = top
+    y_max = min(int(y_tab_max), top + header_h)
+    if y_max <= y_min:
+        y_max = y_min + 120
+    return y_min, y_max
+
+
+def filter_app_chrome_texts(texts: list[str]) -> list[str]:
+    out: list[str] = []
+    for text in texts or []:
+        val = str(text or "").strip()
+        if not val or is_status_bar_chrome_text(val):
+            continue
+        if val not in out:
+            out.append(val)
+    return out
+
+
 def is_volatile_text(text: str) -> bool:
     """流式/商品/价格类文案，不能进 identify。"""
     val = str(text or "").strip()
     if len(val) < 2 or len(val) > 64:
         return True
-    if _PRICE_RE.match(val) or _VOLATILE_RE.match(val) or _CLOCK_RE.match(val):
+    if _PRICE_RE.match(val) or _VOLATILE_RE.match(val) or _CLOCK_RE.match(val) or _PERCENT_RE.match(val):
         return True
     if val.startswith("#") and len(val) > 12:
         return True
@@ -57,15 +112,27 @@ def stable_chrome_texts(
     exclude: set[str],
     limit: int = 4,
 ) -> list[str]:
-    """Tab 内子页可用的稳定 chrome 文案：顶栏短文本，不含 feed 流式内容。"""
+    """Tab 内子页可用的稳定 chrome 文案：App 顶栏短文本，不含状态栏/通知/feed 流式内容。"""
     out: list[str] = []
-    chrome_y = int(y_tab_max * 0.42)
+    from mino_nexus.loop.hierarchy_slots import is_system_ui_noise
+
+    y_min, y_max = _chrome_vertical_px(sample, y_tab_max=y_tab_max)
     for node in sample.get("nodes") or []:
+        if is_system_ui_noise(node):
+            continue
         b = _bounds(node)
-        if not b or b[3] > chrome_y:
+        if not b:
+            continue
+        y1, y2 = b[1], b[3]
+        if y2 <= y_min or y1 > y_max:
             continue
         text = str(node.get("text") or node.get("content_desc") or "").strip()
-        if not text or text in exclude or is_volatile_text(text):
+        if (
+            not text
+            or text in exclude
+            or is_volatile_text(text)
+            or is_status_bar_chrome_text(text)
+        ):
             continue
         if 2 <= len(text) <= 16 and text not in out:
             out.append(text)
@@ -112,14 +179,21 @@ def _profile_stat_hits(
     exclude: set[str],
 ) -> int:
     """个人页顶栏常见多组「数字 + 短标签」结构，不依赖 App 文案。"""
+    from mino_nexus.loop.hierarchy_slots import is_system_ui_noise
+
     hits = 0
-    chrome_y = int(y_tab_max * 0.42)
+    y_min, y_max = _chrome_vertical_px({"nodes": nodes}, y_tab_max=y_tab_max)
     for node in nodes:
+        if is_system_ui_noise(node):
+            continue
         b = _bounds(node)
-        if not b or b[3] > chrome_y:
+        if not b:
+            continue
+        y1, y2 = b[1], b[3]
+        if y2 <= y_min or y1 > y_max:
             continue
         text = str(node.get("text") or node.get("content_desc") or "").strip()
-        if not text or text in exclude:
+        if not text or text in exclude or is_status_bar_chrome_text(text):
             continue
         if re.match(r"^[\d,.+万千百]+$", text):
             hits += 1
@@ -230,23 +304,23 @@ def detect_layout_framework(
         for n in nodes
         if str(n.get("text") or n.get("content_desc") or "").strip()
     ]
+    chrome = stable_chrome_texts(sample, y_tab_max=y_tab_max, exclude=exclude)
     has_back = any(
         _BACK_RID_RE.search(str(n.get("resource_id") or ""))
         or "navigate up" in str(n.get("content_desc") or "").lower()
         for n in nodes
-    )
-    chrome = stable_chrome_texts(sample, y_tab_max=y_tab_max, exclude=exclude)
+    ) or any(str(c or "").strip() in ("返回", "Back") for c in chrome)
     cards = _content_cards(
         nodes, y_tab_max=y_tab_max, content_top_px=top_px, exclude=exclude, screen_w=screen_w
     )
     widgets = _detect_widgets(nodes, y_tab_max=y_tab_max, exclude=exclude, screen_w=screen_w, cards=cards)
 
+    if has_back and len(chrome) >= 1:
+        return {"kind": "detail_page", "columns": 1, "widgets": widgets, "has_back": True}
+
     profile_hits = _profile_stat_hits(nodes, y_tab_max=y_tab_max, exclude=exclude)
     if profile_hits >= 4:
         return {"kind": "profile_page", "columns": 1, "widgets": widgets, **({"has_back": True} if has_back else {})}
-
-    if has_back and len(chrome) >= 1:
-        return {"kind": "detail_page", "columns": 1, "widgets": widgets, "has_back": True}
 
     if "grid_2col" in widgets:
         return {"kind": "feed_grid", "columns": 2, "widgets": widgets}
@@ -373,3 +447,57 @@ def match_layout_framework(nodes: list[dict[str, Any]], spec: dict[str, Any], *,
         if not set(str(w) for w in want_widgets).issubset(have):
             return 0.0
     return 1.0
+
+
+def identify_is_volatile_only(st: dict[str, Any] | None) -> bool:
+    """identify 仅由电量百分比/时钟等易变文案构成、且无结构信号 → 噪声态。"""
+    row = st if isinstance(st, dict) else {}
+    sid = str(row.get("id") or row.get("state_id") or "").strip()
+    if sid and not _NUMERIC_PAGE_ID_RE.match(sid):
+        return False
+    identify = row.get("identify") if isinstance(row.get("identify"), dict) else {}
+    blocks = identify.get("required") if isinstance(identify.get("required"), list) else []
+    landmarks: list[str] = []
+    has_structural_signal = False
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        signal = str(block.get("signal") or "").strip()
+        if signal in ("tab_bar", "layout_framework"):
+            has_structural_signal = True
+        for val in block.get("any") or []:
+            text = str(val or "").strip()
+            if text:
+                landmarks.append(text)
+        match = block.get("match") if isinstance(block.get("match"), dict) else {}
+        for val in match.values():
+            text = str(val or "").strip()
+            if text:
+                landmarks.append(text)
+    if has_structural_signal:
+        return False
+    return bool(landmarks) and all(is_volatile_text(x) or _PERCENT_RE.match(x) or _CLOCK_RE.match(x) for x in landmarks)
+
+
+def drop_volatile_landmark_states(doc: dict[str, Any] | None) -> tuple[dict[str, Any], list[str]]:
+    """从 NavFSM doc 去掉电量百分比等噪声 state 及其边。"""
+    out = dict(doc or {})
+    states = list(out.get("states") or [])
+    drop_ids = [str(st.get("id") or "") for st in states if identify_is_volatile_only(st)]
+    drop_ids = [sid for sid in drop_ids if sid]
+    if not drop_ids:
+        return out, []
+    dropped = set(drop_ids)
+    out["states"] = [st for st in states if str(st.get("id") or "") not in dropped]
+    edges = []
+    for ed in out.get("edges") or []:
+        if not isinstance(ed, dict):
+            continue
+        if str(ed.get("from") or ed.get("from_state") or "") in dropped:
+            continue
+        if str(ed.get("to") or ed.get("to_state") or "") in dropped:
+            continue
+        edges.append(ed)
+    out["edges"] = edges
+    return out, drop_ids
+

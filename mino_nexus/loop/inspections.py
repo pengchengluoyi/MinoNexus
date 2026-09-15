@@ -50,8 +50,12 @@ def refresh_session_block(
     case: dict[str, Any],
     provider_id: str = "",
     slot_sink: dict[str, str],
+    force: bool = False,
 ) -> dict[str, Any]:
-    """跑 inspect-session 并写入 session_block（含 guest/logout 钳制）。"""
+    """跑 inspect-session 并写入 session_block（含 guest/logout 钳制）。
+
+    已有明确结论时默认不重跑（登录用例每 turn 再调一次 LLM 会把步数预算烧光）。
+    """
     from mino_nexus.runtime.session_gate import (
         ensure_case_scene,
         format_required_session_brief,
@@ -62,6 +66,9 @@ def refresh_session_block(
     if not shot or not getattr(shot, "has_image", lambda: False)():
         slot_sink["session_block"] = "（无截图，跳过会话观察）"
         return {"ok": False, "reason": "无截图"}
+    existing = str(slot_sink.get("session_block") or "")
+    if not force and _session_block_is_conclusive(existing):
+        return {"ok": True, "skipped": True, "reason": "already_observed"}
     scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
     ctx.case_scene = scene
     req_enum = required_session_enum(scene=scene)
@@ -76,6 +83,22 @@ def refresh_session_block(
     row = reconcile_inspect_session(row, required=req_enum)
     slot_sink["session_block"] = format_session_block(row, required=req_enum)
     return row
+
+
+def _session_block_is_conclusive(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw or raw.startswith("（"):
+        return False
+    if "session=" not in raw:
+        return False
+    session = ""
+    for bit in raw.split():
+        if bit.startswith("session="):
+            session = bit.split("=", 1)[-1].strip().lower()
+            break
+    if not session or session in ("unknown", "uncertain", "none", "未观察"):
+        return False
+    return True
 
 
 def run_inspections(

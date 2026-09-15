@@ -17,6 +17,7 @@ EVENT_LOCALIZE = "nav/localize"
 EVENT_EDGE_ATTEMPT = "nav/edge_attempt"
 EVENT_GUARD_HIT = "nav/guard_hit"
 EVENT_GUARD_MISS = "nav/guard_miss_candidate"
+EVENT_STEP_EFFECT = "nav/step_effect"
 
 # §10.6 的完整 key 集。值可空，key 不可少 —— 下游按固定列读。
 _KEYS = (
@@ -67,6 +68,11 @@ def guard_hit(**payload: Any) -> None:
 def vlm_widget_state(**payload: Any) -> None:
     """VLM 兜底判 widget 态（§2.2）。optional 字段，不影响 §10.6 最小 key 集。"""
     _emit("nav/vlm_widget_state", payload)
+
+
+def step_effect(**payload: Any) -> None:
+    """步骤效果探针：probe 命中 vs 模型 signal_done 的差异遥测。"""
+    _emit(EVENT_STEP_EFFECT, payload)
 
 
 def guard_miss_candidate(**payload: Any) -> None:

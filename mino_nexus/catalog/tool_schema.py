@@ -23,6 +23,15 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
                 "type": "string",
                 "description": "目标上的可见文字，如 首页 / 我的。执行侧用层级定位，比纯坐标稳",
             },
+            "tab_slot_index": {
+                "type": "integer",
+                "description": "底栏槽位序号（0 起，从左到右）；无文案图标槽可与 anchor_between 联用",
+            },
+            "anchor_between": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "左右锚点文案，定位两 Tab 之间的无文案控件",
+            },
         },
         "required": ["x", "y"],
     },

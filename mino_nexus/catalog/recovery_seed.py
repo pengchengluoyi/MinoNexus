@@ -258,10 +258,43 @@ _SYSTEM_PERMISSION_WHILE_USING_DETERMINISTIC: dict[str, Any] = {
     "forbid": {"text_any": ["拒绝", "不允许", "禁止", "Deny"]},
     "prompt_snippet": "",
     "priority": 65,
-    "max_attempts": 2,
+    "max_attempts": 3,
     "evidence_notes": [
         "MIUI/HyperOS 常见文案「仅在使用中允许」与 AOSP「仅在使用该应用时允许」并存，actions 须都覆盖。",
         "连续失败后 agent 应改用 tap_element 直点或 signal_give_up（limit_recovery_retry 守卫）。",
+    ],
+}
+
+_SYSTEM_MEDIA_PICKER_DISMISS: dict[str, Any] = {
+    "when": "系统相册/文件选择器挡在前台，需返回被测 App",
+    "mode": "deterministic",
+    "match": {
+        "evidence": {"app_foreground": "no", "screen_blocked": "no"},
+        "top_window_pkg_prefix": [
+            "com.google.android.apps.photos",
+            "com.android.documentsui",
+            "com.android.providers.media",
+            "com.miui.gallery",
+            "com.coloros.gallery3d",
+            "com.huawei.photos",
+        ],
+    },
+    "actions": [
+        {"capability": "press_key", "params": {"key": "BACK"}, "target": {}, "fallback_xy": []},
+        {"capability": "wait_ms", "params": {"ms": 400}, "target": {}, "fallback_xy": []},
+        {"capability": "tap_element", "params": {}, "target": {"text": "取消"}, "fallback_xy": []},
+        {"capability": "tap_element", "params": {}, "target": {"text": "关闭"}, "fallback_xy": []},
+        {"capability": "tap_element", "params": {}, "target": {"text": "Cancel"}, "fallback_xy": []},
+        {"capability": "press_key", "params": {"key": "BACK"}, "target": {}, "fallback_xy": []},
+        {"capability": "wait_ms", "params": {"ms": 500}, "target": {}, "fallback_xy": []},
+    ],
+    "verify": {"evidence": {"app_foreground": "yes"}},
+    "forbid": {},
+    "prompt_snippet": "",
+    "priority": 60,
+    "max_attempts": 3,
+    "evidence_notes": [
+        "系统相册/文档选择器不进 App 导航图；优先 BACK，再点取消/关闭。",
     ],
 }
 
@@ -289,6 +322,49 @@ def upgrade_system_permission_recovery_rules() -> int:
             return 0
         row.payload_json = want
         updated = 1
+    if updated:
+        from mino_nexus.catalog.loader import force_reload
+
+        force_reload()
+    return updated
+
+
+def upgrade_system_media_picker_recovery_rules() -> int:
+    """升级系统相册/选择器 deterministic 关闭规则。"""
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.catalog import CatalogEntry
+
+    want = dict(_SYSTEM_MEDIA_PICKER_DISMISS)
+    updated = 0
+    with session_scope() as db:
+        row = (
+            db.query(CatalogEntry)
+            .filter(
+                CatalogEntry.kind == "recovery",
+                CatalogEntry.id == "system_media_picker_dismiss",
+            )
+            .first()
+        )
+        if not row:
+            db.add(
+                CatalogEntry(
+                    kind="recovery",
+                    id="system_media_picker_dismiss",
+                    display_name="关闭系统相册/选择器",
+                    description="前台为系统相册或文档选择器时 BACK + 取消，回到被测 App。",
+                    enabled=True,
+                    lifecycle="active",
+                    platforms_json=["android"],
+                    payload_json=want,
+                    sort_order=18,
+                )
+            )
+            updated = 1
+        else:
+            cur = dict(row.payload_json or {})
+            if cur != want:
+                row.payload_json = want
+                updated = 1
     if updated:
         from mino_nexus.catalog.loader import force_reload
 

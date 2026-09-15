@@ -169,6 +169,39 @@ def tab_label_for_state(fsm: dict[str, Any], state_id: str) -> str:
 def tap_params_for_edge(fsm: dict[str, Any], edge: dict[str, Any]) -> dict[str, Any]:
     """把 nav 边编译成 tap_element 参数。"""
     exe = dict(edge.get("execute") or {})
+    slot_idx = exe.get("tab_slot_index")
+    if slot_idx is not None:
+        try:
+            idx = int(slot_idx)
+        except (TypeError, ValueError):
+            idx = -1
+        if idx >= 0:
+            meta = fsm.get("meta") if isinstance(fsm.get("meta"), dict) else {}
+            tab_bar = meta.get("tab_bar") if isinstance(meta.get("tab_bar"), dict) else {}
+            slots = tab_bar.get("slots") if isinstance(tab_bar.get("slots"), list) else []
+            if 0 <= idx < len(slots):
+                row = slots[idx] if isinstance(slots[idx], dict) else {}
+                bounds = row.get("bounds") or []
+                out: dict[str, Any] = {"tab_slot_index": idx}
+                label = str(row.get("label") or row.get("display") or "").strip()
+                if label and label not in ("icon", "图标 Tab"):
+                    out["selector_text"] = label
+                    out["text"] = label
+                if isinstance(bounds, (list, tuple)) and len(bounds) >= 4:
+                    out["fallback_xy"] = [
+                        (int(bounds[0]) + int(bounds[2])) // 2,
+                        (int(bounds[1]) + int(bounds[3])) // 2,
+                    ]
+                parts = row.get("parts") if isinstance(row.get("parts"), list) else []
+                if idx > 0 and idx + 1 < len(slots):
+                    left = slots[idx - 1]
+                    right = slots[idx + 1]
+                    if isinstance(left, dict) and isinstance(right, dict):
+                        la = str(left.get("label") or left.get("display") or "").strip()
+                        ra = str(right.get("label") or right.get("display") or "").strip()
+                        if la and ra:
+                            out["anchor_between"] = [la, ra]
+                return out
     target_tab = str(exe.get("target_tab") or "").strip()
     if target_tab:
         return {"selector_text": target_tab, "text": target_tab}

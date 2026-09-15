@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from mino_nexus.loop.action_fuse import ProgressGate
 from mino_nexus.loop.step_pointer import SeqNode
-from mino_nexus.services.nav_screen_registry import explore_progress_block, fingerprint_nodes
+from mino_nexus.services.nav_screen_registry import explore_progress_block, explore_screen_identity
 
 
 @dataclass
@@ -34,8 +34,9 @@ class ExploreCursor:
     recovery_fail_counts: dict[str, int] = field(default_factory=dict)
     login_session_hint: str = ""
     otp_prep_hint: str = ""
-    progress_gate: ProgressGate = field(default_factory=ProgressGate)
+    progress_gate: ProgressGate = field(default_factory=lambda: ProgressGate(profile="explore"))
     guest_entry_tapped: bool = False
+    known_screen_labels: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.nodes = [
@@ -46,7 +47,7 @@ class ExploreCursor:
                 observe_only=False,
             )
         ]
-        self.progress_gate.reset_milestone("do", 1)
+        self.progress_gate.reset_milestone("do", 0)
 
     @property
     def done(self) -> bool:
@@ -93,6 +94,7 @@ class ExploreCursor:
 
     def enter_check(self) -> None:
         self.phase = "do"
+        self.progress_gate.reset_milestone("do", max(1, self.step))
 
     def mark_checked(self) -> None:
         self.step_checked = True
@@ -105,23 +107,27 @@ class ExploreCursor:
         self.phase = "done"
 
     def note_observation(self, nodes: list[dict[str, Any]]) -> str:
-        """每 turn observe 后登记屏面；返回 screen_id。"""
+        """每 turn observe 后登记屏面；返回与架构图同一套聚类键。"""
         self.step += 1
         if not nodes:
             self.idle_steps += 1
             return ""
-        sid = fingerprint_nodes(nodes)
+        sid, label = explore_screen_identity(nodes)
         if sid in self._known_set:
             self.idle_steps += 1
         else:
             self._known_set.add(sid)
             self.known_screen_ids.append(sid)
+            if label and label not in self.known_screen_labels:
+                self.known_screen_labels.append(label)
             self.idle_steps = 0
+            self.progress_gate.reset_milestone("do", self.step)
         return sid
 
     def progress_block(self) -> str:
         return explore_progress_block(
             known_screen_ids=self.known_screen_ids,
+            known_screen_labels=self.known_screen_labels,
             step=self.step,
             max_steps=self.max_steps,
             idle_steps=self.idle_steps,

@@ -83,6 +83,11 @@ def _guard_limit_recovery_retry(ctx: dict[str, Any]) -> Optional[str]:
         cap = RECOVERY_FAIL_MAX
     if used < cap:
         return None
+    if rule_id in ("system_permission_dialog_while_using_deterministic", "system_media_picker_dismiss"):
+        return (
+            f"已拒绝重复 recover_{rule_id}：同类恢复已失败/已提示 {used} 次。"
+            f"请改用 press_key(BACK)、tap_element 点「取消/关闭」、signal_ask_human 或 signal_give_up。"
+        )
     return (
         f"已拒绝重复 recover_{rule_id}：同类恢复已失败/已提示 {used} 次。"
         f"请改用 tap_element 直接点授权按钮、press_key(BACK)、signal_ask_human 或 signal_give_up。"
@@ -208,7 +213,18 @@ def _leased_account(ctx: dict[str, Any]) -> bool:
     return True
 
 
+def _system_ui_dismiss_phase(ctx: dict[str, Any]) -> bool:
+    """权限/相册等系统挡屏：允许继续点关/返回，不因进展熔断拦死。"""
+    if str(ctx.get("system_overlay") or "") == "yes":
+        return True
+    if str(ctx.get("app_foreground") or "") == "no":
+        return True
+    return False
+
+
 def _guard_action_fuse(ctx: dict[str, Any]) -> Optional[str]:
+    if _system_ui_dismiss_phase(ctx):
+        return None
     step_cursor = ctx.get("step_cursor")
     if step_cursor is None:
         return None
@@ -241,6 +257,8 @@ def _guard_skip_repeat_check_run_env(ctx: dict[str, Any]) -> Optional[str]:
 
 
 def _guard_skip_repeat_tap(ctx: dict[str, Any]) -> Optional[str]:
+    if _system_ui_dismiss_phase(ctx):
+        return None
     phase = str(ctx.get("phase") or "")
     cap_id = str(ctx.get("cap_id") or "")
     if phase in ("prep", "check") or cap_id != "tap_element":

@@ -87,10 +87,18 @@ def envelope(
     view = skill.get("view") if isinstance(skill.get("view"), dict) else {}
     view_id = str(view.get("id") or skill.get("view_id") or "job-timeline")
     slots = build_slots(cursor, steps or []) if cursor is not None else {"prep": [], "ops": [], "checks": []}
+    case_step = 0
+    loop_phase = ""
+    if cursor is not None:
+        loop_phase = str(getattr(cursor, "phase", "") or "")
+        cur_node = getattr(cursor, "current", lambda: None)()
+        case_step = 0 if loop_phase == "prep" else int(getattr(cur_node, "n", 0) or 0)
     return {
         "skill_id": str(skill.get("id") or ""),
         "view_id": view_id,
         "status": status,
         "summary": summary,
         "slots": slots,
+        "case_step": case_step,
+        "loop_phase": loop_phase,
     }

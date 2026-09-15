@@ -9,8 +9,6 @@ from mino_nexus.core.schemas import PlanEvent
 from mino_nexus.loop.router_proxy import RouterProxy
 from mino_nexus.loop.web_env import frame_step
 from mino_nexus.runtime.run_context import is_web_slot
-from mino_nexus.runtime.session_gate import is_login_module_case
-
 TAG = "AppEnv"
 
 
@@ -41,11 +39,10 @@ def reset_native_app_before_case(
     case: dict[str, Any] | None = None,
     login_module: bool = False,
 ) -> bool:
-    """登录模块用例开环：close_app → wait → launch_app，减轻批跑页面栈污染。"""
+    """可选开环：close_app → wait → launch_app。仅当调用方显式 login_module=True 时执行（默认不自动冷启动）。"""
     if is_web_slot(str(getattr(ctx, "sn", "") or ""), str(getattr(ctx, "platform", "") or "")):
         return False
-    scene = getattr(ctx, "case_scene", None)
-    if not login_module and not is_login_module_case(case=case, scene=scene):
+    if not login_module:
         return False
     pkg = str(getattr(ctx, "target_package", "") or "").strip()
     if not pkg:

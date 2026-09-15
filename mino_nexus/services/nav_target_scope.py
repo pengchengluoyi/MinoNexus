@@ -18,6 +18,18 @@ _LAUNCHER_PACKAGES = frozenset(
     }
 )
 
+# 状态栏 / 输入法 —— 任意屏都会出现，不代表前台归属
+_SYSTEM_ONLY_PKGS = frozenset(
+    {
+        "android",
+        "com.android.systemui",
+        "com.android.inputmethod.latin",
+        "com.baidu.input",
+        "com.sohu.inputmethod.sogou",
+        "com.google.android.inputmethod.latin",
+    }
+)
+
 
 @dataclass(frozen=True)
 class TargetScope:
@@ -180,14 +192,18 @@ def infer_foreground(
         }
 
     if pkgs:
+        app_pkgs = {p for p in pkgs if p not in _SYSTEM_ONLY_PKGS}
         if target and target in pkgs:
             fg = target
             kind = "app"
+        elif not app_pkgs:
+            fg = target or ""
+            kind = "app" if target else "unknown"
         elif target:
-            fg = sorted(pkgs)[0]
-            kind = "foreign" if target not in pkgs else "app"
+            fg = sorted(app_pkgs)[0]
+            kind = "foreign"
         else:
-            fg = sorted(pkgs)[0]
+            fg = sorted(app_pkgs)[0]
             kind = "app"
     elif target:
         fg = target
