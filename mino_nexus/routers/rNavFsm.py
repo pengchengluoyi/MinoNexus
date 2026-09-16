@@ -127,6 +127,16 @@ class AtlasSplitCaptureBody(BaseModel):
     project_id: str = ""
 
 
+class AtlasMorphVlmBody(BaseModel):
+    session_id: str = ""
+    turn_id: int = 0
+    peer_turn_id: int = 0
+    state_id: str = ""
+    display_name: str = ""
+    project_id: str = ""
+    apply: bool = False
+
+
 @router.get("")
 def list_nav_fsm(_sess: dict = Depends(current_session)):
     return ok(store.list_apps())
@@ -350,6 +360,77 @@ def post_atlas_split_capture(
     if not row.get("ok"):
         raise HTTPException(status_code=422, detail=str(row.get("reason") or "拆分失败"))
     return ok(row)
+
+
+@router.post("/{app_id}/atlas-morph-vlm")
+def post_atlas_morph_vlm(
+    app_id: str,
+    body: AtlasMorphVlmBody,
+    sess: dict = Depends(current_session),
+):
+    """M4：VLM 判定 morph vs split；可选 apply 执行 pin/split。"""
+    from mino_nexus.services.nav_atlas_morph import apply_atlas_morph_verdict, judge_atlas_morph
+
+    session_id = str(body.session_id or "").strip()
+    turn_id = int(body.turn_id or 0)
+    if not session_id or turn_id <= 0:
+        raise HTTPException(status_code=422, detail="session_id / turn_id 必填")
+    peer = int(body.peer_turn_id or 0)
+    if peer <= 0:
+        index = capture.read_session_index(app_id, session_id) or {}
+        turns = sorted(
+            [int(t.get("turn_id") or 0) for t in (index.get("turns") or []) if int(t.get("turn_id") or 0) > 0]
+        )
+        prior = [t for t in turns if t < turn_id]
+        peer = prior[-1] if prior else 0
+    if peer <= 0:
+        raise HTTPException(status_code=422, detail="需要 peer_turn_id 或 session 内前一帧")
+    verdict = judge_atlas_morph(
+        app_id=app_id,
+        session_id=session_id,
+        turn_id=turn_id,
+        peer_turn_id=peer,
+        state_id=str(body.state_id or ""),
+        display_name=str(body.display_name or ""),
+    )
+    if body.apply and verdict.get("ok"):
+        applied = apply_atlas_morph_verdict(
+            app_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            state_id=str(body.state_id or ""),
+            verdict=str(verdict.get("verdict") or ""),
+            project_id=str(body.project_id or ""),
+            updated_by=str(sess.get("username") or sess.get("user_id") or ""),
+            display_name=str(body.display_name or ""),
+        )
+        verdict["applied"] = applied
+    return ok(verdict)
+
+
+@router.post("/{app_id}/alias-governance/apply")
+def post_alias_governance_apply(
+    app_id: str,
+    body: DraftBody,
+    sess: dict = Depends(current_session),
+):
+    """按应用别名规则合并到 draft（造物相机等预置表）。"""
+    from mino_nexus.services.nav_alias_governance import apply_governance_to_doc
+
+    doc = body.doc if body.doc else store.read_raw(app_id, version=store.DRAFT_VERSION)
+    if not doc:
+        doc = calib.read_draft(app_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="无 draft 可治理")
+    merged, n = apply_governance_to_doc(app_id, doc)
+    if n <= 0:
+        return ok({"ok": True, "changed": 0, "doc": merged})
+    saved = store.save_draft(
+        app_id,
+        merged,
+        updated_by=str(sess.get("username") or sess.get("user_id") or "alias_governance"),
+    )
+    return ok({"ok": True, "changed": n, "doc": saved})
 
 
 # ---------------- v2.5 被动采集 + 候选（§19） ----------------

@@ -51,6 +51,8 @@ def refresh_session_block(
     provider_id: str = "",
     slot_sink: dict[str, str],
     force: bool = False,
+    nav: Any = None,
+    turn_id: int = 0,
 ) -> dict[str, Any]:
     """跑 inspect-session 并写入 session_block（含 guest/logout 钳制）。
 
@@ -78,10 +80,19 @@ def refresh_session_block(
         accounts_brief=str(getattr(ctx, "accounts_brief", "") or ""),
         image_base64=str(getattr(shot, "image_base64", "") or ""),
         image_mime=str(getattr(shot, "image_mime", "") or "image/png"),
+        screen_w=int(getattr(shot, "width", 0) or 0),
+        screen_h=int(getattr(shot, "height", 0) or 0),
         provider_id=provider_id or None,
     )
     row = reconcile_inspect_session(row, required=req_enum)
     slot_sink["session_block"] = format_session_block(row, required=req_enum)
+    layout = row.get("screen_layout") if isinstance(row.get("screen_layout"), dict) else {}
+    if nav is not None and layout:
+        nav.attach_turn_layout(int(turn_id or 0), layout)
+    vlm_h = row.get("vlm_hierarchy") if isinstance(row.get("vlm_hierarchy"), dict) else {}
+    if vlm_h.get("nodes") and nav is not None:
+        nav.attach_turn_vlm_hierarchy(int(turn_id or 0), vlm_h)
+        setattr(ctx, "nav_vlm_hierarchy", vlm_h)
     return row
 
 

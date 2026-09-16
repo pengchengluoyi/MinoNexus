@@ -423,7 +423,9 @@ def _pick_tab_hotspot(prev_turn: dict[str, Any], target_tab: str) -> str:
         return ""
     wf = _turn_wireframe(prev_turn)
     chrome = wf.get("chrome") or {}
-    bottom = float(chrome.get("bottom") or 0.88)
+    from mino_nexus.services.nav_screen_layout import DEFAULT_CONTENT_BOTTOM
+
+    bottom = float(chrome.get("bottom") or DEFAULT_CONTENT_BOTTOM)
     best = ""
     best_y = -1.0
     for region in wf.get("regions") or []:
@@ -691,6 +693,119 @@ def _relation_layout(
     return layout_states
 
 
+LANE_SUFFIX_MERGE_JACCARD = 0.40
+
+
+def _coalesce_lane_suffix_buckets(
+    refined_buckets: dict[str, dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+    """同一粗车道下 *-sN 子桶：代表线框互 Jaccard 够则并回一页（见 9月15日-架构聚类过并过拆复盘 §4）。"""
+    import re
+
+    from mino_nexus.services.nav_app_skeleton import merge_skeleton_wireframe, wireframe_jaccard
+
+    fp_remap: dict[str, str] = {}
+    if not refined_buckets:
+        return refined_buckets, fp_remap
+
+    def _rep_wf(bucket: dict[str, Any]) -> dict[str, Any]:
+        wfs = list(bucket.get("wireframes") or [])
+        return merge_skeleton_wireframe(wfs) if wfs else {}
+
+    def _merge_bucket(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+        out = dict(a)
+        for field in (
+            "frameworks",
+            "chromes",
+            "inferred_roles",
+            "wireframes",
+            "sample_turns",
+            "name_samples",
+            "chrome_rows",
+        ):
+            out[field] = list(out.get(field) or []) + list(b.get(field) or [])
+        morph = list(out.get("morph_wireframes") or []) + list(b.get("morph_wireframes") or [])
+        if morph:
+            out["morph_wireframes"] = morph
+            out["morph_count"] = max(
+                int(out.get("morph_count") or 0),
+                int(b.get("morph_count") or 0),
+                len(morph) - 1,
+            )
+        return out
+
+    groups: dict[str, list[str]] = {}
+    for key in refined_buckets:
+        base = re.sub(r"-s\d+$", "", str(key))
+        groups.setdefault(base, []).append(str(key))
+
+    out = dict(refined_buckets)
+    for base, keys in groups.items():
+        uniq = sorted(set(keys))
+        if len(uniq) <= 1:
+            continue
+        reps = {k: _rep_wf(out[k]) for k in uniq}
+
+        def _max_cross_jaccard(ka: str, kb: str) -> float:
+            wfa = list(out[ka].get("wireframes") or [])[:16]
+            wfb = list(out[kb].get("wireframes") or [])[:16]
+            if not wfa or not wfb:
+                return wireframe_jaccard(reps[ka], reps[kb])
+            best = 0.0
+            for a in wfa:
+                for b in wfb:
+                    best = max(best, wireframe_jaccard(a, b))
+            return best
+
+        parent = {k: k for k in uniq}
+
+        def _find(x: str) -> str:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def _union(a: str, b: str) -> None:
+            ra, rb = _find(a), _find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        from mino_nexus.services.nav_atlas_naming import merge_cluster_display_name
+
+        def _cluster_title(key: str) -> str:
+            return str(
+                merge_cluster_display_name(list(out[key].get("name_samples") or [])) or ""
+            ).strip()
+
+        for i, ki in enumerate(uniq):
+            for kj in uniq[i + 1 :]:
+                if _max_cross_jaccard(ki, kj) >= LANE_SUFFIX_MERGE_JACCARD:
+                    _union(ki, kj)
+                    continue
+                t1, t2 = _cluster_title(ki), _cluster_title(kj)
+                if t1 and t1 == t2:
+                    _union(ki, kj)
+
+        clusters: dict[str, list[str]] = {}
+        for k in uniq:
+            clusters.setdefault(_find(k), []).append(k)
+
+        for members in clusters.values():
+            if len(members) <= 1:
+                continue
+            canon = base if base in members else sorted(members)[0]
+            merged = dict(out[canon])
+            for k in members:
+                if k == canon:
+                    continue
+                fp_remap[k] = canon
+                merged = _merge_bucket(merged, out[k])
+                del out[k]
+            merged["skeleton_fp"] = canon
+            out[canon] = merged
+    return out, fp_remap
+
+
 def _atlas_cluster_doc(
     app_id: str,
     filtered: list[dict[str, Any]],
@@ -699,7 +814,7 @@ def _atlas_cluster_doc(
     y_tab: int,
     cap_meta: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """按 Tab + 布局角色/chrome 合并为关系结构（与 nav_synthesis 同聚类键）。"""
+    """按骨骼 lane + 线框相似度合并为关系结构（state_id=page.sk*，Tab 仅用于边标签/命名）。"""
     from mino_nexus.services.nav_layout import (
         detect_layout_framework,
         framework_fingerprint,
@@ -803,6 +918,7 @@ def _atlas_cluster_doc(
     from mino_nexus.services.nav_atlas_naming import merge_cluster_display_name
     from mino_nexus.services.nav_app_skeleton import (
         merge_skeleton_wireframe,
+        should_coalesce_morph_clusters,
         split_indices_by_wireframe_similarity,
     )
 
@@ -816,6 +932,10 @@ def _atlas_cluster_doc(
         if n != len(wfs):
             wfs = wfs[:n]
         sub_clusters = split_indices_by_wireframe_similarity(wfs)
+        morph_frames: list[dict[str, Any]] = []
+        if should_coalesce_morph_clusters(wfs, sub_clusters):
+            morph_frames = [wfs[i] for i in sorted({j for cl in sub_clusters for j in cl}) if i < len(wfs)]
+            sub_clusters = [sorted({j for cl in sub_clusters for j in cl})]
         for cl in sub_clusters:
             use_fp = skeleton_fp if len(cl) == n else f"{skeleton_fp}-s{split_i}"
             if len(cl) != n:
@@ -846,8 +966,17 @@ def _atlas_cluster_doc(
                 tid = int(t.get("turn_id") or 0)
                 if sess and tid:
                     turn_cluster_fp[(sess, tid)] = use_fp
+            if morph_frames:
+                sub["morph_wireframes"] = morph_frames
+                sub["morph_count"] = max(0, len(morph_frames) - 1)
             refined_buckets[use_fp] = sub
-    buckets = refined_buckets
+    buckets, lane_fp_remap = _coalesce_lane_suffix_buckets(refined_buckets)
+    if lane_fp_remap:
+        for key, sk_fp in list(turn_cluster_fp.items()):
+            canon = sk_fp
+            while canon in lane_fp_remap:
+                canon = lane_fp_remap[canon]
+            turn_cluster_fp[key] = canon
 
     for skeleton_fp, bucket in buckets.items():
         merged_fw = merge_frameworks(bucket["frameworks"])
@@ -857,6 +986,11 @@ def _atlas_cluster_doc(
         inferred_role = roles[0] if roles else semantic_page_role(merged_fw)
         merged_wf = merge_skeleton_wireframe(list(bucket.get("wireframes") or []))
         display_name = merge_cluster_display_name(list(bucket.get("name_samples") or []))
+        from mino_nexus.services.nav_viewport import classify_viewport_extent, evidence_tier_from_counts
+
+        viewport = classify_viewport_extent(merged_fw, merged_wf)
+        morph_count = int(bucket.get("morph_count") or 0)
+        morph_wfs = list(bucket.get("morph_wireframes") or [])
         screen_rows.append(
             {
                 "id": sid,
@@ -885,6 +1019,11 @@ def _atlas_cluster_doc(
             "cluster_surface": "sub" if inferred_role == "detail" else "main",
             "framework": merged_fw,
             "name_samples": list(bucket.get("name_samples") or []),
+            "layout_class": viewport.get("layout_class"),
+            "layout_extent": viewport.get("layout_extent"),
+            "morph_count": morph_count,
+            "morphs": morph_wfs[:12] if morph_wfs else [],
+            "evidence_tier": evidence_tier_from_counts(visit_count=0, morph_count=morph_count),
         }
 
     pin_map, pin_meta = _load_atlas_capture_pins(app_id)
@@ -1035,6 +1174,10 @@ def _atlas_cluster_doc(
                     "chrome_texts": list(meta.get("chrome_texts") or row.get("chrome") or [])[:8],
                     "header_title": str(meta.get("header_title") or ""),
                     "skeleton_fp": str(meta.get("skeleton_fp") or row.get("skeleton_fp") or ""),
+                    "layout_class": str(meta.get("layout_class") or ""),
+                    "layout_extent": meta.get("layout_extent") if isinstance(meta.get("layout_extent"), dict) else {},
+                    "morph_count": int(meta.get("morph_count") or 0),
+                    "evidence_tier": str(meta.get("evidence_tier") or ""),
                 },
             }
         )
@@ -1183,6 +1326,15 @@ def _atlas_cluster_doc(
         if dn:
             st.setdefault("meta", {})
             st["meta"]["display_name"] = dn
+        samples = list(cm.get("name_samples") or [])
+        if samples:
+            st.setdefault("meta", {})
+            aliases = [str(a).strip() for a in samples if str(a).strip() and str(a).strip() != dn]
+            if aliases:
+                st["meta"]["name_samples"] = aliases[:12]
+                existing = st["meta"].get("aliases")
+                if not isinstance(existing, list):
+                    st["meta"]["aliases"] = aliases[:12]
     _annotate_wireframes_from_edges(wireframes, edges)
 
     for i in range(len(turn_cluster_ids) - 1):
@@ -2060,13 +2212,14 @@ def _augment_atlas_from_fsm_localized_captures(
     app_id: str,
     filtered: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """把跑批 localize 命中的 NavFSM 屏（如 page.11 拍摄页）补进架构 Atlas，避免只在路线图有、架构图没有。"""
+    """把跑批 localize 命中的屏补进 Atlas。骨骼模式下只追加 turn_ref / 线框去重，不再灌入 page.tab_* 旧节点。"""
     from mino_nexus.services import nav_fsm_store as store
     from mino_nexus.services.nav_compiler import state_label
 
     fsm, _ = store.load_with_reason(app_id)
     if not fsm or not filtered:
         return doc
+    skeleton_mode = _atlas_uses_skeleton_states(doc)
     out = dict(doc)
     states = list(out.get("states") or [])
     edges = list(out.get("edges") or [])
@@ -2104,6 +2257,13 @@ def _augment_atlas_from_fsm_localized_captures(
             continue
         if sid in known:
             _append_atlas_turn_ref(meta, state_id=sid, turn=turn)
+            continue
+        if skeleton_mode and (
+            sid.startswith("page.tab_") or _fsm_state_is_atlas_noise(fsm_by_id.get(sid) or {})
+        ):
+            leg = _resolve_legacy_fsm_atlas_state_id(sid, out, states)
+            if leg:
+                _append_atlas_turn_ref(meta, state_id=leg, turn=turn)
             continue
         st = dict(fsm_by_id[sid])
         wf = _turn_wireframe(turn, app_id=app_id)
@@ -2173,6 +2333,8 @@ def _augment_atlas_from_fsm_localized_captures(
             continue
         if not f or not t or f == t:
             continue
+        if skeleton_mode and (f.startswith("page.tab_") or t.startswith("page.tab_")):
+            continue
         if f not in known or t not in known:
             continue
         eid = str(ed.get("id") or f"edge.{f}_to_{t}")
@@ -2195,13 +2357,112 @@ def _augment_atlas_from_fsm_localized_captures(
     return out
 
 
+def _atlas_uses_skeleton_states(doc: dict[str, Any]) -> bool:
+    """架构图已按骨骼聚类（page.sk*），不再以 page.tab_* 为屏态主键。"""
+    if not isinstance(doc, dict):
+        return False
+    meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+    if meta.get("screen_atlas") and str(meta.get("atlas_layout") or "") == "skeleton_grid":
+        return True
+    for st in doc.get("states") or []:
+        sid = str((st or {}).get("id") or "").strip()
+        if sid.startswith("page.sk"):
+            return True
+    return False
+
+
+def _hydrate_atlas_edge_execute(edge: dict[str, Any]) -> dict[str, Any]:
+    """把 Atlas 边上的 action_label 写入 execute，供 fsm_navigate / tap 编译。"""
+    row = dict(edge or {})
+    if str(row.get("kind") or "nav") != "nav":
+        return row
+    exe = dict(row.get("execute") or {})
+    from mino_nexus.services.nav_execute import execute_target_page
+
+    meta = dict(row.get("meta") or {})
+    action_type = str(meta.get("action_type") or "").strip()
+    if action_type == "back" or meta.get("reverse"):
+        exe.setdefault("steps", ["press_key"])
+        exe.setdefault("key", "BACK")
+        row["execute"] = exe
+        return row
+    if execute_target_page(exe) or exe.get("selector_text"):
+        if exe.get("target_tab") and not exe.get("target_page"):
+            exe["target_page"] = str(exe.get("target_tab") or "").strip()
+        row["execute"] = exe
+        return row
+    label = str(meta.get("action_label") or "").strip()
+    if action_type == "tab" and label:
+        tab = label.split("·", 1)[-1].strip() if "·" in label else label
+        if tab:
+            exe["target_page"] = tab
+    elif action_type == "tap" and label:
+        sel = label.split("·", 1)[-1].strip() if "·" in label else label
+        if sel and sel not in ("进入", "点击"):
+            exe["selector_text"] = sel
+            exe["text"] = sel
+    row["execute"] = exe
+    return row
+
+
+def prepare_atlas_doc_for_nav_runtime(doc: dict[str, Any]) -> dict[str, Any]:
+    """Screen Atlas 文档 → 跑批/路线图可用的 NavFSM 形状（仍含 display_name / 骨骼线框）。"""
+    out = dict(doc or {})
+    states: list[dict[str, Any]] = []
+    for st in out.get("states") or []:
+        if not isinstance(st, dict):
+            continue
+        row = dict(st)
+        meta = dict(row.get("meta") or {})
+        samples = meta.get("name_samples") if isinstance(meta.get("name_samples"), list) else []
+        dn = str(meta.get("display_name") or "").strip()
+        aliases = [str(a).strip() for a in (meta.get("aliases") or []) if str(a).strip()]
+        for s in samples:
+            val = str(s or "").strip()
+            if val and val != dn and val not in aliases:
+                aliases.append(val)
+        if aliases:
+            meta["aliases"] = aliases[:12]
+        meta.setdefault("skeleton_fp", str(meta.get("skeleton_fp") or ""))
+        row["meta"] = meta
+        states.append(row)
+    out["states"] = states
+    out["edges"] = [_hydrate_atlas_edge_execute(ed) for ed in (out.get("edges") or [])]
+    nav_meta = dict(out.get("meta") or {})
+    nav_meta.setdefault("nav_source", "screen_atlas")
+    out["meta"] = nav_meta
+    return out
+
+
+def atlas_doc_for_navigation(
+    app_id: str,
+    *,
+    project_id: str = "",
+    session_id: str = "",
+) -> dict[str, Any] | None:
+    """从采集构建骨骼架构图，作为导航/ localize / fsm_navigate 的真源。"""
+    built = build_atlas(app_id, project_id=project_id, session_id=session_id)
+    doc = built.get("doc") if isinstance(built, dict) else None
+    if not doc or not (doc.get("states") or []):
+        return None
+    if not _atlas_uses_skeleton_states(doc):
+        return None
+    doc = prepare_atlas_doc_for_nav_runtime(doc)
+    from mino_nexus.services.nav_alias_governance import apply_governance_to_doc
+    from mino_nexus.services.nav_edge_resolve import enrich_state_aliases_from_nav_edges
+
+    doc, _ = apply_governance_to_doc(app_id, doc)
+    doc, _ = enrich_state_aliases_from_nav_edges(doc)
+    return doc
+
+
 def build_atlas(
     app_id: str,
     *,
     project_id: str = "",
     session_id: str = "",
 ) -> dict[str, Any]:
-    """从采集构建 Screen Atlas：Tab 关系结构 + 合并相似页。"""
+    """从采集构建 Screen Atlas：骨骼聚类 + 观测跳转边（不按 Tab 分桶命名 state_id）。"""
     ordered, cap_meta = capture.iter_cumulative_turns(app_id, limit_sessions=40, limit_turns=2000)
     if session_id:
         ordered = [t for t in ordered if str(t.get("session_id") or "") == str(session_id)]

@@ -256,19 +256,35 @@ def _forbidden(rule, action) -> str:
     return ""
 
 
-def _dispatch(router, ctx, event: PlanEvent):
+def _dispatch(
+    router,
+    ctx,
+    event: PlanEvent,
+    *,
+    agent_turn: int = 0,
+    action_idx: int = 0,
+):
     if is_local_cap(event.capability_id):
-        return dispatch_local(event)
-    from mino_nexus.loop.web_env import agent_step_idx, frame_step
+        return dispatch_local(event, ctx=ctx, router=router)
+    from mino_nexus.loop.web_env import frame_step, recovery_action_step_idx
 
     scout_run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
     case_seq = int(getattr(ctx, "case_seq", 0) or 0)
-    turn = int(event.seq or 0)
-    step_idx = agent_step_idx(case_seq, turn) if turn > 0 else frame_step(case_seq, 3)
+    if action_idx > 0:
+        step_idx = recovery_action_step_idx(case_seq, agent_turn, action_idx)
+    else:
+        step_idx = frame_step(case_seq, 3)
     return router.dispatch(event, run_id=scout_run_id, step_idx=step_idx)
 
 
-def apply_rule(match: RuleMatch, ctx, router, *, target_package: str = "") -> RecoveryOutcome:
+def apply_rule(
+    match: RuleMatch,
+    ctx,
+    router,
+    *,
+    target_package: str = "",
+    agent_turn: int = 0,
+) -> RecoveryOutcome:
     rule = match.rule
     out = RecoveryOutcome(rule_id=rule.id, mode=rule.mode)
     if rule.mode == "advise":
@@ -299,7 +315,7 @@ def apply_rule(match: RuleMatch, ctx, router, *, target_package: str = "") -> Re
                 ai_reasoning=f"L0 恢复 {rule.id}",
                 label=rule.title or rule.id,
             )
-            res = _dispatch(router, ctx, event)
+            res = _dispatch(router, ctx, event, agent_turn=agent_turn, action_idx=idx)
             status = getattr(res.status, "value", res.status)
             out.actions.append({
                 "capability": action.capability,

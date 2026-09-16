@@ -467,6 +467,20 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
         if isinstance(raw_layout, dict)
         else {}
     )
+    raw_vlm = raw.get("vlm_hierarchy")
+    vlm_hierarchy: dict[str, Any] = {}
+    if isinstance(raw_vlm, dict):
+        nodes = raw_vlm.get("nodes")
+        if isinstance(nodes, list):
+            vlm_hierarchy = {
+                "hierarchy_format": str(raw_vlm.get("hierarchy_format") or "accessibility_json"),
+                "degraded_scout": bool(raw_vlm.get("degraded_scout")),
+                "nodes": [n for n in nodes if isinstance(n, dict)][:40],
+            }
+            if raw_vlm.get("page_summary"):
+                vlm_hierarchy["page_summary"] = str(raw_vlm.get("page_summary") or "").strip()
+        else:
+            warnings.append("vlm_hierarchy 缺少 nodes 数组，已忽略")
     return AgentDecision(
         thought=str(raw.get("thought") or "").strip(),
         action=action,
@@ -479,6 +493,7 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
         subflow=subflow,
         published=published,
         screen_layout=screen_layout,
+        vlm_hierarchy=vlm_hierarchy,
         raw_llm=raw,
         parse_warnings=warnings,
     )
@@ -616,7 +631,14 @@ def decide_next_action(
     # 覆盖 raw_llm：既保留输出，也带上“喂给模型的输入”用于 UI 可视化溯源。
     decision.raw_llm = {"llm_input": llm_input_debug, "llm_output": raw, "meta": meta}
     return decision
-def _parse_inspect_session_raw(raw: dict[str, Any]) -> dict[str, Any]:
+def _parse_inspect_session_raw(
+    raw: dict[str, Any],
+    *,
+    width: int = 1080,
+    height: int = 1920,
+) -> dict[str, Any]:
+    from mino_nexus.services.nav_screen_layout import normalize_vision_layout
+
     session = str(raw.get("session") or "unknown").strip().lower()
     if session not in {"logged_out", "logged_in", "unknown"}:
         session = "unknown"
@@ -631,6 +653,24 @@ def _parse_inspect_session_raw(raw: dict[str, Any]) -> dict[str, Any]:
         probe = probe.strip().lower() in {"true", "1", "yes"}
     seen = str(raw.get("seen") or "").strip()[:240]
     reason = str(raw.get("reason") or "").strip()[:240] or "（未说明）"
+    raw_layout = raw.get("screen_layout")
+    screen_layout = (
+        normalize_vision_layout(raw_layout, screen_w=width, screen_h=height)
+        if isinstance(raw_layout, dict) and raw_layout
+        else {}
+    )
+    raw_vlm = raw.get("vlm_hierarchy")
+    vlm_hierarchy: dict[str, Any] = {}
+    if isinstance(raw_vlm, dict) and raw_vlm:
+        nodes = raw_vlm.get("nodes")
+        if isinstance(nodes, list):
+            vlm_hierarchy = {
+                "hierarchy_format": str(raw_vlm.get("hierarchy_format") or "accessibility_json"),
+                "degraded_scout": bool(raw_vlm.get("degraded_scout")),
+                "nodes": [n for n in nodes if isinstance(n, dict)][:40],
+            }
+            if str(raw_vlm.get("page_summary") or "").strip():
+                vlm_hierarchy["page_summary"] = str(raw_vlm.get("page_summary") or "").strip()
     return {
         "session": session,
         "identity": identity,
@@ -638,6 +678,8 @@ def _parse_inspect_session_raw(raw: dict[str, Any]) -> dict[str, Any]:
         "probe": bool(probe),
         "next": nxt,
         "reason": reason,
+        "screen_layout": screen_layout,
+        "vlm_hierarchy": vlm_hierarchy,
         "ok": True,
     }
 def inspect_session(
@@ -647,10 +689,14 @@ def inspect_session(
     accounts_brief: str = "",
     image_base64: str = "",
     image_mime: str = "image/png",
+    screen_w: int = 0,
+    screen_h: int = 0,
     provider_id: Optional[str] = None,
     timeout_sec: int = 60,
 ) -> dict[str, Any]:
     """观察当前屏登录态。空输出/解析失败重试；耗尽后 ok=False，不当成功。"""
+    width = int(screen_w or 0) or 1080
+    height = int(screen_h or 0) or 1920
     empty = {
         "session": "unknown",
         "identity": "unknown",
@@ -693,7 +739,7 @@ def inspect_session(
             json_mode=bool(call.get("json_mode", True)),
         )
         if isinstance(raw, dict) and str(raw.get("session") or "").strip():
-            row = _parse_inspect_session_raw(raw)
+            row = _parse_inspect_session_raw(raw, width=width, height=height)
             if attempt > 1:
                 SLog.i(TAG, f"inspect_session recovered on attempt {attempt}")
             return row

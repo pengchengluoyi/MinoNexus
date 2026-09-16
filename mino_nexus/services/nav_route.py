@@ -5,6 +5,27 @@ from typing import Any
 
 from mino_nexus.services import nav_fsm as F
 from mino_nexus.services import nav_fsm_store as store
+from mino_nexus.services.nav_execute import execute_target_page
+
+
+def _ref_display_variants(ref: str) -> list[str]:
+    """自然语言目标（如「我的页面」）的常见写法变体，用于 Tab 直点。"""
+    val = str(ref or "").strip()
+    if not val:
+        return []
+    out: list[str] = [val]
+    if val.endswith("页面") and len(val) > 2:
+        out.append(val[:-2])
+    if val.endswith("页") and len(val) > 1 and not val.endswith("页面"):
+        out.append(val[:-1])
+    dedup: list[str] = []
+    seen: set[str] = set()
+    for item in out:
+        key = item.strip()
+        if key and key not in seen:
+            seen.add(key)
+            dedup.append(key)
+    return dedup
 
 
 def resolve_state_ref(fsm: dict[str, Any], ref: str) -> str:
@@ -14,11 +35,15 @@ def resolve_state_ref(fsm: dict[str, Any], ref: str) -> str:
         return ""
     if F.state_by_id(fsm, val):
         return val
+    for variant in _ref_display_variants(val):
+        if variant != val and F.state_by_id(fsm, variant):
+            return variant
     meta = fsm.get("meta") if isinstance(fsm.get("meta"), dict) else {}
     tab_bar = meta.get("tab_bar") if isinstance(meta.get("tab_bar"), dict) else {}
     labels = tab_bar.get("labels") if isinstance(tab_bar.get("labels"), dict) else {}
     for sid, label in labels.items():
-        if str(label or "").strip() == val:
+        lab = str(label or "").strip()
+        if lab == val or lab in _ref_display_variants(val):
             return str(sid)
     for sid in tab_bar.get("entries") or []:
         if str(sid).endswith(val) or val in str(sid):
@@ -27,6 +52,14 @@ def resolve_state_ref(fsm: dict[str, Any], ref: str) -> str:
         sid = str(st.get("id") or "").strip()
         if not sid:
             continue
+        st_meta = st.get("meta") if isinstance(st.get("meta"), dict) else {}
+        dn = str(st_meta.get("display_name") or "").strip()
+        if dn and (dn == val or dn in _ref_display_variants(val)):
+            return sid
+        for alias in st_meta.get("aliases") or []:
+            al = str(alias or "").strip()
+            if al == val or al in _ref_display_variants(val):
+                return sid
         if sid.endswith(f".{val}") or sid.split(".")[-1] == val:
             return sid
         identify = st.get("identify") or {}
@@ -37,7 +70,7 @@ def resolve_state_ref(fsm: dict[str, Any], ref: str) -> str:
                 continue
             if block.get("signal") == "tab_bar":
                 tab = str((block.get("match") or {}).get("selected") or "").strip()
-                if tab == val:
+                if tab == val or tab in _ref_display_variants(val):
                     return sid
     return val
 
@@ -103,6 +136,7 @@ def plan_route(
                 "to": str(ed.get("to") or ""),
                 "execute": dict(ed.get("execute") or {}),
                 "effect_assert": dict(ed.get("effect_assert") or {}),
+                "meta": dict(ed.get("meta") or {}),
             }
         )
     ids = [s["edge_id"] for s in steps if s["edge_id"]]
@@ -155,6 +189,10 @@ def tab_label_for_state(fsm: dict[str, Any], state_id: str) -> str:
     st = F.state_by_id(fsm, sid)
     if not st:
         return ""
+    st_meta = st.get("meta") if isinstance(st.get("meta"), dict) else {}
+    dn = str(st_meta.get("display_name") or "").strip()
+    if dn and sid.startswith("page.sk"):
+        return dn
     identify = st.get("identify") or {}
     required = identify.get("required")
     blocks = required if isinstance(required, list) else ([required] if required else [])
@@ -164,6 +202,89 @@ def tab_label_for_state(fsm: dict[str, Any], state_id: str) -> str:
         if block.get("signal") == "tab_bar":
             return str((block.get("match") or {}).get("selected") or "").strip()
     return ""
+
+
+def _edge_step_meta(fsm: dict[str, Any], edge_step: dict[str, Any]) -> dict[str, Any]:
+    meta = edge_step.get("meta") if isinstance(edge_step.get("meta"), dict) else {}
+    if meta:
+        return dict(meta)
+    eid = str(edge_step.get("edge_id") or "").strip()
+    if eid:
+        full = F.edge_by_id(fsm, eid)
+        if isinstance(full, dict):
+            em = full.get("meta")
+            if isinstance(em, dict):
+                return dict(em)
+    return {}
+
+
+def is_tab_shell_state(fsm: dict[str, Any], state_id: str) -> bool:
+    """当前 state 是否为底栏 Tab 根态（entries / labels 中的壳页）。"""
+    sid = str(state_id or "").strip()
+    if not sid or not fsm:
+        return False
+    meta = fsm.get("meta") if isinstance(fsm.get("meta"), dict) else {}
+    tab_bar = meta.get("tab_bar") if isinstance(meta.get("tab_bar"), dict) else {}
+    entries = tab_bar.get("entries") or []
+    if sid in {str(e).strip() for e in entries if str(e).strip()}:
+        return True
+    labels = tab_bar.get("labels") if isinstance(tab_bar.get("labels"), dict) else {}
+    return sid in labels
+
+
+def pick_fsm_first_step(
+    fsm: dict[str, Any],
+    plan: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """fsm_navigate 本步应执行的边（Tab 根上多 hop 且终端为 Tab 时直跳最后一跳）。"""
+    steps = [s for s in (plan.get("steps") or []) if isinstance(s, dict)]
+    meta: dict[str, Any] = {"planned_hops": len(steps), "step_pick": "shortest_first"}
+    if not steps:
+        return {}, meta
+    src = str(plan.get("from_state") or "").strip()
+    dst = str(plan.get("to_state") or "").strip()
+    first = steps[0]
+    if len(steps) >= 2 and is_tab_shell_state(fsm, src):
+        terminal = steps[-1]
+        term_to = str(terminal.get("to") or "").strip()
+        if term_to == dst and not edge_is_system_back(fsm, terminal):
+            meta["step_pick"] = "tab_shell_terminal"
+            return terminal, meta
+    if len(steps) >= 2 and not is_tab_shell_state(fsm, src):
+        terminal = steps[-1]
+        term_to = str(terminal.get("to") or "").strip()
+        tab_target = is_tab_shell_state(fsm, dst) or bool(tab_label_for_state(fsm, dst))
+        if (
+            term_to == dst
+            and tab_target
+            and not edge_is_system_back(fsm, terminal)
+            and not edge_is_system_back(fsm, first)
+        ):
+            meta["step_pick"] = "deep_page_direct_tab"
+            return terminal, meta
+    return first, meta
+
+
+def edge_is_system_back(fsm: dict[str, Any], edge_step: dict[str, Any]) -> bool:
+    """Atlas 观测的返回边：系统 BACK 比文案 tap 更稳（图标返回键常无「返回」文本节点）。"""
+    meta = _edge_step_meta(fsm, edge_step)
+    action_type = str(meta.get("action_type") or "").strip().lower()
+    if action_type == "back" or meta.get("reverse"):
+        return True
+    exe = edge_step.get("execute") if isinstance(edge_step.get("execute"), dict) else {}
+    steps = exe.get("steps")
+    if isinstance(steps, list) and "press_key" in [str(s) for s in steps]:
+        return True
+    return str(exe.get("key") or "").strip().upper() in ("BACK", "ESCAPE")
+
+
+def dispatch_spec_for_edge(fsm: dict[str, Any], edge_step: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """fsm_navigate 本步应派发的 capability 与参数。"""
+    if edge_is_system_back(fsm, edge_step):
+        exe = edge_step.get("execute") if isinstance(edge_step.get("execute"), dict) else {}
+        key = str(exe.get("key") or "BACK").strip().upper() or "BACK"
+        return "press_key", {"key": key}
+    return "tap_element", tap_params_for_edge(fsm, edge_step)
 
 
 def tap_params_for_edge(fsm: dict[str, Any], edge: dict[str, Any]) -> dict[str, Any]:
@@ -202,9 +323,25 @@ def tap_params_for_edge(fsm: dict[str, Any], edge: dict[str, Any]) -> dict[str, 
                         if la and ra:
                             out["anchor_between"] = [la, ra]
                 return out
-    target_tab = str(exe.get("target_tab") or "").strip()
-    if target_tab:
-        return {"selector_text": target_tab, "text": target_tab}
+    target_page = execute_target_page(exe)
+    if target_page:
+        return {"selector_text": target_page, "text": target_page}
+    sel = str(exe.get("selector_text") or exe.get("text") or "").strip()
+    if sel:
+        return {"selector_text": sel, "text": sel}
+    em = edge.get("meta") if isinstance(edge.get("meta"), dict) else {}
+    action_type = str(em.get("action_type") or "").strip().lower()
+    if action_type == "back" or em.get("reverse"):
+        al = str(em.get("action_label") or "").strip()
+        back_label = al if al and al not in ("点击", "tap") else "返回"
+        return {"selector_text": back_label, "text": back_label}
+    al = str(em.get("action_label") or "").strip()
+    if al and "·" in al:
+        part = al.split("·", 1)[-1].strip()
+        if part:
+            return {"selector_text": part, "text": part}
+    if al and al not in ("点击", "tap"):
+        return {"selector_text": al, "text": al}
     dst = str(edge.get("to") or "").strip()
     label = tab_label_for_state(fsm, dst)
     if label:
@@ -216,8 +353,22 @@ def tap_params_for_edge(fsm: dict[str, Any], edge: dict[str, Any]) -> dict[str, 
 
 
 def direct_tab_tap_params(fsm: dict[str, Any], to_state_ref: str) -> dict[str, Any]:
-    """无路可走时，尝试按目标 Tab 文案直点。"""
-    label = tab_label_for_state(fsm, to_state_ref) or str(to_state_ref or "").strip()
+    """无路可走时，尝试按目标屏展示名 / Tab 文案直点。"""
+    raw_ref = str(to_state_ref or "").strip()
+    label = tab_label_for_state(fsm, to_state_ref) or raw_ref
+    if not tab_label_for_state(fsm, to_state_ref):
+        for variant in _ref_display_variants(raw_ref):
+            if variant:
+                label = variant
+                break
+    sid = resolve_state_ref(fsm, to_state_ref)
+    if sid:
+        st = F.state_by_id(fsm, sid)
+        if st:
+            meta = st.get("meta") if isinstance(st.get("meta"), dict) else {}
+            dn = str(meta.get("display_name") or "").strip()
+            if dn:
+                label = dn
     if label:
         return {"selector_text": label, "text": label}
     return {}

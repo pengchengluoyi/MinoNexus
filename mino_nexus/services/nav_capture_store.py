@@ -378,6 +378,63 @@ def read_turn(app_id: str, session_id: str, turn_id: int) -> dict[str, Any] | No
     return row
 
 
+def _slim_vlm_hierarchy(vlm: dict[str, Any]) -> dict[str, Any]:
+    """落盘：保留协议字段，去掉空键。"""
+    out: dict[str, Any] = {
+        "hierarchy_format": str(vlm.get("hierarchy_format") or "accessibility_json"),
+        "degraded_scout": bool(vlm.get("degraded_scout")),
+    }
+    if vlm.get("page_summary"):
+        out["page_summary"] = str(vlm.get("page_summary") or "")[:400]
+    nodes_out: list[dict[str, Any]] = []
+    for n in vlm.get("nodes") or []:
+        if not isinstance(n, dict):
+            continue
+        row = {}
+        for key in (
+            "resource_id",
+            "text",
+            "content_desc",
+            "class",
+            "clickable",
+            "bounds",
+            "center",
+        ):
+            if key in n and n[key] not in (None, "", []):
+                row[key] = n[key]
+        if row:
+            nodes_out.append(row)
+        if len(nodes_out) >= 40:
+            break
+    out["nodes"] = nodes_out
+    out["node_count"] = len(nodes_out)
+    return out
+
+
+def patch_turn_vlm_hierarchy(
+    app_id: str,
+    session_id: str,
+    turn_id: int,
+    *,
+    vlm_hierarchy: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """agent-decide v10：完整 hierarchy 写入 turn meta（节点已裁剪至 ≤40）。"""
+    if not vlm_hierarchy or not isinstance(vlm_hierarchy, dict):
+        return None
+    if not (vlm_hierarchy.get("nodes") or []):
+        return None
+    root = _session_root(app_id, session_id)
+    stem = f"turn_{int(turn_id):04d}"
+    meta_path = root / f"{stem}.meta.json"
+    meta = _read_json(meta_path, None)
+    if not meta:
+        return None
+    meta["vlm_hierarchy"] = _slim_vlm_hierarchy(vlm_hierarchy)
+    meta["vlm_hierarchy_at"] = int(time.time())
+    _write_json(meta_path, meta)
+    return meta
+
+
 def patch_turn_layout(
     app_id: str,
     session_id: str,

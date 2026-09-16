@@ -105,7 +105,9 @@ def edge_action_label(fsm: dict[str, Any] | None, edge: dict[str, Any] | None) -
     if ui:
         return ui
     ex = edge.get("execute") if isinstance(edge.get("execute"), dict) else {}
-    tab = str(ex.get("target_tab") or ex.get("selector_text") or "").strip()
+    from mino_nexus.services.nav_execute import execute_target_page
+
+    tab = execute_target_page(ex) or str(ex.get("selector_text") or "").strip()
     if tab:
         return f"点击「{tab}」"
     label = str(ex.get("target_label") or "").strip()
@@ -125,6 +127,7 @@ def compile_assist(
     project_id: str = "",
     run_type: str = "manual",
     include_wiki: bool = True,
+    localized: dict[str, Any] | None = None,
 ) -> str:
     if plan is None or not plan.state_id:
         return ""
@@ -134,9 +137,9 @@ def compile_assist(
     if not getattr(plan, "case_navigation_goal", False):
         return _head(plan, fsm).strip()
 
-    parts: list[str] = [_head(plan, fsm)]
+    parts: list[str] = [_head(plan, fsm, localized=localized)]
 
-    route_line = _route_line(plan, fsm)
+    route_line = _route_line(plan, fsm, localized=localized)
     if route_line:
         parts.append(route_line)
 
@@ -159,7 +162,7 @@ def compile_assist(
     return "\n\n".join(p for p in parts if p).strip()
 
 
-def _head(plan: NavPlan, fsm: dict[str, Any] | None) -> str:
+def _head(plan: NavPlan, fsm: dict[str, Any] | None, *, localized: dict[str, Any] | None = None) -> str:
     here = state_label(fsm, plan.state_id)
     band_note = {
         "high": "",
@@ -167,12 +170,19 @@ def _head(plan: NavPlan, fsm: dict[str, Any] | None) -> str:
         "recover": "（定位置信度低：优先恢复/问人，勿乱点）",
     }.get(plan.band, "")
     conf = f"{plan.confidence:.0%}" if plan.confidence <= 1 else f"{plan.confidence:.2f}"
-    return f"【导航】当前屏：{here}（id={plan.state_id}，置信 {conf}）{band_note}"
+    policy = str((localized or {}).get("policy_note") or "").strip()
+    policy_bit = f"（{policy}）" if policy else ""
+    return f"【导航】当前屏：{here}（id={plan.state_id}，置信 {conf}）{band_note}{policy_bit}"
 
 
-def _route_line(plan: NavPlan, fsm: dict[str, Any] | None) -> str:
+def _route_line(plan: NavPlan, fsm: dict[str, Any] | None, *, localized: dict[str, Any] | None = None) -> str:
     goal = str(plan.goal_state_id or "").strip()
     goal_name = state_label(fsm, goal) if goal else ""
+
+    ref_prefix = ""
+    loc = localized or {}
+    if loc.get("band") == "explore" or loc.get("evidence_tier") == "low":
+        ref_prefix = "参考意见，非确证："
 
     if plan.route_uncovered or (
         goal
@@ -181,7 +191,7 @@ def _route_line(plan: NavPlan, fsm: dict[str, Any] | None) -> str:
         and "路线图未覆盖" in str(plan.edge_reason or "")
     ):
         return (
-            f"【路线】路线图未覆盖：从当前屏无法沿已发布跳转到达用例目标「{goal_name}」"
+            f"{ref_prefix}【路线】路线图未覆盖：从当前屏无法沿已发布跳转到达用例目标「{goal_name}」"
             f"（{goal}）。不要编造 Tab/返回路径；按用例步骤点击，或 signal_ask_human / signal_give_up。"
         )
 
@@ -205,7 +215,7 @@ def _route_line(plan: NavPlan, fsm: dict[str, Any] | None) -> str:
         tail += f"（用例目标为「{goal_name}」，全程可能还需后续步骤）"
     elif goal_name and dest_id == goal:
         tail += "（下一步即到用例目标屏）"
-    return f"【路线】下一步：{action}{tail}"
+    return f"{ref_prefix}【路线】下一步：{action}{tail}"
 
 
 def _allow_block(plan: NavPlan, *, run_type: str = "manual") -> str:

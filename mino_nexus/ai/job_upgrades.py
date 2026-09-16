@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from datetime import datetime
 from typing import Any
 
@@ -10,8 +11,12 @@ AGENT_DECIDE_V6_MARKER = "prompt_version >= 6（signal_skip / 迷路重启）"
 AGENT_DECIDE_V7_MARKER = "prompt_version >= 7（NavFSM RouteAssist / 导航守卫）"
 AGENT_DECIDE_V8_MARKER = "prompt_version >= 8（screen_layout 布局线框）"
 AGENT_DECIDE_V9_MARKER = "prompt_version >= 9（文档库 doc_context 摘录）"
+AGENT_DECIDE_V10_MARKER = "prompt_version >= 10（vlm_hierarchy）"
+AGENT_DECIDE_V11_MARKER = "prompt_version >= 11（screen_layout+vlm_hierarchy 每轮必填）"
+AGENT_DECIDE_V12_MARKER = "prompt_version >= 12（tool 参数承载 screen_layout）"
 DOC_CONTEXT_SLOT = "doc_context"
 ASSERT_VISION_V2_MARKER = "prompt_version >= 2（screen_layout 布局线框）"
+INSPECT_SESSION_V2_MARKER = "prompt_version >= 2（screen_layout + vlm_hierarchy）"
 NAV_ASSIST_SLOT = "nav_assist"
 
 _SCREEN_LAYOUT_JSON_HINT = """
@@ -24,11 +29,47 @@ _SCREEN_LAYOUT_JSON_HINT = """
 
 ```json
 "screen_layout": {
-  "chrome": {"top": 0.06, "bottom": 0.88},
+  "chrome": {"top": 0.06, "bottom": 0.96},
   "regions": [{"id":"r1","label":"引流条","role":"banner","clickable":true,"rect":{"x":0,"y":0.08,"w":1,"h":0.1}}]
 }
 ```
 """
+
+_VLM_HIERARCHY_JSON_HINT = """
+### vlm_hierarchy（与 action / 会话字段同轮输出，必填对象）
+
+每轮 JSON **必须**附带 `vlm_hierarchy`（与 `screen_layout` 并列；Scout `==== hierarchy` 是否为空都要写，便于 tap 互证与审计）：
+- `hierarchy_format` 固定 `accessibility_json`；`nodes[]` 字段与 Scout `nodes` 同形（`bounds`/`center` 为设备像素）。
+- 只列可见且与当前步骤相关的节点（≤40）；不要编造 `resource_id`。
+- `degraded_scout`：你认为 Scout hierarchy 不可用/不可信时为 true，否则 false。
+- `screen_layout` 管区域框；`vlm_hierarchy` 管可点名控件文案；与 Scout 冲突时以 Scout 坐标为准、VLM 补 text/desc。
+
+```json
+"vlm_hierarchy": {
+  "hierarchy_format": "accessibility_json",
+  "degraded_scout": false,
+  "nodes": [{"text":"我的","class":"android.widget.TextView","clickable":true,"bounds":[800,2200,950,2300],"center":[875,2250]}]
+}
+```
+"""
+
+
+def _commit_job_upgrade(merged: dict[str, Any], job_id: str) -> None:
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+    from mino_nexus.services.job_store import _to_row
+
+    with session_scope() as db:
+        db_row = db.query(LlmJob).filter(LlmJob.id == job_id).first()
+        if db_row is None:
+            db.add(_to_row({**merged, "id": job_id, "builtin": True}))
+        else:
+            db_row.system_blocks_json = list(merged.get("system_blocks") or [])
+            db_row.user_blocks_json = list(merged.get("user_blocks") or [])
+            db_row.slots_json = list(merged.get("slots") or [])
+            db_row.prompt_version = int(merged.get("prompt_version") or 1)
+            db_row.overrides_json = dict(merged.get("overrides_json") or {})
+        db.flush()
 
 
 def _patch_agent_decide_v5(text: str) -> str:
@@ -527,6 +568,243 @@ def upgrade_agent_decide_to_v9() -> int:
     return 1
 
 
+def _patch_agent_decide_v10(text: str) -> str:
+    out = str(text or "")
+    if "### vlm_hierarchy" in out:
+        return out
+    anchor = AGENT_DECIDE_V9_MARKER
+    if anchor in out:
+        out = out.replace(anchor, _VLM_HIERARCHY_JSON_HINT.strip() + "\n\n<!-- " + anchor + " -->\n")
+    else:
+        out = out.rstrip() + "\n\n" + _VLM_HIERARCHY_JSON_HINT.strip() + f"\n\n<!-- {AGENT_DECIDE_V10_MARKER} -->\n"
+    return out
+
+
+def upgrade_agent_decide_to_v10() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 10:
+        return 0
+    if int(row.get("prompt_version") or 1) < 9:
+        upgrade_agent_decide_to_v9()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_agent_decide_v10(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    _ensure_doc_context_slot(merged)
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 9),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v9 before program upgrade to v10",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 10
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
+
+
+def _patch_agent_decide_v11(text: str) -> str:
+    """V10 → V11：vlm_hierarchy 改为每轮必填；统一 screen_layout 话术。"""
+    out = str(text or "")
+    out = re.sub(
+        r"### vlm_hierarchy[\s\S]*?(?=\n### |\n<!-- prompt_version|\Z)",
+        _VLM_HIERARCHY_JSON_HINT.strip() + "\n\n",
+        out,
+        count=1,
+    )
+    if "### vlm_hierarchy" not in out:
+        out = out.rstrip() + "\n\n" + _VLM_HIERARCHY_JSON_HINT.strip() + "\n"
+    if "### screen_layout" not in out:
+        out = out.rstrip() + "\n\n" + _SCREEN_LAYOUT_JSON_HINT.strip() + "\n"
+    if AGENT_DECIDE_V11_MARKER not in out:
+        out = out.rstrip() + f"\n\n<!-- {AGENT_DECIDE_V11_MARKER} -->\n"
+    return out
+
+
+_AGENT_DECIDE_V12_TOOL_LAYOUT_NOTE = """
+### 输出通道（agent-decide 使用 function call）
+
+`screen_layout` 与 `vlm_hierarchy` **写在本次 function call 的参数里**（与 `thought`、能力参数同级），不要只写在正文。
+若模型同时输出 assistant 正文 JSON，服务端会合并补全；但 **以 tool 参数为准**。
+"""
+
+
+def _patch_agent_decide_v12(text: str) -> str:
+    out = str(text or "")
+    if _AGENT_DECIDE_V12_TOOL_LAYOUT_NOTE.strip() not in out:
+        out = out.rstrip() + "\n\n" + _AGENT_DECIDE_V12_TOOL_LAYOUT_NOTE.strip() + "\n"
+    if AGENT_DECIDE_V12_MARKER not in out:
+        out = out.rstrip() + f"\n\n<!-- {AGENT_DECIDE_V12_MARKER} -->\n"
+    return out
+
+
+def upgrade_agent_decide_to_v12() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 12:
+        return 0
+    if int(row.get("prompt_version") or 1) < 11:
+        upgrade_agent_decide_to_v11()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_agent_decide_v12(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 11),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": f"v{row.get('prompt_version')} before program upgrade to v12 tool-layout channel",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 12
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
+
+
+def upgrade_agent_decide_to_v11() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 11:
+        return 0
+    if int(row.get("prompt_version") or 1) < 10:
+        upgrade_agent_decide_to_v10()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_agent_decide_v11(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    _ensure_doc_context_slot(merged)
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 10),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": f"v{row.get('prompt_version')} before program upgrade to v11",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 11
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
+
+
+def _patch_inspect_session_v2(text: str) -> str:
+    out = str(text or "")
+    needle = '"reason": "一句话"\n}'
+    extended = (
+        '"reason": "一句话",\n'
+        '  "screen_layout": {"chrome": {"top": 0.06, "bottom": 0.96}, "regions": []},\n'
+        '  "vlm_hierarchy": {"hierarchy_format": "accessibility_json", "degraded_scout": false, "nodes": []}\n'
+        "}"
+    )
+    if needle in out and '"screen_layout"' not in out[:2000]:
+        out = out.replace(needle, extended, 1)
+    if "### screen_layout" not in out:
+        out = (
+            out.rstrip()
+            + "\n\n"
+            + _SCREEN_LAYOUT_JSON_HINT.strip()
+            + "\n\n"
+            + _VLM_HIERARCHY_JSON_HINT.strip()
+            + f"\n\n<!-- {INSPECT_SESSION_V2_MARKER} -->\n"
+        )
+    return out
+
+
+def upgrade_inspect_session_to_v2() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("inspect-session")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 2:
+        return 0
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_inspect_session_v2(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v1 before program upgrade to v2 screen_layout+vlm_hierarchy",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 2
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "inspect-session")
+    return 1
+
+
 def _patch_assert_vision_v2(text: str) -> str:
     out = str(text or "")
     if "### screen_layout" in out:
@@ -573,14 +851,7 @@ def upgrade_assert_vision_to_v2() -> int:
     from mino_nexus.models.llm_job import LlmJob
     from mino_nexus.services.job_store import _to_row
 
-    with session_scope() as db:
-        db_row = db.query(LlmJob).filter(LlmJob.id == "assert-vision").first()
-        if db_row is None:
-            db.add(_to_row({**merged, "id": "assert-vision", "builtin": True}))
-        else:
-            db_row.system_blocks_json = list(merged.get("system_blocks") or [])
-            db_row.prompt_version = 2
-        db.flush()
+    _commit_job_upgrade(merged, "assert-vision")
     return 1
 
 
@@ -655,6 +926,65 @@ def ensure_nav_widget_state_job() -> int:
         "call": {"temperature": 0.0, "max_tokens": 200, "timeout_sec": 30, "json_mode": True},
         "flags": ["case_execution_use"],
     }
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+
+    with session_scope() as db:
+        if db.query(LlmJob).filter(LlmJob.id == jid).first():
+            return 0
+        db.add(_to_row(spec))
+        db.flush()
+    return 1
+
+
+def ensure_nav_atlas_morph_job() -> int:
+    """M4：两帧/线框上下文 + 截图，判定 same_page_morph | split_page。"""
+    from mino_nexus.services.job_store import get_job, _to_row
+
+    jid = "nav-atlas-morph"
+    if get_job(jid):
+        return 0
+    spec = {
+        "id": jid,
+        "label": "Atlas 多态判定",
+        "summary": "同一逻辑页内容多态 vs 应拆页（仅建议 pin/split）",
+        "engine": "text_chat",
+        "enabled": True,
+        "builtin": True,
+        "prompt_version": 1,
+        "output_schema": "json",
+        "slots": [
+            {"name": "context_json", "kind": "text"},
+            {"name": "image_base64", "kind": "image"},
+            {"name": "image_mime", "kind": "text"},
+        ],
+        "system_blocks": [
+            {
+                "id": "main",
+                "text": (
+                    "你是移动 App **架构采集**审核员。根据上下文 JSON（两 turn 的线框摘要、localize）"
+                    "和用户附带的**较新一帧截图**，判断这两帧是否应算作**同一逻辑页的多态 morph**。\n\n"
+                    "只输出 JSON：\n"
+                    '{"verdict":"same_page_morph|split_page","confidence":0-1,"reason":""}\n\n'
+                    "- **same_page_morph**：壳层/导航结构相同，仅 feed/轮播/列表内容变化；应 pin 到同一 page.sk。\n"
+                    "- **split_page**：壳层、返回栈、Tab 或主布局角色变化；应拆成独立页。\n"
+                    "不要编造未看见的控件；不确定时 split_page 且 confidence<0.6。"
+                ),
+            }
+        ],
+        "user_blocks": [
+            {
+                "id": "ctx",
+                "slot": "context_json",
+                "heading": "==== 两帧上下文（JSON）====",
+            }
+        ],
+        "image": {"slot": "image_base64"},
+        "call": {"temperature": 0.0, "max_tokens": 280, "timeout_sec": 45, "json_mode": True},
+        "flags": ["case_execution_use"],
+    }
+    # user_blocks 需要 image 块由 render_job 的 image 配置处理
+    spec["user_blocks"] = list(spec["user_blocks"])
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.llm_job import LlmJob
 

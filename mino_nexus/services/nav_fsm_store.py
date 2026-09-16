@@ -235,6 +235,11 @@ def load(
     return doc
 
 
+def account_scope_reason(doc: dict[str, Any], *, expected_account_id: str = "") -> str:
+    """跑批租号 / project 与 nav_fsm 文档是否一致（§11.4）。"""
+    return _scope_reason(doc, expected_account_id=expected_account_id)
+
+
 def _scope_reason(doc: dict[str, Any], *, expected_account_id: str = "") -> str:
     """§11.4 三元绑定：project_id 对得上 apps、account_id 对得上跑批租号。"""
     aid = str(doc.get("app_id") or "")

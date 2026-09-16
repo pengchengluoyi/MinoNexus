@@ -408,5 +408,9 @@ class AgentDecision(BaseModel):
         default_factory=dict,
         description="本屏布局线框（归一化坐标），与 hierarchy 并行采集",
     )
+    vlm_hierarchy: dict[str, Any] = Field(
+        default_factory=dict,
+        description="v10：弱 hierarchy 时 VLM 补全的 accessibility_json 形节点树",
+    )
     raw_llm: dict[str, Any] = Field(default_factory=dict)
     parse_warnings: list[str] = Field(default_factory=list)

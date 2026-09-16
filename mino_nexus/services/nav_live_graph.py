@@ -170,6 +170,9 @@ def _resolve_orphan_state_id(sid: str, known: set[str]) -> str:
 def merge_localize_orphans(doc: dict[str, Any], ordered: list[dict[str, Any]]) -> dict[str, Any]:
     """Tab 合成模式下不盲目追加 localize 孤儿页。"""
     out = dict(doc or {})
+    meta0 = out.get("meta") if isinstance(out.get("meta"), dict) else {}
+    if meta0.get("screen_atlas") or meta0.get("nav_source") == "screen_atlas":
+        return out
     states = list(out.get("states") or [])
     known = _state_ids(out)
     mode = str((out.get("meta") or {}).get("synthesis_mode") or "")
@@ -235,7 +238,8 @@ def _turn_wireframe(turn: dict[str, Any], *, app_id: str = "") -> dict[str, Any]
 
 
 def _mark_nav_regions(wf: dict[str, Any], state_id: str, doc: dict[str, Any]) -> dict[str, Any]:
-    """可点击组件若文案/描述命中出边 target_tab，标记跳转目标。"""
+    """可点击组件若文案/描述命中出边 target_page，标记跳转目标。"""
+    from mino_nexus.services.nav_execute import execute_target_page
     regions = list(wf.get("regions") or [])
     if not regions or not state_id:
         return wf
@@ -248,7 +252,7 @@ def _mark_nav_regions(wf: dict[str, Any], state_id: str, doc: dict[str, Any]) ->
             continue
         exec_body = ed.get("execute") if isinstance(ed.get("execute"), dict) else {}
         hints = [
-            str(exec_body.get("target_tab") or ""),
+            execute_target_page(exec_body),
             labels_map.get(to_state, ""),
             to_state.split(".")[-1],
         ]
@@ -356,8 +360,10 @@ def enrich_ui_logic_edges(doc: dict[str, Any]) -> dict[str, Any]:
 
         if eid.startswith("edge.tab."):
             dst = str(row.get("to") or "")
-            tab = str(exec_body.get("target_tab") or labels.get(dst) or dst.split(".")[-1])
-            action = f"点击 Tab · {tab}"
+            from mino_nexus.services.nav_execute import execute_target_page
+
+            tab = execute_target_page(exec_body) or labels.get(dst) or dst.split(".")[-1]
+            action = f"点击页 · {tab}"
             action_kind = "tap_tab"
         elif meta.get("reason") == "tab_sub_enter":
             action = "进入子页"
@@ -375,8 +381,10 @@ def enrich_ui_logic_edges(doc: dict[str, Any]) -> dict[str, Any]:
         elif steps:
             step = str(steps[0] or "")
             if step == "tap_element":
-                tab = str(exec_body.get("target_tab") or "")
-                action = f"点击 Tab · {tab}" if tab else "点击"
+                from mino_nexus.services.nav_execute import execute_target_page
+
+                tab = execute_target_page(exec_body)
+                action = f"点击页 · {tab}" if tab else "点击"
                 action_kind = "tap"
             elif step == "swipe_direction":
                 d = str(exec_body.get("direction") or scroll.get("direction") or "")
@@ -725,8 +733,13 @@ def get_live_graph(
         "turns_system_skipped": max(0, len(ordered) - len(app_turns)),
         "target_scope": scope.as_dict() if scope else {},
     }
-    synthesized = build_fsm_from_captures(app_id, project_id=project_id)
-    source = "capture_synthesis" if synthesized else "published"
+    from mino_nexus.services import nav_screen_registry as atlas_reg
+
+    synthesized = atlas_reg.atlas_doc_for_navigation(app_id, project_id=project_id)
+    source = "screen_atlas" if synthesized else ""
+    if not synthesized:
+        synthesized = build_fsm_from_captures(app_id, project_id=project_id)
+        source = "capture_synthesis" if synthesized else "published"
 
     if synthesized:
         synthesized = merge_localize_orphans(synthesized, ordered)

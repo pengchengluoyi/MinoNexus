@@ -84,7 +84,10 @@ def _screen_score(localized: dict[str, Any] | None, state_id: str) -> float:
         if not isinstance(row, dict):
             continue
         if str(row.get("state_id") or "").strip() == state_id:
-            return float(row.get("confidence") or 0.0)
+            conf = float(row.get("confidence") or 0.0)
+            sig = row.get("signals") if isinstance(row.get("signals"), dict) else {}
+            sk = float(sig.get("skeleton_wireframe") or 0.0)
+            return max(conf, sk)
     return 0.0
 
 
@@ -146,6 +149,17 @@ def resolve_state_fuzzy(
     looks_like_id = raw.startswith("page.") or raw.startswith("tab_")
     min_name = 0.55 if role == "to" else 0.5
     if best_name < min_name:
+        from mino_nexus.services.nav_edge_resolve import resolve_state_via_nav_edges
+
+        edge_out = resolve_state_via_nav_edges(fsm, raw, role=role)
+        if edge_out.state_id:
+            edge_out = ResolveOutcome(
+                edge_out.state_id,
+                name_score=edge_out.name_score,
+                screen_score=_screen_score(localized, edge_out.state_id),
+                method=edge_out.method,
+            )
+            return edge_out
         return ResolveOutcome("", name_score=best_name, screen_score=best_screen, method="no_match")
 
     if role == "from" and not looks_like_id:
@@ -177,6 +191,15 @@ def plan_route_resolved(
     from mino_nexus.services.nav_route import plan_route
 
     from_out = resolve_state_fuzzy(fsm, from_ref, localized=localized, role="from")
+    chosen = str((localized or {}).get("chosen") or "").strip()
+    ch_conf = float((localized or {}).get("confidence") or 0.0)
+    if from_ref and not from_out.state_id and chosen and ch_conf >= 0.35 and F.state_by_id(fsm, chosen):
+        from_out = ResolveOutcome(
+            chosen,
+            name_score=from_out.name_score,
+            screen_score=ch_conf,
+            method="localized_chosen",
+        )
     to_out = resolve_state_fuzzy(fsm, to_ref, localized=localized, role="to")
     meta = {
         "from_ref": from_ref,

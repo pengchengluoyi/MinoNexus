@@ -107,6 +107,19 @@ def assemble_json_chat_slots(*, user_payload: str) -> dict[str, str]:
     return {"user_payload": user_payload or "{}"}
 
 
+def assemble_atlas_morph_slots(
+    *,
+    context_json: str,
+    image_base64: str = "",
+    image_mime: str = "image/jpeg",
+) -> dict[str, str]:
+    return {
+        "context_json": (context_json or "").strip() or "{}",
+        "image_base64": image_base64 or "",
+        "image_mime": image_mime or "image/jpeg",
+    }
+
+
 def assemble_widget_state_slots(
     *,
     widget: str,

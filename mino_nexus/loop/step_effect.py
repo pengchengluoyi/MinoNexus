@@ -73,10 +73,24 @@ def probe(expected: str, nodes: list[dict[str, Any]]) -> tuple[bool, list[str]]:
     return bool(hits), hits
 
 
-def achievement_hint(keywords: list[str]) -> str:
+def _expects_full_page_navigation(expected: str) -> bool:
+    exp = str(expected or "").strip()
+    if not exp:
+        return False
+    if any(token in exp for token in ("跳转到", "切换到", "进入", "打开")):
+        return True
+    return "页面" in exp and len(exp) >= 8
+
+
+def achievement_hint(keywords: list[str], *, expected: str = "") -> str:
     if not keywords:
         return ""
     shown = " / ".join(str(k) for k in keywords[:6])
+    if _expects_full_page_navigation(expected) and all(len(str(k)) <= 4 for k in keywords):
+        return (
+            f"【达成提示·弱】屏上可见「{shown}」等文案，可能仅为底栏 Tab，不等于已进入目标页。"
+            f"若步骤要求进入完整页面，请继续 fsm_navigate 或点击目标 Tab；勿仅因此 signal_done。"
+        )
     return (
         f"【达成提示】本步预期已在屏上出现（命中：{shown}）。"
         f"若无其它待办，立即 signal_done。"

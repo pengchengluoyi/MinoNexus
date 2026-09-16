@@ -137,6 +137,7 @@ def chrome_cluster_discriminator(
 
 STRUCT_MIN_REGION_KEYS = 3
 WIRE_FRAME_MERGE_JACCARD = 0.65
+MORPH_JACCARD_MIN = 0.35
 
 
 def region_key_structural(region: dict[str, Any], *, grid: float = 0.08) -> str:
@@ -182,6 +183,33 @@ def structural_cluster_token(wireframe: dict[str, Any] | None) -> str:
     if keys:
         return _short_hash(f"sparse|{'|'.join(keys)}", 10)
     return wireframe_structure_signature(wireframe)
+
+
+def should_coalesce_morph_clusters(
+    wireframes: list[dict[str, Any] | None],
+    clusters: list[list[int]],
+) -> bool:
+    """同 chrome、内容 Jaccard 在 morph 带内 → 不拆 *-sN。"""
+    if len(clusters) <= 1:
+        return False
+    chrome: set[str] = set()
+    indices: list[int] = []
+    for cl in clusters:
+        for i in cl:
+            indices.append(i)
+            if 0 <= i < len(wireframes):
+                chrome.add(shell_cluster_signature(wireframes[i]))
+    if len(chrome) != 1:
+        return False
+    pairs: list[float] = []
+    for a in indices:
+        for b in indices:
+            if a < b:
+                pairs.append(wireframe_jaccard(wireframes[a], wireframes[b]))
+    if not pairs:
+        return False
+    mn, mx = min(pairs), max(pairs)
+    return mn >= MORPH_JACCARD_MIN and mx < WIRE_FRAME_MERGE_JACCARD
 
 
 def split_indices_by_wireframe_similarity(

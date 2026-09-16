@@ -31,16 +31,20 @@ def screen_size(nodes: list[dict[str, Any]]) -> tuple[int, int]:
     return w or 1080, h or 1920
 
 
+# 屏面内容区默认下沿（归一化 y）。0.88 会把底栏上方约 10% 正文误裁进 chrome 带。
+DEFAULT_CONTENT_BOTTOM = 0.96
+
+
 def sanitize_chrome(chrome: dict[str, Any] | None) -> dict[str, float]:
     if not isinstance(chrome, dict):
-        return {"top": 0.06, "bottom": 0.88}
+        return {"top": 0.06, "bottom": DEFAULT_CONTENT_BOTTOM}
     top = float(chrome.get("top") or 0.06)
-    bottom = float(chrome.get("bottom") or 0.88)
+    bottom = float(chrome.get("bottom") or DEFAULT_CONTENT_BOTTOM)
     if top > 0.22 or bottom < 0.55 or top >= bottom:
         if top > 0.5 and bottom > 0.85:
-            top, bottom = 0.06, 0.88
+            top, bottom = 0.06, DEFAULT_CONTENT_BOTTOM
         elif top >= bottom:
-            top, bottom = 0.06, 0.88
+            top, bottom = 0.06, DEFAULT_CONTENT_BOTTOM
     top = max(0.0, min(0.22, top))
     bottom = max(0.55, min(1.0, bottom))
     bottom = max(top + 0.1, bottom)
@@ -123,7 +127,7 @@ def collapse_system_chrome_regions(wf: dict[str, Any]) -> dict[str, Any]:
     out = dict(wf or {})
     chrome = sanitize_chrome(out.get("chrome"))
     top = float(chrome.get("top") or 0.06)
-    bottom = float(chrome.get("bottom") or 0.88)
+    bottom = float(chrome.get("bottom") or DEFAULT_CONTENT_BOTTOM)
     regions = list(out.get("regions") or [])
     if not regions:
         out["chrome"] = chrome
@@ -178,7 +182,9 @@ def infer_content_bands(nodes: list[dict[str, Any]]) -> dict[str, Any]:
             bottom_candidates.append(y1)
 
     content_top_px = max(top_candidates) if top_candidates else int(screen_h * 0.06)
-    content_bottom_px = min(bottom_candidates) if bottom_candidates else int(screen_h * 0.88)
+    content_bottom_px = (
+        min(bottom_candidates) if bottom_candidates else int(screen_h * DEFAULT_CONTENT_BOTTOM)
+    )
     content_top_px = max(0, min(content_top_px, screen_h - 1))
     content_bottom_px = max(content_top_px + 1, min(content_bottom_px, screen_h))
 
@@ -448,7 +454,7 @@ def normalize_vision_layout(raw: dict[str, Any], *, screen_w: int, screen_h: int
         return {}
     chrome = raw.get("chrome") if isinstance(raw.get("chrome"), dict) else {}
     top = float(chrome.get("top") or raw.get("content_top") or 0.06)
-    bottom = float(chrome.get("bottom") or raw.get("content_bottom") or 0.88)
+    bottom = float(chrome.get("bottom") or raw.get("content_bottom") or DEFAULT_CONTENT_BOTTOM)
     top = max(0.0, min(1.0, top))
     bottom = max(top + 0.01, min(1.0, bottom))
 

@@ -454,6 +454,12 @@ def build_fsm_from_captures(app_id: str, *, project_id: str = "") -> dict[str, A
     if len(synth_turns) < 2:
         return None
 
+    from mino_nexus.services import nav_screen_registry as atlas_reg
+
+    atlas_doc = atlas_reg.atlas_doc_for_navigation(app_id, project_id=project_id)
+    if atlas_doc:
+        return atlas_doc
+
     from mino_nexus.services.nav_synthesis import build_from_tab_bar
 
     tab_doc = build_from_tab_bar(
@@ -1259,6 +1265,11 @@ def prepare_publish(
     else:
         result_source = "template_autofill"
     draft = finalize_for_publish(app_id, draft)
+    from mino_nexus.services.nav_alias_governance import apply_governance_to_doc
+    from mino_nexus.services.nav_edge_resolve import enrich_state_aliases_from_nav_edges
+
+    draft, _ = apply_governance_to_doc(app_id, draft)
+    draft, _ = enrich_state_aliases_from_nav_edges(draft)
     saved = calib.save_draft(app_id, draft)
     pending = tpl.pending_marks(saved)
 

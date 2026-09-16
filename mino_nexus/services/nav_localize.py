@@ -20,12 +20,19 @@ from mino_nexus.loop.hierarchy_slots import match_any, node_matches
 # 默认权重，与设计稿 §2.2 的「高/中/低」对应
 DEFAULT_WEIGHTS: dict[str, float] = {
     "session": 1.0,
+    "skeleton_wireframe": 0.88,
     "tab_bar": 0.9,
     "layout_framework": 0.85,
     "text_landmarks": 0.7,
+    "vlm_landmarks": 0.78,
     "history": 0.6,
     "phash_delta": 0.2,
 }
+
+_DEGRADED_CONF_CAP = 0.72
+_LOW_FEED_CAP = 0.55
+_LOW_INFINITE_WIDTH_CAP = 0.60
+_NAV_STABLE_FIXED_CAP = 0.85
 
 BAND_HIGH = 0.75
 BAND_LOW = 0.45
@@ -55,11 +62,14 @@ def localize(
     last_edge_passed: bool = False,
     weights: dict[str, float] | None = None,
     extra_signals: dict[str, dict[str, float]] | None = None,
+    state_wireframes: dict[str, Any] | None = None,
+    current_wireframe: dict[str, Any] | None = None,
+    hierarchy_weak: bool = False,
 ) -> dict[str, Any]:
     """返回 §2.1 的输出形状。`extra_signals` 形如 `{state_id: {"vlm_screen": 0.8}}`。"""
     w = {**DEFAULT_WEIGHTS, **(weights or {})}
     nodes = list(nodes or [])
-    degraded = not nodes
+    degraded = not nodes or bool(hierarchy_weak and nodes)
 
     candidates: list[dict[str, Any]] = []
     for state in states or []:
@@ -76,6 +86,14 @@ def localize(
         )
         for name, val in (extra_signals or {}).get(sid, {}).items():
             signals[name] = float(val)
+        if state_wireframes and current_wireframe and isinstance(current_wireframe, dict):
+            ref = state_wireframes.get(sid)
+            if isinstance(ref, dict) and ref.get("regions"):
+                from mino_nexus.services.nav_app_skeleton import wireframe_jaccard
+
+                j = wireframe_jaccard(current_wireframe, ref)
+                if j > 0:
+                    signals["skeleton_wireframe"] = float(j)
         conf = _weighted(signals, w)
         if required_miss:
             conf *= _REQUIRED_MISS_FACTOR
@@ -95,7 +113,7 @@ def localize(
     ambiguous = bool(
         top and second and (conf - float(second["confidence"])) < _AMBIGUOUS_DELTA and conf > 0
     )
-    return {
+    result = {
         "candidates": candidates[:5],
         "chosen": str(top["state_id"]) if top and conf > 0 else "",
         "confidence": round(conf, 4),
@@ -103,6 +121,53 @@ def localize(
         "band": band_of(conf),
         "degraded": degraded,
     }
+    return result
+
+
+def apply_evidence_policy(
+    localized: dict[str, Any],
+    *,
+    state_meta: dict[str, Any] | None = None,
+    fsm_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """按 hierarchy 质量、证据 tier、layout_extent 封顶置信（方案二 M1）。"""
+    from mino_nexus.services.nav_viewport import evidence_tier_from_counts
+
+    out = dict(localized or {})
+    meta = dict(state_meta or {})
+    conf = float(out.get("confidence") or 0.0)
+    cap = 1.0
+    notes: list[str] = []
+
+    if out.get("degraded"):
+        cap = min(cap, _DEGRADED_CONF_CAP)
+        notes.append("结构定位，待 hierarchy/VLM 印证")
+
+    morph_count = int(meta.get("morph_count") or 0)
+    tier = evidence_tier_from_counts(
+        visit_count=int(meta.get("visit_count") or 0),
+        session_count=int(meta.get("session_count") or 0),
+        morph_count=morph_count,
+    )
+    layout_class = str(meta.get("layout_class") or "")
+    extent = meta.get("layout_extent") if isinstance(meta.get("layout_extent"), dict) else {}
+    width_inf = str(extent.get("width") or "") == "infinite"
+
+    nav_stable = bool((fsm_meta or {}).get("nav_stable"))
+    if nav_stable and layout_class == "fixed_viewport":
+        cap = min(cap, _NAV_STABLE_FIXED_CAP)
+    elif tier == "low" and layout_class == "infinite_feed":
+        cap = min(cap, _LOW_FEED_CAP)
+    elif tier == "low" and width_inf:
+        cap = min(cap, _LOW_INFINITE_WIDTH_CAP)
+
+    if cap < 1.0 and conf > cap:
+        out["confidence"] = round(min(conf, cap), 4)
+        out["band"] = band_of(float(out["confidence"]))
+    out["evidence_tier"] = tier
+    if notes:
+        out["policy_note"] = "；".join(notes)
+    return out
 
 
 def _weighted(signals: dict[str, float], weights: dict[str, float]) -> float:

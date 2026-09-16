@@ -349,11 +349,15 @@ class StepCursor:
         if self.phase == "do":
             self.step_start_fp = str(fp or "").strip()
 
-    def note_step_effect_hit(self, keywords: list[str]) -> None:
+    def note_step_effect_hit(self, keywords: list[str], *, expected: str = "") -> None:
         from mino_nexus.loop.step_effect import achievement_hint
 
+        cur = self.current()
+        exp = str(expected or "").strip()
+        if not exp and cur is not None:
+            exp = str(cur.expected or "").strip()
         self.step_effect_hit_streak += 1
-        self.step_effect_hint = achievement_hint(keywords)
+        self.step_effect_hint = achievement_hint(keywords, expected=exp)
 
     def reset_step_effect_streak(self) -> None:
         self.step_effect_hit_streak = 0

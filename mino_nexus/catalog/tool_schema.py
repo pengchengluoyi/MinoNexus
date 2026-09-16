@@ -174,11 +174,11 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
         "properties": {
             "from_state": {
                 "type": "string",
-                "description": "当前屏 state_id 或 Tab 文案（如「首页」）",
+                "description": "当前逻辑页 state_id（page.sk*）或展示名/别名",
             },
             "to_state": {
                 "type": "string",
-                "description": "目标屏 state_id 或 Tab 文案",
+                "description": "目标逻辑页 state_id 或展示名/别名",
             },
             "current_state": {
                 "type": "string",
@@ -189,7 +189,7 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
                 "description": "同 to_state",
             },
         },
-        "description": "按 NavFSM 路线图规划最短路（底栏 Tab 切换等）",
+        "description": "按 NavFSM 路线图规划最短路并执行第一步点击（目标为逻辑页 target_page，非仅底栏 Tab）",
     },
 }
 
@@ -199,13 +199,54 @@ SIGNAL_ASK_HUMAN = "signal_ask_human"
 SIGNAL_SKIP = "signal_skip"
 CONTROL_TOOL_NAMES = frozenset({SIGNAL_DONE, SIGNAL_GIVE_UP, SIGNAL_ASK_HUMAN, SIGNAL_SKIP})
 
+_TOOL_META_PROPS: dict[str, Any] = {
+    "thought": {
+        "type": "string",
+        "description": "一两句：当前屏是什么、为什么调这个工具。不要写长推理。",
+    },
+    "expected_after": {
+        "type": "string",
+        "description": "执行后界面大概会变成什么样（给自己看，不是校验结论）",
+    },
+    "remember": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "本步要记住、后面还要用的事实",
+    },
+    "knowledge_ids": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "还需某条知识原文时填写 id",
+    },
+    "screen_layout": {
+        "type": "object",
+        "description": "当前屏内容区布局线框（chrome+regions，坐标 0~1），与 capability 同轮必填",
+    },
+    "vlm_hierarchy": {
+        "type": "object",
+        "description": "VLM 可见控件树（nodes≤40），与 screen_layout 同轮必填",
+    },
+}
+
+
+def _with_tool_meta(parameters: dict[str, Any]) -> dict[str, Any]:
+    spec = dict(parameters or {"type": "object", "properties": {}})
+    props = dict(spec.get("properties") or {})
+    for key, schema in _TOOL_META_PROPS.items():
+        if key not in props:
+            props[key] = schema
+    spec["type"] = spec.get("type") or "object"
+    spec["properties"] = props
+    return spec
+
+
 CONTROL_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
             "name": SIGNAL_DONE,
             "description": "本步操作已经做完，不要再点。不是整案完成，也不是校验通过。",
-            "parameters": {
+            "parameters": _with_tool_meta({
                 "type": "object",
                 "properties": {
                     "thought": {"type": "string"},
@@ -219,7 +260,7 @@ CONTROL_TOOLS: list[dict[str, Any]] = [
                         "items": {"type": "string"},
                     },
                 },
-            },
+            }),
         },
     },
     {
@@ -227,11 +268,11 @@ CONTROL_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": SIGNAL_GIVE_UP,
             "description": "客观做不到本步（缺账号、缺入口、设备不对）。不要用这个表示校验失败。",
-            "parameters": {
+            "parameters": _with_tool_meta({
                 "type": "object",
                 "properties": {"thought": {"type": "string"}},
                 "required": ["thought"],
-            },
+            }),
         },
     },
     {
@@ -239,7 +280,7 @@ CONTROL_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": SIGNAL_ASK_HUMAN,
             "description": "需要人提供能填进界面的信息。禁止让人去设备上点。已租账号时不要用这个要手机号或验证码。",
-            "parameters": {
+            "parameters": _with_tool_meta({
                 "type": "object",
                 "properties": {
                     "thought": {"type": "string"},
@@ -247,7 +288,7 @@ CONTROL_TOOLS: list[dict[str, Any]] = [
                     "field": {"type": "string", "enum": ["sms_code", "phone", "text"]},
                 },
                 "required": ["question"],
-            },
+            }),
         },
     },
     {
@@ -255,7 +296,7 @@ CONTROL_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": SIGNAL_SKIP,
             "description": "本条用例在当前设备/渠道客观无法执行（渠道不对、缺专属入口等），跳过并写明原因。",
-            "parameters": {
+            "parameters": _with_tool_meta({
                 "type": "object",
                 "properties": {
                     "thought": {"type": "string"},
@@ -265,7 +306,7 @@ CONTROL_TOOLS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["reason"],
-            },
+            }),
         },
     },
 ]
@@ -307,39 +348,6 @@ def params_schema_for(cap_id: str, catalog_params: Any = None) -> dict[str, Any]
     if from_catalog:
         return from_catalog
     return dict(PARAM_DEFAULTS.get(str(cap_id or ""), {"type": "object", "properties": {}}))
-
-
-_TOOL_META_PROPS: dict[str, Any] = {
-    "thought": {
-        "type": "string",
-        "description": "一两句：当前屏是什么、为什么调这个工具。不要写长推理。",
-    },
-    "expected_after": {
-        "type": "string",
-        "description": "执行后界面大概会变成什么样（给自己看，不是校验结论）",
-    },
-    "remember": {
-        "type": "array",
-        "items": {"type": "string"},
-        "description": "本步要记住、后面还要用的事实",
-    },
-    "knowledge_ids": {
-        "type": "array",
-        "items": {"type": "string"},
-        "description": "还需某条知识原文时填写 id",
-    },
-}
-
-
-def _with_tool_meta(parameters: dict[str, Any]) -> dict[str, Any]:
-    spec = dict(parameters or {"type": "object", "properties": {}})
-    props = dict(spec.get("properties") or {})
-    for key, schema in _TOOL_META_PROPS.items():
-        if key not in props:
-            props[key] = schema
-    spec["type"] = spec.get("type") or "object"
-    spec["properties"] = props
-    return spec
 
 
 def openai_tool(name: str, description: str, parameters: dict[str, Any]) -> dict[str, Any]:
@@ -393,6 +401,47 @@ def tools_chat_payload(tools: list[dict[str, Any]], *, required: bool = True) ->
     }
 
 
+_VISUAL_ENVELOPE_KEYS = ("screen_layout", "vlm_hierarchy")
+
+
+def _pop_visual_envelope(args: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key in _VISUAL_ENVELOPE_KEYS:
+        if key not in args:
+            continue
+        val = args.pop(key)
+        if isinstance(val, dict) and val:
+            out[key] = val
+    return out
+
+
+def merge_decision_visual_fields(
+    decision: dict[str, Any],
+    *,
+    content: str = "",
+) -> dict[str, Any]:
+    """tool call 决策与正文 JSON 中的 screen_layout / vlm_hierarchy 合并（正文补全 tool 缺项）。"""
+    if not isinstance(decision, dict):
+        return decision
+    extra: Optional[dict[str, Any]] = None
+    text = str(content or "").strip()
+    if text:
+        try:
+            from mino_nexus.ai.llm_client import _extract_first_json_object
+
+            extra = _extract_first_json_object(text)
+        except Exception:
+            extra = None
+    if isinstance(extra, dict):
+        for key in _VISUAL_ENVELOPE_KEYS:
+            val = extra.get(key)
+            if not isinstance(val, dict) or not val:
+                continue
+            if not decision.get(key):
+                decision[key] = val
+    return decision
+
+
 def _args_of(call: dict[str, Any]) -> dict[str, Any]:
     fn = call.get("function") if isinstance(call.get("function"), dict) else {}
     raw = fn.get("arguments")
@@ -428,6 +477,7 @@ def decision_from_tool_calls(
     fn = call.get("function") if isinstance(call.get("function"), dict) else {}
     name = str(fn.get("name") or "").strip()
     args = _args_of(call)
+    envelope = _pop_visual_envelope(args)
     thought = str(args.pop("thought", "") or content or "").strip()
     remember = args.pop("remember", None)
     knowledge_ids = args.pop("knowledge_ids", None)
@@ -440,6 +490,7 @@ def decision_from_tool_calls(
         "knowledge_ids": knowledge_ids if isinstance(knowledge_ids, list) else [],
         "_tool_name": name,
     }
+    out.update(envelope)
     if name == SIGNAL_DONE:
         out["status"] = "done"
         return out

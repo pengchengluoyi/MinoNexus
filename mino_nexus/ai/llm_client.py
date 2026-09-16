@@ -782,8 +782,11 @@ def _parse_chat_json(
     if tool_calls:
         from mino_nexus.catalog.tool_schema import decision_from_tool_calls
 
+        from mino_nexus.catalog.tool_schema import merge_decision_visual_fields
+
         parsed_tools = decision_from_tool_calls(tool_calls, content=content)
         if parsed_tools:
+            merge_decision_visual_fields(parsed_tools, content=content)
             meta["used_tool_calls"] = True
             meta["tool_name"] = str(parsed_tools.get("_tool_name") or "")
             return parsed_tools, content

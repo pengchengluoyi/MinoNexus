@@ -29,6 +29,16 @@ def agent_step_idx(case_seq: int, turn: int) -> int:
     return frame_step(case_seq, slot)
 
 
+def recovery_action_step_idx(case_seq: int, agent_turn: int, action_idx: int) -> int:
+    """Recovery 规则内子动作的 step_idx，与 agent 回合 / fsm 内嵌 tap 的幂等键错开。
+
+    Scout 以 (run_id, step_idx) 缓存 RESULT；若 recovery 复用 agent_step_idx(case, 1..3)，
+    会误命中同回合 fsm_navigate 的 tap_element 缓存（表现为 close_app/launch_app「无坐标」）。
+    """
+    base = FRAME_STEP + max(0, int(case_seq)) * 10 + 40
+    return base + max(0, int(agent_turn)) * 5 + max(1, int(action_idx))
+
+
 def is_web_context(ctx: Any) -> bool:
     return is_web_slot(
         str(getattr(ctx, "sn", "") or ""),

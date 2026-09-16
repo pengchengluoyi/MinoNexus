@@ -98,10 +98,23 @@ class NavRuntime:
         if run_kind == "explore":
             fsm, reason = None, "explore_capture_only"
         else:
-            fsm, reason = store.load_with_reason(app_id, expected_account_id=account_id)
+            from mino_nexus.services.nav_route import load_fsm_doc
+
+            fsm, nav_src = load_fsm_doc(app_id, project_id=project_id, use_live=True)
+            reason = ""
+            if not fsm:
+                fsm, reason = store.load_with_reason(app_id, expected_account_id=account_id)
+                nav_src = "published"
+            else:
+                scope_reason = store.account_scope_reason(fsm, expected_account_id=account_id)
+                if scope_reason:
+                    fsm, reason = None, scope_reason
+                    nav_src = ""
             if reason:
                 level = SLog.w if "没有 nav_fsm 配置" not in reason else SLog.d
                 level(TAG, f"NavFSM 不可用 app_id={app_id}: {reason}")
+            elif fsm and nav_src:
+                SLog.d(TAG, f"NavFSM app_id={app_id} source={nav_src}")
         inst = cls(
             app_id=app_id,
             project_id=project_id,
@@ -148,10 +161,34 @@ class NavRuntime:
                 pass
 
         nodes = snap.nodes if snap.usable() else []
+        hierarchy_weak = bool(
+            snap.ok and nodes and len(str(snap.text or "").strip()) < 24
+        )
         if not self.active:
             slot_sink["nav_assist"] = ""
             self._record_capture(snap, writer=writer, localized={}, screenshot=screenshot)
             return snap
+
+        meta = self.fsm.get("meta") if isinstance(self.fsm.get("meta"), dict) else {}
+        state_wfs = meta.get("state_wireframes") if isinstance(meta.get("state_wireframes"), dict) else {}
+        cur_wf: dict[str, Any] = {}
+        if nodes:
+            from mino_nexus.services.nav_screen_layout import wireframe_from_hierarchy
+
+            cur_wf = wireframe_from_hierarchy(nodes)
+        vlm_h = getattr(self, "_pending_vlm_hierarchy", None)
+        if isinstance(vlm_h, dict) and vlm_h.get("nodes"):
+            from mino_nexus.services.nav_vlm_hierarchy import (
+                merge_vlm_into_nodes,
+                vlm_landmark_signals_for_states,
+            )
+
+            if not nodes or bool(vlm_h.get("degraded_scout")):
+                nodes = merge_vlm_into_nodes(nodes, list(vlm_h.get("nodes") or []))
+            extra_vlm = vlm_landmark_signals_for_states(self.fsm.get("states") or [], vlm_h)
+        else:
+            extra_vlm = None
+        self._pending_vlm_hierarchy = None
 
         self.localized = nav_localize.localize(
             states=self.fsm.get("states") or [],
@@ -159,6 +196,20 @@ class NavRuntime:
             session_block=session_block,
             last_edge_to=self._last_edge_to,
             last_edge_passed=self._last_edge_passed,
+            state_wireframes=state_wfs,
+            current_wireframe=cur_wf,
+            extra_signals=extra_vlm,
+            hierarchy_weak=hierarchy_weak,
+        )
+        chosen_pre = str(self.localized.get("chosen") or "")
+        st_pre = F.state_by_id(self.fsm or {}, chosen_pre)
+        st_meta = (st_pre.get("meta") if isinstance(st_pre, dict) else None) or {}
+        if not isinstance(st_meta, dict):
+            st_meta = {}
+        self.localized = nav_localize.apply_evidence_policy(
+            self.localized,
+            state_meta=st_meta,
+            fsm_meta=meta,
         )
 
         if not self._preflight_done and nodes:
@@ -201,6 +252,7 @@ class NavRuntime:
             app_id=self.app_id,
             project_id=self.project_id,
             run_type=self.run_type,
+            localized=self.localized,
         )
         self._record_capture(snap, writer=writer, localized=self.localized, screenshot=screenshot)
         return snap
@@ -220,6 +272,22 @@ class NavRuntime:
             )
         except Exception as exc:  # noqa: BLE001
             SLog.w(TAG, f"写入 VLM 布局失败（跑批继续）：{type(exc).__name__}: {exc}")
+
+    def attach_turn_vlm_hierarchy(self, turn_id: int, vlm_hierarchy: dict[str, Any] | None) -> None:
+        """agent-decide v10：VLM hierarchy 写入 capture turn meta。"""
+        if not self.session_id or not vlm_hierarchy:
+            return
+        from mino_nexus.services import nav_capture_store as cap_store
+
+        try:
+            cap_store.patch_turn_vlm_hierarchy(
+                self.app_id,
+                self.session_id,
+                int(turn_id),
+                vlm_hierarchy=vlm_hierarchy,
+            )
+        except Exception as exc:  # noqa: BLE001
+            SLog.w(TAG, f"写入 vlm_hierarchy 失败（跑批继续）：{type(exc).__name__}: {exc}")
 
     def _run_preflight(self, nodes: list[dict[str, Any]], *, writer: Any = None) -> None:
         """跑前租号初态（§11.2）。只跑一次；mismatch 记到 `_preflight_block` 供主循环退出。"""

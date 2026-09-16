@@ -201,7 +201,9 @@ def extract_tab_bar_slots(
         band = infer_tab_bar_band(nodes)
         band_top = int(band.get("band_top_px") or 0)
         band_bottom = int(band.get("band_bottom_px") or 0)
-        if band_bottom < int(sh * 0.88):
+        from mino_nexus.services.nav_screen_layout import DEFAULT_CONTENT_BOTTOM
+
+        if band_bottom < int(sh * DEFAULT_CONTENT_BOTTOM):
             continue
         if band_top < int(sh * 0.78):
             continue
@@ -312,7 +314,9 @@ def extract_tab_bar_labels(
             continue
         sh = screen_size(nodes)[1] or 1920
         band = infer_tab_bar_band(nodes)
-        if int(band.get("band_bottom_px") or 0) < int(sh * 0.88):
+        from mino_nexus.services.nav_screen_layout import DEFAULT_CONTENT_BOTTOM
+
+        if int(band.get("band_bottom_px") or 0) < int(sh * DEFAULT_CONTENT_BOTTOM):
             continue
         row = [
             str(x).strip()
@@ -821,13 +825,13 @@ def build_from_tab_bar(
     nav_edges: list[dict[str, Any]] = []
     seen_edge: set[str] = set()
 
-    def _add_edge(eid: str, src: str, dst: str, *, target_tab: str = "", note: str = "") -> None:
+    def _add_edge(eid: str, src: str, dst: str, *, target_page: str = "", note: str = "") -> None:
         if not src or not dst or src == dst or eid in seen_edge:
             return
         seen_edge.add(eid)
         effect: list[dict[str, Any]] = []
-        if target_tab:
-            effect.append({"tab_bar": {"selected": target_tab}})
+        if target_page:
+            effect.append({"tab_bar": {"selected": target_page}})
         dst_screen = next((s for s in screens if s["id"] == dst), None)
         if dst_screen:
             fw = dst_screen.get("framework") or {}
@@ -845,10 +849,10 @@ def build_from_tab_bar(
                 "from": src,
                 "to": dst,
                 "guard": {},
-                "execute": {"steps": ["tap_element"], **({"target_tab": target_tab} if target_tab else {})},
+                "execute": {"steps": ["tap_element"], **({"target_page": target_page} if target_page else {})},
                 "effect_assert": {
                     "within_ms": 8000,
-                    "require_any": effect or [{"tab_bar": {"selected": target_tab}}] if target_tab else [],
+                    "require_any": effect or [{"tab_bar": {"selected": target_page}}] if target_page else [],
                     "require_none": [],
                     "state_delta": {},
                 },
@@ -867,7 +871,7 @@ def build_from_tab_bar(
                 f"edge.tab.{src_tab}_to_{dst_tab}",
                 src_id,
                 tab_entry_id[dst_tab],
-                target_tab=dst_tab,
+                target_page=dst_tab,
             )
 
     turn_state_ids: list[str] = []

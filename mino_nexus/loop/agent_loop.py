@@ -442,6 +442,7 @@ def _run_action(*, event: PlanEvent, shot, proxy: RouterProxy, ctx, scout_run_id
             RuleMatch(rule=rule, reasons=["agent"]),
             ctx, proxy,
             target_package=str(getattr(ctx, "target_package", "") or ""),
+            agent_turn=seq,
         )
     if is_local_cap(cap):
         return dispatch_local(
@@ -736,6 +737,8 @@ def _run_loop(
             case=case,
             provider_id=provider_id,
             slot_sink=inspect_slots,
+            nav=nav,
+            turn_id=0,
         )
         pre_hint = compile_login_session_hint(
             getattr(ctx, "case_scene", None),
@@ -793,6 +796,8 @@ def _run_loop(
                 provider_id=provider_id,
                 slot_sink=inspect_slots,
                 force=bool(last_phase_seen and last_phase_seen != cursor.phase),
+                nav=nav,
+                turn_id=seq,
             )
             ran_case_start_inspection = True
         else:
@@ -891,7 +896,10 @@ def _run_loop(
                     keywords=keywords,
                 )
                 if hit:
-                    cursor.note_step_effect_hit(keywords)
+                    cursor.note_step_effect_hit(
+                        keywords,
+                        expected=str(cur_probe.expected or ""),
+                    )
                     if cursor.step_effect_hit_streak >= 2 and cursor.phase == "do":
                         cursor.enter_check()
                         cursor.correction_hint = ""
@@ -918,6 +926,9 @@ def _run_loop(
             setattr(ctx, "nav_localized_confidence", float(nav.localized.get("confidence") or 0.0))
             setattr(ctx, "nav_localized", dict(nav.localized or {}))
             setattr(ctx, "nav_project_id", str(nav.project_id or ""))
+            snap = getattr(nav, "snapshot", None)
+            nodes = list(getattr(snap, "nodes", None) or []) if snap is not None else []
+            setattr(ctx, "nav_hierarchy_nodes", nodes)
         if nav is None or not nav.active:
             menu = [
                 c for c in menu
@@ -1051,6 +1062,26 @@ def _run_loop(
         )
         if nav is not None and decision.screen_layout:
             nav.attach_turn_layout(seq, decision.screen_layout)
+        vlm_h = decision.vlm_hierarchy if isinstance(decision.vlm_hierarchy, dict) else {}
+        if vlm_h.get("nodes"):
+            setattr(ctx, "nav_vlm_hierarchy", vlm_h)
+            if nav is not None:
+                nav._pending_vlm_hierarchy = vlm_h
+                nav.attach_turn_vlm_hierarchy(seq, vlm_h)
+            if writer:
+                tops = [
+                    str(n.get("text") or n.get("content_desc") or "")[:24]
+                    for n in (vlm_h.get("nodes") or [])[:6]
+                    if isinstance(n, dict)
+                ]
+                writer.append(
+                    "llm/decision",
+                    {
+                        "vlm_hierarchy_nodes": len(vlm_h.get("nodes") or []),
+                        "vlm_hierarchy_top": [t for t in tops if t],
+                        "degraded_scout": bool(vlm_h.get("degraded_scout")),
+                    },
+                )
 
         screen_fp = _screen_fp(shot, inspect_slots.get("hierarchy_text") or "")
 
