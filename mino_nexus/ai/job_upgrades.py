@@ -14,9 +14,12 @@ AGENT_DECIDE_V9_MARKER = "prompt_version >= 9（文档库 doc_context 摘录）"
 AGENT_DECIDE_V10_MARKER = "prompt_version >= 10（vlm_hierarchy）"
 AGENT_DECIDE_V11_MARKER = "prompt_version >= 11（screen_layout+vlm_hierarchy 每轮必填）"
 AGENT_DECIDE_V12_MARKER = "prompt_version >= 12（tool 参数承载 screen_layout）"
+AGENT_DECIDE_V13_MARKER = "prompt_version >= 13 (drop forced visual JSON)"
 DOC_CONTEXT_SLOT = "doc_context"
 ASSERT_VISION_V2_MARKER = "prompt_version >= 2（screen_layout 布局线框）"
+ASSERT_VISION_V3_MARKER = "prompt_version >= 3 (drop forced visual JSON)"
 INSPECT_SESSION_V2_MARKER = "prompt_version >= 2（screen_layout + vlm_hierarchy）"
+INSPECT_SESSION_V3_MARKER = "prompt_version >= 3 (drop forced visual JSON)"
 NAV_ASSIST_SLOT = "nav_assist"
 
 _SCREEN_LAYOUT_JSON_HINT = """
@@ -69,6 +72,8 @@ def _commit_job_upgrade(merged: dict[str, Any], job_id: str) -> None:
             db_row.slots_json = list(merged.get("slots") or [])
             db_row.prompt_version = int(merged.get("prompt_version") or 1)
             db_row.overrides_json = dict(merged.get("overrides_json") or {})
+            if merged.get("call"):
+                db_row.call_json = dict(merged.get("call") or {})
         db.flush()
 
 
@@ -700,6 +705,92 @@ def upgrade_agent_decide_to_v12() -> int:
     return 1
 
 
+def _strip_forced_visual_json(text: str) -> str:
+    """拿掉 v8–v12 要求每轮吐 screen_layout / vlm_hierarchy 的章节。"""
+    out = str(text or "")
+    out = re.sub(
+        r"\n*### screen_layout[\s\S]*?(?=\n### |\n<!-- prompt_version|\Z)",
+        "\n",
+        out,
+        flags=re.I,
+    )
+    out = re.sub(
+        r"\n*### vlm_hierarchy[\s\S]*?(?=\n### |\n<!-- prompt_version|\Z)",
+        "\n",
+        out,
+        flags=re.I,
+    )
+    out = re.sub(
+        r"\n*### 输出通道[\s\S]*?(?=\n### |\n<!-- prompt_version|\Z)",
+        "\n",
+        out,
+    )
+    return out.rstrip() + "\n"
+
+
+def _patch_agent_decide_v13(text: str) -> str:
+    out = _strip_forced_visual_json(text)
+    drop_note = (
+        "### 不要输出布局 JSON\n\n"
+        "Scout 已注入 hierarchy。不要输出 screen_layout、vlm_hierarchy，"
+        "也不要在 tool 参数里填这两项。只输出 thought 与能力参数。\n"
+    )
+    if "### 不要输出布局 JSON" not in out:
+        out = out.rstrip() + "\n\n" + drop_note
+    if AGENT_DECIDE_V13_MARKER not in out:
+        out = out.rstrip() + f"\n\n<!-- {AGENT_DECIDE_V13_MARKER} -->\n"
+    return out
+
+
+def _cap_call_tokens(merged: dict[str, Any], max_tokens: int) -> None:
+    call = dict(merged.get("call") or {})
+    call["max_tokens"] = int(max_tokens)
+    merged["call"] = call
+
+
+def upgrade_agent_decide_to_v13() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 13:
+        return 0
+    if int(row.get("prompt_version") or 1) < 12:
+        upgrade_agent_decide_to_v12()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_agent_decide_v13(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    _cap_call_tokens(merged, 768)
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 12),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v12 before drop forced screen_layout/vlm_hierarchy",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 13
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
+
+
 def upgrade_agent_decide_to_v11() -> int:
     from mino_nexus.services.job_store import (
         _blocks_snapshot,
@@ -805,6 +896,62 @@ def upgrade_inspect_session_to_v2() -> int:
     return 1
 
 
+def _patch_inspect_session_v3(text: str) -> str:
+    out = _strip_forced_visual_json(text)
+    drop_note = (
+        "### 不要输出布局 JSON\n\n"
+        "不要输出 screen_layout、vlm_hierarchy。只输出 session / identity / next / reason。\n"
+    )
+    if "### 不要输出布局 JSON" not in out:
+        out = out.rstrip() + "\n\n" + drop_note
+    if INSPECT_SESSION_V3_MARKER not in out:
+        out = out.rstrip() + f"\n\n<!-- {INSPECT_SESSION_V3_MARKER} -->\n"
+    return out
+
+
+def upgrade_inspect_session_to_v3() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("inspect-session")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 3:
+        return 0
+    if int(row.get("prompt_version") or 1) < 2:
+        upgrade_inspect_session_to_v2()
+        row = get_job("inspect-session") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_inspect_session_v3(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    _cap_call_tokens(merged, 320)
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 2),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v2 before drop forced screen_layout/vlm_hierarchy",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 3
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "inspect-session")
+    return 1
+
+
 def _patch_assert_vision_v2(text: str) -> str:
     out = str(text or "")
     if "### screen_layout" in out:
@@ -851,6 +998,62 @@ def upgrade_assert_vision_to_v2() -> int:
     from mino_nexus.models.llm_job import LlmJob
     from mino_nexus.services.job_store import _to_row
 
+    _commit_job_upgrade(merged, "assert-vision")
+    return 1
+
+
+def _patch_assert_vision_v3(text: str) -> str:
+    out = _strip_forced_visual_json(text)
+    drop_note = (
+        "### 不要输出布局 JSON\n\n"
+        "不要输出 screen_layout。只输出 passed / confidence / evidence / reasoning。\n"
+    )
+    if "### 不要输出布局 JSON" not in out:
+        out = out.rstrip() + "\n\n" + drop_note
+    if ASSERT_VISION_V3_MARKER not in out:
+        out = out.rstrip() + f"\n\n<!-- {ASSERT_VISION_V3_MARKER} -->\n"
+    return out
+
+
+def upgrade_assert_vision_to_v3() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("assert-vision")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 3:
+        return 0
+    if int(row.get("prompt_version") or 1) < 2:
+        upgrade_assert_vision_to_v2()
+        row = get_job("assert-vision") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_assert_vision_v3(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    _cap_call_tokens(merged, 320)
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 2),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v2 before drop forced screen_layout",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 3
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
     _commit_job_upgrade(merged, "assert-vision")
     return 1
 

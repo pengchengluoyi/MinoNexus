@@ -11,6 +11,7 @@ from mino_nexus.ai.schemas import AgentAction, AgentDecision
 from mino_nexus.catalog.exec_classes import MUTATE_CAPS
 from mino_nexus.loop.registry import apply_force_case_expectation, run_guards
 from mino_nexus.loop.inspections import (
+    _session_block_is_conclusive,
     expand_named_knowledge,
     match_stuck_docs,
     refresh_session_block,
@@ -44,7 +45,7 @@ from mino_nexus.core.protocol import EventStatus
 from mino_nexus.services.run_store import line_text, report_run_id
 from mino_nexus.runtime.run_context import build_run_context
 from mino_nexus.loop.web_env import agent_step_idx, cleanup_after_case, frame_step, reset_before_case
-from mino_nexus.loop.app_env import reset_native_app_before_case
+from mino_nexus.loop.app_env import launch_if_hierarchy_away, reset_native_app_before_case
 from mino_nexus.core.schemas import EventResult, PlanEvent
 
 TAG = "AgentLoop"
@@ -97,6 +98,25 @@ def _screen_fp(shot, hierarchy_text: str = "") -> str:
         width=int(getattr(shot, "width", 0) or 0),
         height=int(getattr(shot, "height", 0) or 0),
     )
+
+
+def _effect_nodes(nav, ctx, extra_vlm: Any = None) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+    snap = getattr(nav, "snapshot", None) if nav is not None else None
+    if snap is not None:
+        nodes = [n for n in (getattr(snap, "nodes", None) or []) if isinstance(n, dict)]
+    vlm = extra_vlm if isinstance(extra_vlm, dict) else getattr(ctx, "nav_vlm_hierarchy", None)
+    vlm_nodes = list((vlm or {}).get("nodes") or []) if isinstance(vlm, dict) else []
+    if not vlm_nodes:
+        return nodes
+    try:
+        from mino_nexus.services.nav_vlm_hierarchy import merge_vlm_into_nodes
+
+        merged = merge_vlm_into_nodes(nodes, vlm_nodes)
+        return [n for n in merged if isinstance(n, dict)]
+    except Exception as exc:  # noqa: BLE001
+        SLog.w(TAG, f"merge vlm hierarchy failed: {type(exc).__name__}: {exc}")
+        return nodes
 
 
 def _elapsed(t0: float) -> int:
@@ -727,6 +747,48 @@ def _run_loop(
     if fg_out:
         _log_preflight_recovery(fg_out, source="preflight_fg")
 
+    if not str(getattr(ctx, "app_version", "") or "").strip() and target_pkg:
+        from mino_nexus.runtime.run_context import stamp_app_version, version_from_execute_result
+
+        ver_event = PlanEvent(
+            seq=0,
+            capability_id="get_app_version",
+            event_kind="get_app_version",
+            params={"package": target_pkg},
+            ai_reasoning="prep：记录被测应用版本供导航视图与采集分桶",
+            label="读取应用版本",
+        )
+        ver_result = proxy.dispatch(ver_event, run_id=scout_run_id, step_idx=frame_step(case_seq, 1))
+        raw_ver = ver_result.raw_response if isinstance(getattr(ver_result, "raw_response", None), dict) else {}
+        ver = version_from_execute_result(raw_ver)
+        if not ver and ver_result.summary:
+            ver = str(ver_result.summary or "").strip()[:64]
+        if ver:
+            stamp_app_version(ctx, ver)
+            if writer:
+                writer.append("app/version", {"app_version": ver, "package": target_pkg})
+            history.append(
+                f"0. program → info: 本任务应用版本已确认：{ver}"
+                f"（包 {target_pkg}；无需看图，勿再调 get_app_version）"
+            )
+            if nav is not None:
+                try:
+                    from mino_nexus.services.nav_route import load_fsm_doc
+
+                    app_id = str(getattr(ctx, "app_id", "") or "")
+                    project_id = str(getattr(ctx, "project_id", "") or "")
+                    if app_id:
+                        fsm, _src = load_fsm_doc(
+                            app_id,
+                            project_id=project_id,
+                            use_live=False,
+                            app_version=ver,
+                        )
+                        if fsm:
+                            nav.fsm = fsm
+                except Exception:
+                    pass
+
     if cancel_check and cancel_check():
         return _leave(status="cancelled", summary="任务已取消")
 
@@ -740,6 +802,7 @@ def _run_loop(
             nav=nav,
             turn_id=0,
         )
+        ran_case_start_inspection = True
         pre_hint = compile_login_session_hint(
             getattr(ctx, "case_scene", None),
             inspect_slots.get("session_block") or "",
@@ -789,17 +852,23 @@ def _run_loop(
             return _leave(status="fail", summary=summary)
 
         if login_module_case and cursor.phase in ("prep", "do"):
-            refresh_session_block(
-                shot=shot,
-                ctx=ctx,
-                case=case,
-                provider_id=provider_id,
-                slot_sink=inspect_slots,
-                force=bool(last_phase_seen and last_phase_seen != cursor.phase),
-                nav=nav,
-                turn_id=seq,
-            )
-            ran_case_start_inspection = True
+            conclusive = _session_block_is_conclusive(inspect_slots.get("session_block") or "")
+            if conclusive:
+                ran_case_start_inspection = True
+            elif not ran_case_start_inspection or (
+                last_phase_seen and last_phase_seen != cursor.phase
+            ):
+                refresh_session_block(
+                    shot=shot,
+                    ctx=ctx,
+                    case=case,
+                    provider_id=provider_id,
+                    slot_sink=inspect_slots,
+                    force=False,
+                    nav=nav,
+                    turn_id=seq,
+                )
+                ran_case_start_inspection = True
         else:
             if not ran_case_start_inspection:
                 run_inspections(
@@ -868,43 +937,102 @@ def _run_loop(
             if cursor.done:
                 return _leave(status="pass", summary=cursor.summary(), pack=_pack())
 
+        if not is_explore and cursor.phase in ("prep", "do"):
+            hier_nodes: list[Any] = []
+            if nav is not None:
+                snap = getattr(nav, "snapshot", None)
+                hier_nodes = list(getattr(snap, "nodes", None) or []) if snap is not None else []
+            launched = launch_if_hierarchy_away(
+                proxy,
+                ctx,
+                run_id=scout_run_id,
+                case_seq=case_seq,
+                nodes=hier_nodes,
+            )
+            if launched:
+                rec(
+                    seq,
+                    capability_id="launch_app",
+                    status=str(launched.get("status") or "pass"),
+                    summary=str(launched.get("summary") or ""),
+                    thought=str(launched.get("summary") or ""),
+                    thumb=thumb,
+                    executor_used="adb",
+                )
+                emit(
+                    "result",
+                    thought=str(launched.get("summary") or ""),
+                    step=seq,
+                    capability_id="launch_app",
+                    status=str(launched.get("status") or "pass"),
+                    summary=str(launched.get("summary") or ""),
+                    thumb=thumb,
+                )
+                _log_turn_end(
+                    writer,
+                    cap="launch_app",
+                    status=str(launched.get("status") or "pass"),
+                )
+                continue
+
         screen_fp_turn = _screen_fp(shot, inspect_slots.get("hierarchy_text") or "")
         if not is_explore and isinstance(cursor, StepCursor):
             if cursor.phase == "do" and not cursor.step_start_fp:
                 cursor.refresh_step_start_fp(screen_fp_turn)
             cur_probe = cursor.current()
-            probe_nodes: list[dict[str, Any]] = []
-            if nav is not None and nav.snapshot.usable():
-                probe_nodes = list(nav.snapshot.nodes or [])
-            if (
-                cursor.phase == "do"
-                and cur_probe
-                and str(cur_probe.expected or "").strip()
-                and probe_nodes
-            ):
+            if cursor.phase == "do" and cur_probe and str(cur_probe.expected or "").strip():
                 from mino_nexus.loop import step_effect as step_effect_mod
                 from mino_nexus.services import nav_telemetry
 
-                hit, keywords = step_effect_mod.probe(cur_probe.expected, probe_nodes)
-                nav_telemetry.step_effect(
-                    turn_id=seq,
-                    run_id=scout_run_id,
-                    case_id=cid,
-                    step_n=cur_probe.n,
-                    probe_hit=hit,
-                    model_done=False,
-                    keywords=keywords,
-                )
-                if hit:
-                    cursor.note_step_effect_hit(
-                        keywords,
+                try:
+                    probe_nodes = _effect_nodes(nav, ctx)
+                    loc_now = dict(getattr(nav, "localized", None) or {}) if nav is not None else {}
+                    loc_hit = step_effect_mod.localized_matches_step(
+                        loc_now,
+                        instruction=str(cur_probe.instruction or ""),
                         expected=str(cur_probe.expected or ""),
                     )
-                    if cursor.step_effect_hit_streak >= 2 and cursor.phase == "do":
-                        cursor.enter_check()
-                        cursor.correction_hint = ""
-                else:
-                    cursor.reset_step_effect_streak()
+                    hit, keywords = False, []
+                    if probe_nodes:
+                        hit, keywords = step_effect_mod.probe(
+                            cur_probe.expected,
+                            probe_nodes,
+                            instruction=str(cur_probe.instruction or ""),
+                        )
+                    if loc_hit and not keywords:
+                        keywords = [
+                            str(loc_now.get("display_name") or loc_now.get("chosen") or "localized")
+                        ]
+                    nav_telemetry.step_effect(
+                        turn_id=seq,
+                        run_id=scout_run_id,
+                        case_id=cid,
+                        step_n=cur_probe.n,
+                        probe_hit=bool(hit or loc_hit),
+                        model_done=False,
+                        keywords=keywords,
+                    )
+                    if hit or loc_hit:
+                        cursor.note_step_effect_hit(
+                            keywords,
+                            expected=str(cur_probe.expected or ""),
+                        )
+                        if (
+                            cursor.phase == "do"
+                            and step_effect_mod.should_auto_enter_check(
+                                loc_hit=bool(loc_hit),
+                                probe_hit=bool(hit),
+                                expected=str(cur_probe.expected or ""),
+                                keywords=keywords,
+                                hit_streak=cursor.step_effect_hit_streak,
+                            )
+                        ):
+                            cursor.enter_check()
+                            cursor.correction_hint = ""
+                    else:
+                        cursor.reset_step_effect_streak()
+                except Exception as exc:  # noqa: BLE001 — 探针失败不能拖垮跑批
+                    SLog.w(TAG, f"step_effect probe failed: {type(exc).__name__}: {exc}")
 
         cur = cursor.current()
         if cur is None:
@@ -934,6 +1062,8 @@ def _run_loop(
                 c for c in menu
                 if str(c.get("id") or "") not in ("fsm_navigate", "recover_fsm_navigate")
             ]
+        if str(getattr(ctx, "app_version", "") or "").strip():
+            menu = [c for c in menu if str(c.get("id") or "") != "get_app_version"]
         if writer:
             writer.append(
                 "context/menu",
@@ -1172,15 +1302,37 @@ def _run_loop(
             "run_env_brief": task_env_brief,
             "app_foreground": fg_ctx.get("app_foreground") or "",
             "system_overlay": fg_ctx.get("system_overlay") or "",
+            "nav_localized": dict(getattr(ctx, "nav_localized", None) or {}),
+            "app_version": str(getattr(ctx, "app_version", "") or ""),
         }
         params = apply_force_case_expectation(params, guard_ctx)
         if cap_id == "tap_element":
             tap_nodes: list[dict[str, Any]] = []
-            if nav is not None and nav.snapshot.usable():
-                tap_nodes = list(nav.snapshot.nodes or [])
+            if nav is not None and getattr(nav, "snapshot", None) is not None:
+                tap_nodes = [n for n in (nav.snapshot.nodes or []) if isinstance(n, dict)]
+            if not tap_nodes:
+                tap_nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
+            vlm = getattr(ctx, "nav_vlm_hierarchy", None)
+            extra_nodes = list((vlm or {}).get("nodes") or []) if isinstance(vlm, dict) else []
+            hint = " ".join(
+                x
+                for x in (
+                    thought,
+                    str(cur.instruction or "") if cur else "",
+                    str((cur.expected if cur else "") or ""),
+                )
+                if str(x or "").strip()
+            )
+            from mino_nexus.ai.coords import lift_selector_target, prepare_xy_params_for_execute
             from mino_nexus.loop.tap_enrich import enrich_tap_params
 
-            params = enrich_tap_params(params, tap_nodes)
+            params = enrich_tap_params(params, tap_nodes, hint=hint, extra_nodes=extra_nodes)
+            lift_selector_target(params)
+            prepare_xy_params_for_execute(
+                params,
+                int(getattr(shot, "width", 0) or 0),
+                int(getattr(shot, "height", 0) or 0),
+            )
         pending_mutate = bool(decision.status == "done" and cap_id in MUTATE_CAPS and action)
 
         if decision.status == "done" and not pending_mutate:
@@ -1232,11 +1384,38 @@ def _run_loop(
                 continue
             do_work_reason = None
             if "require_do_work" in list(phase_cfg.get("guards") or []):
+                from mino_nexus.loop import step_effect as step_effect_mod
+
+                loc_done = dict(getattr(ctx, "nav_localized", None) or {})
+                extra_vlm = decision.vlm_hierarchy if isinstance(decision.vlm_hierarchy, dict) else None
+                probe_nodes_guard = _effect_nodes(nav, ctx, extra_vlm=extra_vlm)
+                probe_hit_guard = False
+                if str(cur.expected or "").strip() or str(cur.instruction or "").strip():
+                    probe_hit_guard, _ = step_effect_mod.probe(
+                        str(cur.expected or ""),
+                        probe_nodes_guard,
+                        instruction=str(cur.instruction or ""),
+                    )
+                loc_hit_guard = step_effect_mod.localized_matches_step(
+                    loc_done,
+                    instruction=str(cur.instruction or ""),
+                    expected=str(cur.expected or ""),
+                )
                 do_work_reason = run_guards(
                     ["require_do_work"],
-                    {**guard_ctx, "intent": "signal_done"},
+                    {
+                        **guard_ctx,
+                        "intent": "signal_done",
+                        "step_goal_met": bool(probe_hit_guard or loc_hit_guard),
+                    },
                 )
             if do_work_reason:
+                if isinstance(cursor, StepCursor):
+                    cursor.correction_hint = (
+                        f"{do_work_reason}"
+                        " 若当前屏已是本步目标页，请确认达成信号后直接进入校验；"
+                        "否则先 tap_element / fsm_navigate 做一次设备操作。"
+                    )
                 rec(
                     seq,
                     capability_id="require_do_work",
@@ -1259,13 +1438,16 @@ def _run_loop(
             from mino_nexus.loop import step_effect as step_effect_mod
             from mino_nexus.services import nav_telemetry
 
-            probe_nodes_done: list[dict[str, Any]] = []
-            if nav is not None and nav.snapshot.usable():
-                probe_nodes_done = list(nav.snapshot.nodes or [])
+            extra_vlm_done = decision.vlm_hierarchy if isinstance(decision.vlm_hierarchy, dict) else None
+            probe_nodes_done = _effect_nodes(nav, ctx, extra_vlm=extra_vlm_done)
             probe_hit = False
             kw_done: list[str] = []
-            if str(cur.expected or "").strip() and probe_nodes_done:
-                probe_hit, kw_done = step_effect_mod.probe(cur.expected, probe_nodes_done)
+            if str(cur.expected or "").strip() or str(cur.instruction or "").strip():
+                probe_hit, kw_done = step_effect_mod.probe(
+                    str(cur.expected or ""),
+                    probe_nodes_done,
+                    instruction=str(cur.instruction or ""),
+                )
             nav_telemetry.step_effect(
                 turn_id=seq,
                 run_id=scout_run_id,
@@ -1346,6 +1528,8 @@ def _run_loop(
                 skip_cap = "action_fuse"
             elif "check_run_env" in skip_reason:
                 skip_cap = "skip_repeat_check_run_env"
+            elif "get_app_version" in skip_reason:
+                skip_cap = "skip_repeat_get_app_version"
             if writer:
                 writer.append(
                     "guard/block",
@@ -1364,6 +1548,15 @@ def _run_loop(
             stop_msg = None
             if skip_cap == "action_fuse":
                 stop_msg = cursor.progress_gate.record_fuse_block(skip_reason)
+            elif skip_cap == "limit_recovery_retry":
+                if isinstance(cursor, StepCursor):
+                    cursor.correction_hint = skip_reason
+                    n_block = cursor.bump_recovery_block()
+                    if n_block >= 3:
+                        stop_msg = (
+                            f"连续 {n_block} 次同类恢复被拒绝后仍重复尝试，判定陷入死循环。"
+                            f"{skip_reason}"
+                        )
             if writer:
                 writer.append(
                     "turn/end",
@@ -1413,27 +1606,38 @@ def _run_loop(
         )
         recovery_extra: dict[str, Any] = {}
         if hasattr(result, "recovered"):
-            status_val = "pass" if result.recovered else ("fail" if result.applied else "skipped")
-            summary = result.summary() if callable(getattr(result, "summary", None)) else str(getattr(result, "error", "") or "")
-            elapsed_ms = 0
-            error = result.error or ""
-            executor_used = "recovery"
+            mode = str(getattr(result, "mode", "") or "")
+            rid = str(getattr(result, "rule_id", "") or "").strip()
+            if not rid and cap_id.startswith(RECOVER_PREFIX):
+                rid = cap_id[len(RECOVER_PREFIX):]
+            advice = str(getattr(result, "advice", "") or "").strip()
+            if mode == "advise":
+                status_val = "declined" if result.error else "pass"
+                summary = advice or (result.summary() if callable(getattr(result, "summary", None)) else str(getattr(result, "error", "") or ""))
+                elapsed_ms = 0
+                error = result.error or ""
+                executor_used = "recovery"
+                if summary and isinstance(cursor, StepCursor):
+                    cursor.correction_hint = summary[:500]
+                if rid:
+                    cursor.bump_advise_recovery(rid)
+            else:
+                status_val = "pass" if result.recovered else ("fail" if result.applied else "skipped")
+                summary = result.summary() if callable(getattr(result, "summary", None)) else str(getattr(result, "error", "") or "")
+                elapsed_ms = 0
+                error = result.error or ""
+                executor_used = "recovery"
+                if rid:
+                    if result.recovered:
+                        pass
+                    else:
+                        cursor.bump_recovery_fail(rid)
             actions = getattr(result, "actions", None)
             if isinstance(actions, list) and actions:
                 recovery_extra["recovery_actions"] = actions
             ev_brief = str(getattr(result, "evidence", "") or "").strip()
             if ev_brief and not result.recovered:
                 error = f"{error}; {ev_brief}".strip("; ")
-            rid = str(getattr(result, "rule_id", "") or "").strip()
-            if not rid and cap_id.startswith(RECOVER_PREFIX):
-                rid = cap_id[len(RECOVER_PREFIX):]
-            if rid:
-                if result.recovered:
-                    pass
-                elif str(getattr(result, "mode", "") or "") == "advise":
-                    cursor.bump_advise_recovery(rid)
-                else:
-                    cursor.bump_recovery_fail(rid)
         else:
             status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
             summary = result.summary or ""
@@ -1540,11 +1744,13 @@ def _run_loop(
             post_shot = proxy.observe("screenshot", force_fresh=True)
             post_fp = _screen_fp(post_shot, inspect_slots.get("hierarchy_text") or "")
             cursor.progress_gate.record_pass(
-                cap_id="tap_element" if cap_id in ("fsm_navigate", "recover_fsm_navigate") else cap_id,
+                cap_id=cap_id if fuseable_cap(cap_id) else "tap_element",
                 params=params if fuseable_cap(cap_id) else {},
                 pre_fp=screen_fp,
                 post_fp=post_fp,
             )
+            if isinstance(cursor, StepCursor):
+                cursor.clear_recovery_block()
 
         if cap_id == "tap_element" and getattr(result, "status", None) == EventStatus.PASS:
             if not post_fp:

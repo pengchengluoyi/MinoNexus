@@ -83,14 +83,27 @@ def _guard_limit_recovery_retry(ctx: dict[str, Any]) -> Optional[str]:
         cap = RECOVERY_FAIL_MAX
     if used < cap:
         return None
+    snippet = str(getattr(rule, "prompt_snippet", "") or "").strip() if rule is not None else ""
+    if snippet:
+        snippet = snippet.replace("\n", " ").strip()
+        if len(snippet) > 160:
+            snippet = snippet[:160].rstrip() + "…"
+    if rule_id == "screen_secure_or_no_capture":
+        return (
+            f"已拒绝重复 recover_{rule_id}：同类恢复已失败/已提示 {used} 次。"
+            f"{snippet or '截图全黑且未锁屏时唤醒无效。'}"
+            f"请 press_key(BACK) 收起键盘、wait_ms 后再观察，或改用 tap_element / signal_ask_human；"
+            f"禁止再调用本恢复。"
+        )
     if rule_id in ("system_permission_dialog_while_using_deterministic", "system_media_picker_dismiss"):
         return (
             f"已拒绝重复 recover_{rule_id}：同类恢复已失败/已提示 {used} 次。"
             f"请改用 press_key(BACK)、tap_element 点「取消/关闭」、signal_ask_human 或 signal_give_up。"
         )
+    extra = f"{snippet}" if snippet else "请改用 tap_element、press_key(BACK)、signal_ask_human 或 signal_give_up。"
     return (
         f"已拒绝重复 recover_{rule_id}：同类恢复已失败/已提示 {used} 次。"
-        f"请改用 tap_element 直接点授权按钮、press_key(BACK)、signal_ask_human 或 signal_give_up。"
+        f"{extra}"
     )
 
 
@@ -175,6 +188,10 @@ def _guard_require_do_work(ctx: dict[str, Any]) -> Optional[str]:
     ops = int(getattr(step_cursor, "step_ops", 0) or 0)
     if ops > 0:
         return None
+    if bool(ctx.get("step_goal_met")):
+        return None
+    if str(getattr(step_cursor, "step_effect_hint", "") or "").startswith("【达成提示】"):
+        return None
     return (
         "本步尚未执行任何设备操作（点击/输入/滑动等），不能 signal_done。"
         "请先完成步骤原文要求的具体动作。"
@@ -256,6 +273,18 @@ def _guard_skip_repeat_check_run_env(ctx: dict[str, Any]) -> Optional[str]:
     )
 
 
+def _guard_skip_repeat_get_app_version(ctx: dict[str, Any]) -> Optional[str]:
+    if str(ctx.get("cap_id") or "") != "get_app_version":
+        return None
+    ver = str(ctx.get("app_version") or "").strip()
+    if not ver:
+        return None
+    return (
+        f"已拒绝重复 get_app_version（本任务已确认版本 {ver}）。"
+        f"版本由 Scout 直接回传，无需看图；请继续其它前置或 signal_done。"
+    )
+
+
 def _guard_skip_repeat_tap(ctx: dict[str, Any]) -> Optional[str]:
     if _system_ui_dismiss_phase(ctx):
         return None
@@ -307,6 +336,7 @@ GUARDS: dict[str, GuardFn] = {
     "deny_mutate": _guard_deny_mutate,
     "skip_repeat_read_device": _guard_skip_repeat_read_device,
     "skip_repeat_check_run_env": _guard_skip_repeat_check_run_env,
+    "skip_repeat_get_app_version": _guard_skip_repeat_get_app_version,
     "action_fuse": _guard_action_fuse,
     "skip_repeat_tap": _guard_skip_repeat_tap,
     "limit_advise_recovery": _guard_limit_advise_recovery,

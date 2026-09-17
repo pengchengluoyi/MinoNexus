@@ -318,6 +318,7 @@ class StepCursor:
         self.step_effect_hit_streak: int = 0
         self.step_effect_hint: str = ""
         self.correction_hint: str = ""
+        self.recovery_block_streak: int = 0
         if self.phase != "prep":
             self._sync()
 
@@ -341,6 +342,7 @@ class StepCursor:
         self.step_effect_hit_streak = 0
         self.step_effect_hint = ""
         self.correction_hint = ""
+        self.recovery_block_streak = 0
         self.progress_gate.reset_milestone("do", 1 if self.nodes else 0)
         self._sync()
         self.step_start_fp = ""
@@ -378,6 +380,13 @@ class StepCursor:
         self.recovery_fail_counts[rid] = n
         return n
 
+    def bump_recovery_block(self) -> int:
+        self.recovery_block_streak = int(self.recovery_block_streak or 0) + 1
+        return self.recovery_block_streak
+
+    def clear_recovery_block(self) -> None:
+        self.recovery_block_streak = 0
+
     def mark_guest_entry(self, summary: str = "") -> None:
         if tap_summary_is_guest_entry(summary):
             self.guest_entry_tapped = True
@@ -407,6 +416,7 @@ class StepCursor:
         self.step_effect_hit_streak = 0
         self.step_effect_hint = ""
         self.correction_hint = ""
+        self.recovery_block_streak = 0
         self.step_start_fp = ""
 
     def _skip_empty(self) -> str:
@@ -422,6 +432,7 @@ class StepCursor:
         self.step_effect_hit_streak = 0
         self.step_effect_hint = ""
         self.correction_hint = ""
+        self.recovery_block_streak = 0
         self.step_start_fp = ""
         if self.index >= len(self.nodes):
             self.phase = "done"

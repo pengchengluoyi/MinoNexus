@@ -75,8 +75,11 @@ def bootstrap() -> None:
             upgrade_agent_decide_to_v10,
             upgrade_agent_decide_to_v11,
             upgrade_agent_decide_to_v12,
+            upgrade_agent_decide_to_v13,
             upgrade_assert_vision_to_v2,
+            upgrade_assert_vision_to_v3,
             upgrade_inspect_session_to_v2,
+            upgrade_inspect_session_to_v3,
         )
 
         v8 = upgrade_agent_decide_to_v8()
@@ -94,12 +97,21 @@ def bootstrap() -> None:
         v12 = upgrade_agent_decide_to_v12()
         if v12:
             SLog.i(TAG, "agent-decide upgraded to prompt v12")
+        v13 = upgrade_agent_decide_to_v13()
+        if v13:
+            SLog.i(TAG, "agent-decide upgraded to prompt v13")
         av2 = upgrade_assert_vision_to_v2()
         if av2:
             SLog.i(TAG, "assert-vision upgraded to prompt v2")
+        av3 = upgrade_assert_vision_to_v3()
+        if av3:
+            SLog.i(TAG, "assert-vision upgraded to prompt v3")
         is2 = upgrade_inspect_session_to_v2()
         if is2:
             SLog.i(TAG, "inspect-session upgraded to prompt v2")
+        is3 = upgrade_inspect_session_to_v3()
+        if is3:
+            SLog.i(TAG, "inspect-session upgraded to prompt v3")
         from mino_nexus.ai.job_upgrades import ensure_nav_widget_state_job
 
         nw = ensure_nav_widget_state_job()
@@ -110,11 +122,6 @@ def bootstrap() -> None:
         nm = ensure_nav_atlas_morph_job()
         if nm:
             SLog.i(TAG, "nav-atlas-morph job seeded")
-        from mino_nexus.services.nav_alias_governance import upgrade_app_alias_governance
-
-        ag = upgrade_app_alias_governance()
-        if ag:
-            SLog.i(TAG, f"alias governance patched {ag} state(s)")
         db.commit()
     except Exception:
         db.rollback()

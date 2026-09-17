@@ -1,11 +1,38 @@
 """NavFSM 路径规划：给定起止屏态，在 nav 边图上求最短路（运行时，不画恢复边）。"""
 from __future__ import annotations
 
+import copy
+import re
 from typing import Any
 
 from mino_nexus.services import nav_fsm as F
 from mino_nexus.services import nav_fsm_store as store
 from mino_nexus.services.nav_execute import execute_target_page
+
+_NAV_REF_QUOTE_RE = re.compile(r"[「『\"“]([^」』\"”]{1,24})[」』\"”]")
+_NAV_REF_WRAP_RE = re.compile(
+    r"^(?:点击|点一下|切换到|进入|打开)(?:底部|上面|中间)?"
+)
+_NAV_REF_TAB_TAIL_RE = re.compile(r"(?:底部)?(?:Tab|tab|TAB)$")
+
+
+def click_label_from_nav_ref(ref: str) -> str:
+    """从 from/to 口语里抽出可点文案（引号内或短标签），忽略 page.sk* 节点 id。"""
+    raw = str(ref or "").strip()
+    if not raw or raw.startswith("page.") or raw.startswith("tab_"):
+        return ""
+    quoted = _NAV_REF_QUOTE_RE.search(raw)
+    if quoted:
+        return str(quoted.group(1) or "").strip()
+    cleaned = _NAV_REF_WRAP_RE.sub("", raw).strip()
+    cleaned = _NAV_REF_TAB_TAIL_RE.sub("", cleaned).strip()
+    if len(cleaned) >= 2 and cleaned[0] in "「『\"“" and cleaned[-1] in "」』\"”":
+        cleaned = cleaned[1:-1].strip()
+    if 1 <= len(cleaned) <= 16 and cleaned != raw:
+        return cleaned
+    if 1 <= len(raw) <= 16 and " " not in raw and "\n" not in raw:
+        return raw
+    return ""
 
 
 def _ref_display_variants(ref: str) -> list[str]:
@@ -151,13 +178,107 @@ def plan_route(
     }
 
 
+def _state_ids(doc: dict[str, Any] | None) -> set[str]:
+    out: set[str] = set()
+    for st in (doc or {}).get("states") or []:
+        if not isinstance(st, dict):
+            continue
+        sid = str(st.get("id") or st.get("state_id") or "").strip()
+        if sid:
+            out.add(sid)
+    return out
+
+
+def _wireframes_of(doc: dict[str, Any] | None) -> dict[str, Any]:
+    meta = (doc or {}).get("meta") if isinstance((doc or {}).get("meta"), dict) else {}
+    wfs = meta.get("state_wireframes") if isinstance(meta, dict) else None
+    return dict(wfs) if isinstance(wfs, dict) else {}
+
+
+def _has_sk_states(doc: dict[str, Any] | None) -> bool:
+    return any(sid.startswith("page.sk") for sid in _state_ids(doc))
+
+
+def overlay_atlas_for_runtime(
+    base: dict[str, Any] | None,
+    atlas: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """把草稿 Atlas 的骨骼页 / wireframe / nav 边叠到已发布 Tab 图上。
+
+    跑批读 `v1` 时常常只有 `page.tab_*` + tab_bar 文案；真正能辨页的
+    `page.sk*` 与 `state_wireframes` 还停在 draft。不叠的话 localize 选不出当前页。
+    """
+    if not isinstance(base, dict):
+        return atlas if isinstance(atlas, dict) else base
+    if not isinstance(atlas, dict):
+        return base
+    atlas_wf = _wireframes_of(atlas)
+    if not atlas_wf and not _has_sk_states(atlas):
+        return base
+    if _has_sk_states(base) and _wireframes_of(base):
+        return base
+    out = copy.deepcopy(base)
+    meta = dict(out.get("meta") or {})
+    base_wf = _wireframes_of(out)
+    if atlas_wf:
+        merged = dict(atlas_wf)
+        merged.update(base_wf)
+        meta["state_wireframes"] = merged
+        out["meta"] = meta
+    ids = _state_ids(out)
+    extra_states: list[dict[str, Any]] = []
+    for st in atlas.get("states") or []:
+        if not isinstance(st, dict):
+            continue
+        sid = str(st.get("id") or st.get("state_id") or "").strip()
+        if sid and sid not in ids:
+            extra_states.append(copy.deepcopy(st))
+            ids.add(sid)
+    if extra_states:
+        out["states"] = list(out.get("states") or []) + extra_states
+    extra_edges: list[dict[str, Any]] = []
+    seen = {
+        (
+            str(e.get("id") or e.get("edge_id") or ""),
+            str(e.get("from") or e.get("from_state") or ""),
+            str(e.get("to") or e.get("to_state") or ""),
+        )
+        for e in (out.get("edges") or [])
+        if isinstance(e, dict)
+    }
+    for ed in atlas.get("edges") or []:
+        if not isinstance(ed, dict):
+            continue
+        if str(ed.get("kind") or "nav") != "nav":
+            continue
+        frm = str(ed.get("from") or ed.get("from_state") or "").strip()
+        to = str(ed.get("to") or ed.get("to_state") or "").strip()
+        if not frm or not to or frm not in ids or to not in ids:
+            continue
+        key = (str(ed.get("id") or ed.get("edge_id") or ""), frm, to)
+        if key in seen:
+            continue
+        extra_edges.append(copy.deepcopy(ed))
+        seen.add(key)
+    if extra_edges:
+        out["edges"] = list(out.get("edges") or []) + extra_edges
+    return out
+
+
 def load_fsm_doc(
     app_id: str,
     *,
     version: str = store.DEFAULT_VERSION,
     use_live: bool = True,
     project_id: str = "",
+    app_version: str = "",
+    nav_view_id: str = "",
 ) -> tuple[dict[str, Any] | None, str]:
+    """读导航图。
+
+    `use_live=True` 会现场 `get_live_graph` / `build_atlas`，只给导航页/编译器用。
+    跑批必须 `use_live=False`，只用 `nav_fsm*` 里已有的数据。
+    """
     doc: dict[str, Any] | None = None
     source = "published"
     if use_live:
@@ -171,8 +292,28 @@ def load_fsm_doc(
         except Exception:
             doc = None
     if not doc:
-        doc = store.read_raw(app_id, version=version) or store.read_raw(app_id, version=store.DRAFT_VERSION)
-        source = "published"
+        requested = store.read_raw(app_id, version=version)
+        draft = store.read_raw(app_id, version=store.DRAFT_VERSION)
+        if (
+            requested
+            and str(version or store.DEFAULT_VERSION) != store.DRAFT_VERSION
+            and draft
+            and draft is not requested
+        ):
+            doc = overlay_atlas_for_runtime(requested, draft)
+            source = "published+atlas" if doc is not requested else "published"
+        else:
+            doc = requested or draft
+            source = "published" if requested else ("draft" if draft else "published")
+    if doc and (app_version or nav_view_id):
+        from mino_nexus.services.nav_version_views import materialize_fsm_for_runtime
+
+        doc = materialize_fsm_for_runtime(
+            doc,
+            app_version=app_version,
+            nav_view_id=nav_view_id,
+            include_pending=False,
+        )
     return doc, source
 
 
@@ -309,10 +450,10 @@ def tap_params_for_edge(fsm: dict[str, Any], edge: dict[str, Any]) -> dict[str, 
                     out["selector_text"] = label
                     out["text"] = label
                 if isinstance(bounds, (list, tuple)) and len(bounds) >= 4:
-                    out["fallback_xy"] = [
-                        (int(bounds[0]) + int(bounds[2])) // 2,
-                        (int(bounds[1]) + int(bounds[3])) // 2,
-                    ]
+                    from mino_nexus.loop.hierarchy_slots import int_list
+
+                    bb = int_list(bounds, 4)
+                    out["fallback_xy"] = [(bb[0] + bb[2]) // 2, (bb[1] + bb[3]) // 2]
                 parts = row.get("parts") if isinstance(row.get("parts"), list) else []
                 if idx > 0 and idx + 1 < len(slots):
                     left = slots[idx - 1]

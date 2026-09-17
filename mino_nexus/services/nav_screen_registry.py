@@ -109,8 +109,17 @@ def _merge_wireframe_duplicate_clusters(
     screen_rows: list[dict[str, Any]],
     cluster_meta: dict[str, dict[str, Any]],
     turn_cluster_ids: list[str],
+    *,
+    timeline: list[dict[str, Any]] | None = None,
+    app_id: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    """同 Tab 内骨骼或线框一致 → 保留访问最多的一屏，其余合并进 canonical。"""
+    """同 skeleton_fp 的重复 state（极少）才合并；不因线框相似或 feed 标题并页。"""
+    nav_sigs = (
+        _build_state_click_nav_signatures(timeline or [], turn_cluster_ids, app_id=app_id)
+        if timeline
+        else {}
+    )
+
     groups: dict[tuple[str, str], list[str]] = {}
     for row in screen_rows:
         if row.get("is_entry"):
@@ -121,14 +130,51 @@ def _merge_wireframe_duplicate_clusters(
         sk = str(cm.get("skeleton_fp") or row.get("skeleton_fp") or "").strip()
         if sk:
             groups.setdefault((tab, f"sk:{sk}"), []).append(sid)
-            continue
-        wf = cm.get("wireframe") or {}
-        sig = _wireframe_layout_signature(wf if isinstance(wf, dict) else {})
-        if sig == "empty":
-            continue
-        groups.setdefault((tab, sig), []).append(sid)
 
     remap: dict[str, str] = {}
+
+    def _absorb_into_canonical(
+        canonical: str,
+        dup_id: str,
+        *,
+        viewport_transform: bool = False,
+    ) -> None:
+        if dup_id == canonical or dup_id in remap:
+            return
+        sa = nav_sigs.get(canonical, frozenset())
+        sb = nav_sigs.get(dup_id, frozenset())
+        if not viewport_transform and not _nav_click_signatures_compatible(sa, sb):
+            return
+        if viewport_transform and not _nav_click_signatures_compatible(sa, sb):
+            click_a = {x for x in sa if x.startswith(("tap:", "tab:"))}
+            click_b = {x for x in sb if x.startswith(("tap:", "tab:"))}
+            if click_a and click_b and click_a != click_b:
+                return
+        remap[dup_id] = canonical
+        can_meta = cluster_meta.get(canonical) or {}
+        dup = cluster_meta.get(dup_id) or {}
+        can_meta["visit_count"] = int(can_meta.get("visit_count") or 0) + int(
+            dup.get("visit_count") or 0
+        )
+        can_turns = list(can_meta.get("turn_wireframes") or [])
+        can_turns.extend(list(dup.get("turn_wireframes") or []))
+        can_meta["turn_wireframes"] = can_turns
+        morphs = list(can_meta.get("morphs") or []) + list(dup.get("morphs") or [])
+        if morphs:
+            can_meta["morphs"] = morphs[:24]
+        can_meta["morph_count"] = max(
+            int(can_meta.get("morph_count") or 0),
+            int(dup.get("morph_count") or 0),
+            max(0, len(can_meta.get("morphs") or []) - 1),
+            max(0, len(can_turns) - 1),
+        )
+        dn = str(dup.get("display_name") or "").strip()
+        names = list(can_meta.get("_merged_display_names") or [])
+        if dn and dn not in names:
+            names.append(dn)
+        can_meta["_merged_display_names"] = names
+        cluster_meta[canonical] = can_meta
+
     for (_tab, _sig), sids in groups.items():
         if len(sids) < 2:
             continue
@@ -138,9 +184,8 @@ def _merge_wireframe_duplicate_clusters(
         for s in sids:
             if s == canonical:
                 continue
-            remap[s] = canonical
+            _absorb_into_canonical(canonical, s)
             dup = cluster_meta.get(s) or {}
-            can_meta["visit_count"] = int(can_meta.get("visit_count") or 0) + int(dup.get("visit_count") or 0)
             dn = str(dup.get("display_name") or "").strip()
             if dn and dn not in names:
                 names.append(dn)
@@ -153,6 +198,46 @@ def _merge_wireframe_duplicate_clusters(
                 merged_title = names[0]
             can_meta["display_name"] = merged_title
         cluster_meta[canonical] = can_meta
+
+    from mino_nexus.services.nav_app_skeleton import (
+        wireframe_aligned_transform_jaccard,
+        wireframes_same_page_under_viewport_transform,
+    )
+
+    def _resolve_sid(sid: str) -> str:
+        while sid in remap:
+            sid = remap[sid]
+        return sid
+
+    page_ids = [
+        str(r.get("id") or "")
+        for r in screen_rows
+        if not r.get("is_entry") and str(r.get("id") or "")
+    ]
+    page_ids.sort(
+        key=lambda s: int((cluster_meta.get(s) or {}).get("visit_count") or 0),
+        reverse=True,
+    )
+    for canon_raw in page_ids:
+        canon = _resolve_sid(canon_raw)
+        can_meta = cluster_meta.get(canon) or {}
+        wf_c = can_meta.get("wireframe") if isinstance(can_meta.get("wireframe"), dict) else {}
+        vc = int(can_meta.get("visit_count") or 0)
+        for dup_raw in page_ids:
+            if dup_raw == canon_raw:
+                continue
+            dup = _resolve_sid(dup_raw)
+            if dup == canon or dup_raw in remap:
+                continue
+            dup_meta = cluster_meta.get(dup) or {}
+            wf_d = dup_meta.get("wireframe") if isinstance(dup_meta.get("wireframe"), dict) else {}
+            if not wireframes_same_page_under_viewport_transform(wf_c, wf_d):
+                continue
+            aligned = wireframe_aligned_transform_jaccard(wf_c, wf_d)
+            vd = int(dup_meta.get("visit_count") or 0)
+            if vd > max(6, int(vc * 0.25)) and aligned < 0.85:
+                continue
+            _absorb_into_canonical(canon, dup, viewport_transform=True)
 
     if not remap:
         return screen_rows, remap
@@ -408,6 +493,26 @@ def _resolve_remapped_state_id(sid: str, remap: dict[str, str]) -> str:
     return sid
 
 
+def _region_bottom_score(region: dict[str, Any]) -> float:
+    rect = region.get("rect") if isinstance(region.get("rect"), dict) else {}
+    y = float(rect.get("y") or 0)
+    h = float(rect.get("h") or 0)
+    return y + h
+
+
+def _region_eligible_for_nav_anchor(region: dict[str, Any]) -> bool:
+    rect = region.get("rect") if isinstance(region.get("rect"), dict) else {}
+    w = float(rect.get("w") or 0)
+    h = float(rect.get("h") or 0)
+    if w * h > 0.22:
+        return False
+    if w > 0.88 and h > 0.35:
+        return False
+    if h > 0.55 and w > 0.45:
+        return False
+    return True
+
+
 def _region_hotspot_key(region: dict[str, Any]) -> str:
     return f"{region.get('source') or 'r'}-{region.get('id') or 0}"
 
@@ -481,6 +586,24 @@ def _pick_transition_hotspot(prev_turn: dict[str, Any], action_label: str) -> st
     return fallback
 
 
+def _sanitize_wireframe_nav_regions(wireframes: dict[str, Any]) -> None:
+    """去掉整屏 region 上的 nav_to，避免 Studio 锚在屏幕中心。"""
+    for _sid, wf in wireframes.items():
+        if not isinstance(wf, dict):
+            continue
+        cleaned: list[dict[str, Any]] = []
+        for region in wf.get("regions") or []:
+            if not isinstance(region, dict):
+                continue
+            r = dict(region)
+            if r.get("nav_to") and not _region_eligible_for_nav_anchor(r):
+                r.pop("nav_to", None)
+                if not r.get("clickable"):
+                    r["clickable"] = False
+            cleaned.append(r)
+        wf["regions"] = cleaned
+
+
 def _annotate_wireframes_from_edges(
     wireframes: dict[str, Any],
     edges: list[dict[str, Any]],
@@ -499,23 +622,101 @@ def _annotate_wireframes_from_edges(
         if not isinstance(wf, dict):
             continue
         regions = list(wf.get("regions") or [])
-        if not regions:
-            continue
         region_key = ""
         if "::" in hs:
             region_key = hs.split("::", 1)[1]
+        assigned = False
         for region in regions:
             rk = _region_hotspot_key(region)
             if region_key and rk != region_key:
                 continue
-            if region.get("clickable") or region_key:
+            if not _region_eligible_for_nav_anchor(region):
+                continue
+            if region_key or region.get("clickable") or _region_bottom_score(region) >= 0.58:
+                if region.get("nav_to") and str(region.get("nav_to")) != dst:
+                    continue
                 region["nav_to"] = dst
                 region["clickable"] = True
                 if meta.get("action_label"):
                     region["nav_label"] = str(meta.get("action_label"))
+                assigned = True
+                break
+        if not assigned and not regions:
+            syn_id = f"nav-anchor-{dst.split('.')[-1]}"
+            regions.append(
+                {
+                    "source": "nav_hint",
+                    "id": syn_id,
+                    "label": str(meta.get("action_label") or "进入"),
+                    "clickable": True,
+                    "nav_to": dst,
+                    "nav_label": str(meta.get("action_label") or "进入"),
+                    "rect": {"x": 0.12, "y": 0.72, "w": 0.76, "h": 0.07},
+                }
+            )
+            assigned = True
+        elif not assigned and regions:
+            action = str(meta.get("action_label") or "")
+            tab_needle = ""
+            if "Tab" in action or "tab" in action.lower():
+                parts = action.replace("切换", "").split("·")
+                if parts:
+                    tab_needle = str(parts[-1]).strip()
+            if tab_needle:
+                for region in regions:
+                    if not _region_eligible_for_nav_anchor(region):
+                        continue
+                    lab = str(region.get("label") or "").strip().split("\n")[0]
+                    if lab != tab_needle and tab_needle not in lab:
+                        continue
+                    if region.get("nav_to") and str(region.get("nav_to")) != dst:
+                        continue
+                    region["nav_to"] = dst
+                    region["clickable"] = True
+                    region["nav_label"] = action or lab
+                    rk = _region_hotspot_key(region)
+                    if rk and not hs:
+                        meta = dict(meta)
+                        meta["from_hotspot_id"] = _hotspot_target_id(src, rk)
+                        ed["meta"] = meta
+                    assigned = True
+                    break
+            if assigned:
+                wf["regions"] = regions
+                wireframes[src] = wf
+                continue
+            pool = sorted(
+                [r for r in regions if _region_eligible_for_nav_anchor(r)],
+                key=_region_bottom_score,
+                reverse=True,
+            )
+            for region in pool:
+                if region.get("nav_to") and str(region.get("nav_to")) != dst:
+                    continue
+                rk = _region_hotspot_key(region)
+                if not rk:
+                    continue
+                region["nav_to"] = dst
+                region["clickable"] = True
+                if meta.get("action_label"):
+                    region["nav_label"] = str(meta.get("action_label"))
+                if not hs and rk:
+                    meta["from_hotspot_id"] = _hotspot_target_id(src, rk)
+                assigned = True
                 break
         wf["regions"] = regions
         wireframes[src] = wf
+        if assigned and not hs:
+            rk_pick = ""
+            for region in regions:
+                if str(region.get("nav_to") or "") == dst:
+                    rk_pick = _region_hotspot_key(region)
+                    break
+            if rk_pick:
+                meta = dict(meta)
+                meta["from_hotspot_id"] = _hotspot_target_id(src, rk_pick)
+                ed["meta"] = meta
+    _sanitize_wireframe_nav_regions(wireframes)
 
 
 def _pick_tab_entry_sid(
@@ -549,6 +750,141 @@ def _pick_tab_entry_sid(
     return str(state_key_to_id.get(keys[0]) or "")
 
 
+def _tab_label_edge_slug(label: str) -> str:
+    slug = re.sub(r"\s+", "_", str(label or "").strip())[:16]
+    return re.sub(r"[^\w\u4e00-\u9fff]", "", slug) or "tab"
+
+
+def _infer_tab_root_state_ids(
+    timeline: list[dict[str, Any]],
+    turn_cluster_ids: list[str],
+    *,
+    y_tab: int,
+    known_labels: list[str],
+    cluster_meta: dict[str, dict[str, Any]],
+) -> dict[str, str]:
+    """底栏 Tab 标签 → 该 Tab 下最常访问的 cluster state（架构图弱 nav 端点）。"""
+    from collections import Counter
+
+    from mino_nexus.services.nav_atlas_naming import sidebar_selections
+
+    counts: dict[str, Counter[str]] = {t: Counter() for t in known_labels}
+    for i, row in enumerate(timeline):
+        if i >= len(turn_cluster_ids):
+            break
+        sid = str(turn_cluster_ids[i] or "")
+        if not sid:
+            continue
+        tab = str(
+            sidebar_selections(row["turn"], y_tab=y_tab, known_labels=known_labels).get("bottom") or ""
+        ).strip()
+        if tab and tab in counts:
+            counts[tab][sid] += 1
+    roots: dict[str, str] = {}
+    for tab, ctr in counts.items():
+        if not ctr:
+            continue
+        best = ""
+        best_rank = (999, 0)
+        for sid, visit_n in ctr.most_common(12):
+            cm = cluster_meta.get(sid) or {}
+            fw = dict(cm.get("framework") or {})
+            kind = str(fw.get("kind") or "").strip()
+            if str(cm.get("cluster_surface") or "") == "main":
+                pri = 0
+            elif kind in ("profile_page", "feed_grid", "content_page", "feed_list"):
+                pri = 15
+            else:
+                pri = 40
+            rank = (pri, -int(visit_n))
+            if rank < best_rank:
+                best_rank = rank
+                best = sid
+        if best:
+            roots[tab] = best
+    return roots
+
+
+def _find_tab_switch_hotspot(
+    timeline: list[dict[str, Any]],
+    turn_cluster_ids: list[str],
+    *,
+    src_sid: str,
+    target_tab: str,
+    y_tab: int,
+    known_labels: list[str],
+) -> str:
+    """在「当前为 src 屏、下一步切到 target_tab」的 turn 上取底栏热点。"""
+    want = str(target_tab or "").strip()
+    if not src_sid or not want:
+        return ""
+    for i in range(len(timeline) - 1):
+        if i >= len(turn_cluster_ids):
+            break
+        if str(turn_cluster_ids[i] or "") != src_sid:
+            continue
+        rk = _pick_tab_hotspot(timeline[i]["turn"], want)
+        if rk:
+            return rk
+    return ""
+
+
+def _add_atlas_tab_bar_weak_nav_edges(
+    edges: list[dict[str, Any]],
+    *,
+    tab_labels: list[str],
+    tab_roots: dict[str, str],
+    timeline: list[dict[str, Any]],
+    turn_cluster_ids: list[str],
+    y_tab: int,
+    known_labels: list[str],
+    add_edge: Any,
+) -> None:
+    """Tab 根页之间补 weak nav（edge.atlas.tab.*，Studio 会画线，非 edge.tab.*）。"""
+    existing: set[tuple[str, str]] = set()
+    for ed in edges:
+        if str(ed.get("kind") or "") != "nav":
+            continue
+        src = str(ed.get("from") or "")
+        dst = str(ed.get("to") or "")
+        if src and dst:
+            existing.add((src, dst))
+    for src_tab in tab_labels:
+        src = str(tab_roots.get(src_tab) or "")
+        if not src:
+            continue
+        for dst_tab in tab_labels:
+            if src_tab == dst_tab:
+                continue
+            dst = str(tab_roots.get(dst_tab) or "")
+            if not dst or (src, dst) in existing:
+                continue
+            rk = _find_tab_switch_hotspot(
+                timeline,
+                turn_cluster_ids,
+                src_sid=src,
+                target_tab=dst_tab,
+                y_tab=y_tab,
+                known_labels=known_labels,
+            )
+            extra: dict[str, Any] = {
+                "action_type": "tab",
+                "source": "tab_bar_weak",
+                "tab_target": dst_tab,
+                "count": 0,
+            }
+            if rk:
+                extra["from_hotspot_id"] = _hotspot_target_id(src, rk)
+            add_edge(
+                f"edge.atlas.tab.{_tab_label_edge_slug(src_tab)}_to_{_tab_label_edge_slug(dst_tab)}",
+                src,
+                dst,
+                action_label=_format_nav_action_label("tab", dst_tab),
+                extra_meta=extra,
+            )
+            existing.add((src, dst))
+
+
 def _fsm_state_is_atlas_noise(st: dict[str, Any]) -> bool:
     """旧 FSM 中仅由百分比/时间等易变文案命中的状态，不补进 Screen Atlas。"""
     from mino_nexus.services.nav_layout import identify_is_volatile_only
@@ -574,13 +910,82 @@ def _scroll_delta_px(prev_nodes: list[dict[str, Any]], cur_nodes: list[dict[str,
     return abs(int(a[0]) - int(b[0]))
 
 
+def _turn_cap_id(turn: dict[str, Any]) -> str:
+    return str(turn.get("cap_id") or "").strip()
+
+
+# Atlas 观测边：仅保留真实设备操作造成的相邻帧跳转（见 docs/9月16日—架构图连线与布局问题梳理.md）
+_ATLAS_OBSERVED_NAV_CAPS = frozenset(
+    {
+        "tap_element",
+        "multi_tap",
+        "swipe_element_to_element",
+        "swipe_direction",
+        "long_press_element",
+        "press_key",
+    }
+)
+_ATLAS_OBSERVED_NAV_BLOCKLIST = frozenset(
+    {
+        "fsm_navigate",
+        "recover_fsm_navigate",
+        "assert_visual",
+        "wait_ms",
+        "noop",
+        "exec_script",
+        "relogin",
+        "logout",
+        "signal_done",
+        "signal_skip",
+        "signal_give_up",
+        "signal_ask_human",
+    }
+)
+
+
+def _press_key_is_physical_back(turn: dict[str, Any]) -> bool:
+    if _turn_cap_id(turn) != "press_key":
+        return False
+    key = str(turn.get("action_key") or turn.get("selector_text") or "").strip().upper()
+    if not key:
+        return False
+    return key in ("BACK", "ESCAPE", "KEYCODE_BACK", "4")
+
+
+def _atlas_observed_nav_eligible(
+    prev_turn: dict[str, Any],
+    *,
+    prev_sid: str,
+    next_sid: str,
+) -> bool:
+    """Turn i 上执行的动作是否可作为 i→i+1 的架构 nav 观测边。"""
+    if not prev_sid or not next_sid or prev_sid == next_sid:
+        return False
+    cap = _turn_cap_id(prev_turn)
+    if not cap or cap.startswith("recover_") or cap in _ATLAS_OBSERVED_NAV_BLOCKLIST:
+        return False
+    if cap not in _ATLAS_OBSERVED_NAV_CAPS:
+        return False
+    if cap == "press_key":
+        return _press_key_is_physical_back(prev_turn)
+    return True
+
+
 def _infer_transition_action(
     prev_turn: dict[str, Any],
     cur_turn: dict[str, Any],
     *,
     label: str,
 ) -> str:
+    if _press_key_is_physical_back(prev_turn):
+        return "back"
+    if _turn_cap_id(prev_turn) == "swipe_direction":
+        return "swipe"
     if str(label or "").strip() == "返回":
+        return "back"
+    from mino_nexus.services.nav_flow_blocks import action_label_indicates_ui_back
+
+    if action_label_indicates_ui_back(str(label or "")):
         return "back"
     from mino_nexus.services.nav_synthesis import _horizontal_tab_row_labels
 
@@ -629,6 +1034,110 @@ def _infer_transition_label(prev_turn: dict[str, Any], cur_turn: dict[str, Any])
         if 2 <= len(text) <= 24:
             return text
     return "进入"
+
+
+def _timeline_session_index(timeline: list[dict[str, Any]]) -> dict[tuple[str, int], int]:
+    out: dict[tuple[str, int], int] = {}
+    for i, row in enumerate(timeline):
+        turn = row.get("turn") or {}
+        out[(str(turn.get("session_id") or ""), int(turn.get("turn_id") or 0))] = i
+    return out
+
+
+def _turn_nav_target_token(cur_turn: dict[str, Any], *, app_id: str = "") -> str:
+    from mino_nexus.services.nav_app_skeleton import (
+        shell_cluster_signature,
+        wireframe_structure_signature,
+    )
+
+    wf = _turn_wireframe(cur_turn, app_id=app_id)
+    tok = wireframe_structure_signature(wf)
+    if tok != "empty":
+        return tok
+    sh = shell_cluster_signature(wf)
+    if sh != "empty":
+        return sh
+    return f"turn:{int(cur_turn.get('turn_id') or 0)}"
+
+
+def _observed_click_nav_signature_from_turn_pair(
+    prev_turn: dict[str, Any],
+    cur_turn: dict[str, Any],
+    *,
+    app_id: str = "",
+) -> str | None:
+    if str(prev_turn.get("session_id") or "") != str(cur_turn.get("session_id") or ""):
+        return None
+    cap = _turn_cap_id(prev_turn)
+    if not cap or cap.startswith("recover_") or cap in _ATLAS_OBSERVED_NAV_BLOCKLIST:
+        return None
+    if cap not in _ATLAS_OBSERVED_NAV_CAPS:
+        return None
+    if cap == "press_key" and not _press_key_is_physical_back(prev_turn):
+        return None
+    label = _infer_transition_label(prev_turn, cur_turn)
+    action = _infer_transition_action(prev_turn, cur_turn, label=label)
+    if action == "swipe":
+        return None
+    tok = _turn_nav_target_token(cur_turn, app_id=app_id)
+    return f"{action}:{tok}"
+
+
+def _bucket_observed_click_nav_signature(
+    bucket: dict[str, Any],
+    timeline: list[dict[str, Any]],
+    sess_idx: dict[tuple[str, int], int],
+    *,
+    app_id: str = "",
+) -> frozenset[str]:
+    sig: set[str] = set()
+    for turn in bucket.get("sample_turns") or []:
+        if not isinstance(turn, dict):
+            continue
+        key = (str(turn.get("session_id") or ""), int(turn.get("turn_id") or 0))
+        i = sess_idx.get(key)
+        if i is None or i + 1 >= len(timeline):
+            continue
+        cur_turn = (timeline[i + 1].get("turn") or {}) if isinstance(timeline[i + 1], dict) else {}
+        piece = _observed_click_nav_signature_from_turn_pair(turn, cur_turn, app_id=app_id)
+        if piece:
+            sig.add(piece)
+    return frozenset(sig)
+
+
+def _nav_click_signatures_compatible(a: frozenset[str], b: frozenset[str]) -> bool:
+    """点击/Tab/返回导致的出边签名一致才允许并页；任一侧有点击语义且不一致则禁止。"""
+    if a == b:
+        return True
+    click_a = {x for x in a if x.startswith(("tap:", "tab:", "back:"))}
+    click_b = {x for x in b if x.startswith(("tap:", "tab:", "back:"))}
+    if click_a or click_b:
+        return click_a == click_b and a == b
+    return True
+
+
+def _build_state_click_nav_signatures(
+    timeline: list[dict[str, Any]],
+    turn_cluster_ids: list[str],
+    *,
+    app_id: str = "",
+) -> dict[str, frozenset[str]]:
+    sigs: dict[str, set[str]] = {}
+    for i in range(len(timeline) - 1):
+        if i + 1 >= len(turn_cluster_ids):
+            break
+        src = str(turn_cluster_ids[i] or "")
+        dst = str(turn_cluster_ids[i + 1] or "")
+        if not src or not dst or src == dst:
+            continue
+        prev_turn = timeline[i]["turn"]
+        cur_turn = timeline[i + 1]["turn"]
+        if not _atlas_observed_nav_eligible(prev_turn, prev_sid=src, next_sid=dst):
+            continue
+        piece = _observed_click_nav_signature_from_turn_pair(prev_turn, cur_turn, app_id=app_id)
+        if piece:
+            sigs.setdefault(src, set()).add(piece)
+    return {k: frozenset(v) for k, v in sigs.items()}
 
 
 def _turn_wireframe(turn: dict[str, Any], *, app_id: str = "") -> dict[str, Any]:
@@ -698,6 +1207,9 @@ LANE_SUFFIX_MERGE_JACCARD = 0.40
 
 def _coalesce_lane_suffix_buckets(
     refined_buckets: dict[str, dict[str, Any]],
+    *,
+    timeline: list[dict[str, Any]] | None = None,
+    app_id: str = "",
 ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
     """同一粗车道下 *-sN 子桶：代表线框互 Jaccard 够则并回一页（见 9月15日-架构聚类过并过拆复盘 §4）。"""
     import re
@@ -707,6 +1219,8 @@ def _coalesce_lane_suffix_buckets(
     fp_remap: dict[str, str] = {}
     if not refined_buckets:
         return refined_buckets, fp_remap
+
+    sess_idx = _timeline_session_index(timeline or [])
 
     def _rep_wf(bucket: dict[str, Any]) -> dict[str, Any]:
         wfs = list(bucket.get("wireframes") or [])
@@ -770,20 +1284,39 @@ def _coalesce_lane_suffix_buckets(
             if ra != rb:
                 parent[rb] = ra
 
-        from mino_nexus.services.nav_atlas_naming import merge_cluster_display_name
+        def _may_union(ki: str, kj: str) -> bool:
+            j = _max_cross_jaccard(ki, kj)
+            sig_a = _bucket_observed_click_nav_signature(
+                out[ki], timeline or [], sess_idx, app_id=app_id
+            )
+            sig_b = _bucket_observed_click_nav_signature(
+                out[kj], timeline or [], sess_idx, app_id=app_id
+            )
+            if not _nav_click_signatures_compatible(sig_a, sig_b):
+                return False
+            rep_a = _rep_wf(out[ki])
+            rep_b = _rep_wf(out[kj])
+            from mino_nexus.services.nav_app_skeleton import (
+                VIEWPORT_TRANSFORM_JACCARD_MIN,
+                wireframe_aligned_transform_jaccard,
+                wireframes_same_page_under_viewport_transform,
+            )
 
-        def _cluster_title(key: str) -> str:
-            return str(
-                merge_cluster_display_name(list(out[key].get("name_samples") or [])) or ""
-            ).strip()
+            if wireframes_same_page_under_viewport_transform(rep_a, rep_b):
+                return True
+            if wireframe_aligned_transform_jaccard(rep_a, rep_b) >= VIEWPORT_TRANSFORM_JACCARD_MIN:
+                return True
+            if j >= LANE_SUFFIX_MERGE_JACCARD:
+                return True
+            from mino_nexus.services.nav_app_skeleton import SCROLL_MORPH_JACCARD_MIN
+
+            if j >= SCROLL_MORPH_JACCARD_MIN and not sig_a and not sig_b:
+                return True
+            return False
 
         for i, ki in enumerate(uniq):
             for kj in uniq[i + 1 :]:
-                if _max_cross_jaccard(ki, kj) >= LANE_SUFFIX_MERGE_JACCARD:
-                    _union(ki, kj)
-                    continue
-                t1, t2 = _cluster_title(ki), _cluster_title(kj)
-                if t1 and t1 == t2:
+                if _may_union(ki, kj):
                     _union(ki, kj)
 
         clusters: dict[str, list[str]] = {}
@@ -931,7 +1464,10 @@ def _atlas_cluster_doc(
         n = len(turns)
         if n != len(wfs):
             wfs = wfs[:n]
-        sub_clusters = split_indices_by_wireframe_similarity(wfs)
+        sub_clusters = split_indices_by_wireframe_similarity(
+            wfs,
+            frameworks=list(bucket.get("frameworks") or [])[: len(wfs)],
+        )
         morph_frames: list[dict[str, Any]] = []
         if should_coalesce_morph_clusters(wfs, sub_clusters):
             morph_frames = [wfs[i] for i in sorted({j for cl in sub_clusters for j in cl}) if i < len(wfs)]
@@ -970,7 +1506,11 @@ def _atlas_cluster_doc(
                 sub["morph_wireframes"] = morph_frames
                 sub["morph_count"] = max(0, len(morph_frames) - 1)
             refined_buckets[use_fp] = sub
-    buckets, lane_fp_remap = _coalesce_lane_suffix_buckets(refined_buckets)
+    buckets, lane_fp_remap = _coalesce_lane_suffix_buckets(
+        refined_buckets,
+        timeline=timeline,
+        app_id=app_id,
+    )
     if lane_fp_remap:
         for key, sk_fp in list(turn_cluster_fp.items()):
             canon = sk_fp
@@ -1006,7 +1546,7 @@ def _atlas_cluster_doc(
         cluster_meta[sid] = {
             "visit_count": 0,
             "wireframe": merged_wf,
-            "wireframe_turns": list(bucket.get("wireframes") or []),
+            "turn_wireframes": list(bucket.get("wireframes") or []),
             "best_score": -1,
             "display_name": display_name,
             "tab": "",
@@ -1082,7 +1622,7 @@ def _atlas_cluster_doc(
             continue
         meta["visit_count"] = int(meta.get("visit_count") or 0) + 1
         if isinstance(wf, dict):
-            meta.setdefault("wireframe_turns", []).append(wf)
+            meta.setdefault("turn_wireframes", []).append(wf)
         nm = page_label_from_turn(
             turn,
             y_tab=y_tab,
@@ -1108,18 +1648,70 @@ def _atlas_cluster_doc(
             )
             meta["header_title"] = meta["display_name"]
 
+    screen_rows, _wf_remap = _merge_wireframe_duplicate_clusters(
+        screen_rows,
+        cluster_meta,
+        turn_cluster_ids,
+        timeline=timeline,
+        app_id=app_id,
+    )
+
     from mino_nexus.services.nav_app_skeleton import merge_skeleton_wireframe
 
     for sid, meta in cluster_meta.items():
-        turns_wf = meta.pop("wireframe_turns", None)
+        turns_wf = list(meta.get("turn_wireframes") or [])
         if turns_wf:
-            merged = merge_skeleton_wireframe(turns_wf)
-            if merged:
-                meta["wireframe"] = merged
+            from mino_nexus.services.nav_app_skeleton import (
+                annotate_morph_axes_from_turn_samples,
+                merge_display_wireframe_for_atlas,
+                merge_skeleton_wireframe,
+            )
 
-    screen_rows, wf_remap = _merge_wireframe_duplicate_clusters(
-        screen_rows, cluster_meta, turn_cluster_ids
-    )
+            display = merge_display_wireframe_for_atlas(turns_wf)
+            merged = merge_skeleton_wireframe(turns_wf)
+            if display and (display.get("regions") or []):
+                annotate_morph_axes_from_turn_samples(
+                    display,
+                    turns_wf,
+                    layout_class=str(meta.get("layout_class") or ""),
+                    layout_extent=meta.get("layout_extent")
+                    if isinstance(meta.get("layout_extent"), dict)
+                    else None,
+                )
+                v_cnt = sum(
+                    1
+                    for r in (display.get("regions") or [])
+                    if isinstance(r, dict) and str(r.get("morph_axis") or "") == "vertical"
+                )
+                h_cnt = sum(
+                    1
+                    for r in (display.get("regions") or [])
+                    if isinstance(r, dict) and str(r.get("morph_axis") or "") == "horizontal"
+                )
+                meta["region_morph_vertical"] = v_cnt
+                meta["region_morph_horizontal"] = h_cnt
+                meta["wireframe"] = display
+            elif merged:
+                meta["wireframe"] = merged
+            if str(meta.get("layout_class") or "") == "infinite_feed":
+                from mino_nexus.services.nav_app_skeleton import count_scroll_morph_variants
+
+                meta["morph_count"] = max(
+                    int(meta.get("morph_count") or 0),
+                    count_scroll_morph_variants(turns_wf),
+                )
+        morph_wfs = meta.get("morphs") or meta.get("morph_wireframes")
+        if isinstance(morph_wfs, list):
+            for mw in morph_wfs:
+                if isinstance(mw, dict):
+                    annotate_wireframe_region_morph(
+                        mw,
+                        layout_class=str(meta.get("layout_class") or ""),
+                        layout_extent=meta.get("layout_extent")
+                        if isinstance(meta.get("layout_extent"), dict)
+                        else None,
+                    )
+
     state_parents: dict[str, str] = {}
     for i, cid in enumerate(turn_cluster_ids):
         if not cid:
@@ -1177,6 +1769,8 @@ def _atlas_cluster_doc(
                     "layout_class": str(meta.get("layout_class") or ""),
                     "layout_extent": meta.get("layout_extent") if isinstance(meta.get("layout_extent"), dict) else {},
                     "morph_count": int(meta.get("morph_count") or 0),
+                    "region_morph_vertical": int(meta.get("region_morph_vertical") or 0),
+                    "region_morph_horizontal": int(meta.get("region_morph_horizontal") or 0),
                     "evidence_tier": str(meta.get("evidence_tier") or ""),
                 },
             }
@@ -1230,6 +1824,9 @@ def _atlas_cluster_doc(
 
     for i in range(len(turn_cluster_ids) - 1):
         a, b = turn_cluster_ids[i], turn_cluster_ids[i + 1]
+        prev_turn = timeline[i]["turn"]
+        if not _atlas_observed_nav_eligible(prev_turn, prev_sid=a, next_sid=b):
+            continue
         side_a = sidebar_selections(
             timeline[i]["turn"], y_tab=y_tab, known_labels=known_labels
         )
@@ -1337,24 +1934,24 @@ def _atlas_cluster_doc(
                     st["meta"]["aliases"] = aliases[:12]
     _annotate_wireframes_from_edges(wireframes, edges)
 
-    for i in range(len(turn_cluster_ids) - 1):
-        a, b = turn_cluster_ids[i], turn_cluster_ids[i + 1]
-        if not a or not b or a == b:
-            continue
-        if any(
-            str(e.get("kind") or "") == "nav"
-            and str(e.get("from") or "") == a
-            and str(e.get("to") or "") == b
-            for e in edges
-        ):
-            continue
-        _add_edge(
-            f"edge.atlas.seq.{i}_{a.split('.')[-1]}_{b.split('.')[-1]}",
-            a,
-            b,
-            action_label="进入",
-            extra_meta={"action_type": "tap", "source": "timeline_seq"},
-        )
+    tab_roots = _infer_tab_root_state_ids(
+        timeline,
+        turn_cluster_ids,
+        y_tab=y_tab,
+        known_labels=known_labels,
+        cluster_meta=cluster_meta,
+    )
+    if len(tab_labels) >= 2 and tab_roots:
+        for st in states:
+            sid = str(st.get("id") or "")
+            for tab, root_sid in tab_roots.items():
+                if sid != root_sid:
+                    continue
+                st.setdefault("meta", {})
+                st["meta"]["tab"] = tab
+                if tab == home_tab:
+                    st["entry"] = True
+
     _annotate_wireframes_from_edges(wireframes, edges)
 
     layout_states: dict[str, dict[str, int]] = {}
@@ -1366,7 +1963,9 @@ def _atlas_cluster_doc(
             "x": 48 + (i % 4) * 280,
             "y": 48 + (i // 4) * 520,
         }
-    home_id = str(states[0].get("id") or "") if states else ""
+    home_id = str(tab_roots.get(home_tab) or "") if home_tab and tab_roots else ""
+    if not home_id and states:
+        home_id = str(states[0].get("id") or "")
     launch_id = ""
     for cid in turn_cluster_ids:
         if cid:
@@ -1412,8 +2011,8 @@ def _atlas_cluster_doc(
             "state_wireframes": wireframes,
             "studio_layout": {"states": layout_states},
             "tab_bar": {
-                "entries": [],
-                "labels": {},
+                "entries": [tab_roots[t] for t in tab_labels if tab_roots.get(t)],
+                "labels": {tab_roots[t]: t for t in tab_labels if tab_roots.get(t)},
                 "home_state_id": home_id,
                 "launch_state_id": launch_id or home_id,
                 "home_tab_label": home_tab,
@@ -1424,6 +2023,16 @@ def _atlas_cluster_doc(
         "states": states,
         "edges": edges,
     }
+    from mino_nexus.services.nav_flow_blocks import enrich_atlas_doc
+
+    enrich_atlas_doc(
+        doc,
+        timeline=timeline,
+        turn_cluster_ids=turn_cluster_ids,
+        nav_action_types=nav_action_types,
+        cluster_meta=cluster_meta,
+        fallback_layout=layout_states,
+    )
     return {
         "doc": doc,
         "screen_list": screen_list,
@@ -1483,6 +2092,10 @@ def _atlas_fallback_doc(
     for turn in filtered:
         sid = fingerprint_turn(turn, y_tab=y_tab, exclude=set())
         if prev_sid and sid and prev_sid != sid:
+            if not _atlas_observed_nav_eligible(prev_turn or {}, prev_sid=prev_sid, next_sid=sid):
+                prev_sid = sid
+                prev_turn = turn
+                continue
             eid = f"edge.atlas.nav.{prev_sid.split('.')[-1]}_to_{sid.split('.')[-1]}"
             if eid not in seen_e:
                 seen_e.add(eid)
@@ -2448,10 +3061,8 @@ def atlas_doc_for_navigation(
     if not _atlas_uses_skeleton_states(doc):
         return None
     doc = prepare_atlas_doc_for_nav_runtime(doc)
-    from mino_nexus.services.nav_alias_governance import apply_governance_to_doc
     from mino_nexus.services.nav_edge_resolve import enrich_state_aliases_from_nav_edges
 
-    doc, _ = apply_governance_to_doc(app_id, doc)
     doc, _ = enrich_state_aliases_from_nav_edges(doc)
     return doc
 
@@ -2537,6 +3148,9 @@ def build_atlas(
         "layout_vision_turns": int(vlm_turns),
         "note": "线框 regions 来自 hierarchy；layout_vision 有数据时与 hierarchy 叠在 wireframe.sources 里",
     }
+    from mino_nexus.services.nav_version_views import collect_nav_views_from_turns
+
+    doc_meta["nav_views"] = collect_nav_views_from_turns(filtered)
     doc = {**doc, "meta": doc_meta}
 
     last_capture_at = max((int(t.get("at") or 0) for t in filtered), default=0)

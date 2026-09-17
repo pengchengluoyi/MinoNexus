@@ -107,9 +107,7 @@ def _session_block_is_conclusive(text: str) -> bool:
         if bit.startswith("session="):
             session = bit.split("=", 1)[-1].strip().lower()
             break
-    if not session or session in ("unknown", "uncertain", "none", "未观察"):
-        return False
-    return True
+    return session in ("logged_in", "guest")
 
 
 def run_inspections(

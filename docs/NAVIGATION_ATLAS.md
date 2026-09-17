@@ -180,14 +180,16 @@ ProgressGate → 无进展 / 熔断空转（与 GuardGate 联动）
 ### 2.2 主路径（默认不用 VLM 做每步 localize）
 
 
-| 信号               | 来源（本仓已有）                           | 默认权重 |
-| ---------------- | ---------------------------------- | ----- |
-| `session`        | `inspect-session` / `session_gate` | 高     |
-| `tab_bar`        | Scout `hierarchy` 结构               | 高     |
-| `text_landmarks` | hierarchy 文本 + `none_of`           | 中     |
-| `history`        | 上一条边 `effect_assert` 是否通过          | 中     |
-| `pHash_delta`    | pillow 感知哈希（**仅进展分**）              | 低     |
-| `vlm_*`          | **接口预留，默认不调用**                     | 见下    |
+| 信号                   | 来源（本仓已有）                                  | 默认权重 |
+| -------------------- | ----------------------------------------- | ----- |
+| `session`            | `inspect-session` / `session_gate`        | 高     |
+| `skeleton_wireframe` | 当前帧 wireframe 与 `meta.state_wireframes` Jaccard | 高     |
+| `tab_bar`            | Scout `hierarchy` 结构                      | 高（纯文案折价，见 §17.1） |
+| `layout_framework`   | hierarchy 结构框架（feed / form / …）           | 高     |
+| `text_landmarks`     | hierarchy 文本 + `none_of`                  | 中     |
+| `history`            | 上一条边 `effect_assert` 是否通过                 | 中     |
+| `pHash_delta`        | pillow 感知哈希（**仅进展分**）                     | 低     |
+| `vlm_*`              | **接口预留，默认不调用**                            | 见下    |
 
 
 **VLM 克制**
@@ -203,6 +205,8 @@ ProgressGate → 无进展 / 熔断空转（与 GuardGate 联动）
 - `≥ 0.75`：推荐边 + 允许动作集
 - `0.45 – 0.75`：探索（仅 recover + 允许动作集内探索 cap）
 - `< 0.45`：恢复边优先（`go_home` / `close_dialog` / `press_back`）
+
+**跑批必须能读到骨骼。** `NavRuntime` / `fsm_navigate` 走 `load_fsm_doc(use_live=False)`：已发布 `v1` 常常只有 `page.tab_*` + 底栏文案；能辨页的 `page.sk*` 与 `state_wireframes` 还停在 `draft`。运行时把 draft Atlas **叠进** published 图（`overlay_atlas_for_runtime`），localize 才能选出当前页。底栏 Tab 文案会在每一屏共现，不能单独当选中态。详见 §17.4。
 
 
 
@@ -701,7 +705,7 @@ QA 对 `nav/guard_miss_candidate` 事件标 `confirmed_fn: true/false`，再算 
 | **0.5** | **真机 walkthrough**（§8.4）       | W1–W5 → `{data_dir}/nav/calibration/{app_id}/{calibration_id}/manifest.json` + `walkthrough.json`                               |
 | **1**   | **DB + 配置录入**                  | migration；`nav_fsm_store` + `validate_nav_fsm`；seed 或 Studio **直接写库**（§0.2）                         |
 | **2**   | `nav_fsm.py`                   | `load(app_id)` 从 DB；match guard；推荐边；允许动作集                                                      |
-| **3**   | `nav_localize.py`              | 读 `hierarchy_text`：session + tab_bar + text_landmarks + history                                      |
+| **3**   | `nav_localize.py`              | 结构化 `nodes`：session + wireframe Jaccard + layout_framework + tab_bar（文案折价）+ landmarks + history |
 | **4**   | `nav_compiler.py`              | 仅文本 RouteAssist；wiki 摘要按 need 分档（§6）                                                                |
 | **5**   | `guard_gate.py`                | 读 `detect.strength` 三档；`strong_text` 连续命中规则                                                        |
 | **6**   | `nav_telemetry` + loop 挂接       | §10.6 最小 schema；hierarchy 通道已在 0.6                                                                 |
@@ -1073,8 +1077,9 @@ seed 草稿可含占位符；**对 dev DB 执行 seed 前**必须通过 `validat
 **已确认 Scout 的节点里没有 `selected` 属性**（`UiNode.to_brief` 只有 7 个字段）。实现按此处理：
 
 - `effect_assert` 的 `tab_bar` 条件退化为文案存在性；
-- localize 的 `tab_bar` 信号：命中校准出的 `selected_resource_id_regex` 才算强证据（1.0），
-  只对上文案则折价（0.6）—— 折价是刻意的，别让「文案在屏上」冒充「这个 Tab 是选中的」。
+- localize 的 `tab_bar` 信号：命中校准出的 `selected_resource_id_regex`，或节点
+  `selected`/`checked`，或 resource-id 含 `selected`/`active`/`checked`，才算强证据（1.0）；
+  只对上文案则折价（**0.2**）—— 底栏几个 Tab 会同时出现在每一屏，0.6 会把所有 tab 根态打成平手，淹没骨骼。
 
 将来 Scout 若补上 `selected` 字段，`_eval_tab_bar` 会自动改用它，无需改配置。
 
@@ -1085,6 +1090,17 @@ seed 草稿可含占位符；**对 dev DB 执行 seed 前**必须通过 `validat
 ### 17.3 当前代码态（为何 0.6 必须先做）
 
 ~~`agent_loop` 现状仅 `observe("screenshot")`，`hierarchy_text` 恒空。~~ **债已还**：`loop/hierarchy_slots.py` + `loop/nav_runtime.py` 在 `MINO_OBSERVE_HIERARCHY` / `playbook.observe_hierarchy` 打开时每 turn 取一帧层级，写 `inspect_slots["hierarchy_text"]`，失败按 §10.0.2 降级。默认关。
+
+### 17.4 跑批运行时图：published 叠 draft Atlas
+
+`load_fsm_doc(..., use_live=False)`（`nav_runtime.for_run` / `fsm_navigate`）：
+
+1. 读已发布 `v1`；若同时有 `draft` 且 draft 含 `page.sk*` 或 `state_wireframes`，则 `overlay_atlas_for_runtime` 把骨骼页、wireframe、nav 边叠上去（`v1` 已是骨骼图则不再叠）。
+2. 状态栏 / 通知头 landmark（`is_status_bar_chrome_text`）不算 required，避免整页 `required_miss`。
+3. `hierarchy_weak` 看**可见文案节点数**，不看 flatten 字符串长度（id/cls 会把空屏撑得很长）。
+4. `fsm_navigate` 无路径时：当前 hierarchy **看不见底栏**（槽位 < 2）→ 本步 `press_key BACK`；底栏可见 → 直点目标 Tab。与 localize 是否已认出页面无关——详情栈点不到底栏。
+
+不在代码里写被测 App 的 Tab 文案或页名白名单。
 
 ---
 
@@ -1097,7 +1113,8 @@ seed 草稿可含占位符；**对 dev DB 执行 seed 前**必须通过 `validat
 | §0.2.2 证据落盘 | `core/paths.nav_calibration_dir`、`services/nav_calibration_store.py` |
 | §0.2.3 / §10.5 读写与门禁 | `services/nav_fsm_store.py`（`load_with_reason` / `save` / `validate_nav_fsm`） |
 | §10.2 API | `routers/rNavFsm.py`（前缀 `/nav-fsm`，本仓 router 不带 `/api`） |
-| §2 localize | `services/nav_localize.py` |
+| §2 localize | `services/nav_localize.py`（Jaccard / 文案折价 / 噪声 landmark） |
+| §17.4 跑批叠图 | `services/nav_route.load_fsm_doc` / `overlay_atlas_for_runtime`；无底栏 BACK：`loop/local_executors._skip_tab_fallback` |
 | §3 / §10.4 状态与选边 | `services/nav_fsm.py` |
 | §10.1 effect_assert | `services/nav_fsm.evaluate_effect_assert` |
 | §5 / §6 RouteAssist + Wiki 分档 | `services/nav_compiler.py` |

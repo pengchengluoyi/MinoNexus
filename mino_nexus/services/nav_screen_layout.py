@@ -15,10 +15,12 @@ _BOTTOM_CHROME_RE = re.compile(
 
 
 def _bounds(node: dict[str, Any]) -> tuple[int, int, int, int] | None:
-    b = node.get("bounds") or []
-    if isinstance(b, (list, tuple)) and len(b) >= 4:
-        return int(b[0]), int(b[1]), int(b[2]), int(b[3])
-    return None
+    from mino_nexus.loop.hierarchy_slots import int_list
+
+    b = int_list(node.get("bounds"), 4)
+    if b[2] <= b[0] and b[3] <= b[1]:
+        return None
+    return b[0], b[1], b[2], b[3]
 
 
 def screen_size(nodes: list[dict[str, Any]]) -> tuple[int, int]:
@@ -353,7 +355,8 @@ def infer_tab_bar_band(nodes: list[dict[str, Any]]) -> dict[str, Any]:
         band_top = min(row[1] for row in row_items)
         band_bottom = max(row[3] for row in row_items)
         source = "horizontal_row"
-        if band_top < max(content_bottom - 24, int(sh * 0.72)):
+        # content_bottom 常切在 Tab 中线，不能用它把真正的底栏行抬走。
+        if band_top < int(sh * 0.72):
             band_top = max(content_bottom, int(sh * 0.84))
             band_bottom = sh
             source = "content_bottom_fallback"

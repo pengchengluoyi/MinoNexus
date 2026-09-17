@@ -208,3 +208,16 @@ mino_nexus/core/bootstrap.py        启动 upgrade 钩子
 
 MinoScout/mino_scout/executors/adb_executor.py  SIM/eSIM read_device_data（0.1.17）
 ```
+
+---
+
+## 7. localize 选不出当前页（2026-09-17）
+
+跑批 `fsm_navigate` 只会 BACK：运行时图没有 draft 骨骼。修复见 [NAVIGATION_ATLAS.md](NAVIGATION_ATLAS.md) §17.4、[`9月16日-用例执行调用fsmnavigate能力异常.md`](9月16日-用例执行调用fsmnavigate能力异常.md) §0.7。
+
+| 文件 | 改动 |
+|------|------|
+| `services/nav_route.py` | `overlay_atlas_for_runtime`；`load_fsm_doc(use_live=False)` 叠 draft |
+| `services/nav_localize.py` | 底栏纯文案 0.2；wireframe Jaccard；噪声 landmark 跳过 |
+| `loop/hierarchy_slots.py` | `hierarchy_is_weak` 看可见文案节点 |
+| `loop/local_executors.py` | 无底栏 BACK；有底栏直点 Tab |

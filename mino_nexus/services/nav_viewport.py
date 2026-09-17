@@ -19,7 +19,7 @@ def classify_viewport_extent(
     width_finite = True
     height_finite = True
     horiz_pager = scroll == "horizontal_pager" or "pager" in kind or "carousel" in kind
-    if horiz_pager:
+    if horiz_pager and scroll != "vertical_list":
         width_finite = False
     wide_cols = sum(
         1

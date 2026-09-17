@@ -324,6 +324,23 @@ def device_platform_kind(device_type: str = "", channels: Any = None, sn: str = 
     return "android"
 
 
+def version_from_execute_result(raw: dict[str, Any] | None) -> str:
+    """从 Scout get_app_version 的 raw_response 提取版本字符串。"""
+    if not isinstance(raw, dict):
+        return ""
+    for key in ("app_version", "version", "version_name", "versionName", "name"):
+        val = str(raw.get(key) or "").strip()
+        if val and not val.startswith("{"):
+            return val[:64]
+    data = raw.get("data")
+    if isinstance(data, dict):
+        return version_from_execute_result(data)
+    extra = raw.get("extra")
+    if isinstance(extra, dict):
+        return version_from_execute_result(extra)
+    return ""
+
+
 def stamp_app_version(ctx: Any, version: str) -> None:
     """上游同名函数。Scout 侧的 get_app_version 现在把版本放 raw_response 回传，
     由调用方拿到 EventResult 后调这里落到 ctx。

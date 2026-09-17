@@ -49,22 +49,25 @@ _FSM_DEGRADE_HINT = (
     "【导航降级】路线图未能从当前屏执行跳转（常见：深层页不在架构图、或当前无底栏 Tab）。"
     "请 press_back 退出栈顶，或 recover_restart_target_app 冷启动后再点 Tab；勿重复盲目 fsm_navigate。"
 )
+_FSM_SAME_PAGE_HINT = (
+    "【导航】路线图判定当前已在目标节点，本次未执行点击。"
+    "若屏上已是目标页请立即 signal_done；若实际不是，请 tap_element 直点目标入口或 press_back，"
+    "禁止用相同 from/to 重复 fsm_navigate。"
+)
 
 
-def _skip_tab_fallback(localized: dict[str, Any]) -> bool:
-    """迷路且 localize 未选中 Tab 根态时，直点底栏 Tab 几乎必败。"""
-    if not isinstance(localized, dict):
-        return False
-    if str(localized.get("band") or "").strip() != "recover":
-        return False
-    chosen = str(localized.get("chosen") or "").strip()
-    if chosen:
-        return False
-    try:
-        conf = float(localized.get("confidence") or 0)
-    except (TypeError, ValueError):
-        conf = 0.0
-    return conf < 0.35
+def _visible_bottom_tab_slots(ctx: Any) -> list[dict[str, Any]]:
+    nodes = getattr(ctx, "nav_hierarchy_nodes", None) if ctx is not None else None
+    if not isinstance(nodes, list) or not nodes:
+        return []
+    from mino_nexus.services.nav_tab_slots import find_bottom_tab_slots
+
+    return find_bottom_tab_slots(nodes)
+
+
+def _skip_tab_fallback(_localized: dict[str, Any], ctx: Any = None) -> bool:
+    """当前屏看不见底栏时，直点 Tab 必败 —— 与 localize 是否已认出页面无关。"""
+    return len(_visible_bottom_tab_slots(ctx)) < 2
 
 
 def dispatch_local(
@@ -332,7 +335,12 @@ def _fsm_navigate(
             error="missing to_state",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
-    fsm_doc, _ = nav_route.load_fsm_doc(app_id, project_id=project_id)
+    fsm_doc, _ = nav_route.load_fsm_doc(
+        app_id,
+        project_id=project_id,
+        use_live=False,
+        app_version=str(getattr(ctx, "app_version", "") or ""),
+    )
     fsm = fsm_doc or {}
     if not fsm:
         return _degrade(
@@ -371,44 +379,101 @@ def _fsm_navigate(
             summary = str(plan.get("summary") or "")
             nav_attempt["plan_ok"] = True
             if hops == 0:
-                plan_msg = f"已在目标屏 {plan.get('to_state')}"
-                nav_attempt["plan_error"] = ""
-                nav_attempt["arrived_at_target"] = True
-                nav_attempt["hops_remaining"] = 0
-                return _result(
-                    event,
-                    status=EventStatus.PASS,
-                    summary=plan_msg,
-                    executor="internal",
-                    elapsed_ms=int((time.time() - t0) * 1000),
-                    raw_response={"nav_attempt": nav_attempt},
+                click_label = nav_route.click_label_from_nav_ref(to_raw)
+                if click_label:
+                    plan_msg = (
+                        f"图上已在 {plan.get('to_state')}，仍按目标文案点击「{click_label}」"
+                    )
+                    step_cap = "tap_element"
+                    step_params = {"selector_text": click_label, "text": click_label}
+                    nav_attempt["plan_error"] = ""
+                    nav_attempt["step_pick"] = "same_page_click_label"
+                    nav_attempt["planned_hops"] = 0
+                    nav_attempt["fallback_tab"] = click_label
+                else:
+                    plan_msg = f"已在目标屏 {plan.get('to_state')}"
+                    nav_attempt["plan_error"] = ""
+                    nav_attempt["arrived_at_target"] = True
+                    nav_attempt["hops_remaining"] = 0
+                    hits = getattr(ctx, "_fsm_same_page_hits", None)
+                    if not isinstance(hits, dict):
+                        hits = {}
+                        if ctx is not None:
+                            setattr(ctx, "_fsm_same_page_hits", hits)
+                    same_key = (
+                        f"{nav_attempt.get('resolved_from') or from_raw}"
+                        f"->{nav_attempt.get('resolved_to') or to_raw}"
+                    )
+                    n = int(hits.get(same_key, 0) or 0) + 1
+                    hits[same_key] = n
+                    if n > 1:
+                        return _degrade(
+                            f"{plan_msg}。{_FSM_SAME_PAGE_HINT}",
+                            "same_page_repeat",
+                            nav_attempt,
+                        )
+                    return _result(
+                        event,
+                        status=EventStatus.PASS,
+                        summary=f"{plan_msg}。{_FSM_SAME_PAGE_HINT}",
+                        executor="internal",
+                        elapsed_ms=int((time.time() - t0) * 1000),
+                        raw_response={
+                            "nav_attempt": nav_attempt,
+                            "correction_hint": _FSM_SAME_PAGE_HINT,
+                        },
+                    )
+            else:
+                first, pick_meta = nav_route.pick_fsm_first_step(fsm, plan)
+                nav_attempt["planned_hops"] = int(pick_meta.get("planned_hops") or hops)
+                nav_attempt["step_pick"] = str(pick_meta.get("step_pick") or "")
+                step_cap, step_params = nav_route.dispatch_spec_for_edge(fsm, first)
+                plan_msg = (
+                    f"规划 {hops} 步：{summary}；本步 {first.get('edge_id') or ''} "
+                    f"→ {first.get('to') or ''}"
                 )
-            first, pick_meta = nav_route.pick_fsm_first_step(fsm, plan)
-            nav_attempt["planned_hops"] = int(pick_meta.get("planned_hops") or hops)
-            nav_attempt["step_pick"] = str(pick_meta.get("step_pick") or "")
-            step_cap, step_params = nav_route.dispatch_spec_for_edge(fsm, first)
-            plan_msg = (
-                f"规划 {hops} 步：{summary}；本步 {first.get('edge_id') or ''} "
-                f"→ {first.get('to') or ''}"
-            )
         else:
             err = str(plan.get("error") or "无路径")
             nav_attempt["plan_ok"] = False
             nav_attempt["plan_error"] = err
-            if _skip_tab_fallback(localized):
-                hint = (
-                    f"{err}；当前屏无底栏 Tab（band=recover），跳过直点 Tab。"
-                    "请先 press_back 或 recover_restart_target_app。"
+            if _skip_tab_fallback(localized, ctx):
+                # 详情/栈顶无底栏：直点 Tab 必败。系统返回是最短可用 hop，
+                # 不要 declined 把这一步踢回模型再自己 press_key。
+                hits = getattr(ctx, "_fsm_recover_back_hits", None) if ctx is not None else None
+                if not isinstance(hits, dict):
+                    hits = {}
+                    if ctx is not None:
+                        setattr(ctx, "_fsm_recover_back_hits", hits)
+                n = int(hits.get("back", 0) or 0) + 1
+                hits["back"] = n
+                if n > 3:
+                    hint = (
+                        f"{err}；当前屏无底栏 Tab，"
+                        f"已连续系统返回 {n - 1} 次仍无法规划。"
+                        "请 recover_restart_target_app 或 tap_element 直点目标。"
+                    )
+                    nav_attempt["plan_error"] = hint
+                    return _degrade(hint, err, nav_attempt)
+                step_cap = "press_key"
+                step_params = {"key": "BACK"}
+                plan_msg = (
+                    f"{err}；当前屏无底栏 Tab，"
+                    f"本步先系统返回退出栈顶（{n}/3），请再次 fsm_navigate。"
                 )
-                nav_attempt["plan_error"] = hint
-                return _degrade(hint, err, nav_attempt)
-            step_params = nav_route.direct_tab_tap_params(fsm, resolve.get("resolved_to") or to_raw)
-            step_cap = "tap_element"
-            if step_params:
-                plan_msg = f"{err}；尝试直接点击 Tab「{step_params.get('selector_text') or ''}」"
-                nav_attempt["fallback_tab"] = step_params.get("selector_text") or ""
+                nav_attempt["step_pick"] = "recover_press_back"
+                nav_attempt["planned_hops"] = max(2, n + 1)
             else:
-                return _degrade(err, err, nav_attempt)
+                step_params = nav_route.direct_tab_tap_params(
+                    fsm, resolve.get("resolved_to") or to_raw
+                )
+                step_cap = "tap_element"
+                if step_params:
+                    plan_msg = (
+                        f"{err}；尝试直接点击 Tab「{step_params.get('selector_text') or ''}」"
+                    )
+                    nav_attempt["fallback_tab"] = step_params.get("selector_text") or ""
+                else:
+                    return _degrade(err, err, nav_attempt)
     else:
         plan_msg = f"未提供当前屏，直接尝试点击目标 Tab「{to_raw}」"
         step_params = nav_route.direct_tab_tap_params(fsm, to_raw)
@@ -433,7 +498,14 @@ def _fsm_navigate(
         if isinstance(nodes, list) and nodes:
             from mino_nexus.loop.tap_enrich import enrich_tap_params
 
-            step_params = enrich_tap_params(step_params, nodes)
+            step_params = enrich_tap_params(
+                step_params,
+                nodes,
+                hint=str(step_params.get("selector_text") or ""),
+            )
+            from mino_nexus.ai.coords import lift_selector_target
+
+            lift_selector_target(step_params)
 
     if router is None:
         return _result(

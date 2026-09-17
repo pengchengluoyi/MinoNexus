@@ -212,6 +212,7 @@ def append_turn(
     cap_id: str = "",
     error: str = "",
     screenshot_b64: str = "",
+    app_version: str = "",
 ) -> dict[str, Any] | None:
     """记一帧。空层级不记 —— 与旧 walkthrough 记步规则一致。"""
     if not nodes:
@@ -260,6 +261,7 @@ def append_turn(
         "screen_kind": screen_pkg["screen_kind"],
         "target_scope": scope.as_dict() if scope else {},
         "cap_id": str(cap_id or ""),
+        "app_version": str(app_version or "").strip()[:64],
         "error": str(error or "")[:200],
         "nodes_rel": f"{stem}.nodes.json",
         "screenshot_rel": "",
@@ -463,6 +465,7 @@ def patch_turn_action(
     *,
     cap_id: str = "",
     selector_text: str = "",
+    action_key: str = "",
 ) -> dict[str, Any] | None:
     """把本 turn 实际执行的动作写回 meta，供 atlas 跳转标签使用。"""
     root = _session_root(app_id, session_id)
@@ -475,6 +478,8 @@ def patch_turn_action(
         meta["cap_id"] = str(cap_id)
     if selector_text:
         meta["selector_text"] = str(selector_text)[:80]
+    if action_key:
+        meta["action_key"] = str(action_key)[:32]
     _write_json(meta_path, meta)
     return meta
 
@@ -577,6 +582,9 @@ def capture_report(app_id: str) -> dict[str, Any]:
         {"text": k, "count": v}
         for k, v in sorted(landmark_counts.items(), key=lambda x: (-x[1], x[0]))[:20]
     ]
+    ordered, _ = iter_cumulative_turns(app_id, limit_sessions=50, limit_turns=500)
+    from mino_nexus.services.nav_version_views import capture_report_by_app_version
+
     return {
         "app_id": str(app_id or ""),
         "sessions": len(sessions),
@@ -584,6 +592,7 @@ def capture_report(app_id: str) -> dict[str, Any]:
         "accounts_seen": sorted(accounts),
         "state_hits": state_hits,
         "top_landmarks": top_landmarks,
+        "turns_by_app_version": capture_report_by_app_version(ordered),
     }
 
 

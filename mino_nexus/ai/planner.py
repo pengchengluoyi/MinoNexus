@@ -46,6 +46,24 @@ from mino_nexus.ai.schemas import (
 from mino_nexus.runtime.menu import available_menu_brief
 from mino_nexus.runtime.run_context import RunContext
 TAG = "RegressionPlanner"
+
+
+def _llm_image(image_base64: str, image_mime: str = "image/png") -> tuple[str, str]:
+    """喂给视觉 job 的图：长边 JPEG。失败则原样回落。"""
+    raw = str(image_base64 or "").strip()
+    if not raw:
+        return "", str(image_mime or "image/png")
+    try:
+        from mino_nexus.loop.agent_stream import make_llm_jpeg
+
+        jpeg, mime = make_llm_jpeg(raw)
+        if jpeg:
+            return jpeg, mime
+    except Exception as exc:
+        SLog.d(TAG, f"llm jpeg skipped: {exc}")
+    return raw, str(image_mime or "image/png")
+
+
 def _chat(*, job: str, provider, messages, job_meta: dict | None = None, **kwargs):
     from mino_nexus.ai import dispatch_log as dispatch
 
@@ -249,6 +267,7 @@ def assert_visual(
             evidence="",
             parse_warnings=["provider unavailable"],
         )
+    image_base64, image_mime = _llm_image(image_base64, image_mime)
     slots = assemble_assert_vision_slots(
         expectation=expectation,
         image_base64=image_base64,
@@ -540,6 +559,7 @@ def decide_next_action(
                                  parse_warnings=["empty session menu"])
     from mino_nexus.catalog.tool_schema import tools_chat_payload, tools_for_menu
 
+    image_base64, image_mime = _llm_image(image_base64, image_mime)
     tool_payload = tools_chat_payload(tools_for_menu(menu))
     provider, gate = resolve_regression_provider(provider_id)
     if provider is None:
@@ -709,6 +729,7 @@ def inspect_session(
     if not image_base64:
         empty["reason"] = "无截图，跳过会话观察"
         return empty
+    image_base64, image_mime = _llm_image(image_base64, image_mime)
     provider, gate = resolve_regression_provider(provider_id)
     if provider is None:
         empty["reason"] = f"未启用 AI：{gate.get('reason')}"
@@ -792,6 +813,7 @@ def judge_widget_state(
     if not image_base64 or not wanted:
         empty["reason"] = "无截图或无候选态"
         return empty
+    image_base64, image_mime = _llm_image(image_base64, image_mime)
     provider, gate = resolve_regression_provider(provider_id)
     if provider is None:
         empty["reason"] = f"未启用 AI：{gate.get('reason')}"

@@ -30,6 +30,41 @@ _MAX_TEXT_CHARS = 6000
 _TRUE = frozenset({"1", "true", "yes", "on"})
 
 
+def safe_int(value: Any, default: int = 0) -> int:
+    """层级/VLM 坐标常夹杂空串、空格或浮点字符串，不能直接 int()。"""
+    if value is None or isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        try:
+            return int(value)
+        except (OverflowError, ValueError):
+            return default
+    text = str(value).strip()
+    if not text:
+        return default
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        try:
+            return int(float(text))
+        except (TypeError, ValueError, OverflowError):
+            return default
+
+
+def int_list(raw: Any, size: int) -> list[int]:
+    """只接受 list/tuple；字符串不当字符序列迭代。缺位补 0。"""
+    if size <= 0:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        return [0] * size
+    out = [safe_int(item, 0) for item in list(raw)[:size]]
+    if len(out) < size:
+        out.extend([0] * (size - len(out)))
+    return out
+
+
 def observe_hierarchy_enabled(ctx: Any) -> bool:
     """跑用例时默认采集 hierarchy；仅 env 显式关时才停（不再经 playbook 开关）。
 
@@ -120,21 +155,33 @@ def capture(proxy: Any, *, turn_id: int, screenshot_turn_id: int | None = None) 
         return HierarchySnapshot(
             turn_id=turn_id,
             error=str(getattr(shot, "error", "") or "hierarchy 未返回"),
-            elapsed_ms=int(getattr(shot, "elapsed_ms", 0) or 0),
+            elapsed_ms=safe_int(getattr(shot, "elapsed_ms", 0), 0),
         )
 
-    detail = dict(getattr(shot, "remote_detail", None) or {})
-    nodes = normalize_nodes(detail.get("nodes"))
-    stale = screenshot_turn_id is not None and int(screenshot_turn_id) != int(turn_id)
-    return HierarchySnapshot(
-        ok=True,
-        nodes=nodes,
-        text=flatten(nodes),
-        turn_id=turn_id,
-        stale=stale,
-        elapsed_ms=int(getattr(shot, "elapsed_ms", 0) or detail.get("elapsed_ms") or 0),
-        source=str(detail.get("source") or getattr(shot, "source", "") or ""),
-    )
+    try:
+        detail = dict(getattr(shot, "remote_detail", None) or {})
+        nodes = normalize_nodes(detail.get("nodes"))
+        stale = False
+        if screenshot_turn_id is not None:
+            stale = safe_int(screenshot_turn_id, 0) != safe_int(turn_id, 0)
+        return HierarchySnapshot(
+            ok=True,
+            nodes=nodes,
+            text=flatten(nodes),
+            turn_id=safe_int(turn_id, 0),
+            stale=stale,
+            elapsed_ms=safe_int(
+                getattr(shot, "elapsed_ms", 0) or detail.get("elapsed_ms") or 0,
+                0,
+            ),
+            source=str(detail.get("source") or getattr(shot, "source", "") or ""),
+        )
+    except Exception as exc:  # noqa: BLE001 — 脏 bounds 只降级，不让整案崩溃
+        return HierarchySnapshot(
+            turn_id=safe_int(turn_id, 0),
+            error=f"{type(exc).__name__}: {exc}",
+            elapsed_ms=safe_int(getattr(shot, "elapsed_ms", 0), 0),
+        )
 
 
 _STATUS_BAR_MAX_Y = 80
@@ -148,17 +195,33 @@ _PERCENT_TEXT_RE = re.compile(r"^\d{1,3}%$")
 _CLOCK_TEXT_RE = re.compile(r"^\d{1,2}:\d{2}$")
 
 
+_WEAK_LABEL_MAX = 2
+
+
+def content_label_count(nodes: list[dict[str, Any]] | None) -> int:
+    """非系统噪声、且带可见文案/描述的节点数。flatten 长度会被 id/cls 撑长，不能当弱层级判据。"""
+    n = 0
+    for node in nodes or []:
+        if not isinstance(node, dict) or is_system_ui_noise(node):
+            continue
+        if str(node.get("text") or "").strip() or str(node.get("content_desc") or "").strip():
+            n += 1
+    return n
+
+
+def hierarchy_is_weak(nodes: list[dict[str, Any]] | None) -> bool:
+    """有节点但几乎没有可引用文案时，localize 只能走结构。"""
+    rows = [n for n in (nodes or []) if isinstance(n, dict)]
+    return bool(rows) and content_label_count(rows) <= _WEAK_LABEL_MAX
+
+
 def is_system_ui_noise(node: dict[str, Any]) -> bool:
     """状态栏 / 通知栏节点，不参与层级判据与采集聚类。"""
     rid = str(node.get("resource_id") or "")
     if any(m in rid for m in _SYSTEMUI_MARKERS):
         return True
-    bounds = node.get("bounds") or [0, 0, 0, 0]
-    try:
-        top = int(bounds[1])
-        bottom = int(bounds[3])
-    except (TypeError, ValueError, IndexError):
-        top, bottom = 0, 0
+    bounds = int_list(node.get("bounds"), 4)
+    top, bottom = bounds[1], bounds[3]
     if bottom > 0 and bottom <= _STATUS_BAR_MAX_Y:
         return True
     text = str(node.get("text") or "").strip()
@@ -183,8 +246,8 @@ def normalize_nodes(raw: Any) -> list[dict[str, Any]]:
             "content_desc": str(item.get("content_desc") or ""),
             "class": str(item.get("class") or item.get("cls") or ""),
             "clickable": bool(item.get("clickable")),
-            "bounds": [int(x) for x in (item.get("bounds") or [0, 0, 0, 0])[:4]],
-            "center": [int(x) for x in (item.get("center") or [0, 0])[:2]],
+            "bounds": int_list(item.get("bounds"), 4),
+            "center": int_list(item.get("center"), 2),
         }
         if is_system_ui_noise(row):
             continue

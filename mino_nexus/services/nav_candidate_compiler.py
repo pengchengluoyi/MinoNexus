@@ -130,6 +130,26 @@ def compile_from_captures(app_id: str, *, min_evidence: int = _MIN_EVIDENCE) -> 
         if str(row.get("status") or "") == "pending":
             row["status"] = "accepted"
     batch["pending_count"] = 0
+    try:
+        from mino_nexus.services import nav_screen_registry as atlas_reg
+        from mino_nexus.services.nav_expectation_compiler import (
+            merge_candidates_into_batch,
+            propose_expectation_candidates,
+        )
+
+        built = atlas_reg.build_atlas(app_id)
+        atlas_doc = built.get("doc") if isinstance(built, dict) else None
+        exp_rows = propose_expectation_candidates(app_id, atlas_doc=atlas_doc)
+        if exp_rows:
+            batch = merge_candidates_into_batch(batch, exp_rows)
+            for row in batch.get("candidates") or []:
+                if str(row.get("verification_status") or "") == "pending":
+                    row["status"] = "pending"
+            batch["pending_count"] = sum(
+                1 for c in batch.get("candidates") or [] if str(c.get("status") or "") == "pending"
+            )
+    except Exception:
+        pass
     cand_store.save_batch(app_id, batch)
     return batch
 
@@ -1265,10 +1285,8 @@ def prepare_publish(
     else:
         result_source = "template_autofill"
     draft = finalize_for_publish(app_id, draft)
-    from mino_nexus.services.nav_alias_governance import apply_governance_to_doc
     from mino_nexus.services.nav_edge_resolve import enrich_state_aliases_from_nav_edges
 
-    draft, _ = apply_governance_to_doc(app_id, draft)
     draft, _ = enrich_state_aliases_from_nav_edges(draft)
     saved = calib.save_draft(app_id, draft)
     pending = tpl.pending_marks(saved)

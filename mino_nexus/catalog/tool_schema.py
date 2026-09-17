@@ -218,14 +218,6 @@ _TOOL_META_PROPS: dict[str, Any] = {
         "items": {"type": "string"},
         "description": "还需某条知识原文时填写 id",
     },
-    "screen_layout": {
-        "type": "object",
-        "description": "当前屏内容区布局线框（chrome+regions，坐标 0~1），与 capability 同轮必填",
-    },
-    "vlm_hierarchy": {
-        "type": "object",
-        "description": "VLM 可见控件树（nodes≤40），与 screen_layout 同轮必填",
-    },
 }
 
 

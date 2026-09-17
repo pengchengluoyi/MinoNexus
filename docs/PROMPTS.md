@@ -96,3 +96,16 @@ v7 同时往 system 块插了一节「导航 assist」，讲**怎么读这段**�
 | 生产者 | `loop/inspections.match_step_docs` → `assemble_agent_decide_slots` |
 | 块配置 | `skip_if_empty: true`，`max_chars: 1400` |
 | 升级 | `upgrade_agent_decide_to_v9()`，启动时 bootstrap 幂等调用 |
+
+## 8. 去掉每轮 `screen_layout` / `vlm_hierarchy`（v13 / inspect v3 / assert v3）
+
+跑批主耗时是模型每轮生成这两段 JSON（10–18s），不是传图。Scout hierarchy 已经注入 prompt。
+
+| job | 版本 | 改动 |
+|-----|------|------|
+| `agent-decide` | 13 | 删掉必填布局章节；tool schema 不再带这两字段；`max_tokens` 2048→768 |
+| `inspect-session` | 3 | 同上；`max_tokens` 512→320 |
+| `assert-vision` | 3 | 去掉 `screen_layout`；`max_tokens` 512→320 |
+
+升级入口：`upgrade_agent_decide_to_v13` / `upgrade_inspect_session_to_v3` / `upgrade_assert_vision_to_v3`，启动时 bootstrap 幂等。旧模型若仍吐这两字段，解析侧忽略，不进 `action.params`。
+

@@ -77,6 +77,8 @@ class RecoveryOutcome:
 
     def summary(self) -> str:
         if self.mode == "advise":
+            if self.advice:
+                return f"{self.rule_id}: {self.advice}"
             return f"{self.rule_id}: 给出处置建议"
         state = "已恢复" if self.recovered else "未恢复"
         return f"{self.rule_id}: 执行 {len(self.actions)} 个动作，{state}"
@@ -289,6 +291,36 @@ def apply_rule(
     out = RecoveryOutcome(rule_id=rule.id, mode=rule.mode)
     if rule.mode == "advise":
         out.advice = str(rule.prompt_snippet or "").strip()
+        if router is not None:
+            ev = collect_evidence(ctx, router, target_package=target_package)
+            if hasattr(router, "observe"):
+                try:
+                    from mino_nexus.loop.screen_capture import merge_shot_evidence
+
+                    merge_shot_evidence(ev, router.observe("screenshot", force_fresh=False))
+                except Exception:
+                    pass
+            out.evidence = ev.brief()
+            facts = ev.as_match_dict()
+            mismatch = False
+            evid = dict(getattr(rule.match, "evidence", None) or {})
+            if evid:
+                for key, want in evid.items():
+                    got = facts.get(str(key), "unknown")
+                    if got not in ("unknown", str(want)) and got != str(want):
+                        mismatch = True
+                        break
+            if mismatch:
+                out.error = "evidence_mismatch"
+                out.advice = (
+                    f"当前证据不匹配本恢复（{ev.brief()}）。"
+                    f"请改用 tap_element / press_key / fsm_navigate，勿再调用 recover_{rule.id}。"
+                )
+                return out
+        if not out.advice:
+            out.advice = (
+                f"{rule.id}：按规则提示处理当前异常，不要重复调用本恢复。"
+            )
         return out
 
     max_attempts = max(1, int(rule.max_attempts or 1))
@@ -415,11 +447,38 @@ def ensure_target_app_foreground(
         from mino_nexus.loop.screen_capture import merge_shot_evidence
 
         merge_shot_evidence(ev, shot)
-    if ev.app_foreground != "no" or ev.screen_blocked == "yes":
+    if ev.app_foreground == "yes":
         return None
-    rule = catalog.get_recovery_rule("bring_target_app_foreground")
-    if rule is None:
+    if ev.screen_blocked == "yes":
         return None
-    out = apply_rule(RuleMatch(rule=rule, reasons=["preflight_fg"]), ctx, router, target_package=pkg)
+    away = ev.app_foreground == "no" or (
+        bool(ev.foreground_pkg) and bool(pkg) and ev.foreground_pkg != pkg
+    )
+    if not away:
+        return None
+    event = PlanEvent(
+        seq=0,
+        capability_id="launch_app",
+        event_kind="launch_app",
+        params={"package": pkg},
+        ai_reasoning="开环前台不是被测 App，程序启动目标包",
+        label="程序启动被测 App",
+    )
+    res = _dispatch(router, ctx, event, agent_turn=0, action_idx=1)
+    status = getattr(res.status, "value", res.status)
+    ok = str(status) in (EventStatus.PASS.value, "pass")
+    out = RecoveryOutcome(rule_id="bring_target_app_foreground", mode="execute")
+    out.applied = True
+    out.recovered = ok
+    out.attempts = 1
+    out.actions = [
+        {
+            "capability": "launch_app",
+            "status": str(status),
+            "summary": res.summary,
+        }
+    ]
+    if not ok:
+        out.error = res.error or "launch_app 执行失败"
     out.evidence = ev.brief()
     return out

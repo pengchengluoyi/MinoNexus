@@ -23,7 +23,12 @@ from typing import Any, Optional
 
 from mino_nexus.core.log import SLog
 from mino_nexus.loop.guard_gate import ACTION_ALLOW, GuardGate, Verdict
-from mino_nexus.loop.hierarchy_slots import HierarchySnapshot, capture, observe_hierarchy_enabled
+from mino_nexus.loop.hierarchy_slots import (
+    HierarchySnapshot,
+    capture,
+    hierarchy_is_weak,
+    observe_hierarchy_enabled,
+)
 from mino_nexus.services import nav_compiler, nav_localize, nav_telemetry
 from mino_nexus.services import nav_fsm as F
 from mino_nexus.services import nav_fsm_store as store
@@ -74,6 +79,7 @@ class NavRuntime:
         self._last_edge_passed: bool = False
         self._turn_id: int = 0
         self._run_id: str = ""
+        self._app_version: str = ""
 
     # ---------------- 构造 ----------------
 
@@ -100,7 +106,13 @@ class NavRuntime:
         else:
             from mino_nexus.services.nav_route import load_fsm_doc
 
-            fsm, nav_src = load_fsm_doc(app_id, project_id=project_id, use_live=True)
+            app_ver = str(getattr(ctx, "app_version", "") or "").strip()
+            fsm, nav_src = load_fsm_doc(
+                app_id,
+                project_id=project_id,
+                use_live=False,
+                app_version=app_ver,
+            )
             reason = ""
             if not fsm:
                 fsm, reason = store.load_with_reason(app_id, expected_account_id=account_id)
@@ -129,6 +141,7 @@ class NavRuntime:
             platform=str(getattr(ctx, "platform", "") or "android"),
         )
         inst._run_id = str(run_id or "")
+        inst._app_version = str(getattr(ctx, "app_version", "") or "").strip()
         return inst
 
     @property
@@ -161,9 +174,7 @@ class NavRuntime:
                 pass
 
         nodes = snap.nodes if snap.usable() else []
-        hierarchy_weak = bool(
-            snap.ok and nodes and len(str(snap.text or "").strip()) < 24
-        )
+        hierarchy_weak = bool(snap.ok and nodes and hierarchy_is_weak(nodes))
         if not self.active:
             slot_sink["nav_assist"] = ""
             self._record_capture(snap, writer=writer, localized={}, screenshot=screenshot)
@@ -183,9 +194,13 @@ class NavRuntime:
                 vlm_landmark_signals_for_states,
             )
 
-            if not nodes or bool(vlm_h.get("degraded_scout")):
-                nodes = merge_vlm_into_nodes(nodes, list(vlm_h.get("nodes") or []))
-            extra_vlm = vlm_landmark_signals_for_states(self.fsm.get("states") or [], vlm_h)
+            try:
+                if not nodes or bool(vlm_h.get("degraded_scout")):
+                    nodes = merge_vlm_into_nodes(nodes, list(vlm_h.get("nodes") or []))
+                extra_vlm = vlm_landmark_signals_for_states(self.fsm.get("states") or [], vlm_h)
+            except Exception as exc:  # noqa: BLE001
+                SLog.w(TAG, f"vlm hierarchy merge failed: {type(exc).__name__}: {exc}")
+                extra_vlm = None
         else:
             extra_vlm = None
         self._pending_vlm_hierarchy = None
@@ -217,6 +232,24 @@ class NavRuntime:
 
         state_id = str(self.localized.get("chosen") or "")
         state = F.state_by_id(self.fsm or {}, state_id)
+        st_show = (state.get("meta") if isinstance(state, dict) else None) or {}
+        if isinstance(st_show, dict):
+            display = str(st_show.get("display_name") or "").strip()
+            if display:
+                self.localized["display_name"] = display
+            aliases = [
+                str(item).strip()
+                for item in (st_show.get("aliases") or [])
+                if str(item).strip()
+            ]
+            if aliases:
+                seen: set[str] = set()
+                uniq: list[str] = []
+                for item in aliases:
+                    if item not in seen:
+                        seen.add(item)
+                        uniq.append(item)
+                self.localized["aliases"] = uniq[:12]
         hits = F.evaluate_guards(state, nodes)
         hits = self._maybe_vlm_enrich(state, hits, screenshot)
         nav_telemetry.localize(
@@ -403,6 +436,7 @@ class NavRuntime:
                 cap_id=cap_id,
                 error=snap.error,
                 screenshot_b64=image_b64,
+                app_version=self._app_version,
             )
             if meta:
                 self._captures_recorded += 1
@@ -424,19 +458,7 @@ class NavRuntime:
                 pass
 
     def shutdown(self, *, writer: Any = None, status: str = "", summary: str = "") -> dict[str, Any] | None:
-        """跑批结束摘要；采集结束后再合成一次草稿（不自动 promote）。"""
-        if self.app_id and self._captures_recorded > 0:
-            try:
-                from mino_nexus.services import nav_live_graph
-
-                nav_live_graph.get_live_graph(
-                    self.app_id,
-                    project_id=self.project_id,
-                    updated_by="capture",
-                    sync=False,
-                )
-            except Exception as sync_exc:  # noqa: BLE001
-                SLog.w(TAG, f"收工合成导航草稿失败（忽略）：{type(sync_exc).__name__}: {sync_exc}")
+        """跑批结束摘要。不在执行路径上合成 live 图，导航页用库里已有数据。"""
         if self._captures_recorded <= 0:
             return None
         payload = {
@@ -559,6 +581,7 @@ class NavRuntime:
                 int(self._turn_id),
                 cap_id=str(cap_id or ""),
                 selector_text=str((params or {}).get("selector_text") or ""),
+                action_key=str((params or {}).get("key") or ""),
             )
         except Exception as exc:  # noqa: BLE001
             SLog.w(TAG, f"回写采集动作失败（忽略）：{type(exc).__name__}: {exc}")

@@ -98,6 +98,49 @@ def get_run_events(run_id: str) -> dict[str, Any] | None:
         return copy.deepcopy(hit) if hit else None
 
 
+_LLM_JPEG_EDGE_MIN = 720
+_LLM_JPEG_EDGE_MAX = 900
+_LLM_JPEG_EDGE_DEFAULT = 800
+_LLM_JPEG_QUALITY = 72
+
+
+def make_llm_jpeg(
+    raw_b64: str,
+    *,
+    long_edge: int = _LLM_JPEG_EDGE_DEFAULT,
+    quality: int = _LLM_JPEG_QUALITY,
+) -> tuple[str, str]:
+    """Vision job 用图：长边压到 720–900 的 JPEG。点按仍用千分比，不依赖原图像素。
+
+    返回 ``(jpeg_b64, image/jpeg)``；失败则 ``("", "")``，调用方回落原图。
+    """
+    if not raw_b64:
+        return "", ""
+    try:
+        from PIL import Image
+
+        blob = raw_b64.strip()
+        if blob.startswith("data:") and "," in blob:
+            blob = blob.split(",", 1)[1]
+        img = Image.open(BytesIO(base64.b64decode(blob))).convert("RGB")
+        w, h = img.size
+        long = max(w, h)
+        edge = int(long_edge or _LLM_JPEG_EDGE_DEFAULT)
+        edge = max(_LLM_JPEG_EDGE_MIN, min(_LLM_JPEG_EDGE_MAX, edge))
+        if long > edge:
+            scale = edge / float(long)
+            img = img.resize(
+                (max(1, int(w * scale)), max(1, int(h * scale))),
+                Image.Resampling.LANCZOS,
+            )
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=max(40, min(90, int(quality or _LLM_JPEG_QUALITY))))
+        return base64.b64encode(buf.getvalue()).decode("ascii"), "image/jpeg"
+    except Exception as e:
+        SLog.d(TAG, f"make_llm_jpeg failed: {e}")
+        return "", ""
+
+
 def make_thumb(png_b64: str, *, width: int = 360, quality: int = 70) -> str:
     if not png_b64:
         return ""

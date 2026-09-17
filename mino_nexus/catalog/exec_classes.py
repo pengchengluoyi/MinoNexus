@@ -30,4 +30,5 @@ KIND_META: Dict[str, Dict[str, str]] = {
 MUTATE_CAPS = frozenset({
     "tap_element", "multi_tap", "swipe_element_to_element", "swipe_direction",
     "input_text", "press_key", "long_press_element",
+    "fsm_navigate",
 })

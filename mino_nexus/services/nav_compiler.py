@@ -134,10 +134,31 @@ def compile_assist(
     if str(run_type or "").lower() == "explore":
         return ""
 
+    from mino_nexus.services.nav_flow_blocks import build_flow_context, format_flow_context_block
+
+    flow_ctx = build_flow_context(fsm, state_id=str(plan.state_id or ""), localized=localized)
+    flow_line = format_flow_context_block(flow_ctx)
+    meta = fsm.get("meta") if isinstance(fsm, dict) and isinstance(fsm.get("meta"), dict) else {}
+    resolved_view = str(meta.get("resolved_nav_view_id") or "").strip()
+    resolved_av = str(meta.get("resolved_app_version") or "").strip()
+    version_line = ""
+    if resolved_view and resolved_view != "av:default":
+        version_line = f"【应用版本】{resolved_av or '未知'} → 视图 {resolved_view}"
+
     if not getattr(plan, "case_navigation_goal", False):
-        return _head(plan, fsm).strip()
+        parts = [_head(plan, fsm, localized=localized)]
+        if flow_line:
+            parts.append(flow_line)
+        if version_line:
+            parts.append(version_line)
+        return "\n\n".join(p for p in parts if p).strip()
 
     parts: list[str] = [_head(plan, fsm, localized=localized)]
+
+    if flow_line:
+        parts.append(flow_line)
+    if version_line:
+        parts.append(version_line)
 
     route_line = _route_line(plan, fsm, localized=localized)
     if route_line:

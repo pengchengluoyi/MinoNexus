@@ -255,3 +255,9 @@ PY
 2. 架构页修改展示名 / 增加别名后，模型用口语调用 `fsm_navigate`，在屏态印证通过时规划成功或给出可理解的「无路径」降级。
 3. `recover_restart_target_app` fail 时 trace 有 `actions[]` 与 verify 证据，而非仅「未恢复」。
 4. **不**验收「每条用例自动冷启动」或「recover 带隐藏 fsm_navigate」。
+
+---
+
+## 10. 后续（2026-09-17）
+
+深层页 `from_state` 口语对不上 Tab 图，是因为跑批没用上 draft 骨骼。已用 `overlay_atlas_for_runtime` 叠图，localize 按 wireframe 认 `page.sk*`。详见 [NAVIGATION_ATLAS.md](NAVIGATION_ATLAS.md) §17.4。

@@ -92,6 +92,34 @@
 | agent-decide：`screen_layout` / `vlm_hierarchy` 走 **tool 参数** + 正文 JSON 合并 | `catalog/tool_schema.py`、`llm_client._parse_chat_json` |
 | prompt **v12**（说明 function call 承载布局）+ revisions | `job_upgrades.upgrade_agent_decide_to_v12`、`bootstrap` |
 
+### 0.6 复盘：`cr-83b57d410a49::case-c516fa0a`（跑批改 stored FSM 之后）
+
+| 阶段 | 结果 |
+|------|------|
+| 解析 | `to` → `page.tab_我的`（0.95）；`from=潮玩悟空作品详情页` name=0 / screen=0 |
+| localize | `chosen=""`，`band=recover`，`confidence=0`（详情栈，无底栏） |
+| 执行（修前） | **declined 3ms**：`_skip_tab_fallback` 跳过直点 Tab，把 BACK 踢回模型 |
+| 后续 | 模型 `press_key BACK` pass → `recover_restart` fail → `tap_element(我的)` pass |
+
+**根因**：跑批 `use_live=False` 后 VLM 页名对不上 stored 节点；recover 跳过 Tab 直点是对的，但 **declined 而不是执行系统返回**，白烧一轮 decide。
+
+**已落地**：`_skip_tab_fallback` 时本步 `press_key BACK`（最多 3 次），`step_pick=recover_press_back`。见 `loop/local_executors.py`。
+
+### 0.7 复盘：localize 选不出当前页 → `fsm_navigate` 只会 BACK（2026-09-17）
+
+0.6 把 declined 改成 BACK 之后，详情栈能退出，但 **Tab 根态仍然 `chosen=""`**：跑批读 published `v1`（只有 `page.tab_*` + 底栏文案），draft 里的 `page.sk*` / `state_wireframes` 没用上；底栏几个 Tab 同时可见时纯文案一律同分。
+
+**已落地**（契约见 [NAVIGATION_ATLAS.md](NAVIGATION_ATLAS.md) §2.2 / §17.4）：
+
+| 改动 | 文件 |
+|------|------|
+| 跑批 `load_fsm_doc(use_live=False)` 把 draft Atlas 叠进 `v1` | `nav_route.overlay_atlas_for_runtime` |
+| 底栏纯文案折价 0.2；骨骼 Jaccard / layout_framework 辨页；通知栏 landmark 不 `required_miss` | `nav_localize` |
+| `hierarchy_weak` 看可见文案节点数 | `hierarchy_slots.hierarchy_is_weak` |
+| 无底栏才 BACK；底栏可见则直点目标 Tab | `local_executors._skip_tab_fallback` |
+
+不在 nav 代码里写被测 App 文案。验收：有骨骼的 Tab 根态 `localized.chosen` 非空；详情栈仍 BACK，但 assist 能报出 `page.sk*`。
+
 2. **`target_tab` 表述误导模型与编译器**：历史字段暗示「底栏选中态 / Tab 文案」，而 Atlas 边大量是 **内容区入口、返回、列表项**（详情→我的 甚至当前屏无底栏）。统一改为 **`target_page`**：表示 **跳转后或所点控件关联的「目标逻辑页」**（展示名 / 别名 / `page.sk*`），与 Tab selected 解耦。
 
 3. **Hierarchy degraded 时骨骼 localize 可能虚高**（例：免责声明当页名仍 100%）。此时 **不能**单独信 assist；每轮 **agent-decide** 应输出 **`vlm_hierarchy`**（与 `accessibility_json` 同形），供 **localize 补强、tap 锚点、fsm 边校验**。
@@ -273,7 +301,7 @@ VLM 层级用于 **单帧可交互元素与页级语义**；feed 多态合并仍
 |--------|---------|
 | 展示名=噪声文案 | §2 名称治理 |
 | 图无 nav 边 | 补采 / 手工边；assist 与 `nav_attempt` 同提示「无连通边」 |
-| 详情无底栏仍尝试 `target_page=我的` | `_skip_tab_fallback` + 边语义改用 `target_page` |
+| 详情无底栏仍尝试点目标 Tab | 无底栏槽位时本步 `press_key BACK`；底栏可见才直点 |
 | 骨骼 100% 但 hierarchy degraded | v10 `vlm_hierarchy` + localize 降权；assist 脚注「结构定位，未印证 Tab」 |
 | from 重复解析 | 优先 `localized.chosen` |
 

@@ -28,6 +28,7 @@ _FUSE_CAPS = frozenset({
     "press_key",
     "swipe_direction",
     "long_press_element",
+    "fsm_navigate",
 })
 
 _SMS_RE = re.compile(r"验证码|短信|OTP|sms", re.I)

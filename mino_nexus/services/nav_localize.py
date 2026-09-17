@@ -37,8 +37,9 @@ _NAV_STABLE_FIXED_CAP = 0.85
 BAND_HIGH = 0.75
 BAND_LOW = 0.45
 
-# tab_bar 只靠文案命中（hierarchy 不暴露 selected 属性，§17.1）时的折价
-_TAB_TEXT_ONLY = 0.6
+# tab_bar 只靠文案命中（hierarchy 不暴露 selected 属性，§17.1）时的折价。
+# 底栏 Tab 文案会同时出现在每一屏，0.6 会把所有 tab 根态打成平手，淹没骨骼。
+_TAB_TEXT_ONLY = 0.2
 # required 信号明确不命中时的降权。不清零 —— 还要靠它排序，全零就没法给候选了
 _REQUIRED_MISS_FACTOR = 0.25
 # 两个候选差距小于此值即判 ambiguous
@@ -279,15 +280,31 @@ def _eval_tab_bar(spec: dict[str, Any], nodes: list[dict[str, Any]]) -> Optional
     node = match_any(nodes, [{"text_eq": label}, {"content_desc_contains": label}])
     if node is None:
         return 0.0
-    # 有 selected 属性就用（未来 Scout 若补上这个字段，这里自动变强证据）
-    if node.get("selected") is True:
+    if node.get("selected") is True or node.get("checked") is True:
+        return 1.0
+    rid = str(node.get("resource_id") or "").lower()
+    if any(tok in rid for tok in ("selected", "active", "checked")):
         return 1.0
     return _TAB_TEXT_ONLY
+
+
+def _landmark_terms_are_noise(terms: Any) -> bool:
+    """状态栏/通知头不得当 required landmark，否则整页 required_miss。"""
+    from mino_nexus.services.nav_layout import is_status_bar_chrome_text
+
+    rows = [str(t).strip() for t in (terms or []) if str(t).strip()]
+    if not rows:
+        return False
+    return all(is_status_bar_chrome_text(t) for t in rows)
 
 
 def _eval_landmarks(spec: dict[str, Any], nodes: list[dict[str, Any]]) -> Optional[float]:
     any_terms = spec.get("any") or spec.get("any_of") or []
     none_terms = spec.get("none_of") or spec.get("none") or []
+    if _landmark_terms_are_noise(any_terms):
+        any_terms = []
+    if _landmark_terms_are_noise(none_terms):
+        none_terms = []
     if not any_terms and not none_terms:
         return None
     if none_terms and match_any(nodes, none_terms) is not None:

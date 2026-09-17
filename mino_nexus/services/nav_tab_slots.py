@@ -10,10 +10,13 @@ _LAYOUT_CLASS_RE = re.compile(r"(Layout|View|Widget|Frame|Group)$", re.I)
 
 
 def _bounds(node: dict[str, Any]) -> tuple[int, int, int, int] | None:
-    b = node.get("bounds") or []
-    if isinstance(b, (list, tuple)) and len(b) >= 4:
-        return int(b[0]), int(b[1]), int(b[2]), int(b[3])
-    return None
+    from mino_nexus.loop.hierarchy_slots import int_list
+
+    raw = node.get("bounds")
+    if not isinstance(raw, (list, tuple)) or len(raw) < 4:
+        return None
+    b = int_list(raw, 4)
+    return b[0], b[1], b[2], b[3]
 
 
 def _slot_key(center_x: int, kind: str, label: str) -> str:

@@ -75,4 +75,45 @@ def reset_native_app_before_case(
     return ok_close or ok_launch
 
 
-__all__ = ["reset_native_app_before_case"]
+def launch_if_hierarchy_away(
+    proxy: RouterProxy,
+    ctx: Any,
+    *,
+    run_id: str,
+    case_seq: int,
+    nodes: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """hierarchy 已能看出桌面/错包时，程序 launch_app，不把点击交给模型。每案最多一次。"""
+    if is_web_slot(str(getattr(ctx, "sn", "") or ""), str(getattr(ctx, "platform", "") or "")):
+        return None
+    if getattr(ctx, "_program_launched_app", False):
+        return None
+    pkg = str(getattr(ctx, "target_package", "") or "").strip()
+    if not pkg:
+        return None
+    from mino_nexus.services.nav_capture_store import run_guard_foreground
+
+    fg = run_guard_foreground(
+        nodes or [],
+        target_package=pkg,
+        platform=str(getattr(ctx, "platform", "") or ""),
+    )
+    if str(fg.get("app_foreground") or "") != "no":
+        return None
+    ok = _dispatch(
+        proxy,
+        run_id=run_id,
+        step_idx=frame_step(case_seq, 3),
+        cap="launch_app",
+        params={"package": pkg},
+        label="hierarchy 判定前台不是被测 App，程序启动",
+    )
+    setattr(ctx, "_program_launched_app", True)
+    return {
+        "status": "pass" if ok else "fail",
+        "summary": f"程序启动 {pkg}（前台不是被测应用）",
+        "package": pkg,
+    }
+
+
+__all__ = ["reset_native_app_before_case", "launch_if_hierarchy_away"]

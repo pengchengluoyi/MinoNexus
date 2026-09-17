@@ -104,6 +104,7 @@ class StateLabelsBody(BaseModel):
     chrome_texts: list[str] = []
     header_title: str = ""
     version: str = store.DRAFT_VERSION
+    version_facet: dict[str, Any] | None = None
 
 
 class AtlasMergeStatesBody(BaseModel):
@@ -260,6 +261,19 @@ def patch_state_labels(
         ht = str(body.header_title or "").strip()
         if ht:
             meta["header_title"] = ht
+        vf = body.version_facet if isinstance(body.version_facet, dict) else None
+        if vf and str(vf.get("nav_view_id") or "").strip():
+            facets = list(meta.get("version_facets") or [])
+            vid = str(vf.get("nav_view_id") or "").strip()
+            row = {
+                "nav_view_id": vid,
+                "verification_status": str(vf.get("verification_status") or "pending").strip() or "pending",
+                "wireframe_ref": str(vf.get("wireframe_ref") or "").strip(),
+                "source": vf.get("source") if isinstance(vf.get("source"), dict) else {"kind": "studio"},
+            }
+            facets = [f for f in facets if not (isinstance(f, dict) and str(f.get("nav_view_id") or "") == vid)]
+            facets.append(row)
+            meta["version_facets"] = facets[:12]
         st["meta"] = meta
         hit = True
         break
@@ -488,6 +502,9 @@ def get_screen_atlas(
     app_id: str,
     project_id: str = "",
     session_id: str = "",
+    app_version: str = "",
+    nav_view_id: str = "",
+    include_pending: bool = False,
     _sess: dict = Depends(current_session),
 ):
     """Screen Atlas：证据聚类图（screen.{hash} + 线框），不跑 Tab 合成。"""
@@ -496,6 +513,19 @@ def get_screen_atlas(
         project_id=project_id,
         session_id=str(session_id or "").strip(),
     )
+    if row.get("doc") and (app_version or nav_view_id):
+        from mino_nexus.services.nav_version_views import materialize_fsm_for_runtime, pending_summary
+
+        doc = materialize_fsm_for_runtime(
+            row["doc"],
+            app_version=str(app_version or "").strip(),
+            nav_view_id=str(nav_view_id or "").strip(),
+            include_pending=bool(include_pending),
+        )
+        if doc:
+            row = {**row, "doc": doc}
+            row["pending_summary"] = pending_summary(row["doc"])
+            row["nav_view_id"] = (doc.get("meta") or {}).get("resolved_nav_view_id")
     return ok(row)
 
 
@@ -542,6 +572,12 @@ def get_calibration_report(app_id: str, _sess: dict = Depends(current_session)):
     report["runtime_ready"] = bool(doc) and not bool(reason)
     report["runtime_reason"] = reason or ""
     report["runtime_reason_human"] = humanize.humanize_runtime_reason(reason or "")
+    built = nav_screen_registry.build_atlas(app_id)
+    if isinstance(built.get("doc"), dict):
+        from mino_nexus.services.nav_version_views import pending_summary
+
+        report["atlas_pending"] = pending_summary(built["doc"])
+        report["nav_views"] = (built["doc"].get("meta") or {}).get("nav_views") or []
     return ok(report)
 
 
@@ -553,6 +589,32 @@ def list_candidates(app_id: str, _sess: dict = Depends(current_session)):
 @router.post("/{app_id}/candidates/compile")
 def compile_candidates(app_id: str, _sess: dict = Depends(current_session)):
     return ok(compiler.compile_from_captures(app_id))
+
+
+@router.post("/{app_id}/expectations/compile")
+def compile_version_expectations(app_id: str, _sess: dict = Depends(current_session)):
+    """从 Atlas 业务流 + 用例提示生成 pending 候选（待验证逻辑块）。"""
+    from mino_nexus.services import nav_screen_registry as atlas_reg
+    from mino_nexus.services.nav_expectation_compiler import (
+        merge_candidates_into_batch,
+        propose_expectation_candidates,
+    )
+    from mino_nexus.services import project_store as ps
+    from mino_nexus.services import app_automation as aas
+
+    built = atlas_reg.build_atlas(app_id)
+    atlas_doc = built.get("doc") if isinstance(built, dict) else None
+    case_docs: list[dict[str, Any]] = []
+    try:
+        app = ps.find_app(app_id)
+        if app:
+            case_docs = aas.list_app_cases(app) or []
+    except Exception:
+        case_docs = []
+    rows = propose_expectation_candidates(app_id, atlas_doc=atlas_doc, case_docs=case_docs)
+    batch = merge_candidates_into_batch(candidates.load_batch(app_id), rows)
+    candidates.save_batch(app_id, batch)
+    return ok(batch)
 
 
 @router.post("/{app_id}/candidates/{candidate_id}/review")
