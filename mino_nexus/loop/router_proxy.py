@@ -100,10 +100,17 @@ class RouterProxy:
         *,
         run_id: str = "",
         step_idx: int = -1,
-        **_ignored: Any,
+        **kwargs: Any,
     ) -> EventResult:
         """同步接口 —— 上游循环是同步代码，这里内部跑事件循环。"""
-        return _run_sync(self.dispatch_async(event, run_id=run_id or self.run_id, step_idx=step_idx))
+        return _run_sync(
+            self.dispatch_async(
+                event,
+                run_id=run_id or self.run_id,
+                step_idx=step_idx,
+                **kwargs,
+            )
+        )
 
     def observe(
         self,
@@ -151,27 +158,25 @@ class RouterProxy:
     # ---------------- 异步实现 ----------------
 
     async def dispatch_async(
-        self, event: PlanEvent, *, run_id: str = "", step_idx: int = -1
+        self,
+        event: PlanEvent,
+        *,
+        run_id: str = "",
+        step_idx: int = -1,
+        **kwargs: Any,
     ) -> EventResult:
         started = _now_iso()
         t0 = time.time()
 
         if is_local_cap(event.capability_id):
-            ctx = _ignored.get("ctx")
-            if ctx is not None:
-                from mino_nexus.loop.local_executors import dispatch_local
+            from mino_nexus.loop.local_executors import dispatch_local
 
-                return dispatch_local(
-                    event,
-                    ctx=ctx,
-                    router=self,
-                    target_package=self.target_package,
-                )
-            return _fail(
-                event, started, t0,
-                f"cap={event.capability_id} 为 Nexus 本地能力，需带 ctx 调用 dispatch（agent_loop 已路由）。",
-                executor_used="internal",
-                local_reason="local_cap_missing_ctx",
+            ctx = kwargs.get("ctx")
+            return dispatch_local(
+                event,
+                ctx=ctx,
+                router=self,
+                target_package=self.target_package,
             )
 
         node, why = get_registry().resolve(self.sn)

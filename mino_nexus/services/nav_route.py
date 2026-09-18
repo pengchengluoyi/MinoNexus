@@ -15,6 +15,94 @@ _NAV_REF_WRAP_RE = re.compile(
 )
 _NAV_REF_TAB_TAIL_RE = re.compile(r"(?:底部)?(?:Tab|tab|TAB)$")
 
+# 口语页名不是底栏控件文案；拿去 tap 会锚点落空（如「首页」≠ 造物相机底栏「社区」）。
+_ORAL_HOME_RAW = frozenset(
+    {"首页", "主页", "首頁", "home", "Home", "HOME", "主页面", "首页Tab", "首页tab"}
+)
+_ORAL_LOGIN_RAW = frozenset({"登录页", "登录页面", "登录界面", "登陆页"})
+
+
+def _oral_home_folds() -> frozenset[str]:
+    return frozenset({_fold_label(x) for x in _ORAL_HOME_RAW})
+
+
+def is_oral_home_ref(ref: str) -> bool:
+    raw = str(ref or "").strip()
+    if not raw:
+        return False
+    if raw in _ORAL_HOME_RAW:
+        return True
+    return _fold_label(raw) in _oral_home_folds()
+
+
+def is_oral_login_ref(ref: str) -> bool:
+    raw = str(ref or "").strip()
+    if not raw:
+        return False
+    if raw in _ORAL_LOGIN_RAW:
+        return True
+    folded = _fold_label(raw)
+    return folded in {_fold_label(x) for x in _ORAL_LOGIN_RAW}
+
+
+def is_oral_generic_page_ref(ref: str) -> bool:
+    """不应作为 selector_text 直点的口语目标。"""
+    return is_oral_home_ref(ref) or is_oral_login_ref(ref)
+
+
+def oral_home_state_id(fsm: dict[str, Any]) -> str:
+    meta = fsm.get("meta") if isinstance(fsm.get("meta"), dict) else {}
+    tab_bar = meta.get("tab_bar") if isinstance(meta.get("tab_bar"), dict) else {}
+    home = str(tab_bar.get("home_state_id") or "").strip()
+    if home and F.state_by_id(fsm, home):
+        return home
+    entries = tab_bar.get("entries") or []
+    if isinstance(entries, list):
+        for sid in entries:
+            val = str(sid or "").strip()
+            if val and F.state_by_id(fsm, val):
+                return val
+    return ""
+
+
+def oral_home_tab_label(fsm: dict[str, Any]) -> str:
+    meta = fsm.get("meta") if isinstance(fsm.get("meta"), dict) else {}
+    tab_bar = meta.get("tab_bar") if isinstance(meta.get("tab_bar"), dict) else {}
+    home_label = str(tab_bar.get("home_tab_label") or "").strip()
+    slots = tab_slot_labels(fsm)
+    slot_by_fold = {_fold_label(s): s for s in slots}
+    if home_label and _fold_label(home_label) in slot_by_fold:
+        return slot_by_fold[_fold_label(home_label)]
+    sid = oral_home_state_id(fsm)
+    if sid:
+        lab = tab_root_label_for_state(fsm, sid)
+        if lab:
+            return lab
+    return ""
+
+
+def coerce_oral_nav_ref(fsm: dict[str, Any], ref: str) -> str:
+    """把「首页/主页」等口语映射为 NavFSM 的 home_state_id。"""
+    raw = str(ref or "").strip()
+    if not raw or not fsm:
+        return raw
+    if is_oral_home_ref(raw):
+        home = oral_home_state_id(fsm)
+        if home:
+            return home
+    return raw
+
+
+def _label_in_tab_slots(fsm: dict[str, Any], label: str) -> str:
+    """若 label 与某底栏槽位同义，返回槽位上的真实文案。"""
+    want = _fold_label(label)
+    if not want:
+        return ""
+    for slot in tab_slot_labels(fsm):
+        if _fold_label(slot) == want:
+            return slot
+    return ""
+
 
 def click_label_from_nav_ref(ref: str) -> str:
     """从 from/to 口语里抽出可点文案（引号内或短标签），忽略 page.sk* 节点 id。"""
@@ -30,6 +118,8 @@ def click_label_from_nav_ref(ref: str) -> str:
         cleaned = cleaned[1:-1].strip()
     if 1 <= len(cleaned) <= 16 and cleaned != raw:
         return cleaned
+    if is_oral_generic_page_ref(raw):
+        return ""
     if 1 <= len(raw) <= 16 and " " not in raw and "\n" not in raw:
         # 「…页/页面」是口语目标不是控件文案；拿去 tap 会锚点落空。
         if raw.endswith("页面") or raw.endswith("页"):
@@ -701,20 +791,38 @@ def tab_root_entry_hint(fsm: dict[str, Any], to_state_ref: str) -> str:
 def direct_tab_tap_params(fsm: dict[str, Any], to_state_ref: str) -> dict[str, Any]:
     """无路可走时，尝试按目标屏展示名 / Tab 文案直点。"""
     raw_ref = str(to_state_ref or "").strip()
-    label = tab_label_for_state(fsm, to_state_ref) or raw_ref
-    if not tab_label_for_state(fsm, to_state_ref):
-        for variant in _ref_display_variants(raw_ref):
-            if variant:
-                label = variant
-                break
-    sid = resolve_state_ref(fsm, to_state_ref)
+    if not raw_ref:
+        return {}
+    coerced = coerce_oral_nav_ref(fsm, raw_ref)
+    sid = resolve_state_ref(fsm, coerced) or resolve_state_ref(fsm, raw_ref)
+    label = ""
     if sid:
-        st = F.state_by_id(fsm, sid)
-        if st:
-            meta = st.get("meta") if isinstance(st.get("meta"), dict) else {}
-            dn = str(meta.get("display_name") or "").strip()
-            if dn:
-                label = dn
+        label = tab_root_label_for_state(fsm, sid) or tab_label_for_state(fsm, sid)
+        if not label:
+            st = F.state_by_id(fsm, sid)
+            if st:
+                meta = st.get("meta") if isinstance(st.get("meta"), dict) else {}
+                dn = str(meta.get("display_name") or "").strip()
+                slot_hit = _label_in_tab_slots(fsm, dn)
+                label = slot_hit or dn
+    if not label and is_oral_home_ref(raw_ref):
+        label = oral_home_tab_label(fsm)
+    if not label and not is_oral_generic_page_ref(raw_ref):
+        for variant in _ref_display_variants(raw_ref):
+            slot_hit = _label_in_tab_slots(fsm, variant)
+            if slot_hit:
+                label = slot_hit
+                break
+    slot_hit = _label_in_tab_slots(fsm, label) if label else ""
+    if slot_hit:
+        label = slot_hit
+    elif label and not _label_in_tab_slots(fsm, label):
+        # 展示名不在底栏槽位上 —— 不直点（避免「首页」等口语误 tap）
+        if is_oral_generic_page_ref(raw_ref) or is_oral_generic_page_ref(label):
+            return {}
+        if not tab_slot_labels(fsm):
+            return {"selector_text": label, "text": label}
+        return {}
     if label:
         return {"selector_text": label, "text": label}
     return {}

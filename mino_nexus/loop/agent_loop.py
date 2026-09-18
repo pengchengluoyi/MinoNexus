@@ -37,6 +37,7 @@ from mino_nexus.loop.router_proxy import RouterProxy
 from mino_nexus.loop.skill_trace import envelope as skill_envelope
 from mino_nexus.loop.step_pointer import (
     StepCursor,
+    _expected_defers_to_check,
     build_seq_nodes,
     enrich_assert_expectation,
     screen_fingerprint,
@@ -1026,24 +1027,28 @@ def _run_loop(
             if cursor.phase == "do" and not cursor.step_start_fp:
                 cursor.refresh_step_start_fp(screen_fp_turn)
             cur_probe = cursor.current()
-            if cursor.phase == "do" and cur_probe and str(cur_probe.expected or "").strip():
+            if cursor.phase == "do" and cur_probe and (
+                str(cur_probe.expected or "").strip() or str(cur_probe.instruction or "").strip()
+            ):
                 from mino_nexus.loop import step_effect as step_effect_mod
                 from mino_nexus.services import nav_telemetry
 
                 try:
+                    defer_chk = _expected_defers_to_check(str(cur_probe.expected or ""))
                     probe_nodes = _effect_nodes(nav, ctx)
                     loc_now = dict(getattr(nav, "localized", None) or {}) if nav is not None else {}
                     loc_hit = step_effect_mod.localized_matches_step(
                         loc_now,
                         instruction=str(cur_probe.instruction or ""),
-                        expected=str(cur_probe.expected or ""),
+                        expected="" if defer_chk else str(cur_probe.expected or ""),
                     )
                     hit, keywords = False, []
                     if probe_nodes:
-                        hit, keywords = step_effect_mod.probe(
-                            cur_probe.expected,
+                        hit, keywords = step_effect_mod.probe_expected_for_do(
+                            str(cur_probe.expected or ""),
                             probe_nodes,
                             instruction=str(cur_probe.instruction or ""),
+                            defer_expected_to_check=defer_chk,
                         )
                     if loc_hit and not keywords:
                         keywords = [
@@ -1071,6 +1076,7 @@ def _run_loop(
                                 expected=str(cur_probe.expected or ""),
                                 keywords=keywords,
                                 hit_streak=cursor.step_effect_hit_streak,
+                                defer_expected_to_check=defer_chk,
                             )
                         ):
                             from mino_nexus.loop.step_contract import step_actions_satisfied
@@ -1090,12 +1096,16 @@ def _run_loop(
                                 family_counts=cursor.step_family_counts,
                             )
                             work_ok = int_ok if need_int else fam_ok
+                            if need_int and "nav_tab" in need_int:
+                                if "nav_tab" not in cursor.step_intents_done:
+                                    work_ok = False
                             if work_ok and step_effect_mod.should_auto_enter_check(
                                 loc_hit=bool(loc_hit),
                                 probe_hit=bool(hit),
                                 expected=str(cur_probe.expected or ""),
                                 keywords=keywords,
                                 hit_streak=cursor.step_effect_hit_streak,
+                                defer_expected_to_check=defer_chk,
                             ):
                                 cursor.step_goal_met = True
                                 cursor.enter_check()
@@ -1128,6 +1138,33 @@ def _run_loop(
             snap = getattr(nav, "snapshot", None)
             nodes = list(getattr(snap, "nodes", None) or []) if snap is not None else []
             setattr(ctx, "nav_hierarchy_nodes", nodes)
+        if (
+            not is_explore
+            and isinstance(cursor, StepCursor)
+            and cursor.phase == "do"
+            and cur
+        ):
+            from mino_nexus.loop.step_nav_plan import build_step_nav_plan_hint, step_needs_nav_plan
+
+            if int(cur.n) != int(cursor.step_nav_plan_step_n or 0):
+                cursor.step_nav_plan_step_n = int(cur.n)
+                setattr(ctx, "_login_flow_step_n", int(cur.n))
+                setattr(ctx, "login_flow_macro_done", set())
+                setattr(ctx, "login_flow_interrupt", False)
+                setattr(ctx, "login_flow_macro_active", False)
+                setattr(ctx, "system_dialog_macro_done", False)
+                setattr(ctx, "recovery_allow_back", False)
+                instr_nav = str(cur.instruction or "")
+                if step_needs_nav_plan(instr_nav):
+                    cursor.step_nav_plan_hint = build_step_nav_plan_hint(
+                        instruction=instr_nav,
+                        app_id=str(getattr(ctx, "app_id", "") or ""),
+                        project_id=str(getattr(ctx, "nav_project_id", "") or ""),
+                        localized=dict(getattr(ctx, "nav_localized", None) or {}),
+                        app_version=str(getattr(ctx, "app_version", "") or ""),
+                    )
+                else:
+                    cursor.step_nav_plan_hint = ""
         if nav is None or not nav.active:
             menu = [
                 c for c in menu
@@ -1142,11 +1179,22 @@ def _run_loop(
             target_package=str(getattr(ctx, "target_package", "") or target_pkg),
             platform=str(getattr(ctx, "platform", "") or ""),
         )
+        setattr(ctx, "system_overlay", str(fg_menu.get("system_overlay") or ""))
+        setattr(ctx, "app_foreground", str(fg_menu.get("app_foreground") or ""))
         if str(fg_menu.get("app_foreground") or "") == "yes":
             menu = [
                 c for c in menu
                 if str(c.get("id") or "") not in ("launch_app", "open_app", "open_url")
             ]
+        from mino_nexus.loop.step_contract import instruction_allows_login_flow
+
+        _allows_login_step = instruction_allows_login_flow(
+            str(cur.instruction or "") if cur else "",
+            login_module_case=bool(login_module_case),
+        )
+        if _allows_login_step or getattr(ctx, "login_flow_interrupt", False):
+            _macro_hide = {"request_sms_code", "accept_legal_consent"}
+            menu = [c for c in menu if str(c.get("id") or "") not in _macro_hide]
         if writer:
             writer.append(
                 "context/menu",
@@ -1183,31 +1231,71 @@ def _run_loop(
             and cursor.phase == "do"
             and cur
         ):
-            from mino_nexus.loop.registry import history_cap_passed
-            from mino_nexus.loop.sms_auto import try_auto_request_sms_code
+            from mino_nexus.loop.flow_block_runner import (
+                try_run_login_flow_macro,
+                try_run_system_dialog_macro,
+            )
+            from mino_nexus.loop.login_flow_interrupt import login_overlay_blocks_flow
 
-            auto_sms = try_auto_request_sms_code(
+            hist_lines = list(history[-24:])
+            nodes = list(getattr(ctx, "nav_hierarchy_nodes", None) or [])
+            macro = try_run_system_dialog_macro(
                 proxy,
                 ctx,
-                run_id=scout_run_id,
-                case_seq=case_seq,
                 turn_seq=seq,
-                instruction=str(cur.instruction or ""),
-                login_module_case=login_module_case,
-                hierarchy_nodes=list(getattr(ctx, "nav_hierarchy_nodes", None) or []),
-                menu_cap_ids=[str(c.get("id") or "") for c in menu],
-                sms_auto_attempted=cursor.sms_auto_attempted,
-                history_has_send_pass=history_cap_passed(history, "request_sms_code"),
+                target_package=str(getattr(ctx, "target_package", "") or target_pkg),
             )
-            if auto_sms:
-                cursor.sms_auto_attempted = True
-                st_auto = str(auto_sms.get("status") or "fail")
-                sum_auto = str(auto_sms.get("summary") or "")
-                if auto_sms.get("ok"):
-                    cursor.record_step_op("request_sms_code")
+            if not macro:
+                overlay_login = login_overlay_blocks_flow(
+                    hierarchy_nodes=nodes,
+                    instruction=str(cur.instruction or ""),
+                    login_module_case=bool(login_module_case),
+                )
+                if overlay_login:
+                    setattr(ctx, "login_flow_interrupt", True)
+                    macro = try_run_login_flow_macro(
+                        proxy,
+                        ctx,
+                        run_id=scout_run_id,
+                        case_seq=case_seq,
+                        turn_seq=seq,
+                        app_id=str(getattr(ctx, "app_id", "") or ""),
+                        hierarchy_nodes=nodes,
+                        history_lines=hist_lines,
+                        interrupt=True,
+                    )
+                else:
+                    setattr(ctx, "login_flow_interrupt", False)
+                    if (_allows_login_step or login_module_case) and not cursor.sms_auto_attempted:
+                        macro = try_run_login_flow_macro(
+                            proxy,
+                            ctx,
+                            run_id=scout_run_id,
+                            case_seq=case_seq,
+                            turn_seq=seq,
+                            app_id=str(getattr(ctx, "app_id", "") or ""),
+                            hierarchy_nodes=nodes,
+                            history_lines=hist_lines,
+                            interrupt=False,
+                        )
+            if (
+                macro
+                and str(macro.get("block_id") or "") == "fb.global.system_dialog"
+                and not macro.get("ok")
+            ):
+                macro = None
+            if macro:
+                login_block = str(macro.get("block_id") or "") == "fb.global.login"
+                if not login_block or macro.get("ok"):
+                    cursor.sms_auto_attempted = True
+                cap_auto = str(macro.get("capability_id") or "login_flow_macro")
+                st_auto = str(macro.get("status") or "fail")
+                sum_auto = str(macro.get("summary") or "")
+                if macro.get("ok"):
+                    cursor.record_step_op(cap_auto)
                 rec(
                     seq,
-                    capability_id="request_sms_code",
+                    capability_id=cap_auto,
                     status=st_auto,
                     summary=sum_auto,
                     thought=sum_auto,
@@ -1218,17 +1306,53 @@ def _run_loop(
                     "result",
                     thought=sum_auto,
                     step=seq,
-                    capability_id="request_sms_code",
+                    capability_id=cap_auto,
                     status=st_auto,
                     summary=sum_auto,
                     thumb=thumb,
                 )
-                _log_turn_end(writer, cap="request_sms_code", status=st_auto)
+                _log_turn_end(writer, cap=cap_auto, status=st_auto)
                 continue
 
         in_prep = cursor.phase == "prep"
         in_check = cursor.phase == "check"
-        scripted_check = bool(in_check and cur and str(cur.expected or "").strip())
+        check_programmatic_pass = False
+        if in_check and cur and str(cur.expected or "").strip() and not cursor.step_checked:
+            from mino_nexus.loop.check_plan import build_check_plan, format_check_plan_brief
+            from mino_nexus.loop.check_verify import (
+                plan_for_step,
+                run_programmatic_checks,
+                synthesize_verdict,
+            )
+
+            chk_plan = plan_for_step(str(cur.expected or ""), instruction=str(cur.instruction or ""))
+            inspect_slots["check_plan_brief"] = format_check_plan_brief(chk_plan)
+            probe_nodes_chk = _effect_nodes(nav, ctx)
+            overlay_blk = bool(nav and nav.preflight_block())
+            evidences = run_programmatic_checks(
+                chk_plan,
+                nodes=probe_nodes_chk,
+                nav_localized=dict(getattr(nav, "localized", None) or {}) if nav else {},
+                session_block=str(inspect_slots.get("session_block") or ""),
+                overlay_blocked=overlay_blk,
+            )
+            verdict = synthesize_verdict(chk_plan, evidences)
+            if writer:
+                writer.append(
+                    "check/verdict",
+                    {
+                        "status": verdict.status,
+                        "confidence": verdict.confidence,
+                        "summary": verdict.summary[:240],
+                        "points": len(chk_plan.points),
+                    },
+                )
+            if verdict.status == "pass" and verdict.confidence >= 0.72:
+                cursor.mark_checked()
+                check_programmatic_pass = True
+        scripted_check = bool(
+            in_check and cur and str(cur.expected or "").strip() and not cursor.step_checked
+        )
         intel_pack = context_pack_for_step(
             ctx=ctx,
             case=case,
@@ -1276,7 +1400,13 @@ def _run_loop(
         )
         if cancel_check and cancel_check():
             return _leave(status="cancelled", summary="任务已取消")
-        if scripted_check:
+        if check_programmatic_pass:
+            decision = AgentDecision(
+                status="continue",
+                thought=f"程序校验通过：{verdict.summary}",
+                action=AgentAction(capability_id="signal_done", params={}),
+            )
+        elif scripted_check:
             exp = enrich_assert_expectation(cur.instruction, cur.expected)
             assert_params: dict[str, Any] = {"expectation": exp}
             ctx_bits = [auto_knowledge_body, inspect_slots.get("doc_context") or ""]
@@ -1426,13 +1556,14 @@ def _run_loop(
         turn_decision_cap = cap_id or ("signal_done" if decision.status == "done" else "")
         turn_decision_status = str(decision.status or "")
         params = dict(action.params or {}) if action else {}
-        from mino_nexus.catalog.tool_schema import fill_target_package
+        from mino_nexus.catalog.tool_schema import fill_input_text_from_ctx, fill_target_package
 
         params = fill_target_package(
             params,
             cap_id=cap_id,
             target_package=str(getattr(ctx, "target_package", "") or target_pkg),
         )
+        params = fill_input_text_from_ctx(params, cap_id=cap_id, ctx=ctx)
         fg_nodes: list[dict[str, Any]] = []
         if nav is not None and getattr(nav, "snapshot", None) is not None:
             snap_nodes = getattr(nav.snapshot, "nodes", None) or []
@@ -1470,6 +1601,9 @@ def _run_loop(
             "precondition": str(getattr(cursor, "precondition", "") or case.get("precondition") or ""),
             "decision_thought": thought,
             "login_module_case": bool(login_module_case),
+            "login_flow_interrupt": bool(getattr(ctx, "login_flow_interrupt", False)),
+            "login_flow_macro_active": bool(getattr(ctx, "login_flow_macro_active", False)),
+            "recovery_allow_back": bool(getattr(ctx, "recovery_allow_back", False)),
         }
         params = apply_force_case_expectation(params, guard_ctx)
         if cap_id == "tap_element":
@@ -1586,17 +1720,19 @@ def _run_loop(
                 loc_done = dict(getattr(ctx, "nav_localized", None) or {})
                 extra_vlm = decision.vlm_hierarchy if isinstance(decision.vlm_hierarchy, dict) else None
                 probe_nodes_guard = _effect_nodes(nav, ctx, extra_vlm=extra_vlm)
+                defer_do = _expected_defers_to_check(str(cur.expected or ""))
                 probe_hit_guard = False
                 if str(cur.expected or "").strip() or str(cur.instruction or "").strip():
-                    probe_hit_guard, _ = step_effect_mod.probe(
+                    probe_hit_guard, _ = step_effect_mod.probe_expected_for_do(
                         str(cur.expected or ""),
                         probe_nodes_guard,
                         instruction=str(cur.instruction or ""),
+                        defer_expected_to_check=defer_do,
                     )
                 loc_hit_guard = step_effect_mod.localized_matches_step(
                     loc_done,
                     instruction=str(cur.instruction or ""),
-                    expected=str(cur.expected or ""),
+                    expected="" if defer_do else str(cur.expected or ""),
                 )
                 do_work_reason = run_guards(
                     ["require_do_work"],
@@ -1645,11 +1781,13 @@ def _run_loop(
             probe_nodes_done = _effect_nodes(nav, ctx, extra_vlm=extra_vlm_done)
             probe_hit = False
             kw_done: list[str] = []
+            defer_done = _expected_defers_to_check(str(cur.expected or ""))
             if str(cur.expected or "").strip() or str(cur.instruction or "").strip():
-                probe_hit, kw_done = step_effect_mod.probe(
+                probe_hit, kw_done = step_effect_mod.probe_expected_for_do(
                     str(cur.expected or ""),
                     probe_nodes_done,
                     instruction=str(cur.instruction or ""),
+                    defer_expected_to_check=defer_done,
                 )
             nav_telemetry.step_effect(
                 turn_id=seq,
@@ -1712,31 +1850,22 @@ def _run_loop(
                 _log_turn_end(writer, cap=nav_cap, status="skipped", guard_id=verdict.guard_id)
                 continue
 
-        skip_reason = run_guards(list(phase_cfg.get("guards") or []), guard_ctx)
+        from mino_nexus.loop.registry import run_guards_verdict
+
+        guard_verdict = run_guards_verdict(list(phase_cfg.get("guards") or []), guard_ctx)
+        skip_reason = guard_verdict.reason if not guard_verdict.allowed else None
         if skip_reason:
-            skip_cap = cap_id
-            if "已拒绝重复点击" in skip_reason:
-                skip_cap = "skip_repeat_tap"
-            elif "已拒绝重复 read_device_data" in skip_reason:
-                skip_cap = "skip_repeat_read_device"
-            elif "缺少 script_id" in skip_reason or "exec_script" in skip_reason:
-                skip_cap = "exec_script_params"
-            elif "同类恢复" in skip_reason or "同类 advise" in skip_reason:
-                skip_cap = "limit_recovery_retry"
-            elif "重复切换" in skip_reason or "⇄" in skip_reason:
-                skip_cap = "stuck_alternation"
-            elif "访客入口" in skip_reason or "游客入口" in skip_reason:
-                skip_cap = "block_login_after_guest"
-            elif "【熔断" in skip_reason:
-                skip_cap = "action_fuse"
-            elif "check_run_env" in skip_reason:
-                skip_cap = "skip_repeat_check_run_env"
-            elif "get_app_version" in skip_reason:
-                skip_cap = "skip_repeat_get_app_version"
+            skip_cap = guard_verdict.code or cap_id
             if writer:
                 writer.append(
                     "guard/block",
-                    {"capability_id": cap_id, "reason": skip_reason, "rewritten_cap": skip_cap},
+                    {
+                        "capability_id": cap_id,
+                        "reason": skip_reason,
+                        "rewritten_cap": skip_cap,
+                        "dispatch_gate_code": skip_cap,
+                        "guard_id": guard_verdict.guard_id,
+                    },
                 )
             rec(seq, capability_id=skip_cap, status="skipped", summary=skip_reason, thought=thought, thumb=thumb)
             emit(
@@ -1751,15 +1880,17 @@ def _run_loop(
             stop_msg = None
             if skip_cap == "action_fuse":
                 stop_msg = cursor.progress_gate.record_fuse_block(skip_reason)
-            elif skip_cap == "limit_recovery_retry":
+            elif skip_cap in ("limit_recovery_retry", "block_back_without_nav_back_semantics"):
+                setattr(ctx, "recovery_allow_back", True)
                 if isinstance(cursor, StepCursor):
                     cursor.correction_hint = skip_reason
-                    n_block = cursor.bump_recovery_block()
-                    if n_block >= 3:
-                        stop_msg = (
-                            f"连续 {n_block} 次同类恢复被拒绝后仍重复尝试，判定陷入死循环。"
-                            f"{skip_reason}"
-                        )
+                    if skip_cap == "limit_recovery_retry":
+                        n_block = cursor.bump_recovery_block()
+                        if n_block >= 3:
+                            stop_msg = (
+                                f"连续 {n_block} 次同类恢复被拒绝后仍重复尝试，判定陷入死循环。"
+                                f"{skip_reason}"
+                            )
             if writer:
                 writer.append(
                     "turn/end",
@@ -1940,7 +2071,17 @@ def _run_loop(
             cursor.clear_repeat_tap()
 
         if status_val == "pass" and cap_id in PROGRESS_CAPS and not str(cap_id).startswith(RECOVER_PREFIX):
-            cursor.record_step_op(cap_id, params=params if isinstance(params, dict) else None)
+            count_nav = True
+            if cap_id in ("fsm_navigate", "recover_fsm_navigate"):
+                raw_nav = getattr(result, "raw_response", None) or {}
+                if isinstance(raw_nav, dict):
+                    nav_attempt = raw_nav.get("nav_attempt") or {}
+                    count_nav = bool(nav_attempt.get("arrived_at_target"))
+            cursor.record_step_op(
+                cap_id,
+                params=params if isinstance(params, dict) else None,
+                count_nav_intent=count_nav,
+            )
         if status_val == "pass" and cap_id == "clear_app_cache":
             setattr(ctx, "prep_clear_done", True)
             from mino_nexus.loop.session_persist import mark_session_dirty
@@ -1948,6 +2089,10 @@ def _run_loop(
             mark_session_dirty(ctx, reason="clear_app_cache")
         if status_val == "pass" and cap_id in ("launch_app", "open_app", "open_url"):
             setattr(ctx, "app_launch_confirmed", True)
+        if status_val == "pass" and cap_id == "press_key":
+            key = str((params or {}).get("key") or "").strip().upper()
+            if key in ("BACK", "BACK_KEY"):
+                setattr(ctx, "recovery_allow_back", False)
 
         post_fp = ""
         if status_val == "pass" and (fuseable_cap(cap_id) or cap_id in ("fsm_navigate", "recover_fsm_navigate")):
@@ -1961,6 +2106,12 @@ def _run_loop(
             )
             if isinstance(cursor, StepCursor):
                 cursor.clear_recovery_block()
+                if cap_id == "swipe_direction" and status_val == "pass":
+                    cursor.note_swipe_pass(
+                        direction=str((params or {}).get("direction") or ""),
+                        pre_fp=screen_fp,
+                        post_fp=post_fp,
+                    )
 
         if cap_id == "tap_element" and getattr(result, "status", None) == EventStatus.PASS:
             if not post_fp:

@@ -95,6 +95,12 @@ def ensure_case_account(ctx: Any, case: dict[str, Any] | None = None) -> tuple[d
         params["tags_prompt"] = prompt
     row, err = lease_for_context(ctx, params, ai_reasoning=prompt, need_facets=need)
     if row:
+        score = int(row.get("score") or 0)
+        reason = str(row.get("reason") or "")
+        if score < 0:
+            SLog.w(TAG, f"auto-lease weak match score={score} reason={reason}")
+        elif "老用户≠新用户" in reason or "新用户≠老用户" in reason:
+            SLog.w(TAG, f"auto-lease tag mismatch: {reason}")
         SLog.i(TAG, f"auto-leased {row.get('id') or row.get('phone') or '?'}")
         return row, ""
     SLog.w(TAG, f"auto-lease skipped: {err}")

@@ -221,6 +221,13 @@ def _guard_require_do_work(ctx: dict[str, Any]) -> Optional[str]:
         return f"本步操作未做完，不能 signal_done。{fam_msg}"
     ops = int(getattr(step_cursor, "step_ops", 0) or 0)
     if ops > 0:
+        if need_int:
+            ok_int, int_msg = step_intents_satisfied(
+                instruction=instr,
+                intents_done=getattr(step_cursor, "step_intents_done", None),
+            )
+            if not ok_int:
+                return f"本步意图未达成，不能 signal_done。{int_msg}"
         return None
     if bool(ctx.get("step_goal_met")):
         hint = str(getattr(step_cursor, "step_effect_hint", "") or "")
@@ -274,6 +281,8 @@ def _guard_block_mutate_when_thought_done(ctx: dict[str, Any]) -> Optional[str]:
 def _guard_block_login_flow_unless_step_scope(ctx: dict[str, Any]) -> Optional[str]:
     if str(ctx.get("phase") or "") != "do":
         return None
+    if ctx.get("login_flow_interrupt"):
+        return None
     cap = str(ctx.get("cap_id") or "")
     if not cap or cap.startswith("recover_") or cap.startswith("signal_"):
         return None
@@ -290,6 +299,7 @@ def _guard_block_login_flow_unless_step_scope(ctx: dict[str, Any]) -> Optional[s
         "get_otp",
         "request_sms_code",
         "lease_account",
+        "accept_legal_consent",
     }
     if cap in login_caps:
         return (
@@ -312,6 +322,28 @@ def _guard_block_login_flow_unless_step_scope(ctx: dict[str, Any]) -> Optional[s
                 "本步未要求登录，禁止点击登录入口。"
                 "若本步目标页已出现请 signal_done。"
             )
+    return None
+
+
+def _guard_block_back_without_nav_back_semantics(ctx: dict[str, Any]) -> Optional[str]:
+    """D5-A：recovery 建议 BACK 时放行；否则无 plan allow_back 时拒 LLM 盲 BACK。"""
+    if ctx.get("recovery_allow_back"):
+        return None
+    if str(ctx.get("phase") or "") != "do":
+        return None
+    cap = str(ctx.get("cap_id") or "")
+    if cap != "press_key":
+        return None
+    key = str((ctx.get("params") or {}).get("key") or "").strip().upper()
+    if key not in ("BACK", "BACK_KEY"):
+        return None
+    step_cursor = ctx.get("step_cursor")
+    hint = str(getattr(step_cursor, "step_nav_plan_hint", "") or "")
+    if "【本步导航】" in hint and "降级" not in hint:
+        return (
+            "本步已有 Nav 路线图，禁止用系统 BACK 代替图上 Tab/入口边。"
+            "请 fsm_navigate 或 tap_element；若 recovery 已提示 BACK 则按提示执行。"
+        )
     return None
 
 
@@ -538,6 +570,88 @@ def _guard_skip_repeat_structural_cap(ctx: dict[str, Any]) -> Optional[str]:
     )
 
 
+def _guard_block_idle_wait_in_do(ctx: dict[str, Any]) -> Optional[str]:
+    """instruction 未要求等待时，意图已齐仍 wait_ms 空等 expected 结果。"""
+    if str(ctx.get("phase") or "") != "do":
+        return None
+    if str(ctx.get("cap_id") or "") != "wait_ms":
+        return None
+    cur = ctx.get("cursor")
+    instr = str(getattr(cur, "instruction", "") or "").strip() if cur else ""
+    if re.search(r"等待|加载|稍候", instr, re.I):
+        return None
+    from mino_nexus.loop.step_intent import instruction_required_intents, step_intents_satisfied
+    from mino_nexus.loop.step_pointer import _expected_defers_to_check
+
+    exp = str(getattr(cur, "expected", "") or "").strip() if cur else ""
+    if not _expected_defers_to_check(exp):
+        return None
+    need = instruction_required_intents(instr)
+    if not need:
+        return None
+    step_cursor = ctx.get("step_cursor")
+    ok_int, _ = step_intents_satisfied(
+        instruction=instr,
+        intents_done=getattr(step_cursor, "step_intents_done", None),
+    )
+    if not ok_int:
+        return None
+    return (
+        "本步操作意图已齐；expected 中加载/下一页结果在 check 阶段验证。"
+        "请 signal_done，勿再 wait_ms 空等。"
+    )
+
+
+def _guard_swipe_direction_vs_instruction(ctx: dict[str, Any]) -> Optional[str]:
+    if str(ctx.get("phase") or "") != "do":
+        return None
+    if str(ctx.get("cap_id") or "") != "swipe_direction":
+        return None
+    cur = ctx.get("cursor")
+    instr = str(getattr(cur, "instruction", "") or "").strip() if cur else ""
+    from mino_nexus.loop.swipe_hint import instruction_swipe_direction, swipe_direction_label
+
+    want = instruction_swipe_direction(instr)
+    if not want:
+        return None
+    got = str((ctx.get("params") or {}).get("direction") or "").strip().lower()
+    if not got or got == want:
+        return None
+    return (
+        f"用例要求{swipe_direction_label(want)}，当前 direction={got} 与步骤原文相反。"
+        f"请改用 swipe_direction direction={want}，或先确认截图再滑动。"
+    )
+
+
+def _guard_skip_repeat_swipe_stuck(ctx: dict[str, Any]) -> Optional[str]:
+    """同向滑动多次且屏指纹不变 → 与 9/17 重复事件文档同类问题。"""
+    if str(ctx.get("phase") or "") != "do":
+        return None
+    if str(ctx.get("cap_id") or "") != "swipe_direction":
+        return None
+    params = dict(ctx.get("params") or {})
+    direction = str(params.get("direction") or "").strip().lower()
+    if not direction:
+        return None
+    step_cursor = ctx.get("step_cursor")
+    streak_fp = str(getattr(step_cursor, "swipe_stuck_fp", "") or "")
+    streak_dir = str(getattr(step_cursor, "swipe_stuck_dir", "") or "")
+    streak_n = int(getattr(step_cursor, "swipe_stuck_count", 0) or 0)
+    fp = str(ctx.get("screen_fp") or "").strip()
+    if streak_dir == direction and streak_n >= 3:
+        from mino_nexus.loop.swipe_hint import instruction_swipe_direction, swipe_direction_label
+
+        cur = ctx.get("cursor")
+        instr = str(getattr(cur, "instruction", "") or "").strip() if cur else ""
+        want = instruction_swipe_direction(instr)
+        hint = swipe_direction_label(want) if want else "换滑动方向"
+        return (
+            f"已连续 {streak_n} 次同向 direction={direction} 滑动。"
+            f"请 {hint}、换区域滑动，或 signal_done / signal_give_up；勿再重复 swipe。"
+        )
+    return None
+
+
 def _guard_skip_repeat_satisfied_step_action(ctx: dict[str, Any]) -> Optional[str]:
     """仅当无明确业务意图时，用动作族次数限制超额 swipe/tap（兼容旧步骤）。"""
     if str(ctx.get("phase") or "") != "do":
@@ -565,7 +679,17 @@ def _guard_skip_repeat_satisfied_step_action(ctx: dict[str, Any]) -> Optional[st
         return None
     if bool(getattr(step_cursor, "step_goal_met", False)):
         return f"本步动作次数已达标且目标已达成，请 signal_done，勿再 {cap}。"
-    return f"本步 {fam} 次数已达标（{got}/{need_n}），请 signal_done，勿重复 {cap}。"
+    from mino_nexus.loop.step_intent import format_intent_progress
+
+    prog = format_intent_progress(
+        instruction=instr,
+        intents_done=getattr(step_cursor, "step_intents_done", None),
+    )
+    extra = f" {prog}" if prog else ""
+    return (
+        f"本步 {fam} 次数已达标（{got}/{need_n}），但达成信号未确认，勿重复 {cap}。"
+        f"请换目标元素/导航，或核对是否进错页后再 signal_done。{extra}"
+    )
 
 
 def _guard_prep_clear_before_launch(ctx: dict[str, Any]) -> Optional[str]:
@@ -647,6 +771,9 @@ GUARDS: dict[str, GuardFn] = {
     "skip_repeat_launch_app": _guard_skip_repeat_launch_app,
     "skip_repeat_clear_app_cache": _guard_skip_repeat_clear_app_cache,
     "skip_repeat_satisfied_step_action": _guard_skip_repeat_satisfied_step_action,
+    "block_idle_wait_in_do": _guard_block_idle_wait_in_do,
+    "swipe_direction_vs_instruction": _guard_swipe_direction_vs_instruction,
+    "skip_repeat_swipe_stuck": _guard_skip_repeat_swipe_stuck,
     "skip_repeat_structural_cap": _guard_skip_repeat_structural_cap,
     "prep_clear_before_launch": _guard_prep_clear_before_launch,
     "action_fuse": _guard_action_fuse,
@@ -657,6 +784,7 @@ GUARDS: dict[str, GuardFn] = {
     "block_login_after_guest": _guard_block_login_after_guest,
     "block_login_flow_unless_step_scope": _guard_block_login_flow_unless_step_scope,
     "block_mutate_when_thought_done": _guard_block_mutate_when_thought_done,
+    "block_back_without_nav_back_semantics": _guard_block_back_without_nav_back_semantics,
     "block_do_after_step_goal": _guard_block_do_after_step_goal,
     "require_sms_send_before_otp": _guard_require_sms_send_before_otp,
     "exec_script_params": _guard_exec_script_params,
@@ -698,14 +826,15 @@ PROVIDERS: dict[str, str] = {
 
 
 def run_guards(names: list[str], ctx: dict[str, Any]) -> Optional[str]:
-    for name in names or []:
-        fn = GUARDS.get(str(name or "").strip())
-        if fn is None:
-            continue
-        reason = fn(ctx)
-        if reason:
-            return reason
-    return None
+    from mino_nexus.loop.dispatch_gate import first_block_reason
+
+    return first_block_reason(names, ctx, guards=GUARDS)
+
+
+def run_guards_verdict(names: list[str], ctx: dict[str, Any]):
+    from mino_nexus.loop.dispatch_gate import evaluate_guards
+
+    return evaluate_guards(names, ctx, guards=GUARDS)
 
 
 __all__ = [

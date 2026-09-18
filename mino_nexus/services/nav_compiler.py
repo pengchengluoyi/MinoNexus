@@ -66,6 +66,46 @@ def wiki_block(wiki_refs: list[str], *, app_id: str = "", project_id: str = "") 
     return "\n".join(lines)
 
 
+def compile_page_identity_block(fsm: dict[str, Any] | None, state_id: str) -> str:
+    """从 NavFSM identify.required 编译「本屏应/不应有什么」，供 LLM 判页，非 alias 口语。"""
+    sid = str(state_id or "").strip()
+    if not sid or not fsm:
+        return ""
+    st = state_by_id(fsm, sid)
+    if not isinstance(st, dict):
+        return ""
+    identify = st.get("identify") if isinstance(st.get("identify"), dict) else {}
+    required = identify.get("required")
+    blocks = required if isinstance(required, list) else ([required] if isinstance(required, dict) else [])
+    lines: list[str] = []
+    for spec in blocks:
+        if not isinstance(spec, dict):
+            continue
+        sig = str(spec.get("signal") or "").strip()
+        if sig == "tab_bar":
+            sel = str((spec.get("match") or {}).get("selected") or "").strip()
+            if sel:
+                lines.append(f"底栏选中 Tab 应为「{sel}」")
+        elif sig == "text_landmarks":
+            any_l = [str(x).strip() for x in (spec.get("any") or []) if str(x).strip()]
+            none_l = [str(x).strip() for x in (spec.get("none_of") or []) if str(x).strip()]
+            if any_l:
+                lines.append("屏上应可见：" + "、".join(any_l[:8]))
+            if none_l:
+                lines.append("屏上不应出现：" + "、".join(none_l[:6]))
+        elif sig == "session":
+            want = str((spec.get("match") or {}).get("session") or spec.get("session") or "").strip()
+            if want:
+                lines.append(f"会话态参考：{want}")
+    meta = st.get("meta") if isinstance(st.get("meta"), dict) else {}
+    brief = str(meta.get("page_brief") or meta.get("assert_hint") or "").strip()
+    if brief:
+        lines.append(brief)
+    if not lines:
+        return ""
+    return "【本屏架构要点】\n" + "\n".join(f"- {ln}" for ln in lines[:10])
+
+
 def state_label(fsm: dict[str, Any] | None, state_id: str) -> str:
     """屏面中文/可读名（配置真源在 NavFSM，不硬编码 App 文案）。"""
     sid = str(state_id or "").strip()
@@ -145,8 +185,11 @@ def compile_assist(
     if resolved_view and resolved_view != "av:default":
         version_line = f"【应用版本】{resolved_av or '未知'} → 视图 {resolved_view}"
 
+    page_id = compile_page_identity_block(fsm, str(plan.state_id or ""))
     if not getattr(plan, "case_navigation_goal", False):
         parts = [_head(plan, fsm, localized=localized)]
+        if page_id:
+            parts.append(page_id)
         if flow_line:
             parts.append(flow_line)
         if version_line:
@@ -154,6 +197,8 @@ def compile_assist(
         return "\n\n".join(p for p in parts if p).strip()
 
     parts: list[str] = [_head(plan, fsm, localized=localized)]
+    if page_id:
+        parts.append(page_id)
 
     if flow_line:
         parts.append(flow_line)

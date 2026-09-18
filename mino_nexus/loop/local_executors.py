@@ -78,6 +78,48 @@ def _params_tap_label(params: dict[str, Any]) -> str:
     return _fold_tap_label(params.get("selector_text") or params.get("text") or "")
 
 
+def _tap_params_has_point(params: dict[str, Any]) -> bool:
+    if params.get("x") is not None and params.get("y") is not None:
+        return True
+    raw = params.get("fallback_xy")
+    if isinstance(raw, (list, tuple)) and len(raw) >= 2:
+        try:
+            int(raw[0])
+            int(raw[1])
+            return True
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
+def _tap_selector_likely_on_screen(params: dict[str, Any], nodes: list[dict[str, Any]]) -> bool:
+    from mino_nexus.loop.tap_enrich import _match_node, _hint_labels
+
+    labels = _hint_labels(params, str(params.get("selector_text") or ""))
+    if not labels:
+        return False
+    for label in labels:
+        if _match_node(nodes, label, hint="底栏"):
+            return True
+    return False
+
+
+def _visible_tab_labels(ctx: Any) -> list[str]:
+    from mino_nexus.services.nav_tab_slots import find_bottom_tab_slots
+
+    nodes = getattr(ctx, "nav_hierarchy_nodes", None) if ctx is not None else None
+    if not isinstance(nodes, list):
+        return []
+    out: list[str] = []
+    for slot in find_bottom_tab_slots(nodes):
+        if not isinstance(slot, dict):
+            continue
+        lab = str(slot.get("label") or slot.get("display") or "").strip()
+        if lab and lab not in out:
+            out.append(lab)
+    return out
+
+
 def dispatch_local(
     event: PlanEvent,
     *,
@@ -721,6 +763,12 @@ def _fsm_navigate(
             _attempt(plan_ok=False, plan_error="missing fsm"),
         )
 
+    from mino_nexus.services.nav_route import coerce_oral_nav_ref
+
+    to_raw = coerce_oral_nav_ref(fsm, to_raw)
+    if from_raw:
+        from_raw = coerce_oral_nav_ref(fsm, from_raw)
+
     plan_msg = ""
     step_cap = "tap_element"
     step_params: dict[str, Any] = {}
@@ -800,6 +848,15 @@ def _fsm_navigate(
                 nav_attempt["planned_hops"] = int(pick_meta.get("planned_hops") or hops)
                 nav_attempt["step_pick"] = str(pick_meta.get("step_pick") or "")
                 step_cap, step_params = nav_route.dispatch_spec_for_edge(fsm, first)
+                if step_cap == "press_key" and str(step_params.get("key") or "").upper() == "BACK":
+                    if not nav_route.edge_is_system_back(fsm, first):
+                        return _degrade(
+                            f"{summary}；首 hop 非系统返回边，禁止 BACK（D1-C）。"
+                            "请再次 fsm_navigate 或 tap 目标 Tab/入口。",
+                            "back_not_on_route",
+                            nav_attempt,
+                        )
+                    nav_attempt["allow_back"] = True
                 plan_msg = (
                     f"规划 {hops} 步：{summary}；本步 {first.get('edge_id') or ''} "
                     f"→ {first.get('to') or ''}"
@@ -807,6 +864,8 @@ def _fsm_navigate(
                 dest_tab = nav_route.tab_root_label_for_state(
                     fsm, str(nav_attempt.get("resolved_to") or plan.get("to_state") or "")
                 )
+                if not dest_tab and nav_route.is_oral_home_ref(to_raw):
+                    dest_tab = nav_route.oral_home_tab_label(fsm)
                 if not dest_tab:
                     want = _fold_tap_label(to_raw)
                     dest_tab = next(
@@ -822,54 +881,33 @@ def _fsm_navigate(
                         nav_attempt["step_pick"] = "tab_bar_visible_direct"
                         plan_msg = f"{plan_msg}；底栏可见，本步直点 Tab「{dest_tab}」"
                     elif (not tabs_visible) and step_cap == "tap_element" and not already_tab:
-                        # 最短路常把「去 Tab 页」编成内容区控件（拍照按钮/列表项），
-                        # 当前又没有底栏可点，系统返回比瞎点内容更接近 Tab 根。
-                        step_cap = "press_key"
-                        step_params = {"key": "BACK"}
-                        nav_attempt["step_pick"] = "tab_target_press_back"
-                        plan_msg = (
-                            f"{plan_msg}；目标是底栏 Tab「{dest_tab}」但当前无底栏，"
-                            "本步先系统返回，请再次 fsm_navigate"
-                        )
+                        if first and nav_route.edge_is_system_back(fsm, first):
+                            step_cap = "press_key"
+                            step_params = {"key": "BACK"}
+                            nav_attempt["step_pick"] = "tab_target_system_back"
+                            plan_msg = (
+                                f"{plan_msg}；路线图首 hop 为系统返回，"
+                                "本步 press_key BACK 后再 fsm_navigate"
+                            )
+                        else:
+                            nav_attempt["allow_back"] = False
+                            return _degrade(
+                                f"{plan_msg}；目标 Tab「{dest_tab}」但无底栏且首 hop 非返回边，"
+                                "请 fsm_navigate 直点 Tab 或探索补边（D1-C）。",
+                                "tab_not_visible_no_back_edge",
+                                nav_attempt,
+                            )
         else:
             err = str(plan.get("error") or "无路径")
             nav_attempt["plan_ok"] = False
             nav_attempt["plan_error"] = err
             if _skip_tab_fallback(localized, ctx):
-                # 详情/栈顶无底栏：直点 Tab 必败。系统返回是最短可用 hop，
-                # 不要 declined 把这一步踢回模型再自己 press_key。
-                hits = getattr(ctx, "_fsm_recover_back_hits", None) if ctx is not None else None
-                if not isinstance(hits, dict):
-                    hits = {}
-                    if ctx is not None:
-                        setattr(ctx, "_fsm_recover_back_hits", hits)
-                n = int(hits.get("back", 0) or 0) + 1
-                hits["back"] = n
                 two_stage = nav_route.tab_root_entry_hint(
                     fsm, resolve.get("resolved_to") or to_raw
                 )
-                if n > 3:
-                    hint = (
-                        f"{err}；当前屏无底栏 Tab，"
-                        f"已连续系统返回 {n - 1} 次仍无法规划。"
-                        "请 recover_restart_target_app 或 tap_element 直点目标。"
-                    )
-                    nav_attempt["plan_error"] = hint
-                    return _degrade(hint, err, nav_attempt)
-                step_cap = "press_key"
-                step_params = {"key": "BACK"}
-                plan_msg = (
-                    f"{err}；当前屏无底栏 Tab，"
-                    f"本步先系统返回退出栈顶（{n}/3）"
-                )
-                if two_stage:
-                    plan_msg = f"{plan_msg}，{two_stage}"
-                nav_attempt["step_pick"] = "recover_press_back"
-                # 没有路线图，就别报「第 1/N 步」—— 那句进度是假的，摘要会像导航已完成。
-                nav_attempt["planned_hops"] = 0
-                nav_attempt["recover_hint"] = "；".join(
-                    x for x in (err, two_stage, "退栈后请再次 fsm_navigate；底栏可见时可直点目标") if x
-                )
+                hint = f"{err}；{two_stage or '无 nav 路线（L1 降级），请 tap 探索或补 Atlas 边。'}"
+                nav_attempt["degrade_level"] = 1
+                return _degrade(hint, err, nav_attempt)
             else:
                 step_params = nav_route.direct_tab_tap_params(
                     fsm, resolve.get("resolved_to") or to_raw
@@ -914,6 +952,20 @@ def _fsm_navigate(
             from mino_nexus.ai.coords import lift_selector_target
 
             lift_selector_target(step_params)
+
+    if step_cap == "tap_element" and isinstance(nodes, list) and nodes:
+        if not _tap_params_has_point(step_params) and not _tap_selector_likely_on_screen(
+            step_params, nodes
+        ):
+            sel = str(step_params.get("selector_text") or step_params.get("text") or "").strip()
+            tabs = _visible_tab_labels(ctx)
+            hint_tabs = f"可见底栏：{' / '.join(tabs[:6])}" if tabs else "当前屏无底栏 Tab 匹配"
+            return _degrade(
+                f"目标「{sel or to_raw}」不在当前层级，跳过盲目 tap。{hint_tabs}。"
+                f"{_FSM_DEGRADE_HINT}",
+                "tap_target_not_on_screen",
+                nav_attempt,
+            )
 
     if router is None:
         return _result(

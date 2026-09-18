@@ -70,6 +70,9 @@ def coarse_action_key(cap_id: str, params: dict[str, Any] | None) -> str:
             return f"tap|{sel}|{x},{y}"
         except (TypeError, ValueError):
             return f"tap|{sel or 'coord'}"
+    if cid == "swipe_direction":
+        d = str(p.get("direction") or "").strip().lower() or "?"
+        return f"swipe_dir|{d}"
     return cid
 
 

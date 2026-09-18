@@ -1,5 +1,7 @@
 # 9月16日 — 用例执行调用 fsm_navigate 能力异常（方案 v2）
 
+> **维护说明**：本文 **§0.x 现象复盘** 继续有效；**结论、后续改造与验收** 统一在 [`9月18日-fsm导航能力提升.md`](9月18日-fsm导航能力提升.md) 维护（含步骤导航计划、BACK 收紧、通用逻辑块）。
+
 **应用**：造物相机 `app_id = 3d2b9799-0027-4c7d-bfe7-8c5b88f4087d`  
 **关联**：`9月15日-fsm_navigate异常导致任务失败.md`、`9月16日-增加页面切换多态识别能力.md`、Atlas 真源 `page.sk*`（`nav_screen_registry.atlas_doc_for_navigation`）
 

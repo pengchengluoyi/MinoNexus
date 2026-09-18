@@ -8,18 +8,20 @@ _INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("legal_consent", re.compile(r"同意|协议|勾选|隐私政策|用户协议", re.I)),
     ("logout", re.compile(r"退出登录|注销|登出", re.I)),
     ("login_flow", re.compile(r"验证码|短信|OTP|输入.{0,8}手机|填写.{0,8}手机|密码|一键登录|登录成功", re.I)),
-    ("login_entry", re.compile(r"手机号登录|去登录|登录按钮|点击.{0,12}登录", re.I)),
+    ("login_entry", re.compile(r"手机号登录|去登录|登录按钮|点击(?!.*退出).{0,12}登录", re.I)),
     ("like", re.compile(r"点赞|喜欢", re.I)),
     ("open_app", re.compile(r"打开|启动|冷启动|进入应用", re.I)),
     ("clear_cache", re.compile(r"清缓存|清除缓存|清理缓存", re.I)),
     ("nav_tab", re.compile(r"底部|Tab|标签|「我的」|我的页", re.I)),
-    ("swipe_gesture", re.compile(r"上滑|下滑|左滑|右滑|滑动", re.I)),
+    ("open_content", re.compile(r"帖子|详情|卡片|动态|笔记|feed|Feed", re.I)),
+    ("swipe_gesture", re.compile(r"上滑|下滑|左滑|右滑|滑动|向[上下左右]滑", re.I)),
     ("input_fill", re.compile(r"输入|填写|填入", re.I)),
 ]
 
 _TAP_MARKS_INTENT: list[tuple[str, re.Pattern[str]]] = [
-    ("login_entry", re.compile(r"手机号登录|去登录|登录按钮|点击.{0,12}登录", re.I)),
+    ("login_entry", re.compile(r"手机号登录|去登录|登录按钮|点击(?!.*退出).{0,12}登录", re.I)),
     ("nav_tab", re.compile(r"底部|Tab|标签|「我的」|我的页", re.I)),
+    ("open_content", re.compile(r"帖子|详情|卡片|进入详情", re.I)),
     ("like", re.compile(r"点赞|喜欢", re.I)),
     ("logout", re.compile(r"退出登录|注销|登出", re.I)),
 ]
@@ -52,11 +54,48 @@ _STRUCTURAL_CAPS = frozenset(
 
 
 def mark_tap_intents_from_instruction(instruction: str, intents_done: set[str]) -> None:
-    """tap_element 成功时，标记可由「点一下」完成的意图。"""
+    """tap_element 成功时，标记可由「点一下」完成的意图（不含需二次确认的退出登录）。"""
     text = str(instruction or "")
+    if _logout_needs_confirm(text):
+        return
     for name, pat in _TAP_MARKS_INTENT:
         if pat.search(text):
             intents_done.add(name)
+
+
+def _logout_needs_confirm(instruction: str) -> bool:
+    text = str(instruction or "")
+    return bool(re.search(r"退出登录|注销|登出", text, re.I) and re.search(r"确认|确定", text, re.I))
+
+
+_LOGOUT_MENU_RE = re.compile(r"退出登录|注销|登出", re.I)
+_LOGOUT_CONFIRM_TAP_RE = re.compile(
+    r"(?:^|[「『])(?:退出|确定|确认)(?:」』|$)|^(?:退出|确定|确认)$",
+    re.I,
+)
+
+
+def mark_tap_intents_from_tap(
+    instruction: str,
+    *,
+    tap_label: str,
+    intents_done: set[str],
+) -> None:
+    """按实际点击文案标记意图（退出登录+确认须点确认钮才算 logout）。"""
+    instr = str(instruction or "")
+    label = str(tap_label or "").strip()
+    if not label:
+        mark_tap_intents_from_instruction(instr, intents_done)
+        return
+    if _logout_needs_confirm(instr):
+        if _LOGOUT_MENU_RE.search(label):
+            intents_done.add("logout_pending")
+            return
+        if _LOGOUT_CONFIRM_TAP_RE.search(label):
+            intents_done.discard("logout_pending")
+            intents_done.add("logout")
+        return
+    mark_tap_intents_from_instruction(instr, intents_done)
 
 
 def cap_step_intent(cap_id: str, *, params: dict[str, Any] | None = None) -> str:
@@ -81,6 +120,13 @@ def instruction_required_intents(instruction: str) -> set[str]:
     for name, pat in _INTENT_PATTERNS:
         if pat.search(text):
             out.add(name)
+    if "login_flow" in out and "input_fill" in out:
+        out.discard("input_fill")
+    if "logout" in out:
+        out.discard("login_flow")
+        out.discard("login_entry")
+    if _logout_needs_confirm(text) and "logout" in out:
+        out.discard("logout_pending")
     return out
 
 
@@ -93,6 +139,7 @@ _INTENT_LABELS: dict[str, str] = {
     "open_app": "打开应用",
     "clear_cache": "清缓存",
     "nav_tab": "切换 Tab/导航",
+    "open_content": "打开帖子/详情",
     "swipe_gesture": "滑动",
     "input_fill": "输入内容",
     "sms_send": "发送验证码",
@@ -110,6 +157,12 @@ def _expand_intents_done(done: set[str]) -> set[str]:
             out.add("login_flow")
         elif "otp_fill" in out and "sms_send" in out:
             out.add("login_flow")
+    if "input_fill" not in out and "login_flow" in out:
+        out.add("input_fill")
+    if "login_entry" not in out and "login_flow" in out:
+        out.add("login_entry")
+    if "logout" in out:
+        out.discard("logout_pending")
     return out
 
 

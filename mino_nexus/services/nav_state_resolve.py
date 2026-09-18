@@ -311,7 +311,10 @@ def plan_route_resolved(
     localized: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """plan_route + 模糊解析；附带 resolve 元数据。"""
-    from mino_nexus.services.nav_route import plan_route
+    from mino_nexus.services.nav_route import coerce_oral_nav_ref, plan_route
+
+    from_ref = coerce_oral_nav_ref(fsm, from_ref)
+    to_ref = coerce_oral_nav_ref(fsm, to_ref)
 
     from_out = resolve_state_fuzzy(fsm, from_ref, localized=localized, role="from")
     chosen = str((localized or {}).get("chosen") or "").strip()

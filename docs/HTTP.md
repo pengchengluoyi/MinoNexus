@@ -181,6 +181,19 @@ pip install -e .    # 或 uv sync
 
 跑批每步由 `agent_loop` 调 `context_pack_for_step`（`wiki_first`），session log 事件 `intel/context_pack`。
 
+## 通用逻辑块（FlowBlocks）
+
+表 `nav_flow_block_catalog`（`app_id=__global__` 为通用库）；应用覆盖写在 NavFSM **draft** 的 `meta.flow_block_overrides`。Studio「导航 → 逻辑块」页编辑覆盖。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/flow-blocks/catalog` | 通用逻辑块列表 |
+| `GET` | `/flow-blocks/catalog/{block_id}` | 单块（含 `steps_json`） |
+| `GET` | `/flow-blocks/apps/{app_id}/overrides` | 读应用覆盖 |
+| `PUT` | `/flow-blocks/apps/{app_id}/overrides` | 写应用覆盖（落 draft） |
+
+`GET /nav-fsm/{app_id}/screen-atlas` 与 `live-graph` 响应中的 `doc.meta.flow_blocks` 已剔除 `fb.global.*`，避免架构图展示通用块。
+
 ## NavFSM（导航图配置与校准证据）
 
 配置真源是 `mino.db` 的 `nav_fsm` / `nav_fsm_states` / `nav_fsm_edges`；校准证据是

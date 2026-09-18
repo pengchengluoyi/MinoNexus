@@ -445,6 +445,11 @@ def read_draft(app_id: str) -> Optional[dict[str, Any]]:
     return read_raw(app_id, version=DRAFT_VERSION)
 
 
+def load_draft(app_id: str) -> Optional[dict[str, Any]]:
+    """与 `read_draft` 同义；供 flow_block / 外部模块统一命名。"""
+    return read_draft(app_id)
+
+
 def promote_draft(app_id: str, *, updated_by: str = "") -> dict[str, Any]:
     """draft 行 → v1 正式发布行。"""
     draft = read_draft(app_id)

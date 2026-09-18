@@ -934,19 +934,26 @@ def call_chat_text(
             _safe_record_llm(messages=messages, meta=meta)
             return None, meta
 
+        req_tools = require_tool_calls
+        if round_i > 0 and str(meta.get("fail_kind") or "") == "no_tool_calls":
+            # 火山等：finish_reason=tool_calls 但无有效 tool_calls；第二轮允许正文 JSON 降级
+            req_tools = False
+            meta["tools_downgraded"] = True
         parsed, content = _parse_chat_json(
-            resp_json, meta, require_tool_calls=require_tool_calls,
+            resp_json, meta, require_tool_calls=req_tools,
         )
         if parsed is not None:
             _safe_record_llm(messages=messages, parsed=parsed, meta=meta)
             return parsed, meta
 
-        # 截断 / 墙钟超时：同预算再打没用。空白熔断允许再打一轮。
+        # 截断 / 墙钟超时：同 budget 再打没用。空白熔断 / no_tool_calls 允许再打一轮。
         kind = str(meta.get("fail_kind") or "")
         if meta.get("truncated") or kind == "timeout" or round_i + 1 >= rounds:
             break
 
-        meta["retry_reasons"] = list(meta.get("retry_reasons") or []) + ["parse"]
+        meta["retry_reasons"] = list(meta.get("retry_reasons") or []) + [
+            "no_tool_calls" if kind == "no_tool_calls" else "parse"
+        ]
         SLog.w(
             TAG,
             f"chat JSON parse retry provider={meta.get('provider_id')} model={meta.get('model')} "

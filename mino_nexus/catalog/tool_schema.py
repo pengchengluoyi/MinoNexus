@@ -472,6 +472,43 @@ def _low_level_needs_package(low_level: Any) -> bool:
     return "{package}" in blob
 
 
+def fill_input_text_from_ctx(
+    params: dict[str, Any] | None,
+    *,
+    cap_id: str,
+    ctx: Any = None,
+) -> dict[str, Any]:
+    """LLM 只填 field 时，由租号/OTP 网关补 params.text（Scout adb 必填）。"""
+    out = dict(params or {})
+    if str(cap_id or "").strip() != "input_text":
+        return out
+    if str(out.get("text") or "").strip():
+        return out
+    acc = dict(getattr(ctx, "picked_account", None) or {}) if ctx is not None else {}
+    field = str(out.get("field") or "text").strip().lower()
+    if field == "phone":
+        import re
+
+        from mino_nexus.services.project_env import account_ident
+
+        raw = str(acc.get("phone") or account_ident(acc) or "").strip()
+        digits = re.sub(r"\D", "", raw)
+        if len(digits) >= 11:
+            out["text"] = digits[-11:]
+        elif raw:
+            out["text"] = raw
+        return out
+    if field in ("sms_code", "验证码", "password"):
+        code = str(acc.get("otp") or acc.get("sms_code") or acc.get("password") or "").strip()
+        if not code and field in ("sms_code", "验证码") and ctx is not None:
+            from mino_nexus.loop.local_executors import _resolve_otp
+
+            code, _ = _resolve_otp(ctx)
+        if code:
+            out["text"] = code
+    return out
+
+
 def fill_target_package(
     params: dict[str, Any] | None,
     *,

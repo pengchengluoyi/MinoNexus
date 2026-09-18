@@ -139,3 +139,86 @@ def try_unified_system_permission_recovery(
             out.recovered = True
             return True
     return False
+
+
+def try_proactive_system_permission(
+    *,
+    ctx: Any,
+    router: Any,
+    target_package: str = "",
+    turn_seq: int = 0,
+) -> Optional[dict[str, Any]]:
+    """无 recovery rule 上下文时，由逻辑块宏主动处理系统权限挡屏。"""
+    if router is None:
+        return None
+    from mino_nexus.core.protocol import EventStatus
+    from mino_nexus.loop.recovery import _dispatch as recovery_dispatch
+    from mino_nexus.loop.recovery_permission import pick_permission_allow_text, pick_permission_dismiss_text
+
+    _ = target_package  # 与 recovery unified 一致，包名由 ctx / router 携带
+
+    nodes = list(getattr(ctx, "nav_hierarchy_nodes", None) or [])
+    vlm = getattr(ctx, "nav_vlm_hierarchy", None)
+    if isinstance(vlm, dict):
+        nodes = nodes + [n for n in (vlm.get("nodes") or []) if isinstance(n, dict)]
+    allow = pick_permission_allow_text(hierarchy_nodes=nodes, match_reasons=[])
+    dismiss = pick_permission_dismiss_text(hierarchy_nodes=nodes) if not allow else None
+    tap_text = allow or dismiss
+    if not tap_text:
+        return None
+    kind = "allow" if allow else "dismiss"
+    agent_turn = int(turn_seq or 0)
+
+    def _tap(text: str, *, kind_tag: str, action_idx: int) -> Any:
+        ev = PlanEvent(
+            seq=agent_turn,
+            capability_id="tap_element",
+            event_kind="tap_element",
+            params={"selector_text": text, "text": text},
+            ai_reasoning=f"系统弹窗逻辑块 · unified {kind_tag}",
+            label=text[:40],
+        )
+        return recovery_dispatch(
+            router,
+            ctx,
+            ev,
+            agent_turn=agent_turn,
+            action_idx=action_idx,
+        )
+
+    res = _tap(tap_text, kind_tag=kind, action_idx=1)
+    st = res.status.value if hasattr(res.status, "value") else str(res.status)
+    ok = str(st) in ("pass", EventStatus.PASS.value)
+    summary = str(res.summary or res.error or tap_text)
+    if not ok and allow and dismiss and dismiss != tap_text:
+        res2 = _tap(dismiss, kind_tag="dismiss_fallback", action_idx=2)
+        st2 = res2.status.value if hasattr(res2.status, "value") else str(res2.status)
+        if str(st2) in ("pass", EventStatus.PASS.value):
+            ok = True
+            st = st2
+            summary = str(res2.summary or res2.error or dismiss)
+            kind = "dismiss_fallback"
+    if ok:
+        recovery_dispatch(
+            router,
+            ctx,
+            PlanEvent(
+                seq=agent_turn,
+                capability_id="wait_ms",
+                event_kind="wait_ms",
+                params={"duration_ms": 450},
+                ai_reasoning="系统弹窗点击后等待",
+                label="wait",
+            ),
+            agent_turn=agent_turn,
+            action_idx=3,
+        )
+    return {
+        "ok": ok,
+        "status": st,
+        "summary": summary,
+        "capability_id": "tap_element",
+        "block_id": "fb.global.system_dialog",
+        "step_id": "unified_permission",
+        "unified_kind": kind,
+    }

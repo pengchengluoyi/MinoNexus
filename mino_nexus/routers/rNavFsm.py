@@ -563,6 +563,10 @@ def get_screen_atlas(
             row = {**row, "doc": doc}
             row["pending_summary"] = pending_summary(row["doc"])
             row["nav_view_id"] = (doc.get("meta") or {}).get("resolved_nav_view_id")
+    if row.get("doc"):
+        from mino_nexus.services.nav_flow_block_catalog import strip_global_flow_blocks_from_doc
+
+        row = {**row, "doc": strip_global_flow_blocks_from_doc(row["doc"])}
     return ok(row)
 
 
@@ -580,6 +584,10 @@ def get_live_graph(
         updated_by=str(sess.get("username") or sess.get("user_id") or ""),
         sync=bool(sync),
     )
+    if isinstance(row, dict) and isinstance(row.get("doc"), dict):
+        from mino_nexus.services.nav_flow_block_catalog import strip_global_flow_blocks_from_doc
+
+        row = {**row, "doc": strip_global_flow_blocks_from_doc(row["doc"])}
     return ok(row)
 
 

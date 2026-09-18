@@ -69,6 +69,19 @@ def _probe_terms(expected: str, instruction: str = "") -> list[str]:
     return terms[:12]
 
 
+def probe_expected_for_do(
+    expected: str,
+    nodes: list[dict[str, Any]],
+    *,
+    instruction: str = "",
+    defer_expected_to_check: bool = False,
+) -> tuple[bool, list[str]]:
+    """do 阶段探针：expected 延后到 check 时，只用 instruction 引号内目标，避免「生成中」等弱命中拖住 do。"""
+    if defer_expected_to_check:
+        return probe("", nodes, instruction=instruction)
+    return probe(expected, nodes, instruction=instruction)
+
+
 def probe(
     expected: str,
     nodes: list[dict[str, Any]],
@@ -141,11 +154,14 @@ def should_auto_enter_check(
     expected: str = "",
     keywords: list[str] | None = None,
     hit_streak: int = 0,
+    defer_expected_to_check: bool = False,
 ) -> bool:
     """已在目标逻辑页或强达成探针命中时，直接进 check，不再等模型 signal_done。
 
     仅底栏短文案命中（弱）时仍要连续两轮，避免详情页看见 Tab 字就收工。
     """
+    if defer_expected_to_check:
+        return False
     if loc_hit:
         return True
     if not probe_hit:

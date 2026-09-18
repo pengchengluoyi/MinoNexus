@@ -25,6 +25,14 @@ _POINTER_TEMPLATES: dict[str, str] = {
         "「达成信号/预期」仅供判断可否 signal_done，禁止把校验预期当成操作目标。"
     ),
     "do_current": "【当前只做步骤 {n}】{instruction}\n【本步达成信号】{achievement}",
+    "do_operation": (
+        "【当前只做步骤 {n}·操作】{instruction}\n"
+        "【达成信号·摘要】{achievement_brief}（仅供收工判断，禁止当作点击/输入目标）"
+    ),
+    "do_achievement": (
+        "【当前只做步骤 {n}·收工】达成信号：{achievement}\n"
+        "若屏上已满足且无其它待办，请 signal_done；禁止再改界面凑预期。"
+    ),
     "do_tail": (
         "子动作全部完成且达成信号满足后调 signal_done（不是整案结束）。"
         "跳转类步骤成功后入口从屏上消失是正常现象，禁止因此 signal_give_up。"
@@ -55,6 +63,37 @@ def _pointer_templates() -> dict[str, str]:
 def _achievement_label(expected: str) -> str:
     exp = str(expected or "").strip()
     return exp if exp else "本步无预期（做完即过）"
+
+
+def _expected_defers_to_check(expected: str) -> bool:
+    """expected 描述的是登录后/跳转后的结果，不应在 do 阶段空等。"""
+    exp = str(expected or "").strip()
+    if not exp:
+        return False
+    markers = (
+        "登录成功",
+        "进入",
+        "跳转到",
+        "跳转",
+        "生成中",
+        "提单",
+        "返回",
+        "未跳转",
+    )
+    return any(m in exp for m in markers)
+
+
+def _do_phase_achievement_brief(instruction: str, expected: str) -> str:
+    exp = str(expected or "").strip()
+    if not exp:
+        return "本步无预期（做完即过）"
+    if _expected_defers_to_check(exp):
+        return (
+            "按 instruction 完成全部子动作后即可 signal_done；"
+            f"「{exp[:48]}{'…' if len(exp) > 48 else ''}」仅在 check 阶段 assert_visual 校验，"
+            "do 阶段勿为加载/下一页空等。"
+        )
+    return exp if len(exp) <= 72 else exp[:69].rstrip() + "…"
 
 
 def _pt(key: str, **kwargs: Any) -> str:
@@ -338,6 +377,12 @@ class StepCursor:
         self.step_effect_hint: str = ""
         self.correction_hint: str = ""
         self.recovery_block_streak: int = 0
+        self.do_subphase: str = "operation"
+        self.step_nav_plan_hint: str = ""
+        self.step_nav_plan_step_n: int = 0
+        self.swipe_stuck_fp: str = ""
+        self.swipe_stuck_dir: str = ""
+        self.swipe_stuck_count: int = 0
         if self.phase != "prep":
             self._sync()
 
@@ -368,6 +413,12 @@ class StepCursor:
         self.step_effect_hint = ""
         self.correction_hint = ""
         self.recovery_block_streak = 0
+        self.do_subphase = "operation"
+        self.step_nav_plan_hint = ""
+        self.step_nav_plan_step_n = 0
+        self.swipe_stuck_fp = ""
+        self.swipe_stuck_dir = ""
+        self.swipe_stuck_count = 0
         self.progress_gate.reset_milestone("do", 1 if self.nodes else 0)
         self._sync()
         self.step_start_fp = ""
@@ -390,22 +441,32 @@ class StepCursor:
         self.step_effect_hit_streak = 0
         self.step_effect_hint = ""
 
-    def record_step_op(self, cap_id: str = "", *, params: dict[str, Any] | None = None) -> None:
+    def record_step_op(
+        self,
+        cap_id: str = "",
+        *,
+        params: dict[str, Any] | None = None,
+        count_nav_intent: bool = True,
+    ) -> None:
         self.step_ops += 1
         from mino_nexus.loop.step_contract import cap_action_family
         from mino_nexus.loop.step_intent import cap_step_intent, is_structural_cap
 
         cap = str(cap_id or "").strip()
         intent = cap_step_intent(cap, params=params)
+        if intent == "nav_tab" and not count_nav_intent:
+            intent = ""
         if intent:
             self.step_intents_done.add(intent)
         if cap == "tap_element":
-            from mino_nexus.loop.step_intent import mark_tap_intents_from_instruction
+            from mino_nexus.loop.step_intent import mark_tap_intents_from_tap
 
             cur = self.current()
-            mark_tap_intents_from_instruction(
+            sel = str((params or {}).get("selector_text") or (params or {}).get("text") or "")
+            mark_tap_intents_from_tap(
                 str(cur.instruction or "") if cur else "",
-                self.step_intents_done,
+                tap_label=sel,
+                intents_done=self.step_intents_done,
             )
         if cap and is_structural_cap(cap):
             self.step_structural_caps_done.add(cap)
@@ -416,6 +477,29 @@ class StepCursor:
                 self.step_family_counts[fam] = int(self.step_family_counts.get(fam) or 0) + 1
                 if fam == "swipe":
                     self.step_intents_done.add("swipe_gesture")
+        self.refresh_do_subphase()
+
+    def refresh_do_subphase(self) -> None:
+        if self.phase != "do":
+            self.do_subphase = "operation"
+            return
+        cur = self.current()
+        instr = str(cur.instruction or "") if cur else ""
+        from mino_nexus.loop.step_contract import step_actions_satisfied
+        from mino_nexus.loop.step_intent import instruction_required_intents, step_intents_satisfied
+
+        need_int = instruction_required_intents(instr)
+        int_ok, _ = step_intents_satisfied(
+            instruction=instr,
+            intents_done=self.step_intents_done,
+        )
+        fam_ok, _ = step_actions_satisfied(
+            instruction=instr,
+            families_done=self.step_action_families,
+            family_counts=self.step_family_counts,
+        )
+        op_done = int_ok if need_int else fam_ok
+        self.do_subphase = "achievement" if op_done else "operation"
 
     def bump_advise_recovery(self, rule_id: str) -> int:
         rid = str(rule_id or "").strip()
@@ -473,6 +557,34 @@ class StepCursor:
         self.correction_hint = ""
         self.recovery_block_streak = 0
         self.step_start_fp = ""
+        self.do_subphase = "operation"
+        self.step_nav_plan_hint = ""
+        self.step_nav_plan_step_n = 0
+        self.swipe_stuck_fp = ""
+        self.swipe_stuck_dir = ""
+        self.swipe_stuck_count = 0
+
+    def note_swipe_pass(
+        self,
+        *,
+        direction: str,
+        pre_fp: str,
+        post_fp: str,
+    ) -> None:
+        d = str(direction or "").strip().lower()
+        pre = str(pre_fp or "").strip()
+        post = str(post_fp or "").strip()
+        if not d:
+            return
+        if pre and post and pre != post:
+            self.swipe_stuck_fp = post
+        else:
+            self.swipe_stuck_fp = post or pre or self.swipe_stuck_fp
+        if self.swipe_stuck_dir == d:
+            self.swipe_stuck_count += 1
+        else:
+            self.swipe_stuck_dir = d
+            self.swipe_stuck_count = 1
 
     def _skip_empty(self) -> str:
         if not self.advance():
@@ -495,6 +607,12 @@ class StepCursor:
         self.correction_hint = ""
         self.recovery_block_streak = 0
         self.step_start_fp = ""
+        self.do_subphase = "operation"
+        self.step_nav_plan_hint = ""
+        self.step_nav_plan_step_n = 0
+        self.swipe_stuck_fp = ""
+        self.swipe_stuck_dir = ""
+        self.swipe_stuck_count = 0
         if self.index >= len(self.nodes):
             self.phase = "done"
             return False
@@ -569,11 +687,16 @@ class StepCursor:
             if i < self.index:
                 bit = _pt("step_done", n=node.n, instruction=node.instruction or "（无操作）")
             elif i == self.index and self.phase == "do":
+                ach_line = (
+                    "（操作阶段不展示 expected 全文，校验在 check 阶段）"
+                    if _expected_defers_to_check(node.expected)
+                    else _achievement_label(node.expected)
+                )
                 bit = _pt(
                     "step_active_do",
                     n=node.n,
                     instruction=node.instruction or "（无操作）",
-                    achievement=_achievement_label(node.expected),
+                    achievement=ach_line,
                 )
             elif i == self.index:
                 bit = _pt(
@@ -594,14 +717,33 @@ class StepCursor:
             lines.append(_pt("all_done"))
             return "\n".join(lines)
         if self.phase == "do":
-            lines.append(
-                _pt(
-                    "do_current",
-                    n=cur.n,
-                    instruction=cur.instruction,
-                    achievement=_achievement_label(cur.expected),
+            self.refresh_do_subphase()
+            ach = _achievement_label(cur.expected)
+            ach_brief = _do_phase_achievement_brief(cur.instruction, cur.expected)
+            if self.do_subphase == "achievement":
+                ach_show = (
+                    _do_phase_achievement_brief(cur.instruction, cur.expected)
+                    if _expected_defers_to_check(cur.expected)
+                    else ach
                 )
-            )
+                lines.append(
+                    _pt(
+                        "do_achievement",
+                        n=cur.n,
+                        achievement=ach_show,
+                    )
+                )
+            else:
+                lines.append(
+                    _pt(
+                        "do_operation",
+                        n=cur.n,
+                        instruction=cur.instruction,
+                        achievement_brief=ach_brief,
+                    )
+                )
+            if self.step_nav_plan_hint:
+                lines.append(self.step_nav_plan_hint)
             if not str(cur.expected or "").strip():
                 lines.append(_pt("do_no_expected"))
             if self.login_session_hint:
@@ -628,10 +770,23 @@ class StepCursor:
                 micro = instruction_micro_progress_line(str(cur.instruction or ""))
             if micro:
                 lines.append(micro)
+            from mino_nexus.loop.swipe_hint import instruction_swipe_direction, swipe_direction_label
+
+            swipe_want = instruction_swipe_direction(str(cur.instruction or ""))
+            if swipe_want:
+                lab = swipe_direction_label(swipe_want)
+                if lab:
+                    lines.append(f"【滑动方向】用例要求 {lab}（勿与步骤原文相反）")
             tail_key = "do_tail_login_module" if self.login_module_prompt else "do_tail"
             lines.append(_pt(tail_key))
         else:
             lines.append(_pt("check_current", n=cur.n, expected=cur.expected or "（无预期，无法执行校验）"))
+            from mino_nexus.loop.check_plan import build_check_plan, format_check_plan_brief
+
+            plan = build_check_plan(str(cur.expected or ""), instruction=str(cur.instruction or ""))
+            brief = format_check_plan_brief(plan)
+            if brief:
+                lines.append(brief)
             lines.append(_pt("check_tail"))
         return "\n".join(lines)
 

@@ -61,6 +61,11 @@ def bootstrap() -> None:
         ci = upgrade_consent_ime_capabilities()
         if ci:
             SLog.i(TAG, f"consent/ime capabilities upgraded {ci}")
+        from mino_nexus.catalog.flow_block_seed import seed_global_flow_blocks
+
+        fb = seed_global_flow_blocks()
+        if fb:
+            SLog.i(TAG, f"global flow blocks seeded {fb}")
         from mino_nexus.catalog.recovery_seed import upgrade_check_run_env_capability
 
         cn = upgrade_check_run_env_capability()
@@ -97,6 +102,7 @@ def bootstrap() -> None:
             upgrade_agent_decide_to_v12,
             upgrade_agent_decide_to_v13,
             upgrade_agent_decide_to_v14,
+            upgrade_agent_decide_to_v15,
             upgrade_assert_vision_to_v2,
             upgrade_assert_vision_to_v3,
             upgrade_inspect_session_to_v2,
@@ -124,6 +130,9 @@ def bootstrap() -> None:
         v14 = upgrade_agent_decide_to_v14()
         if v14:
             SLog.i(TAG, "agent-decide upgraded to prompt v14")
+        v15 = upgrade_agent_decide_to_v15()
+        if v15:
+            SLog.i(TAG, "agent-decide upgraded to prompt v15")
         av2 = upgrade_assert_vision_to_v2()
         if av2:
             SLog.i(TAG, "assert-vision upgraded to prompt v2")

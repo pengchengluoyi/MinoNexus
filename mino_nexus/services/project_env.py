@@ -670,6 +670,20 @@ def pick_test_accounts(
         ]
         if extra:
             score += 2 * min(4, len(extra))
+        if "新用户" in raw:
+            if any("新用户" in t or "未注册" in t for t in tags):
+                score += 16
+                reasons.append("新用户")
+            if any("老用户" in t for t in tags):
+                score -= 24
+                reasons.append("老用户≠新用户前置")
+        elif "老用户" in raw:
+            if any("老用户" in t for t in tags):
+                score += 16
+                reasons.append("老用户")
+            if any("新用户" in t or "未注册" in t for t in tags):
+                score -= 12
+                reasons.append("新用户≠老用户前置")
         if session_want == "guest":
             if any("未登录" in t or "未注册" in t or "游客" in t for t in tags):
                 score += 14
