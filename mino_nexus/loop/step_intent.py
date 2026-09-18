@@ -14,6 +14,7 @@ _INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("clear_cache", re.compile(r"清缓存|清除缓存|清理缓存", re.I)),
     ("nav_tab", re.compile(r"底部|Tab|标签|「我的」|我的页", re.I)),
     ("open_content", re.compile(r"帖子|详情|卡片|动态|笔记|feed|Feed", re.I)),
+    ("shutter_capture", re.compile(r"快门|拍摄按钮|拍照按钮|按下拍摄|点击拍摄", re.I)),
     ("swipe_gesture", re.compile(r"上滑|下滑|左滑|右滑|滑动|向[上下左右]滑", re.I)),
     ("input_fill", re.compile(r"输入|填写|填入", re.I)),
 ]
@@ -23,6 +24,7 @@ _TAP_MARKS_INTENT: list[tuple[str, re.Pattern[str]]] = [
     ("nav_tab", re.compile(r"底部|Tab|标签|「我的」|我的页", re.I)),
     ("open_content", re.compile(r"帖子|详情|卡片|进入详情", re.I)),
     ("like", re.compile(r"点赞|喜欢", re.I)),
+    ("shutter_capture", re.compile(r"快门|拍摄按钮|拍照按钮", re.I)),
     ("logout", re.compile(r"退出登录|注销|登出", re.I)),
 ]
 
@@ -51,6 +53,9 @@ _STRUCTURAL_CAPS = frozenset(
         "system_pkg_clear",
     }
 )
+
+
+_CANCEL_TAP_RE = re.compile(r"取消|关闭|返回|拒绝|不允许", re.I)
 
 
 def mark_tap_intents_from_instruction(instruction: str, intents_done: set[str]) -> None:
@@ -84,6 +89,8 @@ def mark_tap_intents_from_tap(
     """按实际点击文案标记意图（退出登录+确认须点确认钮才算 logout）。"""
     instr = str(instruction or "")
     label = str(tap_label or "").strip()
+    if label and _CANCEL_TAP_RE.search(label):
+        return
     if not label:
         mark_tap_intents_from_instruction(instr, intents_done)
         return
@@ -140,6 +147,7 @@ _INTENT_LABELS: dict[str, str] = {
     "clear_cache": "清缓存",
     "nav_tab": "切换 Tab/导航",
     "open_content": "打开帖子/详情",
+    "shutter_capture": "快门/拍摄",
     "swipe_gesture": "滑动",
     "input_fill": "输入内容",
     "sms_send": "发送验证码",

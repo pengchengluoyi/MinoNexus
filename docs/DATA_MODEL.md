@@ -9,6 +9,8 @@
 | 数据 | 表 | 权威来源 |
 |---|---|---|
 | `App` / 项目 / 环境 | `projects` / `apps` | UI / 飞书同步 |
+| 项目号池账号 | `pool_accounts` + `pool_account_facets` | Studio 账号管理；`projects.env.test_accounts` 仅迁移来源 |
+| 项目号池配置（扩展字段 / 启用模板 / 本地模板） | `project_pool_config` | Studio 号池与模板；`projects.env` 中对应键仅迁移来源 |
 | 用例、前置、预期 | `project_cases`（按 `project_id` + `requirement_id`；需求/脑图仍在 `apps.env.automation.qa_process`） | UI / QA 推进 |
 | `AppRegressionRun`（批次结果） | `app_regression_runs` | Nexus 的循环 |
 | 逐步 trace / baseline | `m_case_run_trace` / `m_case_baseline` | Nexus 的循环 |

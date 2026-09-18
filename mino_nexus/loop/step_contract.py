@@ -8,7 +8,7 @@ _OPEN_RE = re.compile(r"打开|启动|进入应用|冷启动", re.I)
 _TAP_RE = re.compile(r"点击|点按|轻触|选中|勾选", re.I)
 _SWIPE_RE = re.compile(r"上滑|下滑|左滑|右滑|滑动|swipe", re.I)
 _INPUT_RE = re.compile(r"输入|填写|填入", re.I)
-_CLEAR_RE = re.compile(r"清缓存|清除缓存|清理缓存|clear.?cache", re.I)
+_CLEAR_RE = re.compile(r"清缓存|清除缓存|清理缓存|清除应用缓存|清除.{0,6}缓存|clear.?cache", re.I)
 _LOGIN_FLOW_RE = re.compile(
     r"登录|验证码|短信|手机号|密码|一键登录|发码|获取验证码|sms|otp",
     re.I,
@@ -101,8 +101,8 @@ def instruction_allows_login_flow(
     *,
     login_module_case: bool = False,
 ) -> bool:
-    if login_module_case:
-        return True
+    """当前 instruction 是否声明登录/验证码操作（login_module 不再整条用例放行）。"""
+    _ = login_module_case
     return bool(_LOGIN_FLOW_RE.search(str(instruction or "")))
 
 

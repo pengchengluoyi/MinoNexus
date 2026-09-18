@@ -125,7 +125,7 @@ READ_DEVICE_DATA_DESCRIPTION = (
 )
 
 LEASE_ACCOUNT_DESCRIPTION = (
-    "需要测试账号或手机号且尚未租到时调用；按用例场景从账号池租号。"
+    "需要测试账号或手机号且尚未租到时调用；按 Requirement DSL / 用例前置从号池租号。"
     "只产出账号句柄，不代替登录步骤。"
 )
 

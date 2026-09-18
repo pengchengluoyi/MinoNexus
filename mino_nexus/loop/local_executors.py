@@ -285,12 +285,29 @@ def dispatch_local(
         from mino_nexus.loop.session_ensure import account_need_from_case
 
         scene = getattr(ctx, "case_scene", None) if ctx is not None else None
-        need = account_need_from_case({}, scene if isinstance(scene, dict) else {})
+        case_row = getattr(ctx, "case", None) if ctx is not None else None
+        need = account_need_from_case(
+            case_row if isinstance(case_row, dict) else {},
+            scene if isinstance(scene, dict) else {},
+        )
+        tid = str(params.get("template_id") or params.get("account_template_id") or "").strip()
+        if tid:
+            need["template_id"] = tid
+        if isinstance(params.get("requirements"), dict):
+            from mino_nexus.services.account_pool_templates import merge_need_requirements
+
+            need["requirements"] = merge_need_requirements(
+                need.get("requirements") if isinstance(need.get("requirements"), dict) else {},
+                params.get("requirements"),
+            )
+        from mino_nexus.services.account_lease import INTERACTIVE_ACQUIRE_WAIT_MS
+
         row, err = lease_for_context(
             ctx,
             params,
             ai_reasoning=str(event.ai_reasoning or ""),
             need_facets=need,
+            wait_ms=INTERACTIVE_ACQUIRE_WAIT_MS,
         )
         if row:
             brief = format_accounts_brief(row)

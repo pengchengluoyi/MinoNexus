@@ -220,6 +220,8 @@ def _guard_require_do_work(ctx: dict[str, Any]) -> Optional[str]:
     elif not ok_fam:
         return f"本步操作未做完，不能 signal_done。{fam_msg}"
     ops = int(getattr(step_cursor, "step_ops", 0) or 0)
+    exp = str(getattr(cur, "expected", "") or "").strip() if cur else ""
+    goal_met = bool(ctx.get("step_goal_met"))
     if ops > 0:
         if need_int:
             ok_int, int_msg = step_intents_satisfied(
@@ -228,6 +230,24 @@ def _guard_require_do_work(ctx: dict[str, Any]) -> Optional[str]:
             )
             if not ok_int:
                 return f"本步意图未达成，不能 signal_done。{int_msg}"
+        if exp and not goal_met:
+            from mino_nexus.loop.step_pointer import _expected_defers_to_check
+
+            defer_chk = _expected_defers_to_check(exp)
+            if defer_chk:
+                if need_int:
+                    return None
+            else:
+                ok_fam_done, _ = step_actions_satisfied(
+                    instruction=instr,
+                    families_done=getattr(step_cursor, "step_action_families", None),
+                    family_counts=getattr(step_cursor, "step_family_counts", None),
+                )
+                if ok_fam_done or ops > 0:
+                    return (
+                        "本步 expected 尚未在屏上确认（如半屏登录、进详情），"
+                        "不能 signal_done。请完成业务目标，勿在 tap 次数达标后直接收工。"
+                    )
         return None
     if bool(ctx.get("step_goal_met")):
         hint = str(getattr(step_cursor, "step_effect_hint", "") or "")
@@ -262,10 +282,15 @@ def _guard_block_assert_in_do(ctx: dict[str, Any]) -> Optional[str]:
 
 
 def _guard_block_mutate_when_thought_done(ctx: dict[str, Any]) -> Optional[str]:
-    if str(ctx.get("phase") or "") != "do":
+    phase = str(ctx.get("phase") or "")
+    if phase not in ("do", "prep"):
         return None
     thought = str(ctx.get("decision_thought") or "")
-    if not re.search(r"signal_done|本步.{0,8}完成|操作.{0,6}完成|应收工", thought, re.I):
+    if not re.search(
+        r"signal_done|本步.{0,8}完成|操作.{0,6}完成|应收工|前置.{0,8}(已|完成)|结束前置",
+        thought,
+        re.I,
+    ):
         return None
     cap = str(ctx.get("cap_id") or "")
     if not cap or cap.startswith("signal_") or cap in ("wait_ms",):
@@ -273,13 +298,39 @@ def _guard_block_mutate_when_thought_done(ctx: dict[str, Any]) -> Optional[str]:
     if cap.startswith("recover_"):
         return None
     return (
-        "模型思考已结论本步应收工（signal_done），与实际 capability 不一致。"
+        "模型思考已结论本步/前置应收工（signal_done），与实际 capability 不一致。"
         f"请 decision.status=done，勿再 {cap}。"
     )
 
 
+def _guard_block_prep_guest_mine_tab(ctx: dict[str, Any]) -> Optional[str]:
+    """guest 前置仍 logged_in 时，禁止点「我的」冒充未登录登录页。"""
+    if str(ctx.get("phase") or "") != "prep":
+        return None
+    if str(ctx.get("cap_id") or "") != "tap_element":
+        return None
+    scene = ctx.get("case_scene") if isinstance(ctx.get("case_scene"), dict) else {}
+    from mino_nexus.runtime.session_gate import required_session
+
+    if required_session(scene=scene) != "guest":
+        return None
+    from mino_nexus.loop.session_ensure import parse_session_value
+
+    session = parse_session_value(str(ctx.get("session_block") or ""))
+    if session != "logged_in":
+        return None
+    blob = str(ctx.get("tap_summary") or "")
+    if "我的" not in blob and "My" not in blob:
+        return None
+    return (
+        "session_block 仍为 logged_in，本用例要求 guest。"
+        "勿点「我的」进登录页收工；请走路线图 logout 边或 recover_restart_target_app 后再 signal_done。"
+    )
+
+
 def _guard_block_login_flow_unless_step_scope(ctx: dict[str, Any]) -> Optional[str]:
-    if str(ctx.get("phase") or "") != "do":
+    phase = str(ctx.get("phase") or "")
+    if phase not in ("do", "prep"):
         return None
     if ctx.get("login_flow_interrupt"):
         return None
@@ -287,13 +338,40 @@ def _guard_block_login_flow_unless_step_scope(ctx: dict[str, Any]) -> Optional[s
     if not cap or cap.startswith("recover_") or cap.startswith("signal_"):
         return None
     cur = ctx.get("cursor")
+    step_cursor = ctx.get("step_cursor")
     instr = str(getattr(cur, "instruction", "") or "").strip() if cur else ""
+    expected = str(getattr(cur, "expected", "") or "").strip() if cur else ""
     from mino_nexus.loop.step_contract import instruction_allows_login_flow
+    from mino_nexus.loop.step_flow_scope import login_flow_allowed
 
-    if instruction_allows_login_flow(
-        instr,
-        login_module_case=bool(ctx.get("login_module_case")),
-    ):
+    if step_cursor is not None:
+        allowed, defer_msg = login_flow_allowed(
+            cursor=step_cursor,
+            phase=phase,
+            instruction=instr,
+            expected=expected,
+        )
+        if not allowed and defer_msg:
+            login_caps = {
+                "get_otp",
+                "request_sms_code",
+                "lease_account",
+                "accept_legal_consent",
+            }
+            if cap in login_caps:
+                return defer_msg
+            if cap == "input_text":
+                field = str((ctx.get("params") or {}).get("field") or "").lower()
+                if field in ("phone", "sms_code", "password", "验证码"):
+                    return defer_msg
+            if cap == "tap_element":
+                from mino_nexus.loop.step_pointer import tap_summary_is_login_entry
+
+                blob = str(ctx.get("tap_summary") or "")
+                if tap_summary_is_login_entry(blob):
+                    return defer_msg
+
+    if instruction_allows_login_flow(instr, login_module_case=False):
         return None
     login_caps = {
         "get_otp",
@@ -395,6 +473,7 @@ def _guard_require_sms_send_before_otp(ctx: dict[str, Any]) -> Optional[str]:
 
 
 def _guard_require_session(ctx: dict[str, Any]) -> Optional[str]:
+    """仅 prep 结束收工时核对 session；do 阶段勿拦 signal_done（否则 guest 用例在步骤 1 会 signal_done↔require_session 死循环）。"""
     if str(ctx.get("phase") or "") != "prep":
         return None
     if str(ctx.get("intent") or "") != "signal_done":
@@ -402,10 +481,21 @@ def _guard_require_session(ctx: dict[str, Any]) -> Optional[str]:
     from mino_nexus.loop.session_ensure import session_mismatch_reason
 
     scene = ctx.get("case_scene") if isinstance(ctx.get("case_scene"), dict) else {}
-    return session_mismatch_reason(
+    reason = session_mismatch_reason(
         scene=scene,
         session_block=str(ctx.get("session_block") or ""),
     )
+    if not reason:
+        return None
+    thought = str(ctx.get("decision_thought") or "")
+    block = str(ctx.get("session_block") or "")
+    if re.search(r"未登录|登录页|guest|游客|前置.{0,6}满足", thought, re.I) and "session=logged_in" in block:
+        return (
+            f"{reason} "
+            "思考声称未登录/前置已满足，但 session_block 仍为 logged_in；"
+            "请先 logout/recover 再 signal_done，勿与 require_session 结论矛盾。"
+        )
+    return reason
 
 
 def _guard_skip_repeat_read_device(ctx: dict[str, Any]) -> Optional[str]:
@@ -784,6 +874,7 @@ GUARDS: dict[str, GuardFn] = {
     "block_login_after_guest": _guard_block_login_after_guest,
     "block_login_flow_unless_step_scope": _guard_block_login_flow_unless_step_scope,
     "block_mutate_when_thought_done": _guard_block_mutate_when_thought_done,
+    "block_prep_guest_mine_tab": _guard_block_prep_guest_mine_tab,
     "block_back_without_nav_back_semantics": _guard_block_back_without_nav_back_semantics,
     "block_do_after_step_goal": _guard_block_do_after_step_goal,
     "require_sms_send_before_otp": _guard_require_sms_send_before_otp,

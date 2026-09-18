@@ -24,7 +24,7 @@ class NavFsm(Base):
     version = Column(String, nullable=False, default="v1")
     # hierarchy_calibration、guard_catalog 等
     meta = Column(JSON, nullable=False, default=dict)
-    # lease_tags、anchor 字段名等，与 Console 号池对齐
+    # lease_requirements（facet DSL）、anchor 字段名等，与 Console 号池对齐
     test_data = Column(JSON, nullable=False, default=dict)
     updated_by = Column(String, default="")
     updated_at = Column(Integer, default=0)

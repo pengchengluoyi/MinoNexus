@@ -220,7 +220,8 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
         return
     try:
         env_brief = str(doc.get("env_brief") or "")
-        for case_seq, case in enumerate(list(doc.get("cases") or [])):
+        cases = list(doc.get("cases") or [])
+        for case_seq, case in enumerate(cases):
             if not _task_still_running(run_id):
                 break
             cid = str(case.get("case_id") or "")
@@ -234,6 +235,32 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
                 "sn": sn,
                 "app_id": str(doc.get("app_id") or ""),
             })
+            scene = case.get("case_scene") if isinstance(case.get("case_scene"), dict) else None
+            if scene is None and isinstance(case.get("scene"), dict):
+                scene = case.get("scene")
+            from mino_nexus.services.account_lease import ensure_case_account_lease
+
+            ok, lease_err = ensure_case_account_lease(
+                run_id,
+                app_id=str(doc.get("app_id") or ""),
+                env_profile=str(doc.get("env_profile") or "test"),
+                platform=str(doc.get("platform") or "android"),
+                target_package=str(package or ""),
+                case=case if isinstance(case, dict) else {},
+                scene=scene,
+            )
+            if not ok and lease_err:
+                reason = f"账号租约：{lease_err}"
+                run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason)
+                emit_testing_task({
+                    "event": "case_finished",
+                    "run_id": run_id,
+                    "task_id": run_id,
+                    "case_id": cid,
+                    "status": "fail",
+                    "app_id": str(doc.get("app_id") or ""),
+                })
+                continue
             result = run_case(
                 run_id=run_id,
                 case=case,
@@ -272,6 +299,9 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
                 "status": result.get("status"),
                 "app_id": str(doc.get("app_id") or ""),
             })
+            from mino_nexus.services.account_lease import release_run_lease
+
+            release_run_lease(run_id, app_id=str(doc.get("app_id") or ""))
         if not _task_still_running(run_id):
             return
         latest = run_store.get(run_id) or doc
@@ -295,7 +325,11 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
         except Exception:
             pass
     finally:
+        from mino_nexus.services.account_lease import release_run_lease
+
         latest = run_store.get(run_id) or doc
+        app_id = str((latest or doc or {}).get("app_id") or "")
+        release_run_lease(run_id, app_id=app_id)
         sns = list(latest.get("sns") or [])
         head = str(latest.get("sn") or "").strip()
         if head and head not in sns:

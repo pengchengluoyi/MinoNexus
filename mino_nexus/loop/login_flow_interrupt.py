@@ -4,6 +4,8 @@ from __future__ import annotations
 from typing import Any
 
 from mino_nexus.loop.step_contract import instruction_allows_login_flow
+from mino_nexus.loop.step_flow_scope import login_flow_allowed
+from mino_nexus.loop.step_pointer import StepCursor
 
 
 def login_overlay_blocks_flow(
@@ -11,9 +13,22 @@ def login_overlay_blocks_flow(
     hierarchy_nodes: list[dict[str, Any]] | None,
     instruction: str,
     login_module_case: bool,
+    cursor: StepCursor | None = None,
+    phase: str = "do",
+    expected: str = "",
 ) -> bool:
     """结构判定：主流程步上出现短信/手机号登录控件（不用 App 词表）。"""
-    if instruction_allows_login_flow(instruction, login_module_case=login_module_case):
+    _ = login_module_case
+    if cursor is not None:
+        allowed, _ = login_flow_allowed(
+            cursor=cursor,
+            phase=phase,
+            instruction=instruction,
+            expected=expected,
+        )
+        if not allowed:
+            return False
+    if instruction_allows_login_flow(instruction, login_module_case=False):
         return False
     nodes = list(hierarchy_nodes or [])
     if not nodes:

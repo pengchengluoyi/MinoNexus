@@ -177,9 +177,21 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
     "lease_account": {
         "type": "object",
         "properties": {
-            "tags_prompt": {
+            "precondition": {
                 "type": "string",
-                "description": "用例要测的场景/标签，供账号池匹配；缺省可写用例目标或前置原文",
+                "description": "用例前置原文；缺省使用 CaseScene。用于编译 Requirement DSL 选号",
+            },
+            "template_id": {
+                "type": "string",
+                "description": "号池业务模板 id（如 tpl_personal / tpl_ecommerce）；与 CaseScene.account_template_id 一致",
+            },
+            "account_template_id": {
+                "type": "string",
+                "description": "同 template_id 别名",
+            },
+            "requirements": {
+                "type": "object",
+                "description": "Requirement DSL：all/prefer 约束 facets，缺省由前置+模板编译",
             },
         },
     },

@@ -9,10 +9,11 @@ from typing import Any, Optional
 
 from mino_nexus.core.log import SLog
 from mino_nexus.runtime.session_gate import (
-    clamp_case_scene,
+    ensure_case_scene,
     required_session,
     session_prep_intent,
 )
+from mino_nexus.services.account_pool_templates import infer_template_id_from_text
 
 TAG = "SessionEnsure"
 _SESSION_RE = re.compile(r"session=(\w+)", re.I)
@@ -22,11 +23,12 @@ def account_need_from_case(
     case: dict[str, Any] | None,
     scene: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    row = clamp_case_scene(scene)
+    row = ensure_case_scene(case or {}, scene if isinstance(scene, dict) else None)
     req = required_session(scene=row)
     prep = session_prep_intent(scene=row)
     pre = str(
-        (scene or {}).get("precondition")
+        row.get("precondition")
+        or (scene or {}).get("precondition")
         or (case or {}).get("precondition")
         or (case or {}).get("precondition_raw")
         or ""
@@ -39,13 +41,27 @@ def account_need_from_case(
     blob = pre
     profile = bool(re.search(r"资料|昵称|头像|profile", blob, re.I))
     address = bool(re.search(r"地址|收货|address", blob, re.I))
-    need_account = bool(session or pre or profile or address)
+    template_id = str(
+        row.get("account_template_id")
+        or row.get("template_id")
+        or (case or {}).get("account_template_id")
+        or (case or {}).get("template_id")
+        or ""
+    ).strip()
+    if not template_id:
+        template_id = infer_template_id_from_text(pre)
+    lease_requirements = row.get("lease_requirements")
+    if not isinstance(lease_requirements, dict):
+        lease_requirements = (case or {}).get("lease_requirements") if isinstance((case or {}).get("lease_requirements"), dict) else {}
+    need_account = bool(session or pre or profile or address or template_id)
     return {
         "need_account": need_account,
         "session": session,
         "prompt": pre,
         "profile": profile,
         "address": address,
+        "template_id": template_id,
+        "requirements": dict(lease_requirements or {}),
     }
 
 
@@ -79,10 +95,7 @@ def session_mismatch_reason(
 
 
 def ensure_case_account(ctx: Any, case: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, str]:
-    """开跑时按场景租号。已有租约则跳过；失败不阻断用例。"""
-    picked = getattr(ctx, "picked_account", None) or {}
-    if isinstance(picked, dict) and (picked.get("id") or picked.get("ident") or picked.get("phone")):
-        return picked, ""
+    """开跑时按场景租号；ctx 上账号与当前前置不一致时由 lease_for_context 重选。"""
     scene = getattr(ctx, "case_scene", None) or {}
     need = account_need_from_case(case or {}, scene if isinstance(scene, dict) else {})
     if not need.get("need_account"):
@@ -92,15 +105,24 @@ def ensure_case_account(ctx: Any, case: dict[str, Any] | None = None) -> tuple[d
     params: dict[str, Any] = {}
     prompt = str(need.get("prompt") or "").strip()
     if prompt:
-        params["tags_prompt"] = prompt
-    row, err = lease_for_context(ctx, params, ai_reasoning=prompt, need_facets=need)
+        params["precondition"] = prompt
+    observed = getattr(ctx, "account_probe_facets", None)
+    obs_map = observed if isinstance(observed, dict) else None
+    from mino_nexus.services.account_lease import INTERACTIVE_ACQUIRE_WAIT_MS
+
+    row, err = lease_for_context(
+        ctx,
+        params,
+        ai_reasoning=prompt,
+        need_facets=need,
+        observed_by_account=obs_map,
+        wait_ms=INTERACTIVE_ACQUIRE_WAIT_MS,
+    )
     if row:
         score = int(row.get("score") or 0)
         reason = str(row.get("reason") or "")
         if score < 0:
             SLog.w(TAG, f"auto-lease weak match score={score} reason={reason}")
-        elif "老用户≠新用户" in reason or "新用户≠老用户" in reason:
-            SLog.w(TAG, f"auto-lease tag mismatch: {reason}")
         SLog.i(TAG, f"auto-leased {row.get('id') or row.get('phone') or '?'}")
         return row, ""
     SLog.w(TAG, f"auto-lease skipped: {err}")

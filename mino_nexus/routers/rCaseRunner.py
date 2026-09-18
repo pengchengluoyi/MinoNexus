@@ -227,6 +227,9 @@ def cancel_task(task_id: str, _sess: dict = Depends(current_session)):
         sns=sns,
         platforms_by_sn=doc.get("platforms_by_sn") if isinstance(doc.get("platforms_by_sn"), dict) else {},
     )
+    from mino_nexus.services.account_lease import release_run_lease
+
+    release_run_lease(task_id, app_id=str(doc.get("app_id") or ""))
     emit_testing_task({
         "event": "task_finished",
         "run_id": task_id,

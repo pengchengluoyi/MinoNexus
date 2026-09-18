@@ -13,7 +13,9 @@ from mino_nexus.models.nav_fsm import NavFsm, NavFsmEdge, NavFsmState
 from mino_nexus.models.nav_flow_block_catalog import NavFlowBlockCatalog
 from mino_nexus.models.node import Node, Studio
 from mino_nexus.models.plugin import PluginPolicy, UserPluginSecret
+from mino_nexus.models.pool_account import PoolAccount, PoolAccountFacet
 from mino_nexus.models.project import App, Project
+from mino_nexus.models.project_pool_config import ProjectPoolConfig
 from mino_nexus.models.run import AppRegressionRun, MCaseBaseline, MCaseRunTrace
 from mino_nexus.models.session_event import SessionEvent, SessionMeta
 from mino_nexus.models.settings import Settings
@@ -48,6 +50,9 @@ __all__ = [
     "NavFlowBlockCatalog",
     "Node",
     "PluginPolicy",
+    "PoolAccount",
+    "PoolAccountFacet",
+    "ProjectPoolConfig",
     "Project",
     "SessionEvent",
     "SessionMeta",

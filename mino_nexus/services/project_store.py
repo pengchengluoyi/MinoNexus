@@ -288,9 +288,19 @@ def require_app(app_id: str) -> dict[str, Any]:
 
 
 def project_env(project_id: str) -> dict[str, Any]:
+    from mino_nexus.services.project_pool_config_store import (
+        ensure_migrated_from_project_env,
+        load_pool_config,
+        merge_pool_config_into_doc,
+    )
+
+    pid = str(project_id or "").strip()
+    ensure_migrated_from_project_env(pid)
     root = _root()
-    project = require_project(project_id)
-    return env_from_project_row(project, _apps_of(root, project_id))
+    project = require_project(pid)
+    base = env_from_project_row(project, _apps_of(root, pid))
+    pool = load_pool_config(pid)
+    return merge_pool_config_into_doc(base, pool)
 
 
 def list_apps(project_id: str) -> list[dict[str, Any]]:
@@ -299,21 +309,31 @@ def list_apps(project_id: str) -> list[dict[str, Any]]:
 
 
 def list_projects() -> list[dict[str, Any]]:
+    from mino_nexus.services.project_pool_config_store import project_env_summary
+    from mino_nexus.services.pool_account_store import count_accounts
+
     root = _root()
     out = []
     for p in root["projects"]:
         if not isinstance(p, dict):
             continue
-        apps_out = [_public_app(a) for a in _apps_of(root, str(p.get("id") or ""))]
+        pid = str(p.get("id") or "")
+        from mino_nexus.services.project_pool_config_store import ensure_migrated_from_project_env
+
+        ensure_migrated_from_project_env(pid)
+        apps_out = [_public_app(a) for a in _apps_of(root, pid)]
         case_count = sum(int((a.get("automation_stats") or {}).get("case_count") or 0) for a in apps_out)
         knowledge_count = sum(int((a.get("automation_stats") or {}).get("knowledge_count") or 0) for a in apps_out)
+        slim_env = p.get("env") if isinstance(p.get("env"), dict) else {}
+        summary = project_env_summary(slim_env)
+        summary["pool_account_count"] = count_accounts(pid)
         out.append(
             {
                 "id": p.get("id"),
                 "uid": p.get("uid"),
                 "name": p.get("name"),
                 "description": p.get("description"),
-                "env": p.get("env") if isinstance(p.get("env"), dict) else {},
+                "env_summary": summary,
                 "apps": apps_out,
                 "app_count": len(apps_out),
                 "case_count": case_count,
@@ -401,15 +421,29 @@ def update_app_env(app_id: str, env: dict) -> dict[str, Any]:
 
 
 def save_project_env(project_id: str, doc: dict[str, Any]) -> dict[str, Any]:
-    require_project(project_id)
+    from mino_nexus.services.project_pool_config_store import (
+        extract_pool_config_from_doc,
+        load_pool_config,
+        merge_pool_config_into_doc,
+        save_pool_config,
+        strip_pool_keys_from_doc,
+    )
+
+    pid = str(project_id or "").strip()
+    require_project(pid)
+    src = dict(doc or {})
+    pool_patch = extract_pool_config_from_doc(src)
+    if pool_patch:
+        save_pool_config(pid, pool_patch)
+    runtime = strip_pool_keys_from_doc(src)
     root = _root()
     for p in root["projects"]:
-        if p.get("id") == project_id:
-            p["env"] = doc
+        if p.get("id") == pid:
+            p["env"] = runtime
             p["updated_at"] = _now()
             break
     _save(root)
-    return doc
+    return merge_pool_config_into_doc(runtime, load_pool_config(pid))
 
 
 def update_app_record(app_id: str, **fields: Any) -> dict[str, Any]:
@@ -435,16 +469,22 @@ def delete_app(app_id: str) -> dict[str, Any]:
 
 
 def delete_project(project_id: str) -> dict[str, Any]:
+    from mino_nexus.services.project_pool_config_store import delete_pool_config
+    from mino_nexus.services.pool_account_store import replace_all
+
     project = require_project(project_id)
     name = project.get("name")
+    pid = str(project_id or "").strip()
+    replace_all(pid, [])
+    delete_pool_config(pid)
     root = _root()
-    apps = _apps_of(root, project_id)
+    apps = _apps_of(root, pid)
     app_ids = [str(a.get("id")) for a in apps]
     app_names = [a.get("name") for a in apps]
-    root["apps"] = [a for a in root["apps"] if a.get("project_id") != project_id]
-    root["projects"] = [p for p in root["projects"] if p.get("id") != project_id]
+    root["apps"] = [a for a in root["apps"] if a.get("project_id") != pid]
+    root["projects"] = [p for p in root["projects"] if p.get("id") != pid]
     _save(root)
-    return {"id": project_id, "name": name, "app_ids": app_ids, "app_names": app_names}
+    return {"id": pid, "name": name, "app_ids": app_ids, "app_names": app_names}
 
 
 def find_test_account(
@@ -478,9 +518,10 @@ def find_test_account(
             doc = project_env(pid)
         except KeyError:
             continue
-        for row in list_test_accounts(doc):
+        for row in list_test_accounts(doc, project_id=pid):
             ident = account_ident_of(row)
-            if want_id and str(row.get("id") or "") == want_id:
+            row_aid = str(row.get("account_id") or row.get("id") or "")
+            if want_id and row_aid == want_id:
                 return {**row, "project_id": pid, "account_ident": ident}
             if want_ident and ident == want_ident:
                 return {**row, "project_id": pid, "account_ident": ident}

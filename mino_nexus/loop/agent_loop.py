@@ -39,6 +39,7 @@ from mino_nexus.loop.step_pointer import (
     StepCursor,
     _expected_defers_to_check,
     build_seq_nodes,
+    compute_case_wall_budget_sec,
     enrich_assert_expectation,
     screen_fingerprint,
 )
@@ -52,6 +53,7 @@ from mino_nexus.core.schemas import EventResult, PlanEvent
 
 TAG = "AgentLoop"
 _MAX_STEPS = 24
+_TURN_SAFETY_CAP = 500
 RECOVER_PREFIX = "recover_"
 _NON_FATAL_LOCAL_REASONS = frozenset(
     {"local_cap_misrouted", "cap_not_in_catalog", "no_impl_for_device", "fsm_degraded"}
@@ -358,7 +360,7 @@ def run_case(
         }
         raise
     finally:
-        from mino_nexus.services.account_lease import release_ctx_lease
+        from mino_nexus.services.account_facet_commit import commit_case_facet_effects
 
         if not writer._closed:
             writer.close(
@@ -366,6 +368,9 @@ def run_case(
                 summary=str(outcome.get("summary") or ""),
                 step_count=len(outcome.get("steps") or []),
             )
+        commit_case_facet_effects(ctx, case, status=str(outcome.get("status") or ""))
+        from mino_nexus.services.account_lease import release_ctx_lease
+
         release_ctx_lease(ctx)
         cleanup_after_case(proxy, ctx, run_id=scout_run_id, case_seq=case_seq, case=case)
         dispatch.reset(tok)
@@ -510,11 +515,18 @@ def _run_loop(
     sop = skill.get("sop") if isinstance(skill.get("sop"), dict) else {}
     phases = normalize_phases(sop.get("phases"))
     inspections = normalize_inspections(sop.get("inspections") if "inspections" in sop else None)
+    wall_budget_sec = 0
     try:
-        cap = 200 if is_explore else 80
-        max_steps = max(1, min(cap, int(case.get("max_steps") or sop.get("max_steps") or _MAX_STEPS)))
+        if is_explore:
+            cap = 200
+            max_steps = max(1, min(cap, int(case.get("max_steps") or sop.get("max_steps") or _MAX_STEPS)))
+        else:
+            wall_budget_sec = compute_case_wall_budget_sec(case)
+            max_steps = _TURN_SAFETY_CAP
     except (TypeError, ValueError):
-        max_steps = 200 if is_explore else _MAX_STEPS
+        max_steps = 200 if is_explore else _TURN_SAFETY_CAP
+        if not is_explore:
+            wall_budget_sec = compute_case_wall_budget_sec(case)
     if is_explore:
         from mino_nexus.loop.explore_cursor import ExploreCursor
 
@@ -572,6 +584,7 @@ def _run_loop(
     ran_case_start_inspection = False
     last_phase_seen = ""
     ctx.case_scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
+    ctx.case = case
     login_module_case = is_login_module_case(case=case, scene=ctx.case_scene)
     if isinstance(cursor, StepCursor):
         cursor.login_module_prompt = login_module_case
@@ -581,6 +594,11 @@ def _run_loop(
     task_env_brief = str(run_env_brief or getattr(ctx, "env_label", "") or "").strip()
     if task_env_brief:
         history.append(f"0. program → info: 本任务运行环境已确认：{task_env_brief}")
+    if not is_explore and wall_budget_sec > 0:
+        history.append(
+            f"0. program → info: 本用例墙钟预算 {wall_budget_sec} 秒"
+            f"（前置+操作+校验按步数各 ×{30} 秒）；耗尽即失败，不再按「N 步」截断。"
+        )
     cursor.progress_gate.reset_milestone(
         cursor.phase,
         0 if cursor.phase == "prep" else (cursor.current().n if cursor.current() else 0),
@@ -835,6 +853,10 @@ def _run_loop(
         if cancel_check and cancel_check():
             return _leave(status="cancelled", summary="任务已取消")
 
+        if not is_explore and wall_budget_sec > 0 and (time.time() - t0) >= wall_budget_sec:
+            summary = f"超过 {wall_budget_sec} 秒仍未完成"
+            return _leave(status="fail", summary=summary)
+
         if cursor.done:
             return _leave_case(cursor)
 
@@ -948,6 +970,9 @@ def _run_loop(
             ctx, str(inspect_slots.get("session_block") or "")
         )
         inspect_slots["session_execution"] = execution_context_session_line(ctx)
+        from mino_nexus.services.account_facet_commit import record_session_probe
+
+        record_session_probe(ctx, str(inspect_slots.get("session_block") or ""))
 
         cursor.login_session_hint = compile_login_session_hint(
             getattr(ctx, "case_scene", None),
@@ -1121,6 +1146,12 @@ def _run_loop(
                 return _leave(status="pass", summary=cursor.summary(), pack=_pack())
             return _leave_case(cursor)
 
+        if not is_explore and cur is not None:
+            prev_step_n = int(getattr(ctx, "_run_case_step_n", 0) or 0)
+            if int(cur.n) != prev_step_n:
+                setattr(ctx, "_run_case_step_n", int(cur.n))
+                setattr(ctx, "login_flow_macro_done", set())
+
         phase_cfg = _phase_cfg()
         phase_tool_kinds = merge_phase_tool_kinds(phase_cfg, sop)
         menu = available_menu_brief(
@@ -1130,6 +1161,30 @@ def _run_loop(
             platform=str(getattr(ctx, "platform", "") or ""),
             tool_kinds=phase_tool_kinds or None,
         )
+        if (
+            not is_explore
+            and isinstance(cursor, StepCursor)
+            and cursor.phase == "prep"
+        ):
+            from mino_nexus.loop.registry import history_cap_passed
+            from mino_nexus.loop.step_contract import precondition_requires_clear_cache
+
+            prec_menu = str(getattr(cursor, "precondition", "") or case.get("precondition") or "")
+            if precondition_requires_clear_cache(prec_menu):
+                cleared = bool(getattr(ctx, "prep_clear_done", False)) or history_cap_passed(
+                    list(history[-24:]), "clear_app_cache"
+                )
+                if not cleared:
+                    menu = [
+                        c
+                        for c in menu
+                        if str(c.get("id") or "") not in ("launch_app", "open_app", "open_url")
+                    ]
+                    cursor.correction_hint = (
+                        cursor.correction_hint
+                        or "【前置顺序】本条须先 clear_app_cache 成功，再 launch_app；"
+                        "未清缓存前菜单已隐藏打开应用，避免落在桌面/设置。"
+                    )
         if nav is not None:
             setattr(ctx, "nav_localized_state", str(nav.localized.get("chosen") or ""))
             setattr(ctx, "nav_localized_confidence", float(nav.localized.get("confidence") or 0.0))
@@ -1225,6 +1280,20 @@ def _run_loop(
                 prep_hints.append(sms_line)
             cursor.otp_prep_hint = "\n".join(prep_hints)
 
+        if not is_explore and isinstance(cursor, StepCursor):
+            from mino_nexus.loop.step_flow_scope import login_flow_allowed
+
+            _ins = str(cur.instruction or "") if cur else ""
+            _exp = str(cur.expected or "") if cur else ""
+            _lf_hint_ok, _lf_hint_msg = login_flow_allowed(
+                cursor=cursor,
+                phase=cursor.phase,
+                instruction=_ins,
+                expected=_exp,
+            )
+            if _lf_hint_msg:
+                cursor.correction_hint = _lf_hint_msg
+
         if (
             not is_explore
             and isinstance(cursor, StepCursor)
@@ -1236,9 +1305,58 @@ def _run_loop(
                 try_run_system_dialog_macro,
             )
             from mino_nexus.loop.login_flow_interrupt import login_overlay_blocks_flow
+            from mino_nexus.loop.step_flow_scope import login_flow_allowed
 
             hist_lines = list(history[-24:])
             nodes = list(getattr(ctx, "nav_hierarchy_nodes", None) or [])
+            from mino_nexus.loop.login_submit import try_auto_login_submit
+
+            _lf_ok, _lf_msg = login_flow_allowed(
+                cursor=cursor,
+                phase="do",
+                instruction=str(cur.instruction or ""),
+                expected=str(cur.expected or ""),
+            )
+            submit_auto = None
+            if _lf_ok:
+                submit_auto = try_auto_login_submit(
+                    proxy,
+                    ctx,
+                    turn_seq=seq,
+                    instruction=str(cur.instruction or ""),
+                    hierarchy_nodes=nodes,
+                    intents_done=cursor.step_intents_done,
+                    history_lines=hist_lines,
+                    login_module_case=bool(login_module_case),
+                )
+            if submit_auto:
+                st_sub = str(submit_auto.get("status") or "fail")
+                sum_sub = str(submit_auto.get("summary") or "")
+                if submit_auto.get("ok"):
+                    cursor.record_step_op(
+                        "tap_element",
+                        screen_fp=screen_fp_turn,
+                        selector_text="登录",
+                    )
+                rec(
+                    seq,
+                    capability_id="tap_element",
+                    status=st_sub,
+                    summary=sum_sub,
+                    thought=sum_sub,
+                    thumb=thumb,
+                )
+                emit(
+                    "result",
+                    thought=sum_sub,
+                    step=seq,
+                    capability_id="tap_element",
+                    status=st_sub,
+                    summary=sum_sub,
+                    thumb=thumb,
+                )
+                _log_turn_end(writer, cap="tap_element", status=st_sub)
+                continue
             macro = try_run_system_dialog_macro(
                 proxy,
                 ctx,
@@ -1250,6 +1368,9 @@ def _run_loop(
                     hierarchy_nodes=nodes,
                     instruction=str(cur.instruction or ""),
                     login_module_case=bool(login_module_case),
+                    cursor=cursor,
+                    phase="do",
+                    expected=str(cur.expected or ""),
                 )
                 if overlay_login:
                     setattr(ctx, "login_flow_interrupt", True)
@@ -1266,7 +1387,7 @@ def _run_loop(
                     )
                 else:
                     setattr(ctx, "login_flow_interrupt", False)
-                    if (_allows_login_step or login_module_case) and not cursor.sms_auto_attempted:
+                    if _lf_ok and (_allows_login_step or login_module_case) and not cursor.sms_auto_attempted:
                         macro = try_run_login_flow_macro(
                             proxy,
                             ctx,
@@ -1511,6 +1632,10 @@ def _run_loop(
                     and cursor.step_ops > 0
                     and cursor.step_start_fp
                     and screen_fp != cursor.step_start_fp
+                    and (
+                        bool(cursor.step_goal_met)
+                        or str(getattr(cursor, "do_subphase", "") or "") == "achievement"
+                    )
                 ):
                     cursor.enter_check()
                     cursor.correction_hint = (
@@ -1658,6 +1783,22 @@ def _run_loop(
                 _log_turn_end(writer, cap="signal_done", status="pass")
                 return _leave(status="pass", summary=cursor.summary(), pack=_pack())
             if in_prep:
+                from mino_nexus.runtime.session_gate import required_session as _req_sess_kind
+
+                if _req_sess_kind(scene=dict(getattr(ctx, "case_scene", None) or {})) == "guest" and shot.has_image():
+                    refresh_session_block(
+                        shot=shot,
+                        ctx=ctx,
+                        case=case,
+                        provider_id=provider_id,
+                        slot_sink=inspect_slots,
+                        force=True,
+                        nav=nav,
+                        turn_id=seq,
+                    )
+                    inspect_slots["session_block"] = effective_session_block(
+                        ctx, str(inspect_slots.get("session_block") or "")
+                    )
                 sess_reason = run_guards(
                     ["require_session"],
                     {
@@ -1670,6 +1811,17 @@ def _run_loop(
                 if sess_reason:
                     if isinstance(cursor, StepCursor):
                         cursor.correction_hint = sess_reason
+                        streak = int(getattr(cursor, "prep_session_skip_streak", 0) or 0) + 1
+                        cursor.prep_session_skip_streak = streak
+                        if streak >= 5:
+                            return _leave(
+                                status="blocked",
+                                summary=(
+                                    f"{sess_reason} "
+                                    "前置 session 与用例要求不一致且多次无法纠正，任务已停止（避免空转）。"
+                                    "请先 logout/清号池或调整前置。"
+                                ),
+                            )
                     rec(
                         seq,
                         capability_id="require_session",
@@ -2084,6 +2236,8 @@ def _run_loop(
             )
         if status_val == "pass" and cap_id == "clear_app_cache":
             setattr(ctx, "prep_clear_done", True)
+            if in_prep:
+                setattr(ctx, "app_launch_confirmed", False)
             from mino_nexus.loop.session_persist import mark_session_dirty
 
             mark_session_dirty(ctx, reason="clear_app_cache")
@@ -2149,7 +2303,10 @@ def _run_loop(
 
     if is_explore:
         return _leave(status="pass", summary=cursor.summary(), pack=_pack())
-    summary = f"超过 {max_steps} 步仍未完成"
+    if not is_explore and wall_budget_sec > 0:
+        summary = f"超过 {wall_budget_sec} 秒仍未完成"
+    else:
+        summary = f"超过 {max_steps} 步仍未完成"
     return _leave(status="fail", summary=summary)
 
 

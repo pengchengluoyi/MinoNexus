@@ -28,6 +28,7 @@ GUARD_CODES: dict[str, str] = {
     "block_login_after_guest": "block_login_after_guest",
     "block_login_flow_unless_step_scope": "block_login_flow_unless_step_scope",
     "block_mutate_when_thought_done": "block_mutate_when_thought_done",
+    "block_prep_guest_mine_tab": "block_prep_guest_mine_tab",
     "block_do_after_step_goal": "block_do_after_step_goal",
     "require_sms_send_before_otp": "require_sms_send_before_otp",
     "exec_script_params": "exec_script_params",

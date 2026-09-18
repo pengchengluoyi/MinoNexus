@@ -821,6 +821,26 @@ def upsert_knowledge_item(kid: str, body: KnowledgeItemBody, _sess: dict = Depen
     return ok(row, msg="已保存")
 
 
+class AccountPoolTemplatesBody(BaseModel):
+    templates: list[dict[str, Any]] = []
+    extension_addons: dict[str, list[dict[str, Any]]] = {}
+
+
+@router.get("/account-pool-templates")
+def get_account_pool_templates(_sess: dict = Depends(current_session)):
+    from mino_nexus.services.account_pool_templates import list_templates_catalog
+
+    return ok(list_templates_catalog(include_disabled=True))
+
+
+@router.put("/account-pool-templates")
+def put_account_pool_templates(body: AccountPoolTemplatesBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.account_pool_templates import list_templates_catalog, save_template_catalog
+
+    save_template_catalog(body.templates, extension_addons=body.extension_addons)
+    return ok(list_templates_catalog(include_disabled=True), msg="已保存号池模板")
+
+
 @router.delete("/knowledge/{kid}")
 def delete_knowledge_item(kid: str, _sess: dict = Depends(current_session)):
     if not ss.delete_knowledge_item(kid):

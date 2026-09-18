@@ -181,7 +181,7 @@ def build_template(
             "guard_catalog": [],
         },
         "test_data": {
-            "lease_tags": [],
+            "lease_requirements": {},
             "anchor_field": anchor_field,
         },
     } | {"states": states, "edges": edges}

@@ -149,7 +149,13 @@ def clamp_case_scene(raw: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         how = "clamp" if warnings else "llm"
     elif prep_raw or req_raw or need_raw or plat_raw or "prep_items" in row:
         how = "clamp"
-    return {
+    account_template_id = str(
+        row.get("account_template_id") or row.get("template_id") or ""
+    ).strip()[:48]
+    lease_requirements = row.get("lease_requirements")
+    if not isinstance(lease_requirements, dict):
+        lease_requirements = {}
+    out = {
         "session_prep": prep,
         "required_session": req,
         "auth_under_test": auth,
@@ -160,6 +166,14 @@ def clamp_case_scene(raw: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         "how": how,
         "parse_warnings": warnings,
     }
+    if account_template_id:
+        out["account_template_id"] = account_template_id
+    if lease_requirements:
+        out["lease_requirements"] = lease_requirements
+    pre = str(row.get("precondition") or "").strip()
+    if pre:
+        out["precondition"] = pre[:2000]
+    return out
 
 
 def fallback_case_scene(reason: str = "", precondition: str = "") -> dict[str, Any]:
