@@ -57,6 +57,7 @@ https://github.com/<owner>/MinoScout/releases/latest/download/manifest.json
 |---|---|---|
 | GET | `/runtime/nodes` | 当前用户可见的节点。`?studio_id=` 为本工作台 id。未归属仅管理员可见；离线节点仍列出 |
 | POST | `/runtime/nodes/install-token` | 短 TTL 节点凭证。Studio 写入 Scout 配置 |
+| PATCH | `/runtime/nodes/{node_id}` | **Console 管理员**：改 `owner_user_id` / `studio_id`（离线节点也生效） |
 | POST | `/runtime/nodes/{node_id}/command` | Studio 对已连接节点下发 `stop` / `restart` / `update`。离线 409。`start` 400 |
 | GET | `/releases/scout/latest` | **客户端不用。** 兼容旧调用的可选代理；未设 `MINO_SCOUT_MANIFEST_URL` 时 404。不存文件 |
 

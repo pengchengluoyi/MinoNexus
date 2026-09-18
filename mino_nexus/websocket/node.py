@@ -169,20 +169,56 @@ class NodeConnection:
             SLog.w(TAG, f"拒绝注册 node={req.node_id}：token 无效")
             return
 
-        self.node_id = req.node_id
-        owner_user_id = ""
-        from mino_nexus.services.runtime_tokens import peek_token
+        from dataclasses import replace
 
-        info = peek_token(req.token)
-        if info:
-            owner_user_id = str(info.get("user_id") or "")
-        warnings = reg.register(req, send=self.request, owner_user_id=owner_user_id)
+        from mino_nexus.services.node_register import resolve_register_node_id
+        from mino_nexus.services.runtime_tokens import (
+            consume_install_token,
+            issue_node_credential,
+            peek_node_token,
+            peek_token,
+        )
+
+        install_info = peek_token(req.token)
+        node_info = peek_node_token(req.token) if install_info is None else None
+        owner_user_id = str((install_info or node_info or {}).get("user_id") or "")
+        assigned, id_warnings = resolve_register_node_id(
+            req.node_id,
+            is_install_token=install_info is not None,
+            user_id=owner_user_id,
+        )
+        if node_info:
+            from mino_nexus.services.node_store import sanitize_id
+
+            cred_nid = sanitize_id(str(node_info.get("node_id") or ""))
+            if cred_nid and cred_nid != assigned:
+                id_warnings.append(f"node_id 已与凭证绑定为 {cred_nid}")
+                assigned = cred_nid
+        reg_req = replace(req, node_id=assigned) if assigned != req.node_id else req
+        self.node_id = assigned
+
+        warnings = list(id_warnings)
+        warnings.extend(reg.register(reg_req, send=self.request, owner_user_id=owner_user_id))
+
+        issued_node_id = ""
+        issued_node_token = ""
+        if assigned != req.node_id:
+            issued_node_id = assigned
+        if install_info is not None:
+            consume_install_token(req.token)
+            issued_node_token = issue_node_credential(
+                node_id=assigned,
+                user_id=owner_user_id,
+            )
+
         await self._reply(env, P.Registered(
             accepted=True,
             nexus_version=NEXUS_VERSION,
             session_token=f"sess-{_msg_id()}",
             heartbeat_interval_sec=HEARTBEAT_INTERVAL_SEC,
             warnings=warnings,
+            node_id=issued_node_id,
+            node_token=issued_node_token,
         ))
 
     async def _reply_result(self, req_env: P.Envelope, payload: P.Result) -> None:
@@ -225,9 +261,9 @@ def _token_ok(token: str) -> bool:
     tok = str(token or "").strip()
     if not tok:
         return False
-    from mino_nexus.services.runtime_tokens import install_token_ok
+    from mino_nexus.services.runtime_tokens import install_token_ok, node_token_ok
 
-    if install_token_ok(tok):
+    if install_token_ok(tok) or node_token_ok(tok):
         return True
     expect = os.environ.get("MINO_NEXUS_NODE_TOKEN", "")
     if expect:

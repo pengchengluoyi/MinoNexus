@@ -1,322 +1,224 @@
-# Studio 拆分 Scout — 自助安装、升级与配置（2026-09-18）
+# Studio 拆分 Scout — 安装链接、归属与升级（2026-09-18）
 
-## 1. 背景与目标
+**落地主线：** 用户在 **Mino Studio**（已登录）复制 **一条安装命令** → 在 **执行机** 粘贴运行 → 脚本 **只从 GitHub Release** 下载 → 装完 **归属当前用户**。执行机 **不装 Studio**。
 
-产品方向：**执行机不再依赖 Mino Studio 安装/升级**。现场只装 **MinoScout**（+ 可选 Console 在浏览器里管归属），Studio 从「安装向导 + IPC 写盘」退化为可选工作台。
+**铁律：** Nexus **不提供**安装脚本、**不转发** zip、**不**做「先下 bootstrap 再转给 Scout」的任何 HTTP 安装路径。Nexus 只负责 **发 token**（`POST install-token`）和 **REGISTER 时验 token、写归属**。
 
-本方案要解决四件事：
-
-| # | 问题 | 目标 |
-|---|------|------|
-| A | v0.1.19 只更 browser 层导致 **Playwright 驱动认 1234、磁盘是 1243**，`web{scout_id}` 离线 | 升级策略保证 **runtime ↔ browser 原子一致** |
-| B | 安装/增量更新逻辑在 **Studio Electron**（`scoutSetup` + `scoutLayers.cjs`） | 迁到 **Scout 自身**（`mino-scout setup` / `update`） |
-| C | 配对凭证只经 Studio `install-token`，Console 403；15 分钟 TTL 不适合常驻进程 | **Console 发码 + 首次 REGISTER 换长期 node 凭证** |
-| D | `studio_id` / 归属人只在 REGISTER 与 Nexus 内存/JSON 里拼 | **本地配置文件为真源**，Nexus **可改归属**并下发/回写 Scout |
-
-本文是 **方案真源**；实现分阶段落在 MinoScout（安装/升级/本地配置）与 MinoNexus（凭证、归属 API）。Studio 文档 `SCOUT_INSTALL.md` 在落地后标为「遗留路径」。
+**状态：** Phase 1 进行中（`bootstrap.sh` + Studio「复制远程安装命令」已落地；需打 Scout tag 后执行机才可 curl GitHub）。
 
 ---
 
-## 2. 现状摘要
+## 1. 用户怎么用
 
-### 2.1 Studio 路径（今天要废弃为唯一入口）
-
-```
-Console/Studio 登录 → POST /runtime/nodes/install-token
-→ GitHub manifest.json → Electron scoutSetup
-→ 停 Scout → 下 zip → sha256 → install.sh → config.json → 启 Scout → REGISTER
-```
-
-- Nexus **不托管** zip（`CLAUDE.md` / `README.md`）。
-- 分层决策在 `MinoStudio/electron/scoutLayers.cjs`，与 `MinoScout/scripts/layers.py` **双份**，已发生过漂移。
-
-### 2.2 本地目录（不变根）
-
-与 `MinoScout/packaging/install.sh`、`config.py` 一致：
-
-| OS | 安装根 `$PREFIX` |
-|---|---|
-| macOS | `~/Library/Application Support/MinoScout` |
-| Windows | `%APPDATA%\MinoScout` |
-| Linux | `~/.config/minoscout` 或 `$XDG_CONFIG_HOME/minoscout` |
-
-```
-$PREFIX/
-├── config.json          ← 连接与归属（见 §4）
-├── cache/               ← 如 ADBKeyboard.apk
-├── bin/
-│   ├── mino-scout
-│   ├── _internal/       ← runtime
-│   ├── app/mino_scout/  ← app 层
-│   ├── ms-playwright/   ← browser 层
-│   └── layers.txt       ← 已装三层指纹（升级比对真源）
-└── logs/ …
-```
-
-### 2.3 v0.1.19 Chrome 事故（必须写进升级策略）
-
-- **runtime 指纹** `rt-*` 只 hash `pyproject` 声明（含 `playwright>=1.55`），**不含** PyPI 解析版本与 `browsers.json` 的 chromium revision。
-- CI 每次 `playwright install chromium` 可能拉到 **新 revision** → **browser 指纹 `bw-*` 变**，runtime 指纹 **不变**。
-- Studio 增量：**跳过 runtime，只下 browser+app** → 本机 `_internal` 仍认 **1234**，磁盘 **1243** → `probe_playwright` 失败 → `web{scout_id}` offline。
-
-**结论：** 不能把「browser 单独升级」当成安全路径，除非 runtime 内嵌 driver revision 与 `ms-playwright/` 目录 **绑在同一升级单元**。
-
----
-
-## 3. 设计原则
-
-1. **包从 GitHub Release 来**，Nexus 只给 **凭证与归属**，不给 zip。
-2. **安装态真源在本机文件**（`config.json` + `bin/layers.txt`）；Nexus 不存 Scout 版本号真源。
-3. **升级计划在本机算**（读 manifest + `layers.txt`），与 Studio 解耦。
-4. **browser 与 runtime 耦合**：要么一起换，要么都不换（见 §5）。
-5. **循环代码不感知 Studio**；Scout CLI/子命令不算「循环」，不违背 `RouterProxy` 铁律。
-6. **归属可远程改**：Nexus 改 `studio_id` / `owner_user_id`，Scout 下次 REGISTER 或心跳携带；必要时 Nexus 推送 `EXECUTE node.apply_config`（可选阶段）。
-
----
-
-## 4. 本地配置文件
-
-### 4.1 `config.json`（唯一连接 + 归属文件）
-
-路径：`$PREFIX/config.json`（与 today 相同，**不新增** `config.d` 碎片，避免 install.sh / launchd 只认一处）。
-
-建议字段（向后兼容现有 Studio 写入）：
-
-```json
-{
-  "nexus_url": "http://mino.local:10104",
-  "token": "<node_credential>",
-  "scout_id": "e22615fbbb917111",
-  "studio_id": "577f26389911b1cd",
-  "owner_user_id": "",
-  "version": "0.1.19",
-  "manifest_url": "https://github.com/.../manifest.json",
-  "updated_at": "2026-09-18T03:00:00.000Z"
-}
-```
-
-| 字段 | 谁写 | 说明 |
+| 步骤 | 位置 | 操作 |
 |------|------|------|
-| `nexus_url` | 首次 `setup` / 人工 | HTTP 源站，Scout 推导 `ws://…/node` |
-| `token` | 首次配对 / Nexus 换发 | **长期 node 凭证**（§6），非 15min install-token |
-| `scout_id` | Scout 首次运行 | 与 REGISTER `node_id` 一致，持久 |
-| `studio_id` | Nexus 或 setup 参数 | REGISTER.studio_id；空表示未归属工作台 |
-| `owner_user_id` | **仅 Nexus 下发** | 列表过滤用；Scout 本地可缓存，以 Nexus 为准 |
-| `version` | `setup`/`update` 成功写回 | 最后一次装上的 **app 层版本** |
-| `manifest_url` | 可选，默认 GitHub latest | 内网可覆写 |
+| 1 | 开发机 **Studio**（已登录） | Scout 节点页 → **复制安装命令** |
+| 2 | **执行机**终端 | 粘贴整行回车 |
+| 3 | Studio | 刷新节点列表 → 新节点 online，归当前用户 |
 
-**不**把 `layers.txt` 并进 `config.json`：`layers.txt` 已在 `bin/`，由 install 脚本维护，升级逻辑 **只读** 它（与 Studio  today 一致）。
+执行机需能访问 **GitHub**（下 bootstrap + zip）和 **Nexus**（Scout 连 `/node`），**不需要**访问 Studio。
 
-### 4.2 升级过程临时态（可选）
+---
 
-若需要断点续传，可在 `$PREFIX/update.state.json`（仅升级中 exist，完成后删除）：
+## 2. 复制到剪贴板的内容（唯一形态）
 
-```json
-{
-  "target_version": "0.1.20",
-  "plan": { "mode": "layers", "steps": ["runtime", "app"] },
-  "started_at": "…"
+Studio 拼 **一行 shell**，其中：
+
+- **脚本 URL**：GitHub **固定 tag** 上的 `bootstrap.sh`（与 manifest 里当前推荐版本一致，**不用** `latest` 漂移到未知版本）。
+- **凭证与归属**：通过 `bash -s --` 传给 bootstrap 的参数（**不**经过 Nexus URL）。
+
+示例（版本号由 Studio 读 manifest 填入）：
+
+```bash
+curl -fsSL 'https://github.com/pengchengluoyi/MinoScout/releases/download/v0.1.20/bootstrap.sh' | bash -s -- \
+  --token '【安装凭证】' \
+  --nexus-url 'http://mino.local:10104' \
+  --studio-id '【工作台ID】'
+```
+
+| 参数 | 来源 |
+|------|------|
+| `bootstrap.sh` 的 tag | Studio `getScoutLatestRelease()` → `version` → `releases/download/v{version}/bootstrap.sh` |
+| `--token` | Studio `POST /runtime/nodes/install-token` 返回的 `token` |
+| `--nexus-url` | 同上响应里的 `nexus_url`，或 Studio `nexusOrigin()` |
+| `--studio-id` | 当前工作台 id（与 today 写 `config.json` 一致） |
+
+**UI 必须提示：** 命令里含临时凭证（约 15 分钟有效），勿发到公开渠道；凭证校验在 Scout **REGISTER** 时由 Nexus 完成，**不是**下载脚本时。
+
+**Windows（二期）：** 同 tag 的 `bootstrap.ps1`，Studio 复制 `irm … | iex` 等价命令。
+
+---
+
+## 3. 执行机上的数据流（不经过 Nexus 安装）
+
+```text
+curl GitHub …/vX.Y.Z/bootstrap.sh | bash -s -- --token … --nexus-url … --studio-id …
+  → bootstrap.sh（GitHub 静态文件）
+  → curl GitHub manifest.json（默认同 tag 或 bootstrap 内写死的 manifest URL）
+  → 下载 combined / 分层 zip（仍只从 GitHub）
+  → 解压，执行包内 packaging/install.sh
+  → 写 $PREFIX/config.json（nexus_url、token、studio_id）
+  → launchd / systemd 启动 mino-scout
+  → 脚本退出；Scout 进程由服务管理，关终端不影响
+  → Scout dial Nexus REGISTER（Nexus 验 token → owner_user_id + studio_id）
+```
+
+**Nexus 在整个安装阶段只有两类参与：**
+
+1. Studio 事先 `POST /runtime/nodes/install-token`（浏览器会话）。
+2. 装完后 Scout WebSocket **REGISTER**（执行机 → Nexus）。
+
+---
+
+## 4. Nexus 职责（无安装脚本）
+
+### 4.1 保留
+
+```http
+POST /runtime/nodes/install-token
+→ { "token", "expires_at", "ttl_sec", "nexus_url" }
+```
+
+`issue(user_id=当前登录用户)` → REGISTER 时 `owner_user_id`（已有）。
+
+### 4.2 明确不做
+
+| 不做 | 原因 |
+|------|------|
+| `GET /runtime/nodes/scout-install.sh` | 用户要求：安装流量不走 Nexus |
+| Nexus 代理 GitHub zip / bootstrap | 铁律：二进制只在 GitHub Release |
+| `GET /releases/scout/latest` 给安装用 | 客户端（Studio）直读 GitHub manifest；Nexus 代理仅可选兼容 |
+
+### 4.3 后续（与安装无关）
+
+- REGISTER 分配 `node_id`、长期 `node_token`（§8）
+- Console PATCH 改归属（§9）
+
+---
+
+## 5. Studio 页面（待实现）
+
+### 5.1 按钮
+
+**「复制安装命令」**（专机安装）— 与「本机下载并安装」（Electron `scoutSetup`）并列。
+
+Web 版 Studio 只要已登录 Nexus，同样可以复制命令；**执行机不需要 Studio**。
+
+### 5.2 生成逻辑
+
+```javascript
+async function copyInstallCommand() {
+  const rel = await getScoutLatestRelease({ os: 'darwin' }) // 或 hostPlatform
+  const ver = rel.data?.version || rel.version
+  if (!ver) throw new Error('没有可用的 Scout 发布版本')
+
+  const { token, nexus_url } = (await createScoutInstallToken()).data
+  const studio_id = await resolveStudioId()
+  const owner = scoutManifestUrl() // 解析 GitHub owner/repo
+  const bootstrap = `https://github.com/${owner}/MinoScout/releases/download/v${ver}/bootstrap.sh`
+  const nexus = (nexus_url || nexusOrigin()).replace(/\/$/, '')
+
+  // token 中单引号需转义
+  const esc = (s) => String(s).replace(/'/g, "'\\''")
+  const line = [
+    `curl -fsSL '${bootstrap}' | bash -s -- \\`,
+    `  --token '${esc(token)}' \\`,
+    `  --nexus-url '${esc(nexus)}' \\`,
+    `  --studio-id '${esc(studio_id)}'`,
+  ].join('\n')
+
+  await copyToClipboard(line)
 }
 ```
 
-首版可不做；`setup`/`update` 原子完成即可。
+`bootstrap.sh` 的 tag **与 Studio 展示「最新包 vX」同源**，避免命令装 A 版、UI 显示 B 版。
 
-### 4.3 环境变量（保留）
+### 5.3 归属
 
-`MINO_SCOUT_HOME`、`PLAYWRIGHT_BROWSERS_PATH`、ADB Keyboard 相关变量行为不变。
-
----
-
-## 5. Scout 自助安装与升级
-
-### 5.1 CLI 子命令（MinoScout）
-
-| 命令 | 作用 |
+| 字段 | 机制 |
 |------|------|
-| `mino-scout setup` | 首次：拉 manifest → combined 或分层 → `install.sh` → 写 `config.json` → 注册服务 |
-| `mino-scout update` | 已安装：读本机 `bin/layers.txt` → 计划 → 停进程 → 装层 → 启进程 |
-| `mino-scout configure` | 改 `nexus_url` / `token` / `manifest_url`（不下载） |
-| `run` / `probe` / `status` / `stop` | 已有 |
+| `owner_user_id` | install-token 绑定的 `user_id` |
+| `studio_id` | bootstrap 写入 config → REGISTER |
 
-**实现要点：**
-
-- 将 `MinoStudio/electron/scoutLayers.cjs` 的 `planScoutUpdate` **移植为** `mino_scout/packaging/plan.py`（或 `scripts/plan_update.py` 可被冻结 app  import），**单份真源**；CI 跑同一套单测（迁 `test:scout-layers` 到 Scout 仓）。
-- 下载：复用 Scout 已有 `httpx`（`adb_command._download_apk` 模式），校验 manifest `sha256`。
-- 安装：解压到 staging 后调用现有 `packaging/install.sh`（`MINO_SCOUT_SKIP_SERVICE=1` 用于自检）。
-- 升级前：`mino-scout stop`；装完后：launchctl/systemd 与 install.sh  today 相同。
-
-### 5.2 无 Studio 首次安装流程
-
-```mermaid
-sequenceDiagram
-  participant Admin as 管理员 Console
-  participant N as MinoNexus
-  participant Op as 现场运维
-  participant GH as GitHub Release
-  participant Sc as MinoScout
-
-  Admin->>N: POST 配对码 / enroll
-  N-->>Admin: token + nexus_url
-  Op->>Sc: mino-scout setup --token ... --nexus ...
-  Sc->>GH: GET manifest.json
-  Sc->>GH: GET zip(s)
-  Sc->>Sc: install.sh + config.json
-  Sc->>N: REGISTER
-  N-->>Sc: REGISTERED + node_token
-  Sc->>Sc: 写回 config.json token
-```
-
-运维 **不需要** Studio；只需要配对码 + 能访问 GitHub（或内网 mirror URL 写在 `manifest_url`）。
-
-### 5.3 Chrome / 分层升级策略（修复 v0.1.19 类问题）
-
-**打包侧（MinoScout CI，Phase 0）：**
-
-1. **锁定 Playwright**：`pyproject.toml` 改为 `playwright==x.y.z`（或 lockfile），避免 CI 日漂。
-2. **runtime 指纹纳入 driver revision**：在 `scripts/layers.py` 的 `runtime_key()` 材料中加入  
-   `_internal/playwright/driver/package/browsers.json` 里 **chromium revision**（或 `RUNTIME_ABI` +1 并文档化）。
-3. **manifest 增加约束字段**（可选）：  
-   `layers.runtime.chromium_revision`、`layers.browser.dirs` 必须一致；`write_manifest.py` 校验。
-
-**升级计划侧（Scout `plan.py`，Phase 1）：**
-
-```
-若 manifest.browser.dirs 与 本机 runtime 内嵌 revision 不一致
-  → 必须把 runtime + browser 放进同一 plan（或强制 combined）
-若仅 app 层 key 变化且 requires_runtime 匹配
-  → 只下 app
-禁止：仅 browser key 变化而 runtime key 未变但 runtime zip sha256 与 release 不一致
-  → 检测方式：manifest 每层带 sha256，本机记录 last_seen_sha256 在 config.json 或 layers 旁 local-release.json
-```
-
-**简版规则（首版可实现）：**
-
-- 若 plan 包含 **browser** 层，则 **必须同时包含 runtime** 层（顺序 runtime → app → browser）。
-- app 层 `requires_browser` 与 `requires_runtime` 由 install.sh 校验；Scout planner 在下载前做同样检查。
-
-**热修 v0.1.19 已坏机器：** 下 v0.1.17 browser 层或 combined，再 `update` 到修复后的 release（Phase 0 发布后）。
-
-### 5.4 `node.update` 与远程触发
-
-协议已有 `EXECUTE node.update`（Scout 侧曾返回「未实现」）。落地后：
-
-- Nexus `POST /runtime/nodes/{id}/command` `update` → Scout 内调 `update` 同逻辑（**仅本机**）。
-- 无 Studio 时，Console 管理员对在线节点点「更新」即可。
+**谁复制命令，节点归谁。**
 
 ---
 
-## 6. Nexus：凭证与归属
+## 6. MinoScout Release（GitHub）
 
-### 6.1 配对与长期 token
+每个 `v*` tag 附件（CI 增加）：
 
-| 阶段 | 行为 |
+| 文件 | 说明 |
 |------|------|
-| 发码 | Console（或 API）`POST /runtime/nodes/install-token` **或** 新 `POST /runtime/nodes/enroll`；去掉 Console 的 client_gate 403 |
-| 首次 REGISTER | token = install/enroll 码 → 校验通过 → 签发 **node_token**（随机、可吊销、绑定 `node_id`） |
-| REGISTERED 载荷 | 增加 `node_token`（或 HTTP 仅首次返回一次）；Scout 写入 `config.json`，后续 REGISTER 用 node_token |
-| install_token | 一次性或短 TTL，** consumed 后作废** |
+| `manifest.json` | 已有 |
+| `MinoScout-*.zip` / 分层 zip | 已有 |
+| **`bootstrap.sh`** | 新增；源码 `packaging/bootstrap.sh` |
 
-表：`node_credentials`（`node_id`, `token_hash`, `owner_user_id`, `created_at`, `revoked_at`）或扩展现有 `install_tokens`。
+`bootstrap.sh` 接口：
 
-环境变量 `MINO_NEXUS_NODE_TOKEN` 保留为**单节点实验室**兜底，文档标 deprecated。
-
-### 6.2 修改归属（studio / 归属人）
-
-需求：设备在 A 测试员名下，Console 管理员改到 B 或改绑 Studio。
-
-**建议 API（MinoNexus）：**
-
-```
-PATCH /runtime/nodes/{node_id}
-Body: { "studio_id": "...", "owner_user_id": "..." }   # 管理员或 resource owner
+```text
+--token          必填
+--nexus-url      默认 http://mino.local:10104
+--studio-id      可选
+--manifest-url   可选；默认 https://github.com/.../releases/download/v{SCOUT_VERSION}/manifest.json
+                 （构建时把 SCOUT_VERSION 打进 bootstrap，与 tag 一致）
 ```
 
-行为：
+行为：拉 manifest → 下 zip → `install.sh` → 写 config → **仅**注册并启动系统服务。
 
-1. 更新 `nodes.json` / DB 持久化（与 today `node_store` 对齐）。
-2. 若节点 **在线**：`EXECUTE node.apply_config`（新 cap）payload `{ studio_id, owner_user_id }` → Scout 合并写 `config.json` → 下一帧 REGISTER 一致。
-3. 若 **离线**：仅 Nexus 侧生效；Scout 下次连上时 Nexus 在 REGISTERED.warnings 或专用 push 告知拉取配置。
-
-**Scout 侧：**
-
-- REGISTER 继续带 `studio_id`（读 `config.json`）。
-- `owner_user_id` **不必**由 Scout 上报（Nexus 真源在服务端）；若本地缓存仅为展示，以 PATCH 下发为准。
-
-**权限：**
-
-- 改 `owner_user_id`：管理员或 IAM `scout_install` 超集。
-- 改 `studio_id`：管理员或该 studio 负责人（与 today 节点列表过滤一致）。
-
-### 6.3 HTTP 文档同步
-
-落地后更新 `docs/HTTP.md`：Console 可发码、PATCH 节点归属、`node.update` 语义。
+升级：`mino-scout update`（本机，仍只 curl GitHub）。
 
 ---
 
-## 7. Studio 的角色（拆分后）
+## 7. 进程模型与 configure（简要）
 
-| 能力 | Studio | Console | Scout CLI |
-|------|--------|---------|-----------|
-| 本机安装/升级 | 可选保留 IPC（兼容） | 否 | **主路径** |
-| 发配对码 | 可以 | **应该** | 否 |
-| 节点列表 / 远程 restart | 可以 | 可以 | — |
-| 改归属 | 否（改 Console） | **是** | 接收下发 |
-
-Studio 的 `scoutSetup` 在 Phase 2 可改为 **调用本机 `mino-scout update` 子进程**，避免长期双份 planner。
+- 安装后只跑 **系统服务**；裸 `mino-scout` 在服务已运行时 **只打 status/版本**，不启第二进程、不泄露 token。
+- 停止：`mino-scout stop`。
+- CLI 仅 `mino-scout configure nexus-url …`；不可 CLI 改 token / scout_id。
 
 ---
 
-## 8. 分阶段实施
+## 8. scout_id 与 token 生命周期
 
-### Phase 0 — 止血（MinoScout 发版）
-
-- [ ] 锁定 `playwright` 版本；manifest v0.1.20 恢复 **runtime+browser 一致**（1234 或整组 1243）。
-- [ ] `runtime_key` 含 chromium revision **或** `RUNTIME_ABI` bump + 全量 runtime 重发。
-- [ ] 文档说明已坏节点如何回滚 browser 层。
-
-### Phase 1 — Scout 自助（MinoScout）
-
-- [ ] `plan.py` + `mino-scout setup` / `update` / `configure`
-- [ ] 单测：plan 与 `check_layered_install` 对齐；**browser-only plan 必须带 runtime**
-- [ ] README：`INSTALL_WITHOUT_STUDIO.md`
-
-### Phase 2 — Nexus 凭证与归属（MinoNexus）
-
-- [ ] 长期 `node_token` + REGISTER 换发
-- [ ] Console 发码；PATCH `/runtime/nodes/{id}`
-- [ ] `node.update` → Scout 本地 `update`
-- [ ] `node.apply_config`（可选，与 PATCH 同 PR 或紧随其后）
-
-### Phase 3 — 收尾
-
-- [ ] Studio 委托 CLI 或标 deprecate 安装 UI
-- [ ] 两仓 `docs/PROTOCOL.md` 若增 REGISTERED 字段则 golden fixture 同步
+- **scout_id**：Nexus 首次 REGISTER 分配并下发，Scout 写 `config.json`（待协议）。
+- **token**：安装凭证短期有效；REGISTER 成功后换 **长期 node_token** 写 config（待实现）。bootstrap **不**向 Nexus 请求脚本，只把 Studio 给的 token 写入 config 供 Scout 使用。
 
 ---
 
-## 9. 验收
+## 9. Chromium 升级
 
-1. **无 Studio**：新机器 `mino-scout setup` → Console 见节点 online；`web{scout_id}` probe 为 available。
-2. **仅 app 升级**：manifest 只变 app key → 下载 ~90KB，browser 目录 mtime 不变（`check_layered_install` 同类断言）。
-3. **Playwright 滚动**：发一版 bump chromium → runtime key 变 → plan 含 runtime+browser，不出现「仅 browser」。
-4. **重启 Scout / 手机**：ADB Keyboard 策略仍由 Scout 心跳处理（已实现，与安装方案无关）。
-5. **PATCH 归属**：改 `studio_id` 后列表过滤正确；在线节点 `config.json` 同步。
+发版锁 `playwright`；runtime 指纹含 chromium revision；planner 无 revision 变化 **不**下 browser 层；禁止 browser-only 增量。
 
 ---
 
-## 10. 开放问题
+## 10. Console 改归属
 
-1. **内网无 GitHub**：是否 Nexus 只做 manifest 代理（已有可选 `MINO_SCOUT_MANIFEST_URL`），zip 仍从 mirror URL 指到 Release？
-2. **Windows 自助**：`install.ps1` 与 setup 子命令 parity 时间点。
-3. **多 Nexus 环境**：`config.json` 是否支持 profile（暂否，避免 scope 膨胀）。
+安装默认归复制命令的用户；Console **PATCH** 节点 `owner_user_id` / `studio_id`（后续），非安装主路径。
 
 ---
 
-## 11. 相关文档
+## 11. 实施顺序
 
-- `../MinoScout/docs/PACKAGING.md` — 分层与指纹
-- `../MinoStudio/docs/SCOUT_INSTALL.md` — 遗留 Studio 路径
-- `NODE_REGISTRY.md` §6 鉴权、`HTTP.md` `/runtime/nodes`
-- 对话背景：v0.1.19 browser/runtime 不一致导致 `webe22615fbbb917111` offline
+| # | 仓库 | 交付 |
+|---|------|------|
+| 1 | MinoScout | `packaging/bootstrap.sh` + release.yml 上传同 tag |
+| 2 | MinoStudio | 「复制安装命令」§5.2 |
+| 3 | MinoScout | bootstrap 内 manifest/zip 全 GitHub；CLI/update/Chrome 规则 |
+| 4 | MinoNexus | node_token + REGISTER 发号（**无**安装 HTTP） |
 
-**状态：** 方案稿，待评审后按 Phase 0→1→2 开工。
+---
+
+## 12. 验收
+
+1. 抓包/日志：安装阶段 **无** 对 Nexus 的 zip/bootstrap 下载，仅有 GitHub + 最后 Scout WS。
+2. Studio 复制的 tag 与装的 `config.version` / manifest 一致。
+3. 用户 A 复制 → 执行机安装 → 节点仅 A 可见（非管理员）。
+4. token 过期后 REGISTER 失败，安装本身仍可下 GitHub（需 UI 提示重新复制命令）。
+
+---
+
+## 13. 相关
+
+- `mino_nexus/services/runtime_tokens.py`
+- `MinoStudio/src/api/runtime.js` — `createScoutInstallToken`、`getScoutLatestRelease`
+- `../MinoScout/packaging/install.sh`

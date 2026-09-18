@@ -12,7 +12,8 @@ from mino_nexus.core import protocol as P
 from mino_nexus.core.http_util import client_header, ok
 from mino_nexus.services.node_registry import get_registry
 from mino_nexus.services.node_store import filter_nodes, get_node as stored_node, node_visible
-from mino_nexus.routers.deps import current_session
+from mino_nexus.routers.deps import current_session, require_packs_writer
+from mino_nexus.services.node_store import sanitize_id, upsert
 from mino_nexus.services.runtime_tokens import issue
 from mino_nexus.services.ui_devices import ui_assets, ui_nodes
 
@@ -24,6 +25,11 @@ _REMOTE_COMMANDS = frozenset({"stop", "restart", "update"})
 class NodeCommandBody(BaseModel):
     command: str
     reason: str = ""
+
+
+class NodePatchBody(BaseModel):
+    owner_user_id: str | None = None
+    studio_id: str | None = None
 
 
 @router.get("/nodes")
@@ -80,6 +86,37 @@ def create_install_token(request: Request, sess: dict = Depends(current_session)
     tok = issue(user_id=str(sess.get("user_id") or ""))
     base = str(request.base_url).rstrip("/")
     return ok({**tok, "nexus_url": base})
+
+
+@router.patch("/nodes/{node_id}")
+def patch_node(
+    node_id: str,
+    body: NodePatchBody,
+    sess: dict = Depends(current_session),
+):
+    require_packs_writer(sess)
+    nid = sanitize_id(node_id)
+    if not nid:
+        raise HTTPException(status_code=400, detail="node_id 无效")
+    snap = stored_node(nid)
+    live = get_registry().get_node(nid)
+    if snap is None and live is None:
+        raise HTTPException(status_code=404, detail="没有这个节点")
+    fields: dict[str, str] = {}
+    if body.owner_user_id is not None:
+        fields["owner_user_id"] = body.owner_user_id
+    if body.studio_id is not None:
+        fields["studio_id"] = body.studio_id
+    if not fields:
+        raise HTTPException(status_code=400, detail="至少提供 owner_user_id 或 studio_id")
+    row = upsert(nid, **fields)
+    if live is not None:
+        if "owner_user_id" in fields:
+            live.owner_user_id = sanitize_id(fields["owner_user_id"])
+        if "studio_id" in fields:
+            live.studio_id = sanitize_id(fields["studio_id"])
+        live.persist_snapshot()
+    return ok({"node": row})
 
 
 @router.post("/nodes/{node_id}/command")

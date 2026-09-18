@@ -10,6 +10,7 @@ from mino_nexus.models.knowledge import KnowledgeEntry
 from mino_nexus.models.llm_job import LlmJob
 from mino_nexus.models.nav import StudioNav
 from mino_nexus.models.nav_fsm import NavFsm, NavFsmEdge, NavFsmState
+from mino_nexus.models.nav_flow_block_catalog import NavFlowBlockCatalog
 from mino_nexus.models.node import Node, Studio
 from mino_nexus.models.plugin import PluginPolicy, UserPluginSecret
 from mino_nexus.models.project import App, Project
@@ -18,7 +19,7 @@ from mino_nexus.models.session_event import SessionEvent, SessionMeta
 from mino_nexus.models.settings import Settings
 from mino_nexus.models.skill import Skill
 from mino_nexus.models.task import Task
-from mino_nexus.models.token import InstallToken
+from mino_nexus.models.token import InstallToken, NodeCredential
 
 __all__ = [
     "AppIntelLink",
@@ -38,11 +39,13 @@ __all__ = [
     "KnowledgeEntry",
     "LlmJob",
     "InstallToken",
+    "NodeCredential",
     "MCaseBaseline",
     "MCaseRunTrace",
     "NavFsm",
     "NavFsmEdge",
     "NavFsmState",
+    "NavFlowBlockCatalog",
     "Node",
     "PluginPolicy",
     "Project",

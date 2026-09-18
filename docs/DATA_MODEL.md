@@ -29,7 +29,8 @@
 | 图谱别名 | `m_atlas_alias` | UI |
 | 集成插件策略 / 用户密钥 | `plugin_policies` / `user_plugin_secrets` | UI |
 | Studio 侧栏 | `studio_nav` | Console |
-| Scout 安装凭证 | `install_tokens` | Studio 领取 |
+| Scout 安装凭证 | `install_tokens` | Studio 领取（短 TTL） |
+| Scout 节点长期 token | `node_credentials` | 首次 REGISTER 换发，按 `node_id` 唯一 |
 | 轻量任务 | `tasks` | `rTask` |
 | 节点 manifest | Nexus 内存缓存 | **Scout 的 `REGISTER` / `HEARTBEAT`** |
 | 原始截图 / 屏幕流 | **Scout 本地**，用后即删 | Scout |
