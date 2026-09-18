@@ -144,15 +144,16 @@ async def command_node(
     if live is None or not live.alive or live.send is None:
         raise HTTPException(status_code=409, detail="节点离线，无法下发")
 
+    update_timeout = 600.0 if cmd == "update" else 20.0
     payload = P.Execute(
         run_id="",
         step_idx=-1,
         sn="",
         capability_id=f"node.{cmd}",
         params={"command": cmd, "reason": str(body.reason or "studio")},
-        timeout_sec=20.0,
+        timeout_sec=update_timeout,
     )
-    result = live.send(P.MsgType.EXECUTE, payload, timeout=25.0)
+    result = live.send(P.MsgType.EXECUTE, payload, timeout=update_timeout + 30.0)
     if inspect.isawaitable(result):
         result = await result
     if result is None:
