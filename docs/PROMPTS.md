@@ -109,3 +109,9 @@ v7 同时往 system 块插了一节「导航 assist」，讲**怎么读这段**�
 
 升级入口：`upgrade_agent_decide_to_v13` / `upgrade_inspect_session_to_v3` / `upgrade_assert_vision_to_v3`，启动时 bootstrap 幂等。旧模型若仍吐这两字段，解析侧忽略，不进 `action.params`。
 
+## 9. 低置信导航不要冻住（v14）
+
+`【导航】` 置信低时页名只是结构猜测。v14 改掉「先 recover / 问人，勿乱点」：以截图和用例步骤为准；达成信号已在屏上则 `signal_done`，禁止连续空等 `wait_ms`。`wait_ms` 同时计入 `ProgressGate` 里程碑（见 `loop/action_fuse.py`）。
+
+升级入口：`upgrade_agent_decide_to_v14`，启动时 bootstrap 幂等。
+

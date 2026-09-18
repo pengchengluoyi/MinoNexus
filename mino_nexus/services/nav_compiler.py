@@ -188,11 +188,16 @@ def _head(plan: NavPlan, fsm: dict[str, Any] | None, *, localized: dict[str, Any
     band_note = {
         "high": "",
         "explore": "（定位置信度中等：先确认是否在当前屏，勿走远路）",
-        "recover": "（定位置信度低：优先恢复/问人，勿乱点）",
+        "recover": "（定位置信度低：页名仅供参考，以截图和用例步骤为准；达成信号已在屏上则 signal_done，不要空等）",
     }.get(plan.band, "")
     conf = f"{plan.confidence:.0%}" if plan.confidence <= 1 else f"{plan.confidence:.2f}"
     policy = str((localized or {}).get("policy_note") or "").strip()
     policy_bit = f"（{policy}）" if policy else ""
+    if plan.band == "recover":
+        return (
+            f"【导航】当前屏无法高置信确认，结构上看最像「{here}」"
+            f"（id={plan.state_id}，置信 {conf}）{band_note}{policy_bit}"
+        )
     return f"【导航】当前屏：{here}（id={plan.state_id}，置信 {conf}）{band_note}{policy_bit}"
 
 
@@ -222,7 +227,10 @@ def _route_line(plan: NavPlan, fsm: dict[str, Any] | None, *, localized: dict[st
     if not plan.edge:
         if plan.band == "recover":
             if goal_name:
-                return f"【路线】置信低，暂不推荐跳转边。用例目标为「{goal_name}」；请先 recover 或问人。"
+                return (
+                    f"【路线】置信低，暂不推荐跳转边。用例目标为「{goal_name}」。"
+                    "按用例步骤在截图上操作；若本步达成信号已出现，立刻 signal_done。"
+                )
             return ""
         reason = str(plan.edge_reason or "当前没有可执行的跳转边").strip()
         return f"【路线】本步无推荐跳转（{reason}）"

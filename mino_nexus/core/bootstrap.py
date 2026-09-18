@@ -51,6 +51,16 @@ def bootstrap() -> None:
         an = upgrade_account_capabilities()
         if an:
             SLog.i(TAG, f"account capabilities upgraded {an}")
+        from mino_nexus.catalog.recovery_seed import upgrade_get_otp_capability
+
+        ot = upgrade_get_otp_capability()
+        if ot:
+            SLog.i(TAG, f"get_otp capability upgraded {ot}")
+        from mino_nexus.catalog.recovery_seed import upgrade_consent_ime_capabilities
+
+        ci = upgrade_consent_ime_capabilities()
+        if ci:
+            SLog.i(TAG, f"consent/ime capabilities upgraded {ci}")
         from mino_nexus.catalog.recovery_seed import upgrade_check_run_env_capability
 
         cn = upgrade_check_run_env_capability()
@@ -61,6 +71,16 @@ def bootstrap() -> None:
         fn = upgrade_fsm_navigate_capability()
         if fn:
             SLog.i(TAG, f"fsm_navigate capability upgraded {fn}")
+        from mino_nexus.catalog.recovery_seed import upgrade_package_param_capabilities
+
+        pp = upgrade_package_param_capabilities()
+        if pp:
+            SLog.i(TAG, f"package param capabilities upgraded {pp}")
+        from mino_nexus.catalog.recovery_seed import upgrade_capability_empty_params
+
+        sp = upgrade_capability_empty_params()
+        if sp:
+            SLog.i(TAG, f"capability empty params upgraded {sp}")
         from mino_nexus.services.job_store import upgrade_jobs_prompt_version, upgrade_jobs_strip_when
 
         jn = upgrade_jobs_strip_when()
@@ -76,6 +96,7 @@ def bootstrap() -> None:
             upgrade_agent_decide_to_v11,
             upgrade_agent_decide_to_v12,
             upgrade_agent_decide_to_v13,
+            upgrade_agent_decide_to_v14,
             upgrade_assert_vision_to_v2,
             upgrade_assert_vision_to_v3,
             upgrade_inspect_session_to_v2,
@@ -100,6 +121,9 @@ def bootstrap() -> None:
         v13 = upgrade_agent_decide_to_v13()
         if v13:
             SLog.i(TAG, "agent-decide upgraded to prompt v13")
+        v14 = upgrade_agent_decide_to_v14()
+        if v14:
+            SLog.i(TAG, "agent-decide upgraded to prompt v14")
         av2 = upgrade_assert_vision_to_v2()
         if av2:
             SLog.i(TAG, "assert-vision upgraded to prompt v2")

@@ -70,6 +70,14 @@ def _skip_tab_fallback(_localized: dict[str, Any], ctx: Any = None) -> bool:
     return len(_visible_bottom_tab_slots(ctx)) < 2
 
 
+def _fold_tap_label(text: str) -> str:
+    return "".join(str(text or "").split()).lower()
+
+
+def _params_tap_label(params: dict[str, Any]) -> str:
+    return _fold_tap_label(params.get("selector_text") or params.get("text") or "")
+
+
 def dispatch_local(
     event: PlanEvent,
     *,
@@ -198,8 +206,23 @@ def dispatch_local(
                     summary = f"{summary}；{reason}"
                 status = EventStatus.FAIL
         elif req == "guest":
-            summary = reason or f"会话观察：{session}"
-            status = EventStatus.PASS if session in ("guest", "logged_out", "unknown") else EventStatus.PASS
+            if session == "logged_in":
+                from mino_nexus.loop.session_ensure import try_logout_via_nav
+
+                ok, logout_msg = try_logout_via_nav(ctx, router, seq=event.seq)
+                if ok:
+                    summary = f"已执行 logout 边（原 session={session}）；{logout_msg}"
+                    status = EventStatus.PASS
+                else:
+                    summary = (
+                        f"观察完成，当前仍已登录（session={session}）。{logout_msg}"
+                    )
+                    if reason:
+                        summary = f"{summary}；{reason}"
+                    status = EventStatus.FAIL
+            else:
+                summary = reason or f"会话观察：{session}"
+                status = EventStatus.PASS
         else:
             summary = reason or f"会话观察：{session}"
             status = EventStatus.PASS
@@ -217,10 +240,15 @@ def dispatch_local(
         return _fsm_navigate(event, ctx=ctx, t0=t0, router=router)
     if cap == "lease_account":
         params = dict(event.params or {})
+        from mino_nexus.loop.session_ensure import account_need_from_case
+
+        scene = getattr(ctx, "case_scene", None) if ctx is not None else None
+        need = account_need_from_case({}, scene if isinstance(scene, dict) else {})
         row, err = lease_for_context(
             ctx,
             params,
             ai_reasoning=str(event.ai_reasoning or ""),
+            need_facets=need,
         )
         if row:
             brief = format_accounts_brief(row)
@@ -239,6 +267,14 @@ def dispatch_local(
             executor="internal",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
+    if cap == "get_otp":
+        return _get_otp(event, ctx=ctx, t0=t0)
+    if cap == "accept_legal_consent":
+        return _accept_legal_consent(event, ctx=ctx, router=router, t0=t0)
+    if cap == "request_sms_code":
+        return _request_sms_code(event, ctx=ctx, router=router, t0=t0)
+    if cap == "dismiss_ime":
+        return _dismiss_ime(event, ctx=ctx, router=router, t0=t0)
     if cap == "persona_subtask":
         return _result(
             event,
@@ -252,6 +288,342 @@ def dispatch_local(
         status=EventStatus.DECLINED,
         summary=f"未知本地能力 {cap}",
         error=f"cap={cap} 标为本地但没有 executor",
+    )
+
+
+def _hierarchy_nodes(ctx: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    nodes = getattr(ctx, "nav_hierarchy_nodes", None) if ctx is not None else None
+    if isinstance(nodes, list):
+        out.extend(n for n in nodes if isinstance(n, dict))
+    vlm = getattr(ctx, "nav_vlm_hierarchy", None) if ctx is not None else None
+    if isinstance(vlm, dict):
+        out.extend(n for n in (vlm.get("nodes") or []) if isinstance(n, dict))
+    return out
+
+
+def _dispatch_device(
+    router: Any,
+    *,
+    ctx: Any,
+    seq: int,
+    cap: str,
+    params: dict[str, Any],
+    label: str,
+) -> Any:
+    from mino_nexus.core.schemas import PlanEvent
+    from mino_nexus.loop.web_env import agent_step_idx
+
+    event = PlanEvent(
+        seq=seq,
+        capability_id=cap,
+        event_kind=cap,
+        params=dict(params or {}),
+        ai_reasoning=label,
+        label=label[:80],
+    )
+    scout_run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "") if ctx else ""
+    case_seq = int(getattr(ctx, "case_seq", 0) or 0) if ctx else 0
+    return router.dispatch(event, run_id=scout_run_id, step_idx=agent_step_idx(case_seq, seq))
+
+
+def _exec_ok(result: Any) -> bool:
+    st = result.status.value if hasattr(result.status, "value") else str(result.status)
+    return st in ("pass", "done")
+
+
+def _resolve_otp(ctx: Any) -> tuple[str, str]:
+    acc = getattr(ctx, "picked_account", None) if ctx is not None else None
+    if isinstance(acc, dict):
+        for key in ("otp", "sms_code", "code"):
+            val = str(acc.get(key) or "").strip()
+            if val:
+                return val, "account"
+    try:
+        from mino_nexus.services import project_store as ps
+        from mino_nexus.services.project_env import env_secrets
+
+        app_id = str(getattr(ctx, "app_id", "") or "").strip() if ctx is not None else ""
+        if not app_id:
+            return "", "missing"
+        app = ps.require_app(app_id)
+        project_id = str(app.get("project_id") or "").strip()
+        if not project_id:
+            return "", "missing"
+        env_doc = ps.project_env(project_id)
+        env_key = str(getattr(ctx, "env_profile", "") or "test") if ctx is not None else "test"
+        secrets = env_secrets(env_doc, env_key)
+        otp = secrets.get("otp") if isinstance(secrets, dict) else {}
+        if not isinstance(otp, dict):
+            otp = {}
+        fixed = str(otp.get("fixed") or "").strip()
+        mode = str(otp.get("mode") or "auto").strip().lower()
+        if fixed and mode in ("fixed", "auto"):
+            return fixed, "env_fixed"
+    except Exception:
+        return "", "missing"
+    return "", "missing"
+
+
+def _get_otp(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
+    code, source = _resolve_otp(ctx)
+    if not code:
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary="未配置验证码：请在测试账号 otp 字段或项目环境 otp.fixed 填写，勿盲填固定码",
+            error="otp not configured",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    if ctx is not None:
+        acc = dict(getattr(ctx, "picked_account", None) or {})
+        acc["otp"] = code
+        ctx.picked_account = acc
+    return _result(
+        event,
+        status=EventStatus.PASS,
+        summary=f"已取验证码（{source}）otp={code}",
+        executor="internal",
+        elapsed_ms=int((time.time() - t0) * 1000),
+        raw_response={"otp": code, "source": source},
+    )
+
+
+def _accept_legal_consent(
+    event: PlanEvent,
+    *,
+    ctx: Any,
+    router: Any,
+    t0: float,
+) -> EventResult:
+    from mino_nexus.loop.hierarchy_slots import node_flag
+    from mino_nexus.loop.ui_consent import (
+        any_focused_input,
+        find_consent_control,
+        tap_params_for_control,
+    )
+
+    nodes = _hierarchy_nodes(ctx)
+    ctrl = find_consent_control(nodes)
+    if ctrl is None:
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary="未找到可勾选控件（长文案左侧小方框）。请 tap_element 点勾选框本身，不要点长文案。",
+            error="consent control not found",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    if node_flag(ctrl, "checked"):
+        return _result(
+            event,
+            status=EventStatus.PASS,
+            summary="同意框已勾选，无需再点",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    if router is None:
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary="未连接设备，无法勾选同意框",
+            error="no router",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    if any_focused_input(nodes):
+        back = _dispatch_device(
+            router,
+            ctx=ctx,
+            seq=event.seq,
+            cap="press_key",
+            params={"key": "BACK"},
+            label="收起输入法后再勾选",
+        )
+        if not _exec_ok(back):
+            return _result(
+                event,
+                status=EventStatus.FAIL,
+                summary=f"收起输入法失败：{back.summary or back.error}",
+                error=str(back.error or back.summary or "press_key failed"),
+                executor="internal",
+                elapsed_ms=int((time.time() - t0) * 1000),
+            )
+    tap = _dispatch_device(
+        router,
+        ctx=ctx,
+        seq=event.seq,
+        cap="tap_element",
+        params=tap_params_for_control(ctrl, nodes),
+        label="勾选同意框",
+    )
+    if _exec_ok(tap):
+        return _result(
+            event,
+            status=EventStatus.PASS,
+            summary="已点击同意框（长文案左侧控件）",
+            executor="internal+adb",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    return _result(
+        event,
+        status=EventStatus.FAIL,
+        summary=f"勾选同意框失败：{tap.summary or tap.error}",
+        error=str(tap.error or tap.summary or "tap failed"),
+        executor="internal",
+        elapsed_ms=int((time.time() - t0) * 1000),
+    )
+
+
+def _request_sms_code(
+    event: PlanEvent,
+    *,
+    ctx: Any,
+    router: Any,
+    t0: float,
+) -> EventResult:
+    from mino_nexus.loop.ui_consent import any_focused_input
+    from mino_nexus.loop.ui_sms_request import (
+        find_phone_field,
+        find_send_code_button,
+        phone_field_filled,
+        tap_params_for_send_button,
+    )
+
+    nodes = _hierarchy_nodes(ctx)
+    phone = find_phone_field(nodes)
+    if phone is None:
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary="未找到宽手机号输入框。请先 input_text 填入手机号，或 tap_element 聚焦输入框。",
+            error="phone field not found",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    if not phone_field_filled(nodes):
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary="手机号输入框尚无 11 位号码。请先 input_text(field=phone) 或粘贴已租账号手机号。",
+            error="phone not filled",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    btn = find_send_code_button(nodes, phone)
+    if btn is None:
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary="未找到手机号同行右侧的发送控件。请 tap_element 点右侧短文案按钮。",
+            error="send control not found",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    if router is None:
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary="未连接设备，无法点击发送控件",
+            error="no router",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    if any_focused_input(nodes):
+        back = _dispatch_device(
+            router,
+            ctx=ctx,
+            seq=event.seq,
+            cap="press_key",
+            params={"key": "BACK"},
+            label="收起输入法后再点发送",
+        )
+        if not _exec_ok(back):
+            return _result(
+                event,
+                status=EventStatus.FAIL,
+                summary=f"收起输入法失败：{back.summary or back.error}",
+                error=str(back.error or back.summary or "press_key failed"),
+                executor="internal",
+                elapsed_ms=int((time.time() - t0) * 1000),
+            )
+    tap = _dispatch_device(
+        router,
+        ctx=ctx,
+        seq=event.seq,
+        cap="tap_element",
+        params=tap_params_for_send_button(btn, nodes),
+        label="点发送验证码控件",
+    )
+    if _exec_ok(tap):
+        return _result(
+            event,
+            status=EventStatus.PASS,
+            summary="已点击手机号同行右侧发送控件",
+            executor="internal+adb",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    return _result(
+        event,
+        status=EventStatus.FAIL,
+        summary=f"点击发送控件失败：{tap.summary or tap.error}",
+        error=str(tap.error or tap.summary or "tap failed"),
+        executor="internal",
+        elapsed_ms=int((time.time() - t0) * 1000),
+    )
+
+
+def _dismiss_ime(
+    event: PlanEvent,
+    *,
+    ctx: Any,
+    router: Any,
+    t0: float,
+) -> EventResult:
+    from mino_nexus.loop.ui_consent import any_focused_input
+
+    nodes = _hierarchy_nodes(ctx)
+    if not any_focused_input(nodes):
+        return _result(
+            event,
+            status=EventStatus.PASS,
+            summary="未检测到聚焦输入框，未发 BACK",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    if router is None:
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary="未连接设备，无法收起输入法",
+            error="no router",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    back = _dispatch_device(
+        router,
+        ctx=ctx,
+        seq=event.seq,
+        cap="press_key",
+        params={"key": "BACK"},
+        label="收起输入法",
+    )
+    if _exec_ok(back):
+        return _result(
+            event,
+            status=EventStatus.PASS,
+            summary="已 BACK 收起输入法",
+            executor="internal+adb",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    return _result(
+        event,
+        status=EventStatus.FAIL,
+        summary=f"收起输入法失败：{back.summary or back.error}",
+        error=str(back.error or back.summary or "press_key failed"),
+        executor="internal",
+        elapsed_ms=int((time.time() - t0) * 1000),
     )
 
 
@@ -432,6 +804,33 @@ def _fsm_navigate(
                     f"规划 {hops} 步：{summary}；本步 {first.get('edge_id') or ''} "
                     f"→ {first.get('to') or ''}"
                 )
+                dest_tab = nav_route.tab_root_label_for_state(
+                    fsm, str(nav_attempt.get("resolved_to") or plan.get("to_state") or "")
+                )
+                if not dest_tab:
+                    want = _fold_tap_label(to_raw)
+                    dest_tab = next(
+                        (lab for lab in nav_route.tab_slot_labels(fsm) if _fold_tap_label(lab) == want),
+                        "",
+                    )
+                if dest_tab:
+                    already_tab = _params_tap_label(step_params) == _fold_tap_label(dest_tab)
+                    tabs_visible = not _skip_tab_fallback(localized, ctx)
+                    if tabs_visible and not already_tab:
+                        step_cap = "tap_element"
+                        step_params = {"selector_text": dest_tab, "text": dest_tab}
+                        nav_attempt["step_pick"] = "tab_bar_visible_direct"
+                        plan_msg = f"{plan_msg}；底栏可见，本步直点 Tab「{dest_tab}」"
+                    elif (not tabs_visible) and step_cap == "tap_element" and not already_tab:
+                        # 最短路常把「去 Tab 页」编成内容区控件（拍照按钮/列表项），
+                        # 当前又没有底栏可点，系统返回比瞎点内容更接近 Tab 根。
+                        step_cap = "press_key"
+                        step_params = {"key": "BACK"}
+                        nav_attempt["step_pick"] = "tab_target_press_back"
+                        plan_msg = (
+                            f"{plan_msg}；目标是底栏 Tab「{dest_tab}」但当前无底栏，"
+                            "本步先系统返回，请再次 fsm_navigate"
+                        )
         else:
             err = str(plan.get("error") or "无路径")
             nav_attempt["plan_ok"] = False
@@ -446,6 +845,9 @@ def _fsm_navigate(
                         setattr(ctx, "_fsm_recover_back_hits", hits)
                 n = int(hits.get("back", 0) or 0) + 1
                 hits["back"] = n
+                two_stage = nav_route.tab_root_entry_hint(
+                    fsm, resolve.get("resolved_to") or to_raw
+                )
                 if n > 3:
                     hint = (
                         f"{err}；当前屏无底栏 Tab，"
@@ -458,10 +860,16 @@ def _fsm_navigate(
                 step_params = {"key": "BACK"}
                 plan_msg = (
                     f"{err}；当前屏无底栏 Tab，"
-                    f"本步先系统返回退出栈顶（{n}/3），请再次 fsm_navigate。"
+                    f"本步先系统返回退出栈顶（{n}/3）"
                 )
+                if two_stage:
+                    plan_msg = f"{plan_msg}，{two_stage}"
                 nav_attempt["step_pick"] = "recover_press_back"
-                nav_attempt["planned_hops"] = max(2, n + 1)
+                # 没有路线图，就别报「第 1/N 步」—— 那句进度是假的，摘要会像导航已完成。
+                nav_attempt["planned_hops"] = 0
+                nav_attempt["recover_hint"] = "；".join(
+                    x for x in (err, two_stage, "退栈后请再次 fsm_navigate；底栏可见时可直点目标") if x
+                )
             else:
                 step_params = nav_route.direct_tab_tap_params(
                     fsm, resolve.get("resolved_to") or to_raw
@@ -553,7 +961,10 @@ def _fsm_navigate(
         nav_attempt["hops_remaining"] = 0 if arrived else max(0, planned_hops - 1)
         raw: dict[str, Any] = {"nav_attempt": nav_attempt}
         summary = f"{plan_msg}；{verb}"
-        if not arrived and planned_hops > 1:
+        recover_hint = str(nav_attempt.get("recover_hint") or "")
+        if recover_hint:
+            raw["correction_hint"] = recover_hint
+        elif not arrived and planned_hops > 1:
             progress = (
                 f"【导航进行中】本步为路线图第 1/{planned_hops} 步，未到目标「{to_raw}」；"
                 f"请再次 fsm_navigate（当前为 Tab 根时可直点目标 Tab）。"
@@ -605,7 +1016,7 @@ def _check_run_env(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
         cap.id == "get_otp"
         for cap in catalog_reg.filter_capabilities(
             flags or {"internal": True},
-            kinds=["prep", "recovery"],
+            kinds=["prep", "generic", "recovery"],
             platform=platform,
         )
     )

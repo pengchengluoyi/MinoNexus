@@ -49,6 +49,7 @@ class PackPatchBody(BaseModel):
     display_name: Optional[str] = None
     description: Optional[str] = None
     payload: Optional[dict[str, Any]] = None
+    needs_vlm: Optional[bool] = None
 
 
 def _status_patch(body: PackPatchBody) -> dict[str, Any]:
@@ -140,6 +141,7 @@ def _pack_row_from_entry(row) -> dict[str, Any]:
         },
         "when": str(payload.get("when") or ""),
         "summary": desc0 or str(payload.get("when") or "")[:120],
+        "needs_vlm": bool(payload.get("needs_vlm")),
         "payload": payload,
     }
 

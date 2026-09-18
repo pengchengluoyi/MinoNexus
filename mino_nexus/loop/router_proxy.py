@@ -57,9 +57,13 @@ LOCAL_CAPS = frozenset({
     "wait_screen_ready",
     "relogin",
     "lease_account",
+    "get_otp",
     "check_run_env",
     "signal_nav_calib_step",
     "fsm_navigate",  # NavFSM 最短路在 Nexus 算，不经 Scout（local_executors._fsm_navigate）
+    "accept_legal_consent",
+    "dismiss_ime",
+    "request_sms_code",
 })
 
 
@@ -153,12 +157,21 @@ class RouterProxy:
         t0 = time.time()
 
         if is_local_cap(event.capability_id):
+            ctx = _ignored.get("ctx")
+            if ctx is not None:
+                from mino_nexus.loop.local_executors import dispatch_local
+
+                return dispatch_local(
+                    event,
+                    ctx=ctx,
+                    router=self,
+                    target_package=self.target_package,
+                )
             return _fail(
                 event, started, t0,
-                f"cap={event.capability_id} 应由 Nexus 本地 executor 处理，不该走 RouterProxy"
-                "（CLAUDE.md §2.3；local_executors 尚未搬迁）",
-                executor_used="router_proxy",
-                local_reason="local_cap_misrouted",
+                f"cap={event.capability_id} 为 Nexus 本地能力，需带 ctx 调用 dispatch（agent_loop 已路由）。",
+                executor_used="internal",
+                local_reason="local_cap_missing_ctx",
             )
 
         node, why = get_registry().resolve(self.sn)
@@ -172,12 +185,23 @@ class RouterProxy:
             reason = "no_impl_for_device" if "无可用实现" in msg else "cap_not_in_catalog"
             return _fail(event, started, t0, msg, executor_used="router_proxy", local_reason=reason)
 
+        from mino_nexus.catalog.tool_schema import fill_target_package
+
+        params = fill_target_package(
+            event.params,
+            cap_id=event.capability_id,
+            target_package=self.target_package,
+            low_level=(impl or {}).get("low_level"),
+        )
+        if params.get("package") and not str((event.params or {}).get("package") or "").strip():
+            event.params = params
+
         req = P.Execute(
             run_id=run_id or self.run_id,
             step_idx=step_idx if step_idx >= 0 else event.seq,
             sn=self.sn,
             capability_id=event.capability_id,
-            params=dict(event.params or {}),
+            params=params,
             executor_order=order,
             low_level=dict((impl or {}).get("low_level") or {}),
             selected_impl=dict(impl or {}),

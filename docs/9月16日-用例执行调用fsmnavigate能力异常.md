@@ -120,6 +120,124 @@
 
 不在 nav 代码里写被测 App 文案。验收：有骨骼的 Tab 根态 `localized.chosen` 非空；详情栈仍 BACK，但 assist 能报出 `page.sk*`。
 
+### 0.8 复盘：`cr-5ecb8549ce72::case-c516fa0a` —— localize 已经准了，路线仍必然无路（2026-09-17）
+
+**localize 不再是瓶颈**（`session_events` 实测，4 turn 全 `result=pass`、`degraded=false`）：
+
+| turn | `localized.chosen` | confidence / band | 模型这一步做了什么 |
+|------|--------------------|-------------------|--------------------|
+| 1 | `page.sk3f5a31a92f9fs5` | 0.714 / explore（ambiguous） | 模型自己 `press_key` |
+| 2 | `page.sk3f5a31a92f9fs4` | 0.962 / high | `fsm_navigate(→我的)` → **`step_pick=recover_press_back`** |
+| 3 | `page.skd568c2708674s0` | 0.952 / high | 模型 `tap_element(我的)`，成功 |
+| 4 | `page.sk9f40e317be03` | 0.823 / high | `assert-vision` pass |
+
+整案 pass，但 turn 1–2 白烧。turn 2 的 `nav/attempt`：`resolved_from=page.sk3f5a31a92f9fs4`、
+**`resolved_to=page.tab_我的`**、`plan_ok=false`、`plan_error=…两页分属不同连通分量`。
+
+**根因（三条，都不在 localize 上）**
+
+| # | 根因 | 证据 | 位置 |
+|---|------|------|------|
+| 1 | **跑批那份图里同时有两代节点，且互不连通。** published `v1`（`fsm_id=4`，`synthesis_mode=tab_bar_layered`）只有 5 个 legacy `page.tab_*` + 5 条 tab 边；draft（`fsm_id=6`）只有 5 个 `page.sk*` + 14 条 atlas 边。`overlay_atlas_for_runtime` 把 draft **叠加**上去而不删旧节点 → 运行时 10 states / 19 edges，**两个连通分量**。且 `meta.tab_bar.labels` 仍是 `page.tab_我的→"我的"`，`resolve_state_fuzzy` 走 `legacy_ref` 0.95 直接命中旧节点 → `shortest_nav_path` 恒空 | `load_fsm_doc(use_live=False)` 返回 `source=published+atlas`；`resolve_state_fuzzy(doc,"我的")` → `page.tab_我的`，`method=legacy_ref` | `nav_route.overlay_atlas_for_runtime`、`nav_route.resolve_state_ref`（`tab_bar.labels` / `entries` 子串两条分支都会命中） |
+| 2 | **`nav_fsm_store` 落库时把 state 的 `meta` 整块丢掉。** `save()` 只写 `state_id/kind/identify/guards/wiki_ref/entry/role`，`_state_public()` 也不返回 `meta`；`nav_fsm_states` 表根本没有 meta 列。于是 `display_name` / `aliases` / `page_role` / `tab` / `visit_count` 在发布那一刻全部消失 —— §0.1 的 `enrich_state_aliases_from_nav_edges`（`nav_candidate_compiler` 第 1290 行刚写进 meta）紧接着被 `save_draft` 抹掉 | 运行时 `_state_labels(page.sk9f40e317be03)` 只剩 `['sk9f40e317be03']`；把 legacy 节点删掉后 `resolve_state_fuzzy("我的")` → `method=no_match`。补一个 `display_name="我的"` 后同一份图立刻 `ok=true`、2 hop | `nav_fsm_store.save` / `_state_public`、`models/nav_fsm.py` |
+| 3 | **`page.sk*` id 不稳定，而短 id 参与模糊匹配。** live 重建出的是 `page.skd568c2708674` / `page.sk9f40e317be03s18`，已发布的是 `page.skd568c2708674s0` / `page.sk9f40e317be03` —— 同一屏两套 id。`_state_labels` 又把 `sid.replace("page.","")` 当可匹配标签，`_similarity("sk3f5a31a92f9fs4","sk3f5a31a92f9fs0")=0.94`，且 `looks_like_id=True` 会**跳过** `role=="from"` 的屏态印证 → 一个**不存在**的 `page.sk*` 被静默解析成另一屏（实测 live 图上 `page.sk3f5a31a92f9fs4` → `page.sk3f5a31a92f9fs0`，`name_score=0.81`） | 同上脚本 | `nav_state_resolve._state_labels` / `resolve_state_fuzzy` |
+
+**为什么表现成「只会 BACK」**：`_skip_tab_fallback` 只在 **plan 失败** 分支里被问到，而它守的是**唯一的兜底策略**——`direct_tab_tap_params` 直点目标页展示名（默认这个名字就在底栏上）。底栏槽位 < 2 就认为直点必败 → `press_key BACK`。因为根因 1+2 让 plan **100% 失败**，兜底成了唯一路径，`fsm_navigate` 退化成 BACK 机。附带：`is_tab_shell_state` 读的 `tab_bar.entries/labels` 在运行时指向 legacy id、在 live 里是空的，所以 `pick_fsm_first_step` 的 `tab_shell_terminal` / `deep_page_direct_tab` 两条捷径同样永不触发。底栏本身不是导航前提，只是这条兜底的前提。
+
+**已落地（2026-09-17，P0 四条按依赖顺序）**
+
+| # | 改动 | 文件 |
+|---|------|------|
+| 1 | `nav_fsm_states` 加 `meta` 列（additive ALTER），`save` / `_state_public` 双向带上 `meta` —— 不做这条，任何命名治理在跑批路径上都是空转 | `models/nav_fsm.py`、`core/migration.py`、`nav_fsm_store.save` / `_state_public` |
+| 2 | 运行时只认一代节点：`prune_superseded_tab_states` 剔除 legacy `page.tab_*` 节点与其边，并清掉 `tab_bar.entries/labels` / `recover.default_*` 里指向已删节点的引用；`_adopt_atlas_tab_bar` 把 `home/launch` 换到骨骼那一代。合成侧同样剔除，否则每次重发都会把旧节点带回来 | `nav_route.prune_superseded_tab_states` / `overlay_atlas_for_runtime`、`nav_candidate_compiler.merge_synthesized_doc` |
+| 2b | `resolve_state_ref` 删掉 `tab_bar.entries` 的 **id 子串**分支（`"我的" in "page.tab_我的"` 等于给旧节点开后门）；并改成**分层扫**：id 后缀 → `display_name` → 别名 → identify。别名是采集噪声池（一页常十几条），与展示名同层按 states 顺序先到先得会让「我的发布」被另一页的同名别名截走 | `nav_route.resolve_state_ref` |
+| 3 | `_state_labels` 不再把裸 `sk*` 短 id 当标签；`resolve_state_fuzzy` 对 id 形态的 ref（`page.*` / `tab_*` / 裸 `sk<hex>`）只允许**精确存在**，否则 `unknown_state_id`，由 `localized.chosen` 兜 | `nav_state_resolve.looks_like_state_id` / `_state_labels` / `resolve_state_fuzzy` |
+| 4 | `recover_press_back` 不再伪造 `planned_hops`（原来 `max(2, n+1)` 会让摘要报「本步为路线图第 1/2 步」，而根本没有路线图）；`correction_hint` 换成 `plan_error` 原文 + `tab_root_entry_hint`（「退到并列入口「X」后 N 步可到目标」） | `local_executors._fsm_navigate`、`nav_route.tab_root_entry_hint` |
+
+**数据侧**：hierarchy 采集不用清（`nav/capture/*` 与骨骼节点都是好的）。只把 published `v1` 从 Atlas 重发了一次
+（`scripts/republish_nav_fsm_from_atlas.py <app_id> --write`，走 `promote_prepared`；库已备份 `mino.db.bak-fsm-tab-legacy-*`）：
+
+| | 重发前 | 重发后 |
+|---|---|---|
+| `v1` | 5 states / 5 edges，**全是** `page.tab_*`，带名 0 个 | 8 states / 22 edges，**无** legacy，带名 8 个 |
+| 跑批实际看到 | `published+atlas` 叠出 10 states，两个连通分量 | `published` 单一份，8 states |
+| 潮玩详情 → 我的 | `plan_ok=false`（不连通） | 8 个页面**全部**有路径（1–2 hop） |
+
+**验收（实测）**：`resolve_state_fuzzy("我的")` → `page.sk9f40e317be03s18`；失效 id `page.sk3f5a31a92f9fs4`
+→ `unknown_state_id`（不再静默落到 `…fs0`），带 `localized.chosen` 时仍能规划出 2 hop。
+回归见 `tests/test_fsm_nav_semantics.py`（新增 4 例）与 `tests/test_nav_localize.py`（叠图契约改为「只留骨骼那一代」）。
+
+**仍开放**
+
+1. **展示名还是噪声**：`穿搭信号塔` / `内容均由AI生成` / `用户信息区` —— 目前靠别名里的「我的」「灵感」才解析得动。§2 名称治理未做。
+2. **没有并列入口标记**：Atlas 出来的 8 个节点 `entry` 全为 0、`tab_bar.entries/labels` 为空，于是 `is_tab_shell_state` 恒 False ——
+   `pick_fsm_first_step` 的 `tab_shell_terminal` / `deep_page_direct_tab` 两条捷径和 `tab_root_entry_hint` 在真实数据上仍不触发（单测里能触发）。需要 Atlas 侧按底栏槽位把 Tab 根态标出来。
+3. **`page.sk*` id 仍会随重新聚类换代**（`page.skd568c2708674s0` ↔ `page.skd568c2708674`）。第 3 条只是让它**报错而不是错配**；要根治得给骨骼 id 一个稳定键。
+4. **`run_all.py` 按脚本跑，52 个 pytest 风格文件里的断言从不执行**（本次给 `test_fsm_nav_semantics.py` 补了 `main()`，其余未动）。
+
+### 0.9 复盘：`cr-7566d0600a97::case-99ab0675` —— 目标口语被入口按钮别名吞回当前页（2026-09-17）
+
+图已经连通（§0.8 重发后），localize 也认出了 `page.skd568c2708674`。6 次 `fsm_navigate(灵感/穿搭信号塔 → 开始造物拍照页)` 全部 `plan_ok=true`、**hops=0**、`step_pick=same_page_click_label`，再去点「开始造物拍照页」锚点落空。
+
+| 现象 | 真因 |
+|------|------|
+| `resolved_from == resolved_to == page.skd568c2708674` | 入口页别名里有按钮文案「开始造物」；`_norm` 全局删「页」后「开始造物拍照页」⊃「开始造物」，平坦 0.92 包含分；拍照页 `page.sk3f5a31a92f9fs0` 同分但排在后面 |
+| 图上其实有 `skd568… → sk3f5…fs0`（`selector_text=开始造物`） | 规划在 `plan_route` 前就当成「已在目标屏」 |
+| 同页去 tap 整句口语 | `click_label_from_nav_ref` 把 ≤16 字的「…页」当控件文案 |
+
+**已落地**（不写被测 App 文案）：
+
+| 改动 | 文件 |
+|------|------|
+| `_norm` 只剥尾缀「页面/页」；包含分按长短比折价；剩余字被同页其它标签覆盖则加分 | `nav_state_resolve._norm` / `_similarity` / `_state_name_score` |
+| 多页共享同一别名不再 `legacy_ref` 先到先得；同分时优先 leftover 覆盖，其次精确边 `to`（`name≥0.9`），再排除当前屏 | `nav_route.resolve_state_ref`、`resolve_state_fuzzy` |
+| from/to 口语不同却解析到同一节点 → 排除当前屏再解析一次 | `plan_route_resolved._disambiguate_to_away_from_here` |
+| 「…页/页面」不当可点文案 | `click_label_from_nav_ref` |
+
+验收（本机 published 图）：`开始造物拍照页` → `page.sk3f5a31a92f9fs0`，`灵感 → 开始造物拍照页` 1 hop 走 `…_to_sk3f5a31a92f9fs0`。单测见 `test_nav_state_resolve.py` / `test_fsm_nav_semantics.py`。
+
+### 0.10 复盘：`cr-d6d67b22eef9::case-c516fa0a` —— 去 Tab 页却点了「白色拍照按钮」（2026-09-17）
+
+整案最后靠模型自己 `tap_element(我的)` pass，但 `fsm_navigate` 两轮都走歪了：
+
+| turn | 当前 | 规划 | 本步实际 |
+|------|------|------|----------|
+| 1 | `page.sk3f5a31a92f9fs2` 商品展示区 | 2 hop 全是 BACK 链 | `press_key BACK`（图上说回到 fs5，真机落到了拍照页） |
+| 2 | `page.sk3f5a31a92f9fs0` 拍照页 | `fs0 → fs1(白色拍照按钮) → BACK 到我的` | **去点白色拍照按钮**，锚点落空 declined |
+
+图上其实有正确的 Tab 边 `skd568… → sk9f40…`（`target_page=我的`），底栏 `slots` 也有「灵感/我的」。但：
+
+1. `tab_bar.entries/labels` 在剔 legacy 时被清空，`is_tab_shell_state` 恒 False，`pick_fsm_first_step` 的 Tab 捷径永不触发。
+2. `tab_label_for_state` 对每个 `page.sk*` 都返回 `display_name`，于是「商品展示区」「确保物品完整入镜」都被当成 Tab 文案。
+3. 最短路把「去我的」编成内容区边（拍照按钮、列表项）。规划成功就不走「无底栏则 BACK」的兜底。
+
+**已落地**：用 `tab_bar.slots` 精确对齐别名来认 Tab 根；底栏**可见**时去 Tab 页本步直点槽位；**不可见**且本步将要点的不是该 Tab 文案时，改系统返回，禁止跟内容边。
+
+### 0.11 复盘：`cr-4aedc34425b3::case-99ab0675` —— 拍完之后空等 26 轮（2026-09-17）
+
+本轮 **没有调用 `fsm_navigate`**。步骤 1 用 `tap_element(开始造物)` 进了拍照页并 `assert_visual` 通过；步骤 2 点了白色快门后，模型从 turn 5 到 turn 30 **只 `wait_ms`**，直到「超过 30 步仍未完成」。
+
+| 现象 | 真因 |
+|------|------|
+| `observe/hierarchy` `ok=true`、`text_len=0` | Flutter/无障碍不吐 `text`；节点还在，不是通道关掉 |
+| localize `fs5` 置信 **2%**、`band=recover` | 结构分太弱仍选出一个页名；assist 写成「当前屏：管理」+「勿乱点」 |
+| 同案历史 pass（`cr-8b961f17bb71`）也在快门后 wait | 生成需要等，但那次 8 次 wait 后 `signal_done` → 校验；这次 26 次从不收工 |
+| `wait_ms` 不进 `ProgressGate` | `_FUSE_CAPS` 不含等待，同屏空等不计里程碑、不告警、不熔断 |
+
+同案更早的 pass 里，生成结果页也曾被 localize 成 `fs5`（展示名「管理」），但置信够高、assist 没把模型冻住，最后 `assert_visual` 看到了达成信号。
+
+**已落地**（不写被测 App 文案）：
+
+| 改动 | 文件 |
+|------|------|
+| `wait_ms` 计入里程碑（do=10）；同屏空等不走困局/无进展，以免把合法加载等死 | `loop/action_fuse.py` |
+| 第 4 次 wait 起注入「达成信号已在屏上则 signal_done」；第 10 次熔断并禁止继续空等 | 同上 |
+| recover 档 assist 不再「勿乱点 / 先问人」，页名改成「最像…仅供参考」 | `nav_compiler._head` |
+| recover 档业务流一律「参考意见」，不催「进入下一屏」 | `nav_flow_blocks.build_flow_context` |
+| agent-decide **v14** 同步改系统提示里那句「勿乱点」 | `job_upgrades` / bootstrap |
+
+验收：`tests/test_action_fuse.py`（10 次 wait 才里程碑）、`tests/test_nav_compiler.py`（低置信无「勿乱点」）。**需重启 Nexus** 加载代码并跑 bootstrap 升 v14。
+
 2. **`target_tab` 表述误导模型与编译器**：历史字段暗示「底栏选中态 / Tab 文案」，而 Atlas 边大量是 **内容区入口、返回、列表项**（详情→我的 甚至当前屏无底栏）。统一改为 **`target_page`**：表示 **跳转后或所点控件关联的「目标逻辑页」**（展示名 / 别名 / `page.sk*`），与 Tab selected 解耦。
 
 3. **Hierarchy degraded 时骨骼 localize 可能虚高**（例：免责声明当页名仍 100%）。此时 **不能**单独信 assist；每轮 **agent-decide** 应输出 **`vlm_hierarchy`**（与 `accessibility_json` 同形），供 **localize 补强、tap 锚点、fsm 边校验**。

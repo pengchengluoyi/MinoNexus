@@ -15,6 +15,7 @@ AGENT_DECIDE_V10_MARKER = "prompt_version >= 10（vlm_hierarchy）"
 AGENT_DECIDE_V11_MARKER = "prompt_version >= 11（screen_layout+vlm_hierarchy 每轮必填）"
 AGENT_DECIDE_V12_MARKER = "prompt_version >= 12（tool 参数承载 screen_layout）"
 AGENT_DECIDE_V13_MARKER = "prompt_version >= 13 (drop forced visual JSON)"
+AGENT_DECIDE_V14_MARKER = "prompt_version >= 14 (low-conf nav: don't freeze on wait_ms)"
 DOC_CONTEXT_SLOT = "doc_context"
 ASSERT_VISION_V2_MARKER = "prompt_version >= 2（screen_layout 布局线框）"
 ASSERT_VISION_V3_MARKER = "prompt_version >= 3 (drop forced visual JSON)"
@@ -308,7 +309,7 @@ def _patch_agent_decide_v7(text: str) -> str:
     nav_block = """### 导航 assist（出现「==== 导航 assist」块时必守）
 
 - 正文由导航图编译，比凭截图猜路更可靠；**有块就按块里写的做**。
-- **【导航】**：当前在哪一屏（中文名 + id + 置信度）。置信低时先 recover / 问人，勿乱点。
+- **【导航】**：当前在哪一屏（中文名 + id + 置信度）。置信低时页名仅供参考，以截图和用例步骤为准；达成信号已在屏上则 signal_done，禁止连续空等 wait_ms。
 - **【路线】** 三种情况要分清：
   - 「下一步：…」→ 按写的点击去下一屏（仅用于赶路，与用例步骤冲突时以用例为准）。
   - 「已在用例导航目标屏」→ 不必再切 Tab，按用例步骤继续。
@@ -784,6 +785,64 @@ def upgrade_agent_decide_to_v13() -> int:
         **_blocks_snapshot(row),
     })
     merged["prompt_version"] = 13
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
+
+
+_AGENT_DECIDE_V14_OLD = "置信低时先 recover / 问人，勿乱点。"
+_AGENT_DECIDE_V14_NEW = (
+    "置信低时页名仅供参考，以截图和用例步骤为准；"
+    "达成信号已在屏上则 signal_done，禁止连续空等 wait_ms。"
+)
+
+
+def _patch_agent_decide_v14(text: str) -> str:
+    out = str(text or "")
+    if _AGENT_DECIDE_V14_OLD in out:
+        out = out.replace(_AGENT_DECIDE_V14_OLD, _AGENT_DECIDE_V14_NEW, 1)
+    if AGENT_DECIDE_V14_MARKER not in out:
+        out = out.rstrip() + f"\n\n<!-- {AGENT_DECIDE_V14_MARKER} -->\n"
+    return out
+
+
+def upgrade_agent_decide_to_v14() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 14:
+        return 0
+    if int(row.get("prompt_version") or 1) < 13:
+        upgrade_agent_decide_to_v13()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_agent_decide_v14(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 13),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v13 before low-conf nav: don't freeze on wait_ms",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 14
     _set_revisions(merged, revisions)
     _validate_job(merged)
     _smoke_render(merged)

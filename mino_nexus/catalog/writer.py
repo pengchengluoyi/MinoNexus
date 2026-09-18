@@ -122,6 +122,10 @@ def patch(kind: str, entry_id: str, body: dict[str, Any]) -> dict[str, Any]:
             fields["visible_to_json"] = list((body.get("scope") or {}).get("visible_to") or [])
         if isinstance(body.get("payload"), dict):
             fields["payload_json"] = _clean_payload(dict(body["payload"]))
+        payload = dict(fields.get("payload_json") or {})
+        if body.get("needs_vlm") is not None:
+            payload["needs_vlm"] = bool(body.get("needs_vlm"))
+        fields["payload_json"] = _clean_payload(payload)
         _validate(target_ck, fields)
         for key, val in fields.items():
             setattr(row, key, val)

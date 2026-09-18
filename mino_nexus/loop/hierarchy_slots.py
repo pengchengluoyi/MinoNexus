@@ -28,6 +28,24 @@ _MAX_TEXT_NODES = 220
 _MAX_TEXT_CHARS = 6000
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"0", "false", "no", "off"})
+
+
+def node_flag(node: dict[str, Any] | None, key: str) -> bool:
+    """checkable / checked / focused：协议可能给 bool 或 0/1 字符串。"""
+    if not isinstance(node, dict):
+        return False
+    val = node.get(key)
+    if isinstance(val, bool):
+        return val
+    if val is None:
+        return False
+    text = str(val).strip().lower()
+    if text in _TRUE:
+        return True
+    if text in _FALSE:
+        return False
+    return bool(val)
 
 
 def safe_int(value: Any, default: int = 0) -> int:
@@ -245,7 +263,10 @@ def normalize_nodes(raw: Any) -> list[dict[str, Any]]:
             "text": str(item.get("text") or ""),
             "content_desc": str(item.get("content_desc") or ""),
             "class": str(item.get("class") or item.get("cls") or ""),
-            "clickable": bool(item.get("clickable")),
+            "clickable": node_flag(item, "clickable"),
+            "checkable": node_flag(item, "checkable"),
+            "checked": node_flag(item, "checked"),
+            "focused": node_flag(item, "focused"),
             "bounds": int_list(item.get("bounds"), 4),
             "center": int_list(item.get("center"), 2),
         }
@@ -292,6 +313,12 @@ def flatten(nodes: list[dict[str, Any]]) -> str:
             bits.append(f"cls={cls}")
         if node.get("clickable"):
             bits.append("clickable")
+        if node.get("checkable"):
+            bits.append("checkable")
+        if node.get("checked"):
+            bits.append("checked")
+        if node.get("focused"):
+            bits.append("focused")
         lines.append(" ".join(bits))
         if len(lines) >= _MAX_TEXT_NODES:
             lines.append(f"...(+{max(0, len(nodes) - len(lines))} 个节点未列出)")

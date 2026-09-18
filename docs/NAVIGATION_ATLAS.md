@@ -206,7 +206,7 @@ ProgressGate → 无进展 / 熔断空转（与 GuardGate 联动）
 - `0.45 – 0.75`：探索（仅 recover + 允许动作集内探索 cap）
 - `< 0.45`：恢复边优先（`go_home` / `close_dialog` / `press_back`）
 
-**跑批必须能读到骨骼。** `NavRuntime` / `fsm_navigate` 走 `load_fsm_doc(use_live=False)`：已发布 `v1` 常常只有 `page.tab_*` + 底栏文案；能辨页的 `page.sk*` 与 `state_wireframes` 还停在 `draft`。运行时把 draft Atlas **叠进** published 图（`overlay_atlas_for_runtime`），localize 才能选出当前页。底栏 Tab 文案会在每一屏共现，不能单独当选中态。详见 §17.4。
+**跑批必须能读到骨骼。** `NavRuntime` / `fsm_navigate` 走 `load_fsm_doc(use_live=False)`：已发布 `v1` 常常只有 `page.tab_*` + 底栏文案；能辨页的 `page.sk*` 与 `state_wireframes` 还停在 `draft`。运行时把 draft Atlas **叠进** published 图（`overlay_atlas_for_runtime`），localize 才能选出当前页；叠完只留骨骼那一代节点，上一代 `page.tab_*` 连边一起删。底栏 Tab 文案会在每一屏共现，不能单独当选中态。详见 §17.4。
 
 
 
@@ -1096,9 +1096,12 @@ seed 草稿可含占位符；**对 dev DB 执行 seed 前**必须通过 `validat
 `load_fsm_doc(..., use_live=False)`（`nav_runtime.for_run` / `fsm_navigate`）：
 
 1. 读已发布 `v1`；若同时有 `draft` 且 draft 含 `page.sk*` 或 `state_wireframes`，则 `overlay_atlas_for_runtime` 把骨骼页、wireframe、nav 边叠上去（`v1` 已是骨骼图则不再叠）。
-2. 状态栏 / 通知头 landmark（`is_status_bar_chrome_text`）不算 required，避免整页 `required_miss`。
-3. `hierarchy_weak` 看**可见文案节点数**，不看 flatten 字符串长度（id/cls 会把空屏撑得很长）。
-4. `fsm_navigate` 无路径时：当前 hierarchy **看不见底栏**（槽位 < 2）→ 本步 `press_key BACK`；底栏可见 → 直点目标 Tab。与 localize 是否已认出页面无关——详情栈点不到底栏。
+2. **叠完只留一代节点。** 图上出现 `page.sk*` 后，上一代 `page.tab_*` 由 `prune_superseded_tab_states` 连边一起删掉，`tab_bar.entries/labels` 与 `recover.default_*` 里指向已删节点的引用同步清掉。两代节点之间没有任何边，留着的后果不是多几个孤岛，而是 `resolve_state_ref` 优先命中旧节点（`tab_bar.labels` 还挂着它）、`shortest_nav_path` 恒空、`fsm_navigate` 每轮只会 BACK（复盘见 [9月16日-用例执行调用fsmnavigate能力异常.md](9月16日-用例执行调用fsmnavigate能力异常.md) §0.8）。合成侧 `merge_synthesized_doc` 同样剔除，否则每次重发都把旧节点带回来。
+3. **屏态名要能落库。** `nav_fsm_states.meta`（`display_name` / `aliases` / `page_role`）必须随 `save` 落盘 —— 少这一列，`use_live=False` 读到的骨骼节点是无名节点，口语目标一个也解析不出来。
+4. **id 形态的 ref 只认精确存在。** `page.*` / `tab_*` / 裸 `sk<hex>` 解析不到就报 `unknown_state_id`，交给 `localized.chosen` 兜。骨骼 id 会随重新聚类换代且彼此字面相似度极高（`sk3f5a31a92f9fs4` vs `…fs0` = 0.94），模糊匹配会把失效 id 静默解析成隔壁那一屏，规划照样"成功"、走到的是别的页。
+5. 状态栏 / 通知头 landmark（`is_status_bar_chrome_text`）不算 required，避免整页 `required_miss`。
+6. `hierarchy_weak` 看**可见文案节点数**，不看 flatten 字符串长度（id/cls 会把空屏撑得很长）。
+7. `fsm_navigate` 无路径时：当前 hierarchy **看不见底栏**（槽位 < 2）→ 本步 `press_key BACK`；底栏可见 → 直点目标 Tab。与 localize 是否已认出页面无关——详情栈点不到底栏。这条是**兜底**，不是导航前提；此时不得伪造 `planned_hops`，摘要会像"导航已完成"。
 
 不在代码里写被测 App 的 Tab 文案或页名白名单。
 
@@ -1114,7 +1117,7 @@ seed 草稿可含占位符；**对 dev DB 执行 seed 前**必须通过 `validat
 | §0.2.3 / §10.5 读写与门禁 | `services/nav_fsm_store.py`（`load_with_reason` / `save` / `validate_nav_fsm`） |
 | §10.2 API | `routers/rNavFsm.py`（前缀 `/nav-fsm`，本仓 router 不带 `/api`） |
 | §2 localize | `services/nav_localize.py`（Jaccard / 文案折价 / 噪声 landmark） |
-| §17.4 跑批叠图 | `services/nav_route.load_fsm_doc` / `overlay_atlas_for_runtime`；无底栏 BACK：`loop/local_executors._skip_tab_fallback` |
+| §17.4 跑批叠图 | `services/nav_route.load_fsm_doc` / `overlay_atlas_for_runtime` / `prune_superseded_tab_states`；无底栏 BACK：`loop/local_executors._skip_tab_fallback`；id 形态解析：`services/nav_state_resolve.looks_like_state_id` |
 | §3 / §10.4 状态与选边 | `services/nav_fsm.py` |
 | §10.1 effect_assert | `services/nav_fsm.evaluate_effect_assert` |
 | §5 / §6 RouteAssist + Wiki 分档 | `services/nav_compiler.py` |

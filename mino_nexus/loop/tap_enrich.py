@@ -226,4 +226,7 @@ def enrich_tap_params(
                 break
 
     _promote_fallback_xy(out, screen_w=sw, screen_h=sh)
+    from mino_nexus.loop.ui_consent import retarget_tap_to_consent_control
+
+    out = retarget_tap_to_consent_control(out, pool)
     return out

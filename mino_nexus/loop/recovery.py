@@ -324,8 +324,24 @@ def apply_rule(
         return out
 
     max_attempts = max(1, int(rule.max_attempts or 1))
+    verify = rule.verify
     for attempt in range(1, max_attempts + 1):
         out.attempts = attempt
+        from mino_nexus.loop.system_dialog_recovery import (
+            is_system_permission_rule,
+            try_unified_system_permission_recovery,
+        )
+
+        if is_system_permission_rule(rule.id) and try_unified_system_permission_recovery(
+            match,
+            ctx=ctx,
+            router=router,
+            target_package=target_package,
+            agent_turn=agent_turn,
+            rule=rule,
+            out=out,
+        ):
+            return out
         for idx, action in enumerate(rule.actions, 1):
             banned = _forbidden(rule, action)
             if banned:

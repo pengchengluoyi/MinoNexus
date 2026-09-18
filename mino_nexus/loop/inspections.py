@@ -86,6 +86,9 @@ def refresh_session_block(
     )
     row = reconcile_inspect_session(row, required=req_enum)
     slot_sink["session_block"] = format_session_block(row, required=req_enum)
+    from mino_nexus.loop.session_persist import stamp_session_observation
+
+    stamp_session_observation(ctx, row)
     layout = row.get("screen_layout") if isinstance(row.get("screen_layout"), dict) else {}
     if nav is not None and layout:
         nav.attach_turn_layout(int(turn_id or 0), layout)

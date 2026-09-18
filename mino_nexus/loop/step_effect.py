@@ -153,6 +153,8 @@ def should_auto_enter_check(
     kws = [str(k).strip() for k in (keywords or []) if str(k).strip()]
     if _expects_full_page_navigation(expected) and kws and all(len(k) <= 4 for k in kws):
         return int(hit_streak or 0) >= 2
+    if probe_hit and kws and all(len(str(k)) <= 4 for k in kws):
+        return int(hit_streak or 0) >= 2
     return True
 
 

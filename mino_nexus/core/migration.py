@@ -48,6 +48,7 @@ def run_auto_migration() -> None:
         _ensure_column("nav_fsm", "updated_at", "updated_at INTEGER DEFAULT 0")
         _ensure_column("nav_fsm_states", "entry", "entry INTEGER DEFAULT 0")
         _ensure_column("nav_fsm_states", "role", "role TEXT DEFAULT ''")
+        _ensure_column("nav_fsm_states", "meta", "meta JSON")
         _ensure_column("doc_sources", "source_kind", "source_kind TEXT DEFAULT 'upload'")
         _ensure_column("doc_sources", "source_url", "source_url TEXT DEFAULT ''")
         _ensure_column("doc_sources", "feishu_bot_id", "feishu_bot_id TEXT DEFAULT ''")

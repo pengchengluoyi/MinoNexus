@@ -58,6 +58,26 @@ def _nav_edges_only(edges: list[Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _dedupe_doc_edges(doc: dict[str, Any]) -> None:
+    """写入前去重 edge id。遗留 calibration JSON 常把同一条 trace 边写两遍。"""
+    raw = doc.get("edges")
+    if not isinstance(raw, list):
+        return
+    seen: set[str] = set()
+    out: list[Any] = []
+    for ed in raw:
+        if not isinstance(ed, dict):
+            out.append(ed)
+            continue
+        eid = str(ed.get("id") or ed.get("edge_id") or "").strip()
+        if eid:
+            if eid in seen:
+                continue
+            seen.add(eid)
+        out.append(ed)
+    doc["edges"] = out
+
+
 def validate_doc(doc: dict[str, Any], *, allow_calibrate: bool = False) -> None:
     """写入前的结构校验：必填字段 + 边引用的 state 必须存在（§0.2.3「校验」行）。"""
     if not isinstance(doc, dict):
@@ -117,6 +137,9 @@ def _state_public(row: NavFsmState) -> dict[str, Any]:
     role = str(getattr(row, "role", "") or "").strip()
     if role:
         out["role"] = role
+    meta = getattr(row, "meta", None)
+    if isinstance(meta, dict) and meta:
+        out["meta"] = dict(meta)
     return out
 
 
@@ -318,6 +341,7 @@ def save(
     version = str(doc.get("version") or DEFAULT_VERSION).strip() or DEFAULT_VERSION
     doc["version"] = version
 
+    _dedupe_doc_edges(doc)
     validate_doc(doc, allow_calibrate=allow_calibrate or version == DRAFT_VERSION)
     reason = _scope_reason(doc)
     if reason:
@@ -353,6 +377,7 @@ def save(
                     kind=str(st.get("kind") or "page"),
                     identify=dict(st.get("identify") or {}),
                     guards=dict(st.get("guards") or {}),
+                    meta=dict(st.get("meta") or {}),
                     wiki_ref=str(st.get("wiki_ref") or ""),
                     entry=1 if st.get("entry") else 0,
                     role=str(st.get("role") or ""),

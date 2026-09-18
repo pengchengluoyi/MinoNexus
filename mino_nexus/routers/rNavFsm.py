@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from mino_nexus.core.http_util import ok
 from mino_nexus.routers.deps import current_session
@@ -81,6 +81,17 @@ class FeedbackBody(BaseModel):
 class CandidateReviewBody(BaseModel):
     status: str = "accepted"
     note: str = ""
+
+
+class AtlasFlowGroupRow(BaseModel):
+    flow_block_id: str = ""
+    display_name: str = ""
+    state_ids: list[str] = Field(default_factory=list)
+
+
+class AtlasFlowGroupsBody(BaseModel):
+    project_id: str = ""
+    groups: list[AtlasFlowGroupRow] = Field(default_factory=list)
 
 
 class AtlasManualEdgesBody(BaseModel):
@@ -183,6 +194,21 @@ def delete_nav_fsm(app_id: str, version: str = store.DEFAULT_VERSION, _sess: dic
     return ok({"deleted": store.delete(app_id, version=version)})
 
 
+@router.put("/{app_id}/atlas-flow-groups")
+def put_atlas_flow_groups(app_id: str, body: AtlasFlowGroupsBody, sess: dict = Depends(current_session)):
+    """架构页保存业务流展示分组（meta.atlas_flow_groups）。"""
+    try:
+        row = nav_screen_registry.save_atlas_flow_groups(
+            app_id,
+            [g.model_dump() for g in (body.groups or [])],
+            project_id=body.project_id,
+            updated_by=str(sess.get("username") or sess.get("user_id") or ""),
+        )
+    except store.NavFsmInvalid as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ok(row)
+
+
 @router.put("/{app_id}/atlas-manual-edges")
 def put_atlas_manual_edges(app_id: str, body: AtlasManualEdgesBody, sess: dict = Depends(current_session)):
     """架构页只保存手动跳转，不覆盖正式 NavFSM states/edges。"""
@@ -224,6 +250,11 @@ def patch_state_labels(
     if not sid:
         raise HTTPException(status_code=422, detail="state_id 不能为空")
     doc = store.read_raw(app_id, version=body.version or store.DRAFT_VERSION)
+    if not doc:
+        published = store.read_raw(app_id, version=store.DEFAULT_VERSION)
+        if published:
+            doc = dict(published)
+            doc["version"] = store.DRAFT_VERSION
     if not doc:
         doc = calib.read_draft(app_id)
     if not doc:
@@ -308,11 +339,14 @@ def patch_state_labels(
             }
         )
     doc["states"] = states
-    saved = store.save_draft(
-        app_id,
-        doc,
-        updated_by=str(sess.get("username") or sess.get("user_id") or ""),
-    )
+    try:
+        saved = store.save_draft(
+            app_id,
+            doc,
+            updated_by=str(sess.get("username") or sess.get("user_id") or ""),
+        )
+    except store.NavFsmInvalid as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ok(saved)
 
 
@@ -505,13 +539,16 @@ def get_screen_atlas(
     app_version: str = "",
     nav_view_id: str = "",
     include_pending: bool = False,
-    _sess: dict = Depends(current_session),
+    rebuild: bool = False,
+    sess: dict = Depends(current_session),
 ):
-    """Screen Atlas：证据聚类图（screen.{hash} + 线框），不跑 Tab 合成。"""
-    row = nav_screen_registry.build_atlas(
+    """Screen Atlas：默认读库内快照；rebuild=1 时全量重算并落盘。"""
+    row = nav_screen_registry.fetch_screen_atlas(
         app_id,
         project_id=project_id,
         session_id=str(session_id or "").strip(),
+        rebuild=bool(rebuild),
+        updated_by=str(sess.get("username") or sess.get("user_id") or ""),
     )
     if row.get("doc") and (app_version or nav_view_id):
         from mino_nexus.services.nav_version_views import materialize_fsm_for_runtime, pending_summary

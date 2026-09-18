@@ -140,6 +140,20 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {"package": {"type": "string"}},
     },
+    "clear_app_cache": {
+        "type": "object",
+        "properties": {
+            "package": {"type": "string", "description": "必须是本趟目标应用包名"},
+        },
+        "required": ["package"],
+    },
+    "system_pkg_clear": {
+        "type": "object",
+        "properties": {
+            "package": {"type": "string", "description": "必须是本趟目标应用包名"},
+        },
+        "required": ["package"],
+    },
     "get_foreground_app": {"type": "object", "properties": {}},
     "human_input_text": {
         "type": "object",
@@ -169,6 +183,26 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "get_otp": {
+        "type": "object",
+        "properties": {},
+        "description": "从已租账号或项目环境取验证码，不点设备",
+    },
+    "accept_legal_consent": {
+        "type": "object",
+        "properties": {},
+        "description": "勾选长文案左侧的小同意框；输入框聚焦时先 BACK",
+    },
+    "request_sms_code": {
+        "type": "object",
+        "properties": {},
+        "description": "手机号已填 11 位后，点输入框同行右侧短文案发送控件（再 get_otp 取码）",
+    },
+    "dismiss_ime": {
+        "type": "object",
+        "properties": {},
+        "description": "有聚焦输入框时 BACK 收起输入法；无聚焦则不操作",
+    },
     "fsm_navigate": {
         "type": "object",
         "properties": {
@@ -192,6 +226,21 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
         "description": "按 NavFSM 路线图规划最短路并执行第一步点击（目标为逻辑页 target_page，非仅底栏 Tab）",
     },
 }
+
+# 这些能力故意不向模型要业务参数（值由 Nexus 从会话/设备注入）。
+INTENTIONALLY_EMPTY_PARAM_CAPS = frozenset({
+    "wait_screen_ready",
+    "get_foreground_app",
+    "check_run_env",
+    "get_otp",
+    "accept_legal_consent",
+    "dismiss_ime",
+    "request_sms_code",
+    "probe_device_state",
+    "read_device_data",
+    "wake_screen",
+    "dismiss_keyguard",
+})
 
 SIGNAL_DONE = "signal_done"
 SIGNAL_GIVE_UP = "signal_give_up"
@@ -335,11 +384,112 @@ def _params_to_schema(rows: Any) -> Optional[dict[str, Any]]:
     return out
 
 
+def _merge_param_schemas(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    base_props = dict(base.get("properties") or {})
+    over_props = dict(overlay.get("properties") or {})
+    props = {**base_props, **over_props}
+    required = list(dict.fromkeys(
+        [str(x) for x in (base.get("required") or []) if str(x)]
+        + [str(x) for x in (overlay.get("required") or []) if str(x)]
+    ))
+    required = [r for r in required if r in props]
+    out: dict[str, Any] = {"type": "object", "properties": props}
+    desc = overlay.get("description") or base.get("description")
+    if desc:
+        out["description"] = desc
+    if required:
+        out["required"] = required
+    return out
+
+
 def params_schema_for(cap_id: str, catalog_params: Any = None) -> dict[str, Any]:
+    """目录 params 与 PARAM_DEFAULTS 合并：目录为空时用默认，避免无参工具进模型。"""
+    default = dict(PARAM_DEFAULTS.get(str(cap_id or ""), {"type": "object", "properties": {}}))
     from_catalog = _params_to_schema(catalog_params)
-    if from_catalog:
+    if not from_catalog:
+        return default
+    if not (default.get("properties") or {}):
         return from_catalog
-    return dict(PARAM_DEFAULTS.get(str(cap_id or ""), {"type": "object", "properties": {}}))
+    return _merge_param_schemas(default, from_catalog)
+
+
+def schema_to_param_rows(schema: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """OpenAI JSON Schema → catalog payload.params 行。"""
+    if not isinstance(schema, dict):
+        return []
+    props = schema.get("properties") or {}
+    if not isinstance(props, dict):
+        return []
+    required = {str(x) for x in (schema.get("required") or [])}
+    rows: list[dict[str, Any]] = []
+    for name, spec in props.items():
+        key = str(name or "").strip()
+        if not key or key in _TOOL_META_PROPS:
+            continue
+        if not isinstance(spec, dict):
+            spec = {"type": "string"}
+        row: dict[str, Any] = {
+            "name": key,
+            "type": str(spec.get("type") or "string"),
+            "required": key in required,
+        }
+        if spec.get("description"):
+            row["description"] = str(spec["description"])
+        if spec.get("enum"):
+            row["enum"] = list(spec.get("enum") or [])
+        if spec.get("minimum") is not None:
+            row["minimum"] = spec["minimum"]
+        if spec.get("maximum") is not None:
+            row["maximum"] = spec["maximum"]
+        rows.append(row)
+    return rows
+
+
+def cap_specific_param_names(cap_id: str, catalog_params: Any = None) -> list[str]:
+    schema = params_schema_for(cap_id, catalog_params)
+    return [
+        str(k) for k in (schema.get("properties") or {})
+        if str(k) not in _TOOL_META_PROPS
+    ]
+
+
+# Scout low_level 模板 `{package}` 从 EXECUTE.params 取值，不读 device_hint。
+PACKAGE_PARAM_CAPS = frozenset({
+    "launch_app",
+    "close_app",
+    "kill_app",
+    "get_app_version",
+    "clear_app_cache",
+    "system_pkg_clear",
+})
+
+
+def _low_level_needs_package(low_level: Any) -> bool:
+    if isinstance(low_level, dict):
+        blob = json.dumps(low_level, ensure_ascii=False)
+    else:
+        blob = str(low_level or "")
+    return "{package}" in blob
+
+
+def fill_target_package(
+    params: dict[str, Any] | None,
+    *,
+    cap_id: str,
+    target_package: str,
+    low_level: Any = None,
+) -> dict[str, Any]:
+    """派单前补本趟包名。模型漏填时仍能 pm clear / force-stop。"""
+    out = dict(params or {})
+    pkg = str(target_package or "").strip()
+    if not pkg:
+        return out
+    if str(out.get("package") or "").strip():
+        return out
+    cid = str(cap_id or "").strip()
+    if cid in PACKAGE_PARAM_CAPS or _low_level_needs_package(low_level):
+        out["package"] = pkg
+    return out
 
 
 def openai_tool(name: str, description: str, parameters: dict[str, Any]) -> dict[str, Any]:
@@ -363,7 +513,7 @@ def tools_for_menu(menu: list[dict[str, Any]]) -> list[dict[str, Any]]:
         cid = str(row.get("id") or "").strip()
         if not cid or cid in seen or cid in CONTROL_TOOL_NAMES:
             continue
-        if cid in {"release_account", "pick_account", "get_otp", "get_phone"}:
+        if cid in {"release_account", "pick_account", "get_phone"}:
             continue
         seen.add(cid)
         catalog_params = None

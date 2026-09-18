@@ -290,22 +290,53 @@ def compile_otp_prep_hint(
     session_block: str = "",
     hierarchy_text: str = "",
     has_get_otp: bool = False,
+    has_hitl: bool = False,
 ) -> str:
-    """前置：已租号且处于验证码页时，引导 get_otp 而非盲填固定码。"""
+    """已租号且处于验证码页时，引导 get_otp 而非盲填固定码。"""
     brief = str(accounts_brief or "").strip()
     if not brief or "未租" in brief or brief.startswith("（未租"):
         return ""
     blob = f"{session_block}\n{hierarchy_text}"
     if not re.search(r"验证码|短信|OTP|sms", blob, re.I):
         return ""
+    fallback = "请 signal_ask_human 获取验证码。" if has_hitl else "请确认账号池/环境已配置验证码。"
     if has_get_otp:
+        fail_to = "signal_ask_human" if has_hitl else "确认账号 otp 或环境 otp.fixed"
         return (
             "【验证码】已租号且屏上为验证码/短信流程：优先 get_otp 取码填入，"
-            "禁止盲填知识库固定码；取码失败再 signal_ask_human。"
+            f"禁止盲填知识库固定码；取码失败再 {fail_to}。"
         )
+    return f"【验证码】已租号且屏上为验证码流程：勿重复 input_text 固定码，{fallback}"
+
+
+def compile_sms_send_hint(
+    *,
+    accounts_brief: str = "",
+    hierarchy_nodes: list[dict[str, Any]] | None = None,
+    has_request_sms_code: bool = False,
+) -> str:
+    """手机号已填且屏上仍有发送控件时，引导 request_sms_code。"""
+    brief = str(accounts_brief or "").strip()
+    if not brief or "未租" in brief or brief.startswith("（未租"):
+        return ""
+    if not has_request_sms_code:
+        return ""
+    from mino_nexus.loop.ui_sms_request import (
+        find_phone_field,
+        find_send_code_button,
+        phone_field_filled,
+    )
+
+    nodes = [n for n in (hierarchy_nodes or []) if isinstance(n, dict)]
+    if not nodes or not phone_field_filled(nodes):
+        return ""
+    phone = find_phone_field(nodes)
+    if phone is None or find_send_code_button(nodes, phone) is None:
+        return ""
     return (
-        "【验证码】已租号且屏上为验证码流程：勿重复 input_text 固定码，"
-        "请 signal_ask_human 获取验证码。"
+        "【短信登录】手机号已填入且右侧仍有发送控件："
+        "先 request_sms_code，再 get_otp 取码并 input_text 填入验证码框；"
+        "勿跳过发送步骤直接填码。"
     )
 
 

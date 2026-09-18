@@ -19,13 +19,21 @@ _POINTER_TEMPLATES: dict[str, str] = {
         "前置满足后立刻 signal_done。锁屏/黑屏用 recover_*，不要用 prep 工具唤醒。"
         "登录态未确认时不要 signal_done。禁止进步骤、禁止验预期。"
     ),
-    "do_header": "【执行纪律：严格按步骤编号。禁止跳到后面的步骤，禁止提前验后面的预期。】",
+    "do_header": (
+        "【执行纪律：严格按步骤编号。禁止跳到后面的步骤，禁止提前验后面的预期。】"
+        "do 阶段只执行【当前只做步骤 n】中的 instruction；"
+        "「达成信号/预期」仅供判断可否 signal_done，禁止把校验预期当成操作目标。"
+    ),
     "do_current": "【当前只做步骤 {n}】{instruction}\n【本步达成信号】{achievement}",
     "do_tail": (
+        "子动作全部完成且达成信号满足后调 signal_done（不是整案结束）。"
+        "跳转类步骤成功后入口从屏上消失是正常现象，禁止因此 signal_give_up。"
+        "本步未要求登录/验证码时：勿展开完整登录链；若 expected 已满足请立刻 signal_done。"
+        "禁止去做后面步骤。"
+    ),
+    "do_tail_login_module": (
         "做完本步操作后调 signal_done，表示本步操作结束（不是整案结束）。"
         "达成信号一旦在屏上出现，即视为本步完成，立刻 signal_done。"
-        "跳转类步骤成功后，原操作对象（入口/tab/按钮）会从屏上消失，这是达成的正常表现，"
-        "不构成未达成，禁止因此 signal_give_up。"
         "业务入口弹出登录弹窗时先完成登录，禁止只关弹窗反复点同一入口。禁止去做后面步骤。"
     ),
     "do_no_expected": "【本步无预期】做完操作即视为完成，不要试图找校验依据。",
@@ -58,7 +66,8 @@ def _pt(key: str, **kwargs: Any) -> str:
 
 # agent 决策坐标是 0–1000 千分比；10‰ ≈ 1280 宽屏 13px，仅视为同一触点。
 TAP_REPEAT_TOL_MILLI = 10
-_OBSERVE_PREFIXES = ("查看", "观察", "确认屏", "检查屏", "目视", "看")
+_OBSERVE_PREFIXES = ("查看", "观察", "确认屏", "检查屏", "目视", "看", "等待")
+_WAIT_THEN_ACT_RE = re.compile(r"等待.{0,16}(后|再).{0,12}(点击|输入|滑动|打开|进入|勾选)")
 
 
 def enrich_assert_expectation(instruction: str, expected: str) -> str:
@@ -122,6 +131,8 @@ def compile_guest_entry_hint(instruction: str, *, entry_tapped: bool) -> str:
 def is_observe_only_step(instruction: str) -> bool:
     text = str(instruction or "").strip()
     if not text:
+        return False
+    if _WAIT_THEN_ACT_RE.search(text):
         return False
     return any(text.startswith(prefix) for prefix in _OBSERVE_PREFIXES)
 
@@ -308,6 +319,14 @@ class StepCursor:
         self.last_tap: Optional[dict[str, Any]] = None
         self.tap_epoch: int = 0
         self.step_ops: int = 0
+        self.step_action_families: set[str] = set()
+        self.step_family_counts: dict[str, int] = {}
+        self.step_intents_done: set[str] = set()
+        self.step_structural_caps_done: set[str] = set()
+        self.sms_auto_attempted: bool = False
+        self.step_goal_met: bool = False
+        self.login_module_prompt: bool = False
+        self.check_session_refresh: bool = False
         self.advise_recovery_counts: dict[str, int] = {}
         self.recovery_fail_counts: dict[str, int] = {}
         self.login_session_hint: str = ""
@@ -338,6 +357,12 @@ class StepCursor:
         self.index = 0
         self.step_checked = False
         self.step_ops = 0
+        self.step_action_families = set()
+        self.step_family_counts = {}
+        self.step_intents_done = set()
+        self.step_structural_caps_done = set()
+        self.sms_auto_attempted = False
+        self.step_goal_met = False
         self.reset_guest_entry()
         self.step_effect_hit_streak = 0
         self.step_effect_hint = ""
@@ -365,8 +390,32 @@ class StepCursor:
         self.step_effect_hit_streak = 0
         self.step_effect_hint = ""
 
-    def record_step_op(self) -> None:
+    def record_step_op(self, cap_id: str = "", *, params: dict[str, Any] | None = None) -> None:
         self.step_ops += 1
+        from mino_nexus.loop.step_contract import cap_action_family
+        from mino_nexus.loop.step_intent import cap_step_intent, is_structural_cap
+
+        cap = str(cap_id or "").strip()
+        intent = cap_step_intent(cap, params=params)
+        if intent:
+            self.step_intents_done.add(intent)
+        if cap == "tap_element":
+            from mino_nexus.loop.step_intent import mark_tap_intents_from_instruction
+
+            cur = self.current()
+            mark_tap_intents_from_instruction(
+                str(cur.instruction or "") if cur else "",
+                self.step_intents_done,
+            )
+        if cap and is_structural_cap(cap):
+            self.step_structural_caps_done.add(cap)
+        if cap and not is_structural_cap(cap):
+            fam = cap_action_family(cap)
+            if fam:
+                self.step_action_families.add(fam)
+                self.step_family_counts[fam] = int(self.step_family_counts.get(fam) or 0) + 1
+                if fam == "swipe":
+                    self.step_intents_done.add("swipe_gesture")
 
     def bump_advise_recovery(self, rule_id: str) -> int:
         rid = str(rule_id or "").strip()
@@ -413,6 +462,12 @@ class StepCursor:
         self.phase = "do"
         self.step_checked = False
         self.step_ops = 0
+        self.step_action_families = set()
+        self.step_family_counts = {}
+        self.step_intents_done = set()
+        self.step_structural_caps_done = set()
+        self.sms_auto_attempted = False
+        self.step_goal_met = False
         self.step_effect_hit_streak = 0
         self.step_effect_hint = ""
         self.correction_hint = ""
@@ -428,6 +483,12 @@ class StepCursor:
         self.index += 1
         self.step_checked = False
         self.step_ops = 0
+        self.step_action_families = set()
+        self.step_family_counts = {}
+        self.step_intents_done = set()
+        self.step_structural_caps_done = set()
+        self.sms_auto_attempted = False
+        self.step_goal_met = False
         self.reset_guest_entry()
         self.step_effect_hit_streak = 0
         self.step_effect_hint = ""
@@ -452,6 +513,7 @@ class StepCursor:
             return
         self.phase = "check"
         self.step_checked = False
+        self.check_session_refresh = True
         self.progress_gate.reset_milestone("check", cur.n if cur else 0)
 
     def mark_checked(self) -> None:
@@ -557,7 +619,17 @@ class StepCursor:
                 lines.append(self.step_effect_hint)
             if self.correction_hint:
                 lines.append(self.correction_hint)
-            lines.append(_pt("do_tail"))
+            from mino_nexus.loop.step_intent import intent_micro_progress_line
+
+            micro = intent_micro_progress_line(str(cur.instruction or ""))
+            if not micro:
+                from mino_nexus.loop.step_contract import instruction_micro_progress_line
+
+                micro = instruction_micro_progress_line(str(cur.instruction or ""))
+            if micro:
+                lines.append(micro)
+            tail_key = "do_tail_login_module" if self.login_module_prompt else "do_tail"
+            lines.append(_pt(tail_key))
         else:
             lines.append(_pt("check_current", n=cur.n, expected=cur.expected or "（无预期，无法执行校验）"))
             lines.append(_pt("check_tail"))

@@ -31,6 +31,9 @@ def click_label_from_nav_ref(ref: str) -> str:
     if 1 <= len(cleaned) <= 16 and cleaned != raw:
         return cleaned
     if 1 <= len(raw) <= 16 and " " not in raw and "\n" not in raw:
+        # 「…页/页面」是口语目标不是控件文案；拿去 tap 会锚点落空。
+        if raw.endswith("页面") or raw.endswith("页"):
+            return ""
         return raw
     return ""
 
@@ -72,23 +75,40 @@ def resolve_state_ref(fsm: dict[str, Any], ref: str) -> str:
         lab = str(label or "").strip()
         if lab == val or lab in _ref_display_variants(val):
             return str(sid)
-    for sid in tab_bar.get("entries") or []:
-        if str(sid).endswith(val) or val in str(sid):
-            return str(sid)
-    for st in fsm.get("states") or []:
+    # 不按 entries 的 id 子串匹配：`page.tab_我的` 这种把文案编进 id 的上一代节点
+    # 会凭「我的 in page.tab_我的」抢在展示名之前命中。
+    #
+    # 分层扫：id 后缀 → display_name → 别名 → identify。别名是采集来的噪声池
+    # （一个页面常带十几条），若与 display_name 同层按 states 顺序先到先得，
+    # 「我的发布」会被另一页混进来的同名别名截走。
+    variants = _ref_display_variants(val)
+    states = [st for st in fsm.get("states") or [] if str((st or {}).get("id") or "").strip()]
+
+    def _state_meta(st: dict[str, Any]) -> dict[str, Any]:
+        sm = st.get("meta")
+        return sm if isinstance(sm, dict) else {}
+
+    for st in states:
         sid = str(st.get("id") or "").strip()
-        if not sid:
-            continue
-        st_meta = st.get("meta") if isinstance(st.get("meta"), dict) else {}
-        dn = str(st_meta.get("display_name") or "").strip()
-        if dn and (dn == val or dn in _ref_display_variants(val)):
-            return sid
-        for alias in st_meta.get("aliases") or []:
-            al = str(alias or "").strip()
-            if al == val or al in _ref_display_variants(val):
-                return sid
         if sid.endswith(f".{val}") or sid.split(".")[-1] == val:
             return sid
+    for st in states:
+        dn = str(_state_meta(st).get("display_name") or "").strip()
+        if dn and (dn == val or dn in variants):
+            return str(st.get("id") or "").strip()
+    alias_hits: list[str] = []
+    for st in states:
+        sid = str(st.get("id") or "").strip()
+        for alias in _state_meta(st).get("aliases") or []:
+            al = str(alias or "").strip()
+            if al == val or al in variants:
+                if sid not in alias_hits:
+                    alias_hits.append(sid)
+                break
+    if len(alias_hits) == 1:
+        return alias_hits[0]
+    # 多页共享同一别名（常见：入口按钮文案同时出现在出发页和到达页）时不要先到先得。
+    for st in states:
         identify = st.get("identify") or {}
         required = identify.get("required")
         blocks = required if isinstance(required, list) else ([required] if required else [])
@@ -97,8 +117,8 @@ def resolve_state_ref(fsm: dict[str, Any], ref: str) -> str:
                 continue
             if block.get("signal") == "tab_bar":
                 tab = str((block.get("match") or {}).get("selected") or "").strip()
-                if tab == val or tab in _ref_display_variants(val):
-                    return sid
+                if tab == val or tab in variants:
+                    return str(st.get("id") or "").strip()
     return val
 
 
@@ -199,6 +219,78 @@ def _has_sk_states(doc: dict[str, Any] | None) -> bool:
     return any(sid.startswith("page.sk") for sid in _state_ids(doc))
 
 
+def _adopt_atlas_tab_bar(out: dict[str, Any], atlas: dict[str, Any]) -> None:
+    """Tab 身份字段（home / launch / slots）跟着骨骼那一代走。"""
+    ids = _state_ids(out)
+    meta = dict(out.get("meta") or {})
+    bar = dict(meta.get("tab_bar") or {})
+    atlas_meta = atlas.get("meta") if isinstance(atlas.get("meta"), dict) else {}
+    atlas_bar = atlas_meta.get("tab_bar") if isinstance(atlas_meta.get("tab_bar"), dict) else {}
+    for key in ("home_state_id", "launch_state_id"):
+        cand = str(atlas_bar.get(key) or "").strip()
+        if cand and cand in ids:
+            bar[key] = cand
+    if not bar.get("slots") and atlas_bar.get("slots"):
+        bar["slots"] = copy.deepcopy(atlas_bar["slots"])
+    meta["tab_bar"] = bar
+    out["meta"] = meta
+
+
+def prune_superseded_tab_states(doc: dict[str, Any] | None) -> dict[str, Any] | None:
+    """图上已有骨骼节点时，丢掉上一代 `page.tab_*` 占位节点及其边。
+
+    两代节点之间没有任何一条边。留着的后果不是多几个孤岛，而是 `resolve_state_ref`
+    优先命中旧节点（`tab_bar.labels` 里还挂着它），`shortest_nav_path` 于是恒空 ——
+    `fsm_navigate` 每轮都掉进兜底，只会 BACK。
+    """
+    if not isinstance(doc, dict):
+        return doc
+    ids = _state_ids(doc)
+    legacy = {sid for sid in ids if sid.startswith("page.tab_")}
+    if not legacy or not any(sid.startswith("page.sk") for sid in ids):
+        return doc
+    out = copy.deepcopy(doc)
+    out["states"] = [
+        st
+        for st in out.get("states") or []
+        if str((st or {}).get("id") or (st or {}).get("state_id") or "").strip() not in legacy
+    ]
+    kept_edges: list[dict[str, Any]] = []
+    for ed in out.get("edges") or []:
+        if not isinstance(ed, dict):
+            continue
+        frm = str(ed.get("from") or ed.get("from_state") or "").strip()
+        to = str(ed.get("to") or ed.get("to_state") or "").strip()
+        if frm in legacy or to in legacy:
+            continue
+        kept_edges.append(ed)
+    out["edges"] = kept_edges
+    meta = dict(out.get("meta") or {})
+    wfs = meta.get("state_wireframes")
+    if isinstance(wfs, dict):
+        meta["state_wireframes"] = {k: v for k, v in wfs.items() if str(k).strip() not in legacy}
+    bar = meta.get("tab_bar")
+    if isinstance(bar, dict):
+        bar = dict(bar)
+        bar["entries"] = [e for e in bar.get("entries") or [] if str(e).strip() not in legacy]
+        labels = bar.get("labels")
+        if isinstance(labels, dict):
+            bar["labels"] = {k: v for k, v in labels.items() if str(k).strip() not in legacy}
+        for key in ("home_state_id", "launch_state_id"):
+            if str(bar.get(key) or "").strip() in legacy:
+                bar.pop(key, None)
+        meta["tab_bar"] = bar
+    recover = meta.get("recover")
+    if isinstance(recover, dict):
+        recover = dict(recover)
+        for key in ("default_state_id", "default_goal_state_id"):
+            if str(recover.get(key) or "").strip() in legacy:
+                recover.pop(key, None)
+        meta["recover"] = recover
+    out["meta"] = meta
+    return out
+
+
 def overlay_atlas_for_runtime(
     base: dict[str, Any] | None,
     atlas: dict[str, Any] | None,
@@ -207,16 +299,17 @@ def overlay_atlas_for_runtime(
 
     跑批读 `v1` 时常常只有 `page.tab_*` + tab_bar 文案；真正能辨页的
     `page.sk*` 与 `state_wireframes` 还停在 draft。不叠的话 localize 选不出当前页。
+    叠完只留骨骼那一代节点（`prune_superseded_tab_states`）。
     """
     if not isinstance(base, dict):
-        return atlas if isinstance(atlas, dict) else base
+        return prune_superseded_tab_states(atlas) if isinstance(atlas, dict) else base
     if not isinstance(atlas, dict):
-        return base
+        return prune_superseded_tab_states(base)
     atlas_wf = _wireframes_of(atlas)
     if not atlas_wf and not _has_sk_states(atlas):
-        return base
+        return prune_superseded_tab_states(base)
     if _has_sk_states(base) and _wireframes_of(base):
-        return base
+        return prune_superseded_tab_states(base)
     out = copy.deepcopy(base)
     meta = dict(out.get("meta") or {})
     base_wf = _wireframes_of(out)
@@ -262,7 +355,9 @@ def overlay_atlas_for_runtime(
         seen.add(key)
     if extra_edges:
         out["edges"] = list(out.get("edges") or []) + extra_edges
-    return out
+    if _has_sk_states(atlas):
+        _adopt_atlas_tab_bar(out, atlas)
+    return prune_superseded_tab_states(out)
 
 
 def load_fsm_doc(
@@ -317,11 +412,92 @@ def load_fsm_doc(
     return doc, source
 
 
+_PLACEHOLDER_TAB_LABELS = frozenset({"", "icon", "ImageView", "AppCompatImageView", "图标 Tab", "slot"})
+
+
+def _fold_label(text: str) -> str:
+    return re.sub(r"[\s_·\-]+", "", str(text or "").strip().lower())
+
+
+def tab_slot_labels(fsm: dict[str, Any]) -> list[str]:
+    """架构图底栏槽位上的真实文案（跳过纯图标占位）。"""
+    meta = fsm.get("meta") if isinstance(fsm.get("meta"), dict) else {}
+    tab_bar = meta.get("tab_bar") if isinstance(meta.get("tab_bar"), dict) else {}
+    out: list[str] = []
+    seen: set[str] = set()
+    for slot in tab_bar.get("slots") or []:
+        if not isinstance(slot, dict):
+            continue
+        label = str(slot.get("label") or slot.get("display") or "").strip()
+        if label in _PLACEHOLDER_TAB_LABELS:
+            continue
+        key = _fold_label(label)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(label)
+    labels = tab_bar.get("labels") if isinstance(tab_bar.get("labels"), dict) else {}
+    for lab in labels.values():
+        val = str(lab or "").strip()
+        key = _fold_label(val)
+        if not val or val in _PLACEHOLDER_TAB_LABELS or key in seen:
+            continue
+        seen.add(key)
+        out.append(val)
+    home = str(tab_bar.get("home_tab_label") or "").strip()
+    if home and home not in _PLACEHOLDER_TAB_LABELS and _fold_label(home) not in seen:
+        out.append(home)
+    return out
+
+
+def tab_root_label_for_state(fsm: dict[str, Any], state_id: str) -> str:
+    """该节点是否为某个底栏 Tab 的根态；是则返回槽位文案。精确匹配，不用包含。"""
+    sid = str(state_id or "").strip()
+    if not sid or not fsm:
+        return ""
+    slots = tab_slot_labels(fsm)
+    if not slots:
+        return ""
+    slot_by_fold = {_fold_label(s): s for s in slots}
+    meta = fsm.get("meta") if isinstance(fsm.get("meta"), dict) else {}
+    tab_bar = meta.get("tab_bar") if isinstance(meta.get("tab_bar"), dict) else {}
+    labels = tab_bar.get("labels") if isinstance(tab_bar.get("labels"), dict) else {}
+    mapped = str(labels.get(sid) or "").strip()
+    if mapped and _fold_label(mapped) in slot_by_fold:
+        return slot_by_fold[_fold_label(mapped)]
+    if sid == str(tab_bar.get("home_state_id") or "").strip():
+        home = str(tab_bar.get("home_tab_label") or "").strip()
+        if home and _fold_label(home) in slot_by_fold:
+            return slot_by_fold[_fold_label(home)]
+    st = F.state_by_id(fsm, sid)
+    st_meta = st.get("meta") if isinstance(st, dict) else {}
+    names: list[str] = []
+    if isinstance(st_meta, dict):
+        names.append(str(st_meta.get("display_name") or "").strip())
+        names.append(str(st_meta.get("tab") or "").strip())
+        for alias in st_meta.get("aliases") or []:
+            names.append(str(alias or "").strip())
+    identify = (st or {}).get("identify") or {}
+    required = identify.get("required")
+    blocks = required if isinstance(required, list) else ([required] if required else [])
+    for block in blocks:
+        if isinstance(block, dict) and block.get("signal") == "tab_bar":
+            names.append(str((block.get("match") or {}).get("selected") or "").strip())
+    for name in names:
+        key = _fold_label(name)
+        if key and key in slot_by_fold:
+            return slot_by_fold[key]
+    return ""
+
+
 def tab_label_for_state(fsm: dict[str, Any], state_id: str) -> str:
     """目标屏对应的底栏 Tab 文案（用于直接 tap_element）。"""
     sid = resolve_state_ref(fsm, state_id)
     if not sid:
         return ""
+    slot = tab_root_label_for_state(fsm, sid)
+    if slot:
+        return slot
     meta = fsm.get("meta") if isinstance(fsm.get("meta"), dict) else {}
     tab_bar = meta.get("tab_bar") if isinstance(meta.get("tab_bar"), dict) else {}
     labels = tab_bar.get("labels") if isinstance(tab_bar.get("labels"), dict) else {}
@@ -330,10 +506,6 @@ def tab_label_for_state(fsm: dict[str, Any], state_id: str) -> str:
     st = F.state_by_id(fsm, sid)
     if not st:
         return ""
-    st_meta = st.get("meta") if isinstance(st.get("meta"), dict) else {}
-    dn = str(st_meta.get("display_name") or "").strip()
-    if dn and sid.startswith("page.sk"):
-        return dn
     identify = st.get("identify") or {}
     required = identify.get("required")
     blocks = required if isinstance(required, list) else ([required] if required else [])
@@ -360,7 +532,7 @@ def _edge_step_meta(fsm: dict[str, Any], edge_step: dict[str, Any]) -> dict[str,
 
 
 def is_tab_shell_state(fsm: dict[str, Any], state_id: str) -> bool:
-    """当前 state 是否为底栏 Tab 根态（entries / labels 中的壳页）。"""
+    """当前 state 是否为底栏 Tab 根态（entries / labels / 槽位文案对齐的壳页）。"""
     sid = str(state_id or "").strip()
     if not sid or not fsm:
         return False
@@ -370,7 +542,11 @@ def is_tab_shell_state(fsm: dict[str, Any], state_id: str) -> bool:
     if sid in {str(e).strip() for e in entries if str(e).strip()}:
         return True
     labels = tab_bar.get("labels") if isinstance(tab_bar.get("labels"), dict) else {}
-    return sid in labels
+    if sid in labels:
+        return True
+    if sid == str(tab_bar.get("home_state_id") or "").strip() and tab_slot_labels(fsm):
+        return True
+    return bool(tab_root_label_for_state(fsm, sid))
 
 
 def pick_fsm_first_step(
@@ -394,7 +570,7 @@ def pick_fsm_first_step(
     if len(steps) >= 2 and not is_tab_shell_state(fsm, src):
         terminal = steps[-1]
         term_to = str(terminal.get("to") or "").strip()
-        tab_target = is_tab_shell_state(fsm, dst) or bool(tab_label_for_state(fsm, dst))
+        tab_target = is_tab_shell_state(fsm, dst)
         if (
             term_to == dst
             and tab_target
@@ -491,6 +667,35 @@ def tap_params_for_edge(fsm: dict[str, Any], edge: dict[str, Any]) -> dict[str, 
     if short and short not in ("home", "unknown"):
         return {"selector_text": short, "text": short}
     return {}
+
+
+def tab_root_entry_hint(fsm: dict[str, Any], to_state_ref: str) -> str:
+    """当前屏无路可走时，找一个「退栈到哪儿就有路」的入口态。
+
+    深页 → Tab 页的两段式：先 BACK 回并列入口，再按图走。没有这句提示时模型只会
+    看到「无路径」，然后继续盲调 fsm_navigate。
+    """
+    dst = resolve_state_ref(fsm, to_state_ref)
+    if not dst or not F.state_by_id(fsm, dst):
+        return ""
+    from mino_nexus.services.nav_compiler import state_label
+
+    best_sid = ""
+    best_hops = 0
+    for st in fsm.get("states") or []:
+        sid = str((st or {}).get("id") or "").strip()
+        if not sid or sid == dst:
+            continue
+        if not (st.get("entry") or is_tab_shell_state(fsm, sid)):
+            continue
+        path = F.shortest_nav_path(fsm, sid, dst)
+        if not path:
+            continue
+        if not best_sid or len(path) < best_hops:
+            best_sid, best_hops = sid, len(path)
+    if not best_sid:
+        return ""
+    return f"退到并列入口「{state_label(fsm, best_sid)}」后 {best_hops} 步可到目标"
 
 
 def direct_tab_tap_params(fsm: dict[str, Any], to_state_ref: str) -> dict[str, Any]:

@@ -25,11 +25,19 @@ _FUSE_CAPS = frozenset({
     "relogin",
     "read_device_data",
     "lease_account",
+    "get_otp",
     "press_key",
     "swipe_direction",
     "long_press_element",
     "fsm_navigate",
+    "accept_legal_consent",
+    "dismiss_ime",
+    "request_sms_code",
 })
+
+# wait_ms 计入里程碑，但不走「同屏无进展」——生成/加载本来就会在同一屏空等几轮。
+_WAIT_CAPS = frozenset({"wait_ms", "wait_screen_ready"})
+_WAIT_WARN_AFTER = 4
 
 _SMS_RE = re.compile(r"验证码|短信|OTP|sms", re.I)
 _TAP_BUCKET_MILLI = 50
@@ -39,7 +47,7 @@ def fuseable_cap(cap_id: str) -> bool:
     cid = str(cap_id or "").strip()
     if not cid or cid.startswith("recover_"):
         return False
-    return cid in _FUSE_CAPS
+    return cid in _FUSE_CAPS or cid in _WAIT_CAPS
 
 
 def action_key(cap_id: str, params: dict[str, Any] | None) -> str:
@@ -65,6 +73,10 @@ def coarse_action_key(cap_id: str, params: dict[str, Any] | None) -> str:
     return cid
 
 
+def _exit_clause(*, has_hitl: bool) -> str:
+    return "signal_ask_human 或 signal_give_up" if has_hitl else "signal_give_up"
+
+
 def fuse_hint(
     cap_id: str,
     params: dict[str, Any] | None,
@@ -72,31 +84,38 @@ def fuse_hint(
     has_get_otp: bool = False,
     leased: bool = False,
     reason: str = "stagnation",
+    has_hitl: bool = False,
 ) -> str:
     p = dict(params or {})
+    exit_to = _exit_clause(has_hitl=has_hitl)
     if reason == "milestone":
-        return "本阶段步数已用尽：若目标已达成请 signal_done，否则 signal_ask_human 或 signal_give_up。"
+        if str(cap_id or "").strip() in _WAIT_CAPS:
+            return (
+                "连续等待后请停止空等：若本步达成信号已在截图上，立刻 signal_done 进入校验；"
+                "若仍是操作前的页面，重做本步点击。禁止继续 wait_ms。"
+            )
+        return f"本阶段步数已用尽：若目标已达成请 signal_done，否则 {exit_to}。"
     if reason == "state_cycle":
-        return "界面在少数状态间循环：换路径（返回/重进登录/重启 App）或 signal_ask_human。"
+        return f"界面在少数状态间循环：换路径（返回/重进登录/重启 App）或 {exit_to}。"
     if reason == "state_domination":
-        return "困在同一界面过久：确认前置是否已满足、是否走错登录分支，勿再盲试；可 signal_ask_human。"
+        return f"困在同一界面过久：确认前置是否已满足、是否走错登录分支，勿再盲试；可 {exit_to}。"
     if reason == "no_progress":
-        return "连续操作后界面无变化：换元素/策略，或 signal_ask_human / signal_give_up。"
+        return f"连续操作后界面无变化：换元素/策略，或 {exit_to}。"
     if cap_id == "input_text":
         field = str(p.get("field") or "")
         text = str(p.get("text") or "")
         if _SMS_RE.search(f"{field}{text}") or field in ("sms_code", "验证码"):
             if leased and has_get_otp:
-                return "已租号且在验证码流程：请 get_otp 取码，勿盲填固定码；仍失败用 signal_ask_human。"
+                return f"已租号且在验证码流程：请 get_otp 取码，勿盲填固定码；仍失败用 {exit_to}。"
             if has_get_otp:
-                return "验证码勿重复盲填：优先 get_otp，失败再 signal_ask_human。"
-            return "验证码勿重复盲填：用 signal_ask_human 取码。"
-        return "换字段/文案，或 signal_ask_human / signal_give_up。"
+                return f"验证码勿重复盲填：优先 get_otp，失败再 {exit_to}。"
+            return f"验证码勿重复盲填：用 {exit_to}。"
+        return f"换字段/文案，或 {exit_to}。"
     if cap_id == "tap_element":
         return "换元素或先处理挡屏（返回/关弹窗），勿同点循环；可 signal_give_up。"
     if cap_id == "relogin":
         return "登录未完成：继续租号/登录流程，验证码用 get_otp，勿反复 relogin。"
-    return "换策略：signal_ask_human 或 signal_give_up。"
+    return f"换策略：{exit_to}。"
 
 
 def _fps_equal(a: str, b: str) -> bool:
@@ -158,6 +177,7 @@ class ProgressGate:
         self.milestone_turns: int = 0
         self.warning_hint: str = ""
         self.last_intervention: str = ""
+        self._milestone_exhausted: bool = False
 
     def reset_milestone(self, phase: str, step: int = 0) -> None:
         key = f"{phase}:{step}"
@@ -170,6 +190,7 @@ class ProgressGate:
         self.total_fuse_blocks = 0
         self.warning_hint = ""
         self.last_intervention = ""
+        self._milestone_exhausted = False
 
     def record_fuse_block(self, reason: str) -> Optional[str]:
         """连续 block 后升级 stop，避免「熔断本身」形成空转循环。"""
@@ -179,7 +200,8 @@ class ProgressGate:
             return None
         self.fuse_block_streak += 1
         self.total_fuse_blocks += 1
-        self.milestone_turns += 1
+        if "【熔断·里程碑】" in text:
+            self._milestone_exhausted = True
         self.last_intervention = "block"
         n = self.fuse_block_streak
         if n >= 1:
@@ -204,9 +226,13 @@ class ProgressGate:
         screen_fp: str,
         has_get_otp: bool = False,
         leased: bool = False,
+        has_hitl: bool = False,
     ) -> Optional[str]:
         if not fuseable_cap(cap_id):
             return None
+
+        kw = dict(has_get_otp=has_get_otp, leased=leased, has_hitl=has_hitl)
+        exit_to = _exit_clause(has_hitl=has_hitl)
 
         if self.fuse_block_streak >= FUSE_BLOCK_STOP_THRESHOLD:
             return (
@@ -221,18 +247,34 @@ class ProgressGate:
 
         explore = self.profile == "explore"
         budget = 80 if explore else int(MILESTONE_BUDGET.get(str(phase or "do"), 10))
+        if self._milestone_exhausted:
+            if cap_id in ("signal_done", "signal_give_up", "wait_ms"):
+                return None
+            return (
+                "【熔断·里程碑】本阶段步数预算已用尽，禁止再下发设备 mutate。"
+                "若目标已达成请 signal_done，否则 signal_give_up。"
+            )
         if self.milestone_turns >= budget:
-            hint = fuse_hint(cap_id, params, has_get_otp=has_get_otp, leased=leased, reason="milestone")
+            hint = fuse_hint(cap_id, params, reason="milestone", **kw)
             return f"【熔断·里程碑】{phase} 阶段已用 {self.milestone_turns} 步仍未收工。{hint}"
 
-        pre_fp = str(screen_fp or "").strip() or "_"
+        waiting = cap_id in _WAIT_CAPS
+        if waiting:
+            if self.milestone_turns >= _WAIT_WARN_AFTER:
+                self.warning_hint = (
+                    f"【进展告警】已连续 wait_ms {self.milestone_turns} 次。"
+                    "若本步达成信号已在截图上，立刻 signal_done 进入校验，不要继续空等。"
+                )
+            else:
+                self.warning_hint = ""
+            return None
 
         states = self._post_states
         if not explore and len(states) >= STATE_MIN_SAMPLES:
             recent = states[-STATE_WINDOW:]
             uniq = len(set(recent))
             if uniq <= STATE_MAX_UNIQUE:
-                hint = fuse_hint(cap_id, params, has_get_otp=has_get_otp, leased=leased, reason="state_domination")
+                hint = fuse_hint(cap_id, params, reason="state_domination", **kw)
                 return (
                     f"【熔断·困局】近 {len(recent)} 步仅在 {uniq} 个界面状态间打转（非实质进展）。"
                     f"{hint}"
@@ -242,18 +284,18 @@ class ProgressGate:
             cycle = _detect_state_cycle(states)
             if cycle is not None:
                 period, _pat = cycle
-                hint = fuse_hint(cap_id, params, has_get_otp=has_get_otp, leased=leased, reason="state_cycle")
+                hint = fuse_hint(cap_id, params, reason="state_cycle", **kw)
                 return (
                     f"【熔断·状态循环】界面在 {period} 个状态间循环重复。{hint}"
                 )
 
         if _detect_action_pattern_cycle(self._coarse_actions):
-            hint = fuse_hint(cap_id, params, has_get_otp=has_get_otp, leased=leased, reason="state_domination")
+            hint = fuse_hint(cap_id, params, reason="state_domination", **kw)
             return f"【熔断·动作模式】近几步动作类型反复组合仍无进展。{hint}"
 
         # 连续 N 次操作后界面指纹未变 → 第 N+1 次前熔断（先于动作级规则）
         if self.no_progress_streak >= NO_PROGRESS_THRESHOLD - 1:
-            hint = fuse_hint(cap_id, params, has_get_otp=has_get_otp, leased=leased, reason="no_progress")
+            hint = fuse_hint(cap_id, params, reason="no_progress", **kw)
             return (
                 f"【熔断·无进展】连续 {self.no_progress_streak} 次操作后界面指纹未变。"
                 f"{hint}"
@@ -262,7 +304,7 @@ class ProgressGate:
         if self.no_progress_streak >= NO_PROGRESS_THRESHOLD - 2:
             self.warning_hint = (
                 f"【进展告警】已连续 {self.no_progress_streak} 次操作后界面无变化；"
-                f"下一步若仍无进展将熔断，请换策略或 signal_ask_human。"
+                f"下一步若仍无进展将熔断，请换策略或 {exit_to}。"
             )
         else:
             self.warning_hint = ""

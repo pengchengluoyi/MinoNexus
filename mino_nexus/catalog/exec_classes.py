@@ -17,6 +17,7 @@ MENU_ATOMIC_KINDS: Tuple[str, ...] = CAPABILITY_KINDS + (RECOVERY_KIND,)
 # 无 implementations、由 Nexus 本地编排的能力。Scout 不执行。
 LOCAL_ORCH_IDS = frozenset({
     "relogin", "lease_account", "get_otp", "get_phone", "release_account", "fsm_navigate",
+    "accept_legal_consent", "dismiss_ime", "request_sms_code",
 })
 
 KIND_META: Dict[str, Dict[str, str]] = {
@@ -31,4 +32,13 @@ MUTATE_CAPS = frozenset({
     "tap_element", "multi_tap", "swipe_element_to_element", "swipe_direction",
     "input_text", "press_key", "long_press_element",
     "fsm_navigate",
+    "accept_legal_consent", "dismiss_ime", "request_sms_code",
+})
+
+# 计入本步已执行（require_do_work）：突变 + 等待/租号/取码。等待不算改界面，但算进展。
+PROGRESS_CAPS = MUTATE_CAPS | frozenset({
+    "wait_ms",
+    "wait_screen_ready",
+    "lease_account",
+    "get_otp",
 })

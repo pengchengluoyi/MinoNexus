@@ -8,7 +8,7 @@ from mino_nexus.loop.action_fuse import fuseable_cap
 from mino_nexus.loop.step_pointer import cap_clears_repeat_tap
 from mino_nexus.ai.planner import decide_next_action
 from mino_nexus.ai.schemas import AgentAction, AgentDecision
-from mino_nexus.catalog.exec_classes import MUTATE_CAPS
+from mino_nexus.catalog.exec_classes import MUTATE_CAPS, PROGRESS_CAPS
 from mino_nexus.loop.registry import apply_force_case_expectation, run_guards
 from mino_nexus.loop.inspections import (
     _session_block_is_conclusive,
@@ -21,6 +21,7 @@ from mino_nexus.services.app_intel import context_pack_for_step, log_context_pac
 from mino_nexus.runtime.session_gate import (
     compile_login_session_hint,
     compile_otp_prep_hint,
+    compile_sms_send_hint,
     ensure_case_scene,
     is_login_module_case,
 )
@@ -571,6 +572,11 @@ def _run_loop(
     last_phase_seen = ""
     ctx.case_scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
     login_module_case = is_login_module_case(case=case, scene=ctx.case_scene)
+    if isinstance(cursor, StepCursor):
+        cursor.login_module_prompt = login_module_case
+    from mino_nexus.loop.session_ensure import ensure_case_account
+
+    ensure_case_account(ctx, case)
     task_env_brief = str(run_env_brief or getattr(ctx, "env_label", "") or "").strip()
     if task_env_brief:
         history.append(f"0. program → info: 本任务运行环境已确认：{task_env_brief}")
@@ -901,6 +907,46 @@ def _run_loop(
                 )
                 writer.set_phase(cursor.phase)
             last_phase_seen = cursor.phase
+            if (
+                cursor.phase == "do"
+                and bool(getattr(ctx, "session_dirty", False))
+                and shot.has_image()
+            ):
+                refresh_session_block(
+                    shot=shot,
+                    ctx=ctx,
+                    case=case,
+                    provider_id=provider_id,
+                    slot_sink=inspect_slots,
+                    force=True,
+                    nav=nav,
+                    turn_id=seq,
+                )
+                ctx.session_dirty = False
+
+        from mino_nexus.loop.session_persist import effective_session_block, execution_context_session_line
+
+        if (
+            isinstance(cursor, StepCursor)
+            and cursor.phase == "check"
+            and cursor.check_session_refresh
+            and shot.has_image()
+        ):
+            refresh_session_block(
+                shot=shot,
+                ctx=ctx,
+                case=case,
+                provider_id=provider_id,
+                slot_sink=inspect_slots,
+                force=True,
+                nav=nav,
+                turn_id=seq,
+            )
+            cursor.check_session_refresh = False
+        inspect_slots["session_block"] = effective_session_block(
+            ctx, str(inspect_slots.get("session_block") or "")
+        )
+        inspect_slots["session_execution"] = execution_context_session_line(ctx)
 
         cursor.login_session_hint = compile_login_session_hint(
             getattr(ctx, "case_scene", None),
@@ -1027,8 +1073,33 @@ def _run_loop(
                                 hit_streak=cursor.step_effect_hit_streak,
                             )
                         ):
-                            cursor.enter_check()
-                            cursor.correction_hint = ""
+                            from mino_nexus.loop.step_contract import step_actions_satisfied
+                            from mino_nexus.loop.step_intent import (
+                                instruction_required_intents,
+                                step_intents_satisfied,
+                            )
+
+                            need_int = instruction_required_intents(str(cur_probe.instruction or ""))
+                            int_ok, _ = step_intents_satisfied(
+                                instruction=str(cur_probe.instruction or ""),
+                                intents_done=cursor.step_intents_done,
+                            )
+                            fam_ok, _fam_msg = step_actions_satisfied(
+                                instruction=str(cur_probe.instruction or ""),
+                                families_done=cursor.step_action_families,
+                                family_counts=cursor.step_family_counts,
+                            )
+                            work_ok = int_ok if need_int else fam_ok
+                            if work_ok and step_effect_mod.should_auto_enter_check(
+                                loc_hit=bool(loc_hit),
+                                probe_hit=bool(hit),
+                                expected=str(cur_probe.expected or ""),
+                                keywords=keywords,
+                                hit_streak=cursor.step_effect_hit_streak,
+                            ):
+                                cursor.step_goal_met = True
+                                cursor.enter_check()
+                                cursor.correction_hint = ""
                     else:
                         cursor.reset_step_effect_streak()
                 except Exception as exc:  # noqa: BLE001 — 探针失败不能拖垮跑批
@@ -1064,6 +1135,18 @@ def _run_loop(
             ]
         if str(getattr(ctx, "app_version", "") or "").strip():
             menu = [c for c in menu if str(c.get("id") or "") != "get_app_version"]
+        from mino_nexus.services.nav_capture_store import run_guard_foreground
+
+        fg_menu = run_guard_foreground(
+            list(getattr(ctx, "nav_hierarchy_nodes", None) or []),
+            target_package=str(getattr(ctx, "target_package", "") or target_pkg),
+            platform=str(getattr(ctx, "platform", "") or ""),
+        )
+        if str(fg_menu.get("app_foreground") or "") == "yes":
+            menu = [
+                c for c in menu
+                if str(c.get("id") or "") not in ("launch_app", "open_app", "open_url")
+            ]
         if writer:
             writer.append(
                 "context/menu",
@@ -1074,13 +1157,75 @@ def _run_loop(
                 },
             )
         cursor.otp_prep_hint = ""
-        if cursor.phase == "prep":
-            cursor.otp_prep_hint = compile_otp_prep_hint(
+        if cursor.phase in ("prep", "do"):
+            prep_hints: list[str] = []
+            otp_line = compile_otp_prep_hint(
                 accounts_brief=str(getattr(ctx, "accounts_brief", "") or ""),
                 session_block=str(inspect_slots.get("session_block") or ""),
                 hierarchy_text=str(inspect_slots.get("hierarchy_text") or ""),
                 has_get_otp=any(str(c.get("id") or "") == "get_otp" for c in menu),
+                has_hitl=any(str(c.get("id") or "").startswith("human_") for c in menu),
             )
+            if otp_line:
+                prep_hints.append(otp_line)
+            sms_line = compile_sms_send_hint(
+                accounts_brief=str(getattr(ctx, "accounts_brief", "") or ""),
+                hierarchy_nodes=list(getattr(ctx, "nav_hierarchy_nodes", None) or []),
+                has_request_sms_code=any(str(c.get("id") or "") == "request_sms_code" for c in menu),
+            )
+            if sms_line:
+                prep_hints.append(sms_line)
+            cursor.otp_prep_hint = "\n".join(prep_hints)
+
+        if (
+            not is_explore
+            and isinstance(cursor, StepCursor)
+            and cursor.phase == "do"
+            and cur
+        ):
+            from mino_nexus.loop.registry import history_cap_passed
+            from mino_nexus.loop.sms_auto import try_auto_request_sms_code
+
+            auto_sms = try_auto_request_sms_code(
+                proxy,
+                ctx,
+                run_id=scout_run_id,
+                case_seq=case_seq,
+                turn_seq=seq,
+                instruction=str(cur.instruction or ""),
+                login_module_case=login_module_case,
+                hierarchy_nodes=list(getattr(ctx, "nav_hierarchy_nodes", None) or []),
+                menu_cap_ids=[str(c.get("id") or "") for c in menu],
+                sms_auto_attempted=cursor.sms_auto_attempted,
+                history_has_send_pass=history_cap_passed(history, "request_sms_code"),
+            )
+            if auto_sms:
+                cursor.sms_auto_attempted = True
+                st_auto = str(auto_sms.get("status") or "fail")
+                sum_auto = str(auto_sms.get("summary") or "")
+                if auto_sms.get("ok"):
+                    cursor.record_step_op("request_sms_code")
+                rec(
+                    seq,
+                    capability_id="request_sms_code",
+                    status=st_auto,
+                    summary=sum_auto,
+                    thought=sum_auto,
+                    thumb=thumb,
+                    executor_used="internal",
+                )
+                emit(
+                    "result",
+                    thought=sum_auto,
+                    step=seq,
+                    capability_id="request_sms_code",
+                    status=st_auto,
+                    summary=sum_auto,
+                    thumb=thumb,
+                )
+                _log_turn_end(writer, cap="request_sms_code", status=st_auto)
+                continue
+
         in_prep = cursor.phase == "prep"
         in_check = cursor.phase == "check"
         scripted_check = bool(in_check and cur and str(cur.expected or "").strip())
@@ -1135,6 +1280,13 @@ def _run_loop(
             exp = enrich_assert_expectation(cur.instruction, cur.expected)
             assert_params: dict[str, Any] = {"expectation": exp}
             ctx_bits = [auto_knowledge_body, inspect_slots.get("doc_context") or ""]
+            from mino_nexus.loop.session_persist import assert_session_context
+
+            sess_ctx = assert_session_context(
+                ctx, instruction=str(cur.instruction or ""), expected=str(cur.expected or "")
+            )
+            if sess_ctx:
+                ctx_bits.append(sess_ctx)
             merged_ctx = "\n\n".join(b for b in ctx_bits if b).strip()
             if merged_ctx:
                 assert_params["knowledge_context"] = merged_ctx
@@ -1274,6 +1426,13 @@ def _run_loop(
         turn_decision_cap = cap_id or ("signal_done" if decision.status == "done" else "")
         turn_decision_status = str(decision.status or "")
         params = dict(action.params or {}) if action else {}
+        from mino_nexus.catalog.tool_schema import fill_target_package
+
+        params = fill_target_package(
+            params,
+            cap_id=cap_id,
+            target_package=str(getattr(ctx, "target_package", "") or target_pkg),
+        )
         fg_nodes: list[dict[str, Any]] = []
         if nav is not None and getattr(nav, "snapshot", None) is not None:
             snap_nodes = getattr(nav.snapshot, "nodes", None) or []
@@ -1300,10 +1459,17 @@ def _run_loop(
             "menu": menu,
             "accounts_brief": str(getattr(ctx, "accounts_brief", "") or ""),
             "run_env_brief": task_env_brief,
-            "app_foreground": fg_ctx.get("app_foreground") or "",
-            "system_overlay": fg_ctx.get("system_overlay") or "",
+            "app_foreground": fg_ctx.get("app_foreground") or fg_menu.get("app_foreground") or "",
+            "system_overlay": fg_ctx.get("system_overlay") or fg_menu.get("system_overlay") or "",
             "nav_localized": dict(getattr(ctx, "nav_localized", None) or {}),
             "app_version": str(getattr(ctx, "app_version", "") or ""),
+            "case_scene": dict(getattr(ctx, "case_scene", None) or {}),
+            "session_block": str(inspect_slots.get("session_block") or ""),
+            "prep_clear_done": bool(getattr(ctx, "prep_clear_done", False)),
+            "app_launch_confirmed": bool(getattr(ctx, "app_launch_confirmed", False)),
+            "precondition": str(getattr(cursor, "precondition", "") or case.get("precondition") or ""),
+            "decision_thought": thought,
+            "login_module_case": bool(login_module_case),
         }
         params = apply_force_case_expectation(params, guard_ctx)
         if cap_id == "tap_element":
@@ -1358,6 +1524,37 @@ def _run_loop(
                 _log_turn_end(writer, cap="signal_done", status="pass")
                 return _leave(status="pass", summary=cursor.summary(), pack=_pack())
             if in_prep:
+                sess_reason = run_guards(
+                    ["require_session"],
+                    {
+                        **guard_ctx,
+                        "intent": "signal_done",
+                        "case_scene": dict(getattr(ctx, "case_scene", None) or {}),
+                        "session_block": str(inspect_slots.get("session_block") or ""),
+                    },
+                )
+                if sess_reason:
+                    if isinstance(cursor, StepCursor):
+                        cursor.correction_hint = sess_reason
+                    rec(
+                        seq,
+                        capability_id="require_session",
+                        status="skipped",
+                        summary=sess_reason,
+                        thought=thought,
+                        thumb=thumb,
+                    )
+                    emit(
+                        "result",
+                        thought=thought,
+                        step=seq,
+                        capability_id="require_session",
+                        status="skipped",
+                        summary=sess_reason,
+                        thumb=thumb,
+                    )
+                    _log_turn_end(writer, cap="require_session", status="skipped")
+                    continue
                 summary = thought or "前置检查完成，进入操作步骤"
                 rec(seq, capability_id="signal_done", status="skipped",
                         summary=summary, thought=thought, thumb=thumb)
@@ -1411,10 +1608,16 @@ def _run_loop(
                 )
             if do_work_reason:
                 if isinstance(cursor, StepCursor):
+                    from mino_nexus.loop.step_intent import format_intent_progress
+
+                    prog = format_intent_progress(
+                        instruction=str(cur.instruction or ""),
+                        intents_done=cursor.step_intents_done,
+                    )
                     cursor.correction_hint = (
                         f"{do_work_reason}"
-                        " 若当前屏已是本步目标页，请确认达成信号后直接进入校验；"
-                        "否则先 tap_element / fsm_navigate 做一次设备操作。"
+                        + (f" {prog}" if prog else "")
+                        + " 若屏上已达成本步目标，请补全未完成意图对应操作后再 signal_done。"
                     )
                 rec(
                     seq,
@@ -1736,8 +1939,15 @@ def _run_loop(
         ):
             cursor.clear_repeat_tap()
 
-        if status_val == "pass" and cap_id in MUTATE_CAPS and not str(cap_id).startswith(RECOVER_PREFIX):
-            cursor.record_step_op()
+        if status_val == "pass" and cap_id in PROGRESS_CAPS and not str(cap_id).startswith(RECOVER_PREFIX):
+            cursor.record_step_op(cap_id, params=params if isinstance(params, dict) else None)
+        if status_val == "pass" and cap_id == "clear_app_cache":
+            setattr(ctx, "prep_clear_done", True)
+            from mino_nexus.loop.session_persist import mark_session_dirty
+
+            mark_session_dirty(ctx, reason="clear_app_cache")
+        if status_val == "pass" and cap_id in ("launch_app", "open_app", "open_url"):
+            setattr(ctx, "app_launch_confirmed", True)
 
         post_fp = ""
         if status_val == "pass" and (fuseable_cap(cap_id) or cap_id in ("fsm_navigate", "recover_fsm_navigate")):

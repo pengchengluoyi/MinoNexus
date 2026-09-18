@@ -81,6 +81,14 @@ HITL 问人界面、排期 cron、基线库、从设计稿/定位抽登录图标
 | DELETE | `/project/{project_id}/cases/{case_id}` | 删除单条用例 |
 | POST | `/project/{project_id}/cases/delete` | 批量删除；body `{ case_ids: [] }` |
 
+## 设备输入法（Android）
+
+Nexus 不直连 adb；经在线 Scout 下发 `set_input_method`。设备未安装时 Scout 会尝试从 GitHub 下载 [ADB Keyboard](https://github.com/senzhk/ADBKeyboard) 并 `adb install`，再切换。Scout 进程每次启动 REGISTER 前也会走同一套逻辑。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/device/{sn}/ime/adbkeyboard` | 将该 sn 对应 Android 设备默认输入法切到 ADB Keyboard。设备离线或 Scout 无应答时 409/502 |
+
 旧 `POST /app-automation/qa-process/import/{app_id}` 的 `kind=cases` 已停用，请走上述 preview/commit。
 
 ## Jobs（LLM prompt 真源）

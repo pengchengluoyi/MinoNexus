@@ -39,7 +39,13 @@ platforms: [android, ios, web]
 needs_vlm: true
 implementations:                 # 按 cost 升序
   - id / executor / requires_caps / needs_vlm / low_level / cost
+params:                          # 进 agent-decide 的工具参数；空数组会回落到代码里的 PARAM_DEFAULTS
+  - name / type / required / description
 ```
+
+`needs_vlm` 表示执行阶段是否要把截图附给 VLM locate（implementation 级也可声明）。**agent-decide 每轮都会先 observe 再决策**，不需要在能力上再挂「是否要截屏」开关。
+
+`params` 必须把 Scout `low_level` 模板里的占位符（如 `{package}`）声明出来。目录 `params: []` 且代码没有 `PARAM_DEFAULTS` 时，模型会只看到 thought/expected_after，派单时空参——`clear_app_cache` 曾经因此失败。启动时 `upgrade_capability_empty_params` 会把 `PARAM_DEFAULTS` 写回空 params 行。
 
 `low_level` 段会**原样下发给 Scout**（`EXECUTE.low_level`），由 Scout 的 `low_level.py` 填充占位符并执行。
 

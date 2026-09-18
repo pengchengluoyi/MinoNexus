@@ -169,6 +169,22 @@ def vision_region_ignored_for_match(region: dict[str, Any]) -> bool:
     return False
 
 
+def representative_wireframe_from_meta(meta: dict[str, Any] | None) -> dict[str, Any]:
+    """并页/比对用：优先 turn 序列合成，避免空桶 merge_skeleton 导致 same_page 恒 false。"""
+    if not isinstance(meta, dict):
+        return {}
+    turns = [w for w in (meta.get("turn_wireframes") or []) if isinstance(w, dict)]
+    if turns:
+        display = merge_display_wireframe_for_atlas(turns)
+        if isinstance(display, dict) and (display.get("regions") or []):
+            return display
+        best = max(turns, key=lambda w: len(w.get("regions") or []))
+        if best.get("regions"):
+            return dict(best)
+    wf = meta.get("wireframe")
+    return dict(wf) if isinstance(wf, dict) else {}
+
+
 def regions_for_viewport_match(wireframe: dict[str, Any] | None) -> list[dict[str, Any]]:
     """视口/聚类比对：hierarchy 为主；vision 仅作补充，且排除 launcher 类误检。"""
     if not isinstance(wireframe, dict):
@@ -781,24 +797,21 @@ def split_indices_by_wireframe_similarity(
         ):
             clusters[best_ci].append(i)
             continue
+        rep_j = wireframes[clusters[best_ci][0]] if best_ci >= 0 else None
+        rep_i = wireframes[i]
         if (
             best_ci >= 0
-            and wireframes[i]
-            and wireframes[clusters[best_ci][0]]
-            and wireframes_same_page_under_viewport_transform(
-                wireframes[clusters[best_ci][0]],
-                wireframes[i],
-            )
+            and rep_i
+            and rep_j
+            and wireframes_same_page_under_viewport_transform(rep_j, rep_i)
         ):
             clusters[best_ci].append(i)
             continue
         if (
             best_ci >= 0
-            and wireframe_aligned_transform_jaccard(
-                wireframes[clusters[best_ci][0]],
-                wireframes[i],
-            )
-            >= VIEWPORT_TRANSFORM_JACCARD_MIN
+            and rep_i
+            and rep_j
+            and wireframe_aligned_transform_jaccard(rep_j, rep_i) >= VIEWPORT_TRANSFORM_JACCARD_MIN
         ):
             clusters[best_ci].append(i)
             continue

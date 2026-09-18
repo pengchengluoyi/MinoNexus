@@ -1085,6 +1085,8 @@ def merge_synthesized_doc(
 
     mode = str((synthesized.get("meta") or {}).get("synthesis_mode") or "")
     if mode not in ("tab_bar", "tab_bar_layered"):
+        from mino_nexus.services.nav_route import prune_superseded_tab_states
+
         used: set[str] = set()
         states: list[dict[str, Any]] = []
         for doc in (synthesized, existing):
@@ -1099,6 +1101,8 @@ def merge_synthesized_doc(
         out = dict(synthesized)
         out["states"] = states
         out["edges"] = _union_graph_edges(synthesized, existing)
+        # 骨骼合成时把上一代 page.tab_* 一并带过来，会让发布件里存在两个不连通分量。
+        out = prune_superseded_tab_states(out) or out
         return ensure_unique_state_ids(out)
 
     syn_meta = dict(synthesized.get("meta") or {})

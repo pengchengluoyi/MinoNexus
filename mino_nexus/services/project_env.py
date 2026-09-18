@@ -402,6 +402,7 @@ def _norm_test_accounts(raw: Any) -> List[dict]:
                 "email": email,
                 "username": username,
                 "password": str(item.get("password") or "").strip()[:120],
+                "otp": str(item.get("otp") or item.get("sms_code") or "").strip()[:32],
                 "tags": clean_tags[:24],
                 "note": str(item.get("note") or "").strip()[:200],
                 "locked": bool(item.get("locked")),
@@ -419,10 +420,13 @@ def public_test_accounts(rows: List[dict], *, include_password: bool = False) ->
         item = dict(row)
         item["has_password"] = bool(pwd)
         item["password_masked"] = ("••••" + pwd[-2:]) if len(pwd) >= 4 else ("••••" if pwd else "")
+        otp = str(item.get("otp") or "")
+        item["has_otp"] = bool(otp)
         if include_password:
             item["password"] = pwd
         else:
             item.pop("password", None)
+            item.pop("otp", None)
         out.append(item)
     return out
 
@@ -441,6 +445,8 @@ def save_test_accounts(env_doc: dict, rows: List[dict]) -> dict:
         old = prev.get(row["id"]) or {}
         if not row.get("password"):
             row["password"] = str(old.get("password") or "")
+        if not row.get("otp"):
+            row["otp"] = str(old.get("otp") or "")
         merged.append(row)
     doc["test_accounts"] = merged
     return doc
@@ -486,14 +492,44 @@ def _prompt_grams(text: str) -> list[str]:
     return out
 
 
+_POLARITY_PAIRS = (
+    ("已注册", "未注册"),
+    ("已登录", "未登录"),
+    ("已领取", "未领取"),
+)
+
+
 def _tag_fits_query(tag: str, q: str) -> bool:
-    """未注册 / 已登录 这类极性标签，不能只因为「注册」「登录」两个字就命中反义号。"""
+    """极性标签必须整词命中「已X / 未X」，禁止「登录」命中「已登录」。"""
     t = str(tag or "")
     query = str(q or "")
-    for pos, neg in (("已注册", "未注册"), ("已登录", "未登录"), ("已领取", "未领取")):
-        if neg in t and neg not in query:
-            return False
-        if pos in t and neg in query and pos not in query:
+    for pos, neg in _POLARITY_PAIRS:
+        if pos in t:
+            if pos not in query:
+                return False
+            if neg in query:
+                return False
+        if neg in t:
+            if neg not in query:
+                return False
+            if pos in query:
+                return False
+    return True
+
+
+def _query_hits_blob(q: str, blob: str, tags: list[str]) -> bool:
+    query = str(q or "")
+    hay = str(blob or "")
+    if not query or query not in hay:
+        return False
+    stripped = hay
+    for t in tags:
+        stripped = stripped.replace(str(t).lower(), " ")
+    if query in stripped:
+        return True
+    for pos, neg in _POLARITY_PAIRS:
+        inner = pos[1:]
+        if inner and (query == inner or (inner in query and pos not in query and neg not in query)):
             return False
     return True
 
@@ -574,11 +610,14 @@ def pick_test_accounts(
     platform: str = "",
     target_id: str = "",
     env_doc: Optional[dict] = None,
+    need_facets: Optional[dict] = None,
 ) -> List[dict]:
     raw = str(prompt or "").strip()
     q = raw.lower()
     env_key = _slug(env, "") or infer_env_from_prompt(raw)
     grams = _prompt_grams(raw)
+    facets = need_facets if isinstance(need_facets, dict) else {}
+    session_want = str(facets.get("session") or "").strip().lower()
     scored = []
     for row in rows or []:
         row_env = str(row.get("env") or "")
@@ -608,12 +647,12 @@ def pick_test_accounts(
         if str(lease.get("run_id") or "").strip():
             score -= 8
             reasons.append("租用中")
-        if q and q in blob:
+        if q and _query_hits_blob(q, blob, [t.lower() for t in tags]):
             score += 16
             reasons.append("整句命中")
         tag_hits = [
             t for t in tags
-            if t and _tag_fits_query(t, q)
+            if t and _tag_fits_query(t, raw)
             and (t.lower() in q or any(len(g) >= 2 and g in t.lower() for g in grams))
         ]
         if tag_hits:
@@ -631,6 +670,26 @@ def pick_test_accounts(
         ]
         if extra:
             score += 2 * min(4, len(extra))
+        if session_want == "guest":
+            if any("未登录" in t or "未注册" in t or "游客" in t for t in tags):
+                score += 14
+                reasons.append("会话未登录")
+            if any("已登录" in t for t in tags):
+                score -= 20
+                reasons.append("已登录号不宜用于登录流程")
+        elif session_want == "logged_in":
+            if any("已登录" in t for t in tags):
+                score += 14
+                reasons.append("会话已登录")
+            if any("未登录" in t or "未注册" in t for t in tags):
+                score -= 12
+                reasons.append("未登录号不宜用于已登录前置")
+        if facets.get("profile") and any("资料" in t or "profile" in t.lower() for t in tags):
+            score += 8
+            reasons.append("资料面")
+        if facets.get("address") and any("地址" in t or "address" in t.lower() for t in tags):
+            score += 8
+            reasons.append("地址面")
         scored.append({
             **row,
             "score": int(score),

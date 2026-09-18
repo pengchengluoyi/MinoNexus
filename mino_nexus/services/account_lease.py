@@ -55,6 +55,7 @@ def _pick_row(
     platform: str,
     target_id: str,
     run_id: str,
+    need_facets: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     surface = resolve_surface_id(
         env_doc,
@@ -72,8 +73,10 @@ def _pick_row(
         platform=platform,
         target_id=target_id,
         env_doc=env_doc,
+        need_facets=need_facets,
     )
     rid = str(run_id or "").strip()
+    facets = need_facets if isinstance(need_facets, dict) else {}
     for row in ranked:
         if bool(row.get("locked")):
             continue
@@ -81,7 +84,12 @@ def _pick_row(
         other_run = str(lease.get("run_id") or "").strip()
         if other_run and other_run != rid:
             continue
-        if int(row.get("score") or 0) <= 0 and len(ranked) > 1:
+        score = int(row.get("score") or 0)
+        if facets:
+            if score < 0:
+                continue
+            return dict(row)
+        if score <= 0 and len(ranked) > 1:
             continue
         return dict(row)
     return None
@@ -141,6 +149,7 @@ def apply_lease_to_ctx(ctx: Any, row: dict[str, Any], *, project_id: str) -> Non
         "email": str(row.get("email") or ""),
         "username": str(row.get("username") or ""),
         "password": str(row.get("password") or ""),
+        "otp": str(row.get("otp") or row.get("sms_code") or ""),
         "tags": list(row.get("tags") or []),
         "env": lease_meta["env"],
         "label": account_label(row),
@@ -158,6 +167,7 @@ def lease_for_context(
     params: dict[str, Any] | None,
     *,
     ai_reasoning: str = "",
+    need_facets: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     """从 ctx.app_id 对应项目号池租号。成功返回 (row, '')，失败返回 (None, reason)。"""
     app_id = str(getattr(ctx, "app_id", "") or "").strip()
@@ -183,7 +193,8 @@ def lease_for_context(
         return None, "号池为空，请先在项目里添加测试账号"
 
     prompt = _prompt_from_ctx(ctx, params or {}, ai_reasoning=ai_reasoning)
-    if not prompt:
+    facets = need_facets if isinstance(need_facets, dict) else {}
+    if not prompt and not facets.get("session"):
         return None, "缺少租号描述（tags_prompt 或用例前置）"
 
     env_profile = str(getattr(ctx, "env_profile", "") or "").strip()
@@ -198,6 +209,7 @@ def lease_for_context(
         platform=platform,
         target_id=target_id,
         run_id=run_id,
+        need_facets=facets,
     )
     if not row:
         return None, f"没有匹配「{prompt[:60]}」的可用账号（可能都被占用或环境不符）"

@@ -14,7 +14,7 @@ _LAYOUT_COL_STEP = 296
 _LAYOUT_BLOCK_PAD_X = 20
 _LAYOUT_BLOCK_PAD_Y = 40
 _LAYOUT_BLOCK_GAP = 28
-_LAYOUT_ORPHAN_GAP = 28
+_LAYOUT_ORPHAN_GAP = 36
 _LAYOUT_NAV_MAX_DX = 320
 _LAYOUT_NAV_MAX_DY = 56
 _LAYOUT_CANVAS_X0 = 48
@@ -60,9 +60,141 @@ def infer_transition_driver(
     kind = str(action_type or "tap").strip().lower()
     if reverse or kind == "back":
         return "system"
-    if kind in ("tap", "tab", "swipe", "input"):
+    if kind in ("tap", "tab", "swipe", "input", "long_press_element", "multi_tap"):
         return "manual"
     return "unknown"
+
+
+def infer_driver_for_nav_edge(
+    src: str,
+    dst: str,
+    meta: dict[str, Any],
+    nav_action_types: dict[tuple[str, str], str],
+) -> str:
+    """边上 transition.driver：结合 action_type、标签与 Atlas 观测默认。"""
+    same = bool(src and src == dst)
+    action_type = str(meta.get("action_type") or nav_action_types.get((src, dst)) or "tap")
+    label = str(meta.get("action_label") or "")
+    reverse = bool(meta.get("reverse"))
+    if action_label_indicates_ui_back(label):
+        return "system"
+    base = infer_transition_driver(
+        action_type=action_type,
+        same_state=same,
+        reverse=reverse,
+    )
+    if base != "unknown":
+        return base
+    low = label.lower()
+    if any(x in label for x in ("完成", "自动", "下载完成", "跳转")) or "auto" in low:
+        return "auto"
+    kind = action_type.lower()
+    if kind in ("wait", "scroll", "launch", "deeplink", "same_state"):
+        return "auto"
+    if str(meta.get("source") or "") == "screen_atlas" or int(meta.get("count") or 0) > 0:
+        return "manual"
+    return "unknown"
+
+
+_FLOW_BLOCK_SEMANTIC_LEX: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("登录", "验证码", "手机号", "密码", "注册"), "登录流"),
+    (("下载", "安装", "更新包", "正在下载"), "下载流"),
+    (("购买", "结算", "下单", "支付", "订单", "立即购买"), "下单流"),
+    (("搜索", "query", "关键词"), "搜索流"),
+)
+
+
+def _semantic_flow_block_name(
+    state_ids: list[str],
+    *,
+    edges: list[dict[str, Any]] | None,
+    cluster_meta: dict[str, dict[str, Any]],
+) -> str:
+    sid_set = {str(s) for s in state_ids if s}
+    bits: list[str] = []
+    for sid in state_ids:
+        cm = cluster_meta.get(str(sid)) or {}
+        dn = str(cm.get("display_name") or cm.get("header_title") or "").strip()
+        if dn:
+            bits.append(dn)
+    for ed in edges or []:
+        if str(ed.get("kind") or "") != "nav":
+            continue
+        src, dst = str(ed.get("from") or ""), str(ed.get("to") or "")
+        if src not in sid_set and dst not in sid_set:
+            continue
+        em = ed.get("meta") if isinstance(ed.get("meta"), dict) else {}
+        lab = str(em.get("action_label") or "").strip()
+        if lab:
+            bits.append(lab.split("·")[-1].strip() or lab)
+    blob = " ".join(bits)
+    if not blob:
+        return ""
+    for keys, name in _FLOW_BLOCK_SEMANTIC_LEX:
+        if any(k in blob for k in keys):
+            return name
+    return ""
+
+
+def refresh_atlas_wireframe_nav_hints(doc: dict[str, Any]) -> None:
+    """边 ↔ 线框 nav_to / from_hotspot_id 同步（build 末尾与 enrich 后调用）。"""
+    from mino_nexus.services.nav_screen_registry import _annotate_wireframes_from_edges
+
+    meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+    wireframes = dict(meta.get("state_wireframes") or {})
+    edges = doc.get("edges") if isinstance(doc.get("edges"), list) else []
+    _annotate_wireframes_from_edges(wireframes, edges)
+    meta["state_wireframes"] = wireframes
+    doc["meta"] = meta
+
+
+def _read_atlas_flow_group_overrides(app_id: str) -> list[dict[str, Any]]:
+    """Console/草稿 meta.atlas_flow_groups → 展示块覆盖。"""
+    if not str(app_id or "").strip():
+        return []
+    from mino_nexus.services import nav_calibration_store as calib
+    from mino_nexus.services import nav_fsm_store as store
+
+    out: list[dict[str, Any]] = []
+    for reader in (store.read_raw, calib.read_draft):
+        doc = reader(app_id)
+        if not isinstance(doc, dict):
+            continue
+        meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+        rows = meta.get("atlas_flow_groups")
+        if isinstance(rows, list):
+            out.extend(r for r in rows if isinstance(r, dict))
+    return out
+
+
+def _apply_flow_group_overrides(
+    blocks: list[dict[str, Any]],
+    overrides: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not overrides:
+        return blocks
+    by_id = {str(b.get("flow_block_id") or ""): dict(b) for b in blocks if b}
+    for row in overrides:
+        bid = str(row.get("flow_block_id") or "").strip()
+        if not bid:
+            continue
+        base = by_id.get(bid) or {
+            "flow_block_id": bid,
+            "state_ids": [],
+            "display_name": bid,
+            "verification_status": DEFAULT_VERIFICATION,
+        }
+        dn = str(row.get("display_name") or "").strip()
+        if dn:
+            base["display_name"] = dn
+        sids = row.get("state_ids")
+        if isinstance(sids, list) and sids:
+            base["state_ids"] = [str(s) for s in sids if str(s)]
+        base["name_sources"] = list(base.get("name_sources") or []) + [
+            {"kind": "manual_flow_group", "confidence": 1.0}
+        ]
+        by_id[bid] = base
+    return list(by_id.values())
 
 
 def _dedupe_consecutive_state_ids(state_ids: list[str]) -> list[str]:
@@ -91,9 +223,17 @@ def _block_id_from_states(state_ids: list[str]) -> str:
     return f"fb.{digest}"
 
 
-def _default_block_name(state_ids: list[str], cluster_meta: dict[str, dict[str, Any]]) -> str:
+def _default_block_name(
+    state_ids: list[str],
+    cluster_meta: dict[str, dict[str, Any]],
+    *,
+    edges: list[dict[str, Any]] | None = None,
+) -> str:
     if not state_ids:
         return "流程"
+    semantic = _semantic_flow_block_name(state_ids, edges=edges, cluster_meta=cluster_meta)
+    if semantic:
+        return semantic
     first = state_ids[0]
     cm = cluster_meta.get(first) or {}
     dn = str(cm.get("display_name") or "").strip()
@@ -345,6 +485,9 @@ def align_layout_y_for_nav_pairs(
             if not lr:
                 continue
             left, right = lr
+            dx = abs(int(layout[left]["x"]) - int(layout[right]["x"]))
+            if dx > int(_LAYOUT_COL_STEP * 1.15):
+                continue
             y = min(int(layout[left]["y"]), int(layout[right]["y"]))
             if int(layout[left]["y"]) != y or int(layout[right]["y"]) != y:
                 layout[left]["y"] = y
@@ -635,7 +778,7 @@ def build_flow_blocks_hybrid(
             )
             merged[bid] = {
                 "flow_block_id": bid,
-                "display_name": _default_block_name(ordered, cluster_meta),
+                "display_name": _default_block_name(ordered, cluster_meta, edges=edges),
                 "name_sources": [{"kind": "nav_graph", "confidence": 0.85}],
                 "state_ids": ordered,
                 "entry_state_id": ordered[0],
@@ -682,7 +825,7 @@ def build_flow_blocks_hybrid(
             continue
         merged[bid] = {
             "flow_block_id": bid,
-            "display_name": _default_block_name(ordered, cluster_meta),
+            "display_name": _default_block_name(ordered, cluster_meta, edges=edges),
             "name_sources": [{"kind": "capture_segment", "confidence": 0.35}],
             "state_ids": ordered,
             "entry_state_id": ordered[0],
@@ -785,7 +928,7 @@ def merge_segments_to_blocks(
             continue
         merged[bid] = {
             "flow_block_id": bid,
-            "display_name": _default_block_name(path, cluster_meta),
+            "display_name": _default_block_name(path, cluster_meta, edges=None),
             "name_sources": [{"kind": "capture_segment", "confidence": 0.5}],
             "state_ids": list(path),
             "entry_state_id": path[0],
@@ -832,13 +975,7 @@ def annotate_edge_transitions(
         src = str(ed.get("from") or "")
         dst = str(ed.get("to") or "")
         meta = dict(ed.get("meta") or {})
-        same = bool(src and src == dst)
         action_type = str(meta.get("action_type") or nav_action_types.get((src, dst)) or "tap")
-        driver = infer_transition_driver(
-            action_type=action_type,
-            same_state=same,
-            reverse=bool(meta.get("reverse")),
-        )
         flow_block_id = ""
         relation = "global"
         step_index = -1
@@ -860,6 +997,7 @@ def annotate_edge_transitions(
                 break
         if not flow_block_id and action_type == "tab":
             relation = "weak"
+        driver = infer_driver_for_nav_edge(src, dst, meta, nav_action_types)
         meta["transition"] = {
             "driver": driver,
             "flow_block_id": flow_block_id,
@@ -1204,7 +1342,8 @@ def layout_states_for_flow_blocks(
         bid = str(block.get("flow_block_id") or "")
         if len(sids) < 2:
             continue
-        inner_w = len(sids) * _LAYOUT_COL_STEP + _LAYOUT_BLOCK_PAD_X * 2
+        col_step = max(_LAYOUT_COL_STEP, int(_LAYOUT_NODE_W + 56))
+        inner_w = len(sids) * col_step + _LAYOUT_BLOCK_PAD_X * 2
         inner_h = _LAYOUT_NODE_H + _LAYOUT_BLOCK_PAD_Y + 28
         row = 0 if row_x[0] <= row_x[1] else 1
         bx = row_x[row]
@@ -1238,7 +1377,7 @@ def layout_states_for_flow_blocks(
             ordered_sids = sids
         for j, sid in enumerate(ordered_sids):
             layout[sid] = {
-                "x": int(bx + _LAYOUT_BLOCK_PAD_X + j * _LAYOUT_COL_STEP),
+                "x": int(bx + _LAYOUT_BLOCK_PAD_X + j * col_step),
                 "y": int(node_y),
                 "flow_block_id": bid,
             }
@@ -1349,6 +1488,7 @@ def layout_states_for_flow_blocks(
         main_focus = {sid for sid, v in layout.items() if str(v.get("flow_block_id") or "")}
     focus = set(main_focus) | set(orphans)
     _center_layout_on_canvas(layout, regions, focus_sids=focus)
+    _resolve_layout_overlaps(layout, gap=float(_LAYOUT_ORPHAN_GAP))
 
     return layout, regions
 
@@ -1377,12 +1517,14 @@ def build_flow_context(
         on_terminal = sid in terminals
         loc = localized or {}
         tier = str(loc.get("evidence_tier") or "")
-        ref_only = loc.get("band") == "explore" or tier == "low"
+        ref_only = loc.get("band") in ("explore", "recover") or tier == "low"
         phase = "done" if on_terminal else "in_progress"
         if sid == sids[0] and idx == 0 and not on_terminal:
             phase = "entry"
         hint = ""
-        if on_terminal:
+        if ref_only:
+            hint = "定位未确证，业务流进度仅供参考；以用例步骤和截图为准，不要只空等。"
+        elif on_terminal:
             hint = "本业务流已到终态，勿重复触发流内前置操作（如再次下载/再次获取验证码）。"
         elif idx + 1 < len(sids):
             hint = f"流内第 {idx + 1}/{len(sids)} 步，完成后应进入下一屏而非返回流外 Tab。"
@@ -1425,6 +1567,7 @@ def enrich_atlas_doc(
     nav_action_types: dict[tuple[str, str], str],
     cluster_meta: dict[str, dict[str, Any]],
     fallback_layout: dict[str, dict[str, int]] | None = None,
+    app_id: str = "",
 ) -> dict[str, Any]:
     """写入 flow_blocks、边 transition、按块布局。"""
     edges = doc.get("edges") if isinstance(doc.get("edges"), list) else []
@@ -1438,11 +1581,29 @@ def enrich_atlas_doc(
         cluster_meta=cluster_meta,
         atlas_state_ids=atlas_state_ids,
     )
+    overrides = _read_atlas_flow_group_overrides(app_id)
+    if overrides:
+        blocks = _apply_flow_group_overrides(blocks, overrides)
     annotate_edge_transitions(edges, blocks, nav_action_types)
     doc["edges"] = edges
     meta = dict(doc.get("meta") or {})
     meta["flow_blocks"] = blocks
     meta["flow_block_display_count"] = len(_pick_display_blocks(blocks))
+    display_blocks = _pick_display_blocks(blocks)
+    flow_groups = [
+        {
+            "flow_block_id": str(b.get("flow_block_id") or ""),
+            "display_name": str(b.get("display_name") or ""),
+            "state_ids": list(b.get("state_ids") or []),
+            "editable": any(
+                str(s.get("kind") or "") == "manual_flow_group"
+                for s in (b.get("name_sources") or [])
+                if isinstance(s, dict)
+            ),
+        }
+        for b in display_blocks
+    ]
+    meta["flow_groups"] = flow_groups
     if blocks:
         meta["atlas_layout"] = "flow_blocks"
         node_layout, block_regions = layout_states_for_flow_blocks(
@@ -1464,7 +1625,9 @@ def enrich_atlas_doc(
                 }
                 for b in blocks
             ],
+            "flow_groups": flow_groups,
             "flow_block_regions": block_regions,
         }
+    refresh_atlas_wireframe_nav_hints(doc)
     doc["meta"] = meta
     return doc

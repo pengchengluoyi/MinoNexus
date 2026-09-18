@@ -40,6 +40,9 @@ class NavFsmState(Base):
     kind = Column(String, nullable=False, default="page")  # page / dialog / state
     identify = Column(JSON, nullable=False, default=dict)
     guards = Column(JSON, nullable=False, default=dict)
+    # display_name / aliases / page_role / tab / visit_count。跑批 localize 与
+    # nav_state_resolve 全靠它把口语目标解析到 page.sk*，丢了等于节点没有名字。
+    meta = Column(JSON, nullable=False, default=dict)
     wiki_ref = Column(String, default="")
     # Tab 入口等：entry=1 表示应用级并列入口（底栏 Tab）
     entry = Column(Integer, nullable=False, default=0)
