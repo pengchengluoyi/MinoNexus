@@ -42,6 +42,13 @@ def instruction_action_families(instruction: str) -> set[str]:
     text = str(instruction or "").strip()
     if not text:
         return set()
+    from mino_nexus.loop.step_intent import is_profile_shape_form_step
+
+    if is_profile_shape_form_step(text):
+        out: set[str] = set()
+        if _TAP_RE.search(text):
+            out.add("tap")
+        return out
     out: set[str] = set()
     if _OPEN_RE.search(text):
         out.add("open")
@@ -59,6 +66,10 @@ def instruction_action_families(instruction: str) -> set[str]:
 def instruction_action_counts(instruction: str) -> dict[str, int]:
     """同族多次动词计数；分句统计「点击」避免漏 intent。"""
     text = str(instruction or "").strip()
+    from mino_nexus.loop.step_intent import is_profile_shape_form_step
+
+    if is_profile_shape_form_step(text):
+        return {"tap": max(1, len(_TAP_RE.findall(text)))}
     fams = instruction_action_families(text)
     out: dict[str, int] = {}
     if "tap" in fams:

@@ -252,6 +252,27 @@ def empty_requirements() -> dict[str, Any]:
     return {"all": [], "prefer": [], "env": ""}
 
 
+def relax_pool_session_for_device_login(req: dict[str, Any] | None) -> dict[str, Any]:
+    """租号时 session 硬约束降为 prefer（设备登录在 prep 完成）。"""
+    import copy
+
+    out = copy.deepcopy(req or empty_requirements())
+    moved: list[dict[str, str]] = []
+    kept: list[dict[str, str]] = []
+    for c in out.get("all") or []:
+        if isinstance(c, dict) and str(c.get("facet") or "") == "session":
+            moved.append(c)
+        elif isinstance(c, dict):
+            kept.append(c)
+    out["all"] = kept
+    pref = [c for c in (out.get("prefer") or []) if isinstance(c, dict)]
+    for c in moved:
+        if c not in pref:
+            pref.append(c)
+    out["prefer"] = pref
+    return out
+
+
 def compile_requirements_from_text(
     precondition: str,
     *,
@@ -268,12 +289,14 @@ def compile_requirements_from_text(
 
     session = str(session_hint or "").strip().lower()
     if session == "logged_in":
-        req["all"].append(_clause("session", "eq", "logged_in"))
+        # 设备侧要 logged_in；号池租号仍可选 logged_out/unknown，登录在 prep 完成
+        req["prefer"].append(_clause("session", "eq", "logged_in"))
         if "lifecycle" not in pre and "注册" not in pre:
             req["prefer"].append(_clause("lifecycle", "eq", "registered"))
     elif session == "guest":
         req["all"].append(_clause("session", "in", "logged_out,guest,unknown"))
-        req["prefer"].append(_clause("lifecycle", "eq", "unregistered"))
+        if re.search(r"新用户|未注册|游客", pre):
+            req["prefer"].append(_clause("lifecycle", "eq", "unregistered"))
 
     if "新用户" in pre or "未注册" in pre:
         req["all"].append(_clause("lifecycle", "eq", "unregistered"))
@@ -281,17 +304,34 @@ def compile_requirements_from_text(
     elif "老用户" in pre or ("已注册" in pre and "未注册" not in pre):
         req["all"].append(_clause("lifecycle", "eq", "registered"))
 
-    if "已登录" in pre:
-        req["all"].append(_clause("session", "eq", "logged_in"))
+    if "已登录" in pre and session != "logged_in":
+        req["prefer"].append(_clause("session", "eq", "logged_in"))
     elif "未登录" in pre or "游客" in pre:
         req["all"].append(_clause("session", "in", "logged_out,guest,unknown"))
 
-    if want_profile or re.search(r"资料|昵称|头像|profile", pre, re.I):
-        req["all"].append(_clause("profile_data", "eq", "filled"))
+    from mino_nexus.services.account_requirement_compile import apply_profile_data_hints
+
     if want_address or re.search(r"地址|收货|address", pre, re.I):
         req["all"].append(_clause("address", "eq", "filled"))
 
     req["all"].append(_clause("health", "eq", "available"))
+    req = apply_profile_data_hints(pre, req)
+    from mino_nexus.services.account_requirement_compile import _custom_profile_shape_clause
+
+    shape = _custom_profile_shape_clause(req)
+    has_profile_data = any(
+        str(c.get("facet") or "") == "profile_data" for c in (req.get("all") or [])
+    )
+    if want_profile and not has_profile_data and not (
+        shape and str(shape.get("value") or "").lower() == "yes"
+    ):
+        req["all"].append(_clause("profile_data", "eq", "filled"))
+    elif (
+        re.search(r"已配置形象|资料已填|头像已", pre, re.I)
+        and not has_profile_data
+        and not (shape and str(shape.get("value") or "").lower() == "yes")
+    ):
+        req["all"].append(_clause("profile_data", "eq", "filled"))
     return req
 
 
@@ -382,6 +422,18 @@ def _eval_clause(
     want = str(clause.get("value") or "").strip().lower()
     got = str(facets.get(facet) or "unknown").strip().lower()
     defn = _facet_field_def(field_defs, facet)
+    from mino_nexus.services.account_requirement_compile import PROFILE_SHAPE_FACETS
+
+    if facet in PROFILE_SHAPE_FACETS and op == "eq":
+        # 形象 facet 不对称：要「已配置」必须库内 yes；要「未配置」允许未标注，但排除 yes
+        if want == "yes":
+            if got == "unknown":
+                return False
+        elif want == "no":
+            if got == "yes":
+                return False
+            if got in ("no", "unknown"):
+                return True
     # 号池未标注时：未注册/未登录类需求仍可选号，避免整池 unknown 导致永远租不到
     if got == "unknown":
         opts_unknown = {x.strip() for x in want.split(",") if x.strip()}
@@ -478,10 +530,16 @@ def pick_accounts_by_requirements(
     account_ident_fn: Callable[[dict | None], str],
     observed_by_account: dict[str, dict[str, str]] | None = None,
     ident_query: str = "",
+    ident_hints: list[str] | None = None,
     field_defs: list[dict[str, Any]] | None = None,
 ) -> list[dict]:
+    from mino_nexus.services.account_ident_parse import account_row_matches_hints
+
     env_key = str(requirements.get("env") or env or "").strip().lower()
     q = str(ident_query or "").strip().lower()
+    hints = list(ident_hints or [])
+    if not hints and q:
+        hints = [ident_query.strip()]
     scored: list[dict] = []
     obs_map = observed_by_account if isinstance(observed_by_account, dict) else {}
     defs_by_key = {
@@ -491,6 +549,8 @@ def pick_accounts_by_requirements(
     }
 
     for row in rows or []:
+        if hints and not account_row_matches_hints(row, hints):
+            continue
         row_env = str(row.get("env") or "")
         if env_key and row_env and row_env != env_key:
             continue
@@ -538,9 +598,11 @@ def pick_accounts_by_requirements(
 
 _ALLOWED_TRANSITIONS: dict[tuple[str, str, str], set[str]] = {
     ("lifecycle", "unregistered", "registered"): {"case_pass", "manual", "provision"},
-    ("session", "logged_out", "logged_in"): {"case_pass", "probe", "manual"},
-    ("session", "logged_in", "logged_out"): {"case_pass", "reset", "manual"},
-    ("session", "guest", "logged_in"): {"case_pass", "probe"},
+    ("session", "logged_out", "logged_in"): {"case_pass", "probe", "manual", "capability", "flow_block"},
+    ("session", "logged_in", "logged_out"): {"case_pass", "reset", "manual", "capability"},
+    ("session", "logged_in", "guest"): {"case_pass", "probe", "capability"},
+    ("session", "guest", "logged_in"): {"case_pass", "probe", "flow_block"},
+    ("session", "guest", "logged_out"): {"case_pass", "probe", "capability"},
     ("profile_data", "none", "filled"): {"case_pass", "manual"},
     ("address", "none", "filled"): {"case_pass", "manual"},
     ("health", "available", "dirty"): {"case_pass", "probe"},
@@ -572,8 +634,11 @@ def apply_facet_updates(
         edge = (key, old, new_val)
         allowed = _ALLOWED_TRANSITIONS.get(edge)
         if allowed and source not in allowed:
-            errors.append(f"禁止转移 {key}: {old}→{new_val} source={source}")
-            continue
+            if source == "ai_case_end" and ("case_pass" in allowed or "manual" in allowed):
+                pass
+            else:
+                errors.append(f"禁止转移 {key}: {old}→{new_val} source={source}")
+                continue
         if key == "lifecycle" and new_val not in LIFECYCLE:
             continue
         if key == "session" and new_val not in SESSION:
@@ -586,17 +651,60 @@ def apply_facet_updates(
     return core, errors
 
 
-def infer_pass_effects(precondition: str, expected: str) -> dict[str, str]:
+def _expected_text(expected: Any) -> str:
+    if isinstance(expected, list):
+        return "\n".join(str(x) for x in expected if str(x).strip())
+    raw = str(expected or "")
+    if raw.strip().startswith("["):
+        try:
+            import json
+
+            data = json.loads(raw)
+            if isinstance(data, list):
+                return "\n".join(str(x) for x in data if str(x).strip())
+        except json.JSONDecodeError:
+            pass
+    return raw
+
+
+def infer_pass_effects(precondition: str, expected: Any) -> dict[str, str]:
     """用例成功后的默认 facet 效应（可被 case.meta.facet_effects 覆盖）。"""
-    blob = f"{precondition} {expected}"
+    exp_text = _expected_text(expected)
+    blob = f"{precondition} {exp_text}"
     effects: dict[str, str] = {}
-    if re.search(r"注册", blob) and "未注册" not in expected:
+    if re.search(r"注册", blob) and "未注册" not in exp_text:
         effects["lifecycle"] = "registered"
-    if re.search(r"登录", blob) and "退出" not in blob and "登出" not in blob:
+    if re.search(r"登录", blob) and not re.search(r"退出登录|登出", exp_text):
         effects["session"] = "logged_in"
-    if re.search(r"退出|登出", blob):
+    if re.search(r"(?<!不显示)退出|登出", exp_text) and "退出登录按钮" not in exp_text:
         effects["session"] = "logged_out"
+    effects.update(_infer_profile_shape_pass_effects(exp_text))
     return effects
+
+
+_PROFILE_SHAPE_PASS_SAVE_RE = re.compile(
+    r"保存成功|形象.{0,8}保存|保存.{0,8}形象|形象配置.{0,6}完成",
+    re.I,
+)
+_PROFILE_SHAPE_PASS_CAMERA_RE = re.compile(r"进入拍摄|拍摄页", re.I)
+
+
+def _infer_profile_shape_pass_effects(expected: Any) -> dict[str, str]:
+    """用例 pass 且预期证明形象已保存时，写回号池形象 facet（与租号 field_7065t5 对齐）。"""
+    from mino_nexus.services.account_requirement_compile import PROFILE_SHAPE_FACETS
+
+    exp = _expected_text(expected)
+    if not exp.strip():
+        return {}
+    # 仅「进到形象页」不算配置完成（如登录后停在选择形象页但未点完成）
+    if not _PROFILE_SHAPE_PASS_SAVE_RE.search(exp):
+        return {}
+    if _PROFILE_SHAPE_PASS_CAMERA_RE.search(exp) or "保存成功" in exp:
+        out: dict[str, str] = {"profile_data": "filled"}
+        for key in PROFILE_SHAPE_FACETS:
+            out[key] = "yes"
+        return out
+    return {}
 
 
 def observe_session_from_probe(session_block: str) -> dict[str, str]:
@@ -628,15 +736,24 @@ def lease_expired(lease: dict[str, Any], *, now: Optional[datetime] = None) -> b
     return ref >= dt
 
 
-def new_lease_record(run_id: str, *, ttl_sec: int = DEFAULT_LEASE_TTL_SEC) -> dict[str, str]:
+def new_lease_record(
+    run_id: str,
+    *,
+    ttl_sec: int = DEFAULT_LEASE_TTL_SEC,
+    case_id: str = "",
+) -> dict[str, str]:
     rid = str(run_id or "").strip()
     now = datetime.now()
     exp = now + timedelta(seconds=max(60, int(ttl_sec)))
-    return {
+    rec = {
         "run_id": rid[:80],
         "leased_at": now.isoformat(timespec="seconds"),
         "expires_at": exp.isoformat(timespec="seconds"),
     }
+    cid = str(case_id or "").strip()
+    if cid:
+        rec["case_id"] = cid[:64]
+    return rec
 
 
 def sleep_wait(remaining_ms: int) -> None:

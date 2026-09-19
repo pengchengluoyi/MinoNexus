@@ -598,10 +598,17 @@ def save_one_test_account(
         prev_f = old.get("facets") if isinstance(old.get("facets"), dict) else {}
         merged_f = dict(prev_f)
         incoming = payload["facets"]
-        for key in def_keys:
-            if key != "health" and key not in incoming:
-                merged_f.pop(key, None)
-        merged_f.update(incoming)
+        # 自动化写回（租号/探针/用例 pass）只带 facets_for_storage 的稀疏子集；
+        # 缺 key 不能当作「用户清空」，否则会擦掉 Console 配的扩展 facet（如 field_7065t5）。
+        for key, raw in incoming.items():
+            k = str(key or "").strip()
+            if not k or k not in def_keys:
+                continue
+            if raw is None or not str(raw).strip():
+                if k != "health":
+                    merged_f.pop(k, None)
+            else:
+                merged_f[k] = str(raw).strip().lower()
         payload["facets"] = merged_f
     normed = _norm_test_accounts([{**old, **payload}], env_doc=doc)
     if not normed:
@@ -766,10 +773,19 @@ def pick_test_accounts(
         need_facets=need_facets,
         requirements=requirements,
     )
+    from mino_nexus.services.resource_pool import relax_pool_session_for_device_login
+
+    req = relax_pool_session_for_device_login(req)
     env_key = str(req.get("env") or _slug(env, "") or infer_env_from_prompt(raw))
     from mino_nexus.services.account_pool_templates import merged_pool_field_defs
 
     pool_defs = merged_pool_field_defs(env_doc) if env_doc else []
+    from mino_nexus.services.account_ident_parse import extract_account_ident_hints, primary_ident_query
+
+    ident_hints = extract_account_ident_hints(raw)
+    ident_q = primary_ident_query(raw)
+    if not ident_q and re.fullmatch(r"[\d+\-@.\w]+", raw.replace(" ", "")):
+        ident_q = raw.strip()
     return pick_accounts_by_requirements(
         rows,
         req,
@@ -777,7 +793,8 @@ def pick_test_accounts(
         run_id=run_id,
         account_ident_fn=account_ident,
         observed_by_account=observed_by_account,
-        ident_query=raw if re.fullmatch(r"[\d+\-@.\w]+", raw.replace(" ", "")) else "",
+        ident_query=ident_q,
+        ident_hints=ident_hints,
         field_defs=pool_defs,
     )
 

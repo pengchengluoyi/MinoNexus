@@ -368,7 +368,12 @@ def run_case(
                 summary=str(outcome.get("summary") or ""),
                 step_count=len(outcome.get("steps") or []),
             )
-        commit_case_facet_effects(ctx, case, status=str(outcome.get("status") or ""))
+        commit_case_facet_effects(
+            ctx,
+            case,
+            status=str(outcome.get("status") or ""),
+            outcome=outcome,
+        )
         from mino_nexus.services.account_lease import release_ctx_lease
 
         release_ctx_lease(ctx)
@@ -790,6 +795,19 @@ def _run_loop(
             ver = str(ver_result.summary or "").strip()[:64]
         if ver:
             stamp_app_version(ctx, ver)
+            sn_v = str(getattr(ctx, "sn", "") or "").strip()
+            if sn_v and target_pkg:
+                try:
+                    from mino_nexus.services.device_app_session_store import upsert_session
+
+                    upsert_session(
+                        sn_v,
+                        target_pkg,
+                        app_version=ver,
+                        source="get_app_version",
+                    )
+                except Exception:
+                    pass
             if writer:
                 writer.append("app/version", {"app_version": ver, "package": target_pkg})
             history.append(
@@ -1166,14 +1184,13 @@ def _run_loop(
             and isinstance(cursor, StepCursor)
             and cursor.phase == "prep"
         ):
-            from mino_nexus.loop.registry import history_cap_passed
-            from mino_nexus.loop.step_contract import precondition_requires_clear_cache
+            from mino_nexus.services.resource_preflight import claim_requires_clear_cache
 
             prec_menu = str(getattr(cursor, "precondition", "") or case.get("precondition") or "")
-            if precondition_requires_clear_cache(prec_menu):
-                cleared = bool(getattr(ctx, "prep_clear_done", False)) or history_cap_passed(
-                    list(history[-24:]), "clear_app_cache"
-                )
+            scene_prep = dict(getattr(ctx, "case_scene", None) or {})
+            rk_prep = case.get("resource_key") if isinstance(case.get("resource_key"), dict) else None
+            if claim_requires_clear_cache(rk_prep, scene_prep, prec_menu):
+                cleared = bool(getattr(ctx, "prep_clear_done", False))
                 if not cleared:
                     menu = [
                         c
@@ -1414,6 +1431,14 @@ def _run_loop(
                 sum_auto = str(macro.get("summary") or "")
                 if macro.get("ok"):
                     cursor.record_step_op(cap_auto)
+                    if login_block:
+                        from mino_nexus.loop.flow_block_runner import maybe_emit_login_flow_complete
+
+                        maybe_emit_login_flow_complete(
+                            ctx,
+                            app_id=str(getattr(ctx, "app_id", "") or ""),
+                            history_lines=hist_lines,
+                        )
                 rec(
                     seq,
                     capability_id=cap_auto,
@@ -1722,6 +1747,9 @@ def _run_loop(
             "case_scene": dict(getattr(ctx, "case_scene", None) or {}),
             "session_block": str(inspect_slots.get("session_block") or ""),
             "prep_clear_done": bool(getattr(ctx, "prep_clear_done", False)),
+            "session_fact_session": str(
+                (getattr(ctx, "session_fact", None) or {}).get("session") or ""
+            ).strip().lower(),
             "app_launch_confirmed": bool(getattr(ctx, "app_launch_confirmed", False)),
             "precondition": str(getattr(cursor, "precondition", "") or case.get("precondition") or ""),
             "decision_thought": thought,
@@ -1796,9 +1824,9 @@ def _run_loop(
                         nav=nav,
                         turn_id=seq,
                     )
-                    inspect_slots["session_block"] = effective_session_block(
-                        ctx, str(inspect_slots.get("session_block") or "")
-                    )
+                inspect_slots["session_block"] = effective_session_block(
+                    ctx, str(inspect_slots.get("session_block") or "")
+                )
                 sess_reason = run_guards(
                     ["require_session"],
                     {
@@ -1841,6 +1869,44 @@ def _run_loop(
                     )
                     _log_turn_end(writer, cap="require_session", status="skipped")
                     continue
+                from mino_nexus.services.resource_preflight import prep_resource_gate_issues
+
+                resource_issues = prep_resource_gate_issues(ctx, case)
+                if resource_issues:
+                    gate_msg = resource_issues[0]
+                    if isinstance(cursor, StepCursor):
+                        cursor.correction_hint = gate_msg
+                        streak = int(getattr(cursor, "prep_resource_gate_streak", 0) or 0) + 1
+                        cursor.prep_resource_gate_streak = streak
+                        if streak >= 5:
+                            return _leave(
+                                status="blocked",
+                                summary=(
+                                    f"{gate_msg} "
+                                    "测试资源 Claim 多次未满足，任务已停止。"
+                                ),
+                            )
+                    rec(
+                        seq,
+                        capability_id="resource_claim_gate",
+                        status="skipped",
+                        summary=gate_msg,
+                        thought=thought,
+                        thumb=thumb,
+                    )
+                    emit(
+                        "result",
+                        thought=thought,
+                        step=seq,
+                        capability_id="resource_claim_gate",
+                        status="skipped",
+                        summary=gate_msg,
+                        thumb=thumb,
+                    )
+                    _log_turn_end(writer, cap="resource_claim_gate", status="skipped")
+                    continue
+                if isinstance(cursor, StepCursor):
+                    cursor.prep_resource_gate_streak = 0
                 summary = thought or "前置检查完成，进入操作步骤"
                 rec(seq, capability_id="signal_done", status="skipped",
                         summary=summary, thought=thought, thumb=thumb)
@@ -1898,6 +1964,23 @@ def _run_loop(
                 if isinstance(cursor, StepCursor):
                     from mino_nexus.loop.step_intent import format_intent_progress
 
+                    streak = int(getattr(cursor, "require_do_work_streak", 0) or 0) + 1
+                    cursor.require_do_work_streak = streak
+                    if streak >= 8:
+                        if probe_hit_guard or loc_hit_guard:
+                            do_work_reason = None
+                        else:
+                            cur_n = int(cur.n) if cur else 0
+                            return _leave(
+                                status="fail",
+                                summary=(
+                                    f"步骤 {cur_n} 连续 {streak} 次无法收工："
+                                    f"{str(do_work_reason or '')[:160]}"
+                                ),
+                            )
+                if do_work_reason and isinstance(cursor, StepCursor):
+                    from mino_nexus.loop.step_intent import format_intent_progress
+
                     prog = format_intent_progress(
                         instruction=str(cur.instruction or ""),
                         intents_done=cursor.step_intents_done,
@@ -1907,25 +1990,26 @@ def _run_loop(
                         + (f" {prog}" if prog else "")
                         + " 若屏上已达成本步目标，请补全未完成意图对应操作后再 signal_done。"
                     )
-                rec(
-                    seq,
-                    capability_id="require_do_work",
-                    status="skipped",
-                    summary=do_work_reason,
-                    thought=thought,
-                    thumb=thumb,
-                )
-                emit(
-                    "result",
-                    thought=thought,
-                    step=seq,
-                    capability_id="require_do_work",
-                    status="skipped",
-                    summary=do_work_reason,
-                    thumb=thumb,
-                )
-                _log_turn_end(writer, cap="require_do_work", status="skipped")
-                continue
+                if do_work_reason:
+                    rec(
+                        seq,
+                        capability_id="require_do_work",
+                        status="skipped",
+                        summary=do_work_reason,
+                        thought=thought,
+                        thumb=thumb,
+                    )
+                    emit(
+                        "result",
+                        thought=thought,
+                        step=seq,
+                        capability_id="require_do_work",
+                        status="skipped",
+                        summary=do_work_reason,
+                        thumb=thumb,
+                    )
+                    _log_turn_end(writer, cap="require_do_work", status="skipped")
+                    continue
             from mino_nexus.loop import step_effect as step_effect_mod
             from mino_nexus.services import nav_telemetry
 
@@ -2043,6 +2127,23 @@ def _run_loop(
                                 f"连续 {n_block} 次同类恢复被拒绝后仍重复尝试，判定陷入死循环。"
                                 f"{skip_reason}"
                             )
+            elif (
+                cursor.phase == "prep"
+                and isinstance(cursor, StepCursor)
+                and skip_cap in (
+                    "block_prep_guest_mine_tab",
+                    "skip_repeat_clear_app_cache",
+                    "require_session",
+                )
+            ):
+                cursor.prep_guard_streak = int(getattr(cursor, "prep_guard_streak", 0) or 0) + 1
+                cursor.correction_hint = skip_reason
+                if cursor.prep_guard_streak >= 6:
+                    stop_msg = (
+                        f"前置空转 {cursor.prep_guard_streak} 轮（仍为 logged_in 或无法 logout）。"
+                        "请确认清缓存/路线图退出是否可用，或手动将设备登出后再跑。"
+                        f" 最近拦截：{skip_reason[:160]}"
+                    )
             if writer:
                 writer.append(
                     "turn/end",
@@ -2238,9 +2339,24 @@ def _run_loop(
             setattr(ctx, "prep_clear_done", True)
             if in_prep:
                 setattr(ctx, "app_launch_confirmed", False)
-            from mino_nexus.loop.session_persist import mark_session_dirty
+            from mino_nexus.services.resource_transition import emit_clear_app_cache
 
-            mark_session_dirty(ctx, reason="clear_app_cache")
+            emit_clear_app_cache(ctx)
+            ctx.session_dirty = False
+            ctx.session_fact = {
+                "session": "logged_out",
+                "identity": "",
+                "seen": "clear_app_cache",
+                "source": "clear_app_cache",
+                "reason": "清缓存后按未登录继续前置",
+            }
+            from mino_nexus.loop.session_persist import effective_session_block
+
+            inspect_slots["session_block"] = effective_session_block(ctx, "")
+        elif status_val == "pass":
+            from mino_nexus.services.resource_transition_engine import maybe_fire_cap_transition
+
+            maybe_fire_cap_transition(ctx, cap_id, status_val)
         if status_val == "pass" and cap_id in ("launch_app", "open_app", "open_url"):
             setattr(ctx, "app_launch_confirmed", True)
         if status_val == "pass" and cap_id == "press_key":
@@ -2260,6 +2376,8 @@ def _run_loop(
             )
             if isinstance(cursor, StepCursor):
                 cursor.clear_recovery_block()
+                if cursor.phase == "prep" and cap_id not in ("wait_ms", "wait_screen_ready"):
+                    cursor.prep_guard_streak = 0
                 if cap_id == "swipe_direction" and status_val == "pass":
                     cursor.note_swipe_pass(
                         direction=str((params or {}).get("direction") or ""),

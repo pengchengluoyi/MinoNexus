@@ -207,6 +207,24 @@ def preview_import(
         if conflict:
             conflicts.append(str(conflict.get("existing_case_id") or cid or name))
         pre = row.get("precondition") or ""
+        claim_summary = ""
+        try:
+            from mino_nexus.services.case_resource_claim import compile_resource_key_from_precondition
+            from mino_nexus.services.resource_claim_summary import resource_claim_summary
+
+            env_doc = ps.project_env(pid)
+            claim = compile_resource_key_from_precondition(
+                str(pre),
+                env_doc=env_doc,
+                platform=str(row.get("platform") or "android"),
+            )
+            claim_summary = resource_claim_summary(
+                claim,
+                scene=claim.get("case_scene") if isinstance(claim.get("case_scene"), dict) else None,
+                precondition=str(pre),
+            )
+        except Exception:
+            claim_summary = ""
         steps = row.get("steps") or []
         expected = row.get("expected") or []
         flags: list[str] = []
@@ -230,6 +248,7 @@ def preview_import(
             "module": row.get("module") or "",
             "platform": row.get("platform") or "",
             "precondition_preview": str(pre)[:200],
+            "resource_claim_summary": claim_summary,
             "steps_preview": "\n".join(steps)[:240],
             "expected_preview": "\n".join(expected)[:240],
             "flags": flags,

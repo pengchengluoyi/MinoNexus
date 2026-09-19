@@ -200,5 +200,8 @@ def try_logout_via_nav(
     result = router.dispatch(event, run_id=scout_run_id, step_idx=agent_step_idx(case_seq, seq))
     st = result.status.value if hasattr(result.status, "value") else str(result.status)
     if st in ("pass", "done"):
+        from mino_nexus.services.resource_transition_engine import fire_transition
+
+        fire_transition(ctx, "nav_logout", source="nav_logout")
         return True, str(result.summary or "已执行 logout 边")
     return False, str(result.summary or result.error or "logout 边执行失败")

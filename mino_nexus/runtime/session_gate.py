@@ -269,18 +269,40 @@ def is_login_module_case(
 def ensure_case_scene(
     case: dict[str, Any],
     ctx_scene: Optional[dict[str, Any]] = None,
+    *,
+    env_doc: Optional[dict[str, Any]] = None,
+    target_package: str = "",
+    env_profile: str = "test",
 ) -> dict[str, Any]:
     """合并 CaseScene JSON；登录模块缺省时补 guest + logout prep。"""
     raw = case.get("case_scene") if isinstance(case.get("case_scene"), dict) else None
     if raw is None and isinstance(case.get("scene"), dict):
         raw = case.get("scene")
     merged: dict[str, Any] = {**(ctx_scene or {}), **(raw or {})}
+    from mino_nexus.services.case_resource_claim import apply_claim_to_merged_scene
+
+    merged = apply_claim_to_merged_scene(
+        case,
+        merged,
+        env_doc=env_doc,
+        env=str(env_profile or "test"),
+        package=str(target_package or ""),
+    )
     pre = str(case.get("precondition") or merged.get("precondition") or "").strip()
     if pre and re.search(r"登录成功|已登录", pre):
         if str(merged.get("required_session") or "any") in ("", "any"):
             merged["required_session"] = "logged_in"
         if str(merged.get("session_prep") or "skip") == "skip":
             merged["session_prep"] = "relogin"
+    if pre and re.search(r"未登录|游客", pre):
+        if str(merged.get("required_session") or "any") in ("", "any"):
+            merged["required_session"] = "guest"
+        if str(merged.get("session_prep") or "skip") == "skip":
+            merged["session_prep"] = "logout"
+    if str(merged.get("required_session") or "") == "logged_in" and str(
+        merged.get("session_prep") or "skip"
+    ) == "skip":
+        merged["session_prep"] = "relogin"
     if (
         str(merged.get("required_session") or "") in _REQUIRED
         and str(merged.get("session_prep") or "") in _SESSION_PREP

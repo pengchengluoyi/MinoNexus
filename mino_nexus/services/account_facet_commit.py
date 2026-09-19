@@ -35,9 +35,9 @@ def commit_case_facet_effects(
     case: dict[str, Any] | None,
     *,
     status: str,
+    outcome: dict[str, Any] | None = None,
 ) -> None:
-    if str(status or "").lower() not in ("pass", "done"):
-        return
+    """每条用例结束（pass/fail/超时）分析轨迹并写回号池 facet。"""
     lease = getattr(ctx, "resource_lease", None) or {}
     pid = str(lease.get("project_id") or "").strip()
     aid = str(lease.get("account_id") or "").strip()
@@ -45,18 +45,43 @@ def commit_case_facet_effects(
         return
     picked = getattr(ctx, "picked_account", None) or {}
     current = account_facet_values_for_match(picked if isinstance(picked, dict) else {})
-    pre = str(
-        (case or {}).get("precondition")
-        or (case or {}).get("precondition_raw")
-        or ""
-    )
-    expected = str((case or {}).get("expected") or (case or {}).get("expected_raw") or "")
     meta = (case or {}).get("meta") if isinstance((case or {}).get("meta"), dict) else {}
-    effects = meta.get("facet_effects") if isinstance(meta.get("facet_effects"), dict) else {}
+    author_hints = meta.get("facet_effects") if isinstance(meta.get("facet_effects"), dict) else {}
+
+    from mino_nexus.services.account_facet_ai import (
+        collect_probe_for_account,
+        infer_facet_updates_from_run,
+    )
+
+    effects, ai_reason, llm_ok = infer_facet_updates_from_run(
+        project_id=pid,
+        case=case,
+        status=status,
+        outcome=outcome if isinstance(outcome, dict) else {},
+        current_facets=current,
+        probe_facets=collect_probe_for_account(ctx, aid),
+        author_hints=author_hints,
+    )
+    source = "ai_case_end"
+    if not effects and author_hints:
+        effects = {str(k): str(v).strip().lower() for k, v in author_hints.items() if str(v).strip()}
+        source = "manual"
+    if not effects and not llm_ok:
+        st = str(status or "").lower()
+        if st in ("pass", "done"):
+            pre = str(
+                (case or {}).get("precondition")
+                or (case or {}).get("precondition_raw")
+                or ""
+            )
+            expected = (case or {}).get("expected") or (case or {}).get("expected_raw") or ""
+            effects = infer_pass_effects(pre, expected)
+            source = "case_pass"
     if not effects:
-        effects = infer_pass_effects(pre, expected)
-    if not effects:
+        if ai_reason:
+            SLog.d(TAG, f"no facet write: {ai_reason[:120]}")
         return
+
     from mino_nexus.services import project_store as ps
     from mino_nexus.services.account_facet_schema import facets_for_storage
     from mino_nexus.services.account_pool_templates import merged_pool_field_defs
@@ -68,11 +93,15 @@ def commit_case_facet_effects(
         if str(d.get("key") or "")
     )
     updated, errors = apply_facet_updates(
-        current, effects, source="case_pass", extension_keys=ext_keys
+        current, effects, source=source, extension_keys=ext_keys
     )
     if errors:
         SLog.w(TAG, f"facet transition blocked: {errors[:3]}")
+        if not updated or updated == current:
+            return
     stored = facets_for_storage({**current, **updated}, merged_pool_field_defs(env_doc))
+    if stored == facets_for_storage(current, merged_pool_field_defs(env_doc)):
+        return
     persist_account_facets(pid, aid, stored)
     updated = stored
     if isinstance(picked, dict):
@@ -81,3 +110,4 @@ def commit_case_facet_effects(
     lease_out = dict(lease)
     lease_out["facets"] = updated
     ctx.resource_lease = lease_out
+    SLog.i(TAG, f"facet persisted account={aid[:8]} keys={list(stored.keys())}")

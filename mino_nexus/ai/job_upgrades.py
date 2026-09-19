@@ -1261,6 +1261,64 @@ def ensure_nav_widget_state_job() -> int:
     return 1
 
 
+def ensure_account_facet_commit_job() -> int:
+    """用例结束：根据执行轨迹推断号池 facet 写回（pass/fail/超时均调用）。"""
+    from mino_nexus.services.job_store import get_job, _to_row
+
+    jid = "account-facet-commit"
+    if get_job(jid):
+        return 0
+    spec = {
+        "id": jid,
+        "label": "账号 Facet 写回分析",
+        "summary": "读用例 timeline，判断号池 facet 应更新哪些字段",
+        "engine": "json_chat",
+        "role_id": "test-engineer",
+        "enabled": True,
+        "builtin": True,
+        "prompt_version": 1,
+        "output_schema": "json",
+        "slots": [{"name": "payload_json", "kind": "text"}],
+        "system_blocks": [
+            {
+                "id": "main",
+                "text": (
+                    "你是测试账号池状态写回分析器。根据 JSON 里的执行 timeline、探针与字段 catalog，"
+                    "判断租用账号应更新哪些 facet。\n\n"
+                    "铁律：\n"
+                    "- 只写有**执行证据**的字段；无证据则 updates 必须为 {}\n"
+                    "- 仅进入形象/资料配置页、未点保存/完成 → 不要写已配置形象\n"
+                    "- 轨迹或 assert 明确保存成功并进入后续业务页 → 可写形象类为 yes/已配置\n"
+                    "- 登录/登出以 timeline 中 login/logout/clear_app_cache/inspect 为准，不靠前置假设\n"
+                    "- 用例 fail 或超时，若轨迹已证明某状态达成，仍可在 updates 中写该状态\n"
+                    "- updates 的 key/value 必须来自 field_catalog 的枚举\n"
+                    "- author_facet_hints 仅供参考，不能替代证据\n\n"
+                    "只输出 JSON：\n"
+                    '{"updates":{},"reason":"简短中文","confidence":"low|medium|high"}'
+                ),
+            }
+        ],
+        "user_blocks": [
+            {
+                "id": "payload",
+                "slot": "payload_json",
+                "heading": "==== 用例与轨迹 ====",
+            }
+        ],
+        "call": {"temperature": 0.1, "max_tokens": 700, "timeout_sec": 45, "json_mode": True},
+        "flags": ["case_execution_use"],
+    }
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+
+    with session_scope() as db:
+        if db.query(LlmJob).filter(LlmJob.id == jid).first():
+            return 0
+        db.add(_to_row(spec))
+        db.flush()
+    return 1
+
+
 def ensure_nav_atlas_morph_job() -> int:
     """M4：两帧/线框上下文 + 截图，判定 same_page_morph | split_page。"""
     from mino_nexus.services.job_store import get_job, _to_row

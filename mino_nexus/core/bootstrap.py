@@ -31,6 +31,11 @@ def bootstrap() -> None:
         rn = seed_recovery_rules()
         if rn:
             SLog.i(TAG, f"recovery rules seeded {rn}")
+        from mino_nexus.catalog.resource_transition_seed import seed_resource_transition_rules
+
+        trn = seed_resource_transition_rules()
+        if trn:
+            SLog.i(TAG, f"resource transition rules seeded {trn}")
         from mino_nexus.catalog.recovery_seed import upgrade_recovery_rules
 
         un = upgrade_recovery_rules()
@@ -155,6 +160,11 @@ def bootstrap() -> None:
         nm = ensure_nav_atlas_morph_job()
         if nm:
             SLog.i(TAG, "nav-atlas-morph job seeded")
+        from mino_nexus.ai.job_upgrades import ensure_account_facet_commit_job
+
+        af = ensure_account_facet_commit_job()
+        if af:
+            SLog.i(TAG, "account-facet-commit job seeded")
         db.commit()
     except Exception:
         db.rollback()

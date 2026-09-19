@@ -70,6 +70,21 @@ class TestAccountPickBody(BaseModel):
     requirements: dict[str, Any] = {}
 
 
+class ResourceTrialBody(BaseModel):
+    prompt: str = ""
+    env: str = "test"
+    sn: str = ""
+    package_id: str = ""
+    app_id: str = ""
+
+
+class DeviceAppSessionPatchBody(BaseModel):
+    session: str = ""
+    bound_account_id: str = ""
+    identity_hint: str = ""
+    app_version: str = ""
+
+
 class FacetExtensionsBody(BaseModel):
     extensions: list[dict[str, Any]] = []
 
@@ -476,6 +491,78 @@ def allocate_project_account(project_id: str, body: AccountAllocateBody, _sess: 
     if not grant:
         raise HTTPException(status_code=404, detail=err or "分配失败")
     return ok({"grant": grant}, msg="已分配账号凭证")
+
+
+@router.get("/{project_id}/device-app-sessions")
+def list_project_device_app_sessions(
+    project_id: str,
+    sn: str = "",
+    package_id: str = "",
+    app_id: str = "",
+    limit: int = 500,
+    _sess: dict = Depends(current_session),
+):
+    try:
+        ps.require_project(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    from mino_nexus.services.device_app_session_catalog import list_project_device_app_matrix
+
+    payload = list_project_device_app_matrix(
+        project_id,
+        app_id=app_id,
+        sn=sn,
+        package_id=package_id,
+        limit=limit,
+    )
+    return ok(payload)
+
+
+@router.patch("/{project_id}/device-app-sessions/{sn}/{package_id}")
+def patch_project_device_app_session(
+    project_id: str,
+    sn: str,
+    package_id: str,
+    body: DeviceAppSessionPatchBody,
+    _sess: dict = Depends(current_session),
+):
+    try:
+        ps.require_project(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    from mino_nexus.services.device_app_session_store import upsert_session
+
+    patch = body.model_dump(exclude_unset=True)
+    row = upsert_session(
+        sn,
+        package_id,
+        session=patch.get("session"),
+        bound_account_id=patch.get("bound_account_id"),
+        identity_hint=patch.get("identity_hint"),
+        app_version=patch.get("app_version"),
+        source="manual",
+    )
+    return ok({"session": row}, msg="已更新机态")
+
+
+@router.post("/{project_id}/resource-trial")
+def project_resource_trial(project_id: str, body: ResourceTrialBody, _sess: dict = Depends(current_session)):
+    try:
+        doc = ps.project_env(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    from mino_nexus.services.project_resource_trial import run_resource_trial
+
+    data = run_resource_trial(
+        project_id,
+        prompt=body.prompt,
+        env=body.env,
+        sn=body.sn,
+        package_id=body.package_id,
+        app_id=body.app_id,
+        env_doc=doc,
+    )
+    return ok(data)
 
 
 @router.post("/{project_id}/accounts/pick")

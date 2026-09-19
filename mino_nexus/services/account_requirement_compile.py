@@ -163,6 +163,56 @@ def _clauses_from_full_text(pre: str, field_defs: list[dict[str, Any]]) -> list[
     return _non_overlapping_clauses(pre, field_defs)
 
 
+_PROFILE_NONE_RE = re.compile(r"未配置形象|形象未配置|无形象", re.I)
+_PROFILE_FILLED_RE = re.compile(r"已配置形象|形象已配置", re.I)
+# Console 号池模板里「形象」常映射到自定义 facet（如 field_7065t5），与核心 profile_data 不同步
+PROFILE_SHAPE_FACETS = frozenset({"field_7065t5"})
+_PROFILE_SHAPE_FACETS = PROFILE_SHAPE_FACETS
+
+
+def _custom_profile_shape_clause(req: dict[str, Any]) -> dict[str, str] | None:
+    for bucket in ("all", "prefer"):
+        for clause in req.get(bucket) or []:
+            if not isinstance(clause, dict):
+                continue
+            facet = str(clause.get("facet") or "").strip()
+            if facet not in _PROFILE_SHAPE_FACETS:
+                continue
+            if str(clause.get("op") or "eq").strip().lower() != "eq":
+                continue
+            val = str(clause.get("value") or "").strip().lower()
+            if val in ("yes", "no"):
+                return clause
+    return None
+
+
+def _strip_facet_clauses(req: dict[str, Any], facet: str, *, bucket: str | None = None) -> None:
+    facet = str(facet or "").strip()
+    if not facet:
+        return
+    for key in ("all", "prefer"):
+        if bucket and key != bucket:
+            continue
+        rows = [c for c in (req.get(key) or []) if str(c.get("facet") or "") != facet]
+        req[key] = rows
+
+
+def apply_profile_data_hints(pre: str, req: dict[str, Any]) -> dict[str, Any]:
+    """编号行「未配置形象」优先于全文扫描里的「已配置」误匹配。"""
+    out = dict(req or empty_requirements())
+    text = str(pre or "")
+    shape = _custom_profile_shape_clause(out)
+    if _PROFILE_NONE_RE.search(text):
+        _strip_facet_clauses(out, "profile_data")
+        if not (shape and str(shape.get("value") or "").lower() == "no"):
+            _append_clause(out, "all", _clause("profile_data", "eq", "none"))
+    elif _PROFILE_FILLED_RE.search(text):
+        _strip_facet_clauses(out, "profile_data")
+        if not (shape and str(shape.get("value") or "").lower() == "yes"):
+            _append_clause(out, "all", _clause("profile_data", "eq", "filled"))
+    return out
+
+
 def augment_requirements_from_precondition(
     req: dict[str, Any],
     precondition: str,
@@ -201,4 +251,5 @@ def augment_requirements_from_precondition(
     for clause in _clauses_from_full_text(pre, defs):
         _append_clause(out, "prefer", clause)
 
+    out = apply_profile_data_hints(pre, out)
     return out

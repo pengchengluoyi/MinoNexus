@@ -16,6 +16,14 @@ def stamp_session_observation(ctx: Any, row: dict[str, Any] | None) -> None:
     session = str(row.get("session") or "").strip().lower()
     if session not in ("logged_in", "guest", "logged_out", "unknown"):
         return
+    if bool(getattr(ctx, "prep_clear_done", False)) and session == "logged_in":
+        prev = dict(getattr(ctx, "session_fact", None) or {})
+        if (
+            str(prev.get("source") or "") == "clear_app_cache"
+            and str(prev.get("session") or "").lower() in ("logged_out", "guest")
+        ):
+            # 清缓存后 UI 仍像已登录：前置以 clear 结论为准，勿被 inspect 覆写回 logged_in
+            return
     identity = str(row.get("identity") or "").strip()
     seen = str(row.get("seen") or "").strip()
     fact = {
@@ -30,6 +38,9 @@ def stamp_session_observation(ctx: Any, row: dict[str, Any] | None) -> None:
     ctx.task_session = dict(fact)
     if session == "logged_in":
         ctx.session_dirty = False
+    from mino_nexus.services.resource_transition import emit_inspect_session
+
+    emit_inspect_session(ctx, row)
 
 
 def mark_session_dirty(ctx: Any, *, reason: str = "") -> None:
@@ -74,6 +85,12 @@ def _strip_stacked_session_block(block: str) -> str:
 def effective_session_block(ctx: Any, slot_block: str = "") -> str:
     """单条 session 结论：优先当轮 inspect-session 槽，不与 run_context 叠句。"""
     block = _strip_stacked_session_block(str(slot_block or "").strip())
+    fact = dict(getattr(ctx, "session_fact", None) or {})
+    fact_sess = str(fact.get("session") or "").strip().lower()
+    if bool(getattr(ctx, "prep_clear_done", False)) and fact_sess in ("logged_out", "guest"):
+        if parse_session_value(block) == "logged_in":
+            block = ""
+
     if block and not block.startswith("（"):
         return block
 

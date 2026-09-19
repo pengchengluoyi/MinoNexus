@@ -425,6 +425,8 @@ class StepCursor:
         self.step_effect_hint: str = ""
         self.correction_hint: str = ""
         self.prep_session_skip_streak: int = 0
+        self.prep_guard_streak: int = 0
+        self.require_do_work_streak: int = 0
         self.recovery_block_streak: int = 0
         self.do_subphase: str = "operation"
         self.step_nav_plan_hint: str = ""
@@ -462,6 +464,8 @@ class StepCursor:
         self.step_effect_hint = ""
         self.correction_hint = ""
         self.prep_session_skip_streak = 0
+        self.prep_guard_streak = 0
+        self.prep_resource_gate_streak = 0
         self.recovery_block_streak = 0
         self.do_subphase = "operation"
         self.step_nav_plan_hint = ""
@@ -606,6 +610,7 @@ class StepCursor:
         self.step_effect_hint = ""
         self.correction_hint = ""
         self.recovery_block_streak = 0
+        self.require_do_work_streak = 0
         self.step_start_fp = ""
         self.do_subphase = "operation"
         self.step_nav_plan_hint = ""
@@ -656,6 +661,7 @@ class StepCursor:
         self.step_effect_hint = ""
         self.correction_hint = ""
         self.recovery_block_streak = 0
+        self.require_do_work_streak = 0
         self.step_start_fp = ""
         self.do_subphase = "operation"
         self.step_nav_plan_hint = ""

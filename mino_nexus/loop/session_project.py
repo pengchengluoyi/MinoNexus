@@ -373,6 +373,8 @@ def project_trajectory(session_id: str) -> dict[str, Any] | None:
     summary = (end or {}).get("payload", {}).get("summary") or (meta or {}).get("summary") or ""
     finished = status not in ("", "running")
 
+    ui_events = _merge_resource_transition_events(events, ui_events)
+
     return {
         "run_id": sid,
         "session_id": sid,
@@ -394,6 +396,62 @@ def project_trajectory(session_id: str) -> dict[str, Any] | None:
             if str(row.get("type") or "") == "inspection/done"
         ],
     }
+
+
+def _resource_transition_summary(payload: dict[str, Any]) -> str:
+    tid = str(payload.get("trigger_id") or "").strip()
+    src = str(payload.get("source") or "").strip()
+    cap = str(payload.get("cap_id") or "").strip()
+    parts = [f"资源转移 · {tid}" if tid else "资源转移"]
+    if src:
+        parts.append(f"来源 {src}")
+    if cap:
+        parts.append(f"cap {cap}")
+    rules = payload.get("rule_ids")
+    if isinstance(rules, list) and rules:
+        parts.append(f"规则 {', '.join(str(x) for x in rules[:3])}")
+    return " · ".join(parts)
+
+
+def _merge_resource_transition_events(
+    events: list[dict[str, Any]],
+    ui_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """把 resource/transition 钉进 Studio 时间线（按 session seq 与 step 排序）。"""
+    pins: list[tuple[float, int, dict[str, Any]]] = []
+    max_step = 0
+    for i, ev in enumerate(ui_events):
+        step = int(ev.get("step") or 0)
+        if step > max_step:
+            max_step = step
+        pins.append((float(step), i, ev))
+    slot = 0
+    for row in events:
+        if str(row.get("type") or "") != "resource/transition":
+            continue
+        payload = dict(row.get("payload") or {})
+        turn = int(row.get("turn") or 0)
+        seq = int(row.get("seq") or 0)
+        step = turn if turn > 0 else max_step
+        slot += 1
+        pins.append(
+            (
+                float(step) + 0.001 * slot,
+                10_000 + seq,
+                {
+                    "phase": "resource",
+                    "step": step if step > 0 else max_step + slot,
+                    "capability_id": "resource_transition",
+                    "status": "pass",
+                    "result_status": "pass",
+                    "summary": _resource_transition_summary(payload),
+                    "resource_transition": payload,
+                    "event_seq": seq,
+                },
+            )
+        )
+    pins.sort(key=lambda t: (t[0], t[1]))
+    return [t[2] for t in pins]
 
 
 def _structured_to_ui(
@@ -451,6 +509,17 @@ def _structured_to_ui(
                 "loop_phase": phase,
                 "thought": payload.get("tool_name") or payload.get("job") or "llm",
                 "dispatch_id": payload.get("dispatch_id") or "",
+            }
+        elif typ == "resource/transition":
+            base = {
+                "phase": "resource",
+                "step": turn if turn > 0 else 0,
+                "loop_phase": phase,
+                "capability_id": "resource_transition",
+                "status": "pass",
+                "result_status": "pass",
+                "summary": _resource_transition_summary(payload),
+                "resource_transition": payload,
             }
         if base is not None:
             out.append(_enrich_ui_event(

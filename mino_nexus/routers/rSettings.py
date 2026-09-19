@@ -826,6 +826,85 @@ class AccountPoolTemplatesBody(BaseModel):
     extension_addons: dict[str, list[dict[str, Any]]] = {}
 
 
+@router.get("/case-resource-key")
+def get_case_resource_key_catalog(_sess: dict = Depends(current_session)):
+    from mino_nexus.services.case_resource_key_catalog import catalog_payload
+
+    return ok(catalog_payload())
+
+
+class ResourceTransitionRulePatchBody(BaseModel):
+    enabled: Optional[bool] = None
+    label: Optional[str] = None
+
+
+@router.get("/resource-transition-rules")
+def get_resource_transition_rules(_sess: dict = Depends(current_session)):
+    from mino_nexus.core.database import SessionLocal
+    from mino_nexus.models.resource_ops import ResourceTransitionRule
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(ResourceTransitionRule)
+            .order_by(ResourceTransitionRule.trigger_id, ResourceTransitionRule.rule_id)
+            .all()
+        )
+        payload = [
+            {
+                "rule_id": r.rule_id,
+                "trigger_id": r.trigger_id,
+                "platform": r.platform,
+                "label": r.label,
+                "effects": list(r.effects_json or []),
+                "enabled": bool(r.enabled),
+            }
+            for r in rows
+        ]
+    finally:
+        db.close()
+    return ok({"rules": payload})
+
+
+@router.patch("/resource-transition-rules/{rule_id}")
+def patch_resource_transition_rule(
+    rule_id: str,
+    body: ResourceTransitionRulePatchBody,
+    _sess: dict = Depends(current_session),
+):
+    from datetime import datetime, timezone
+
+    from mino_nexus.core.database import SessionLocal
+    from mino_nexus.models.resource_ops import ResourceTransitionRule
+
+    rid = str(rule_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="rule_id required")
+    db = SessionLocal()
+    try:
+        row = db.query(ResourceTransitionRule).filter(ResourceTransitionRule.rule_id == rid).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="规则不存在")
+        patch = body.model_dump(exclude_unset=True)
+        if "enabled" in patch:
+            row.enabled = 1 if patch["enabled"] else 0
+        if "label" in patch and patch["label"] is not None:
+            row.label = str(patch["label"])[:200]
+        row.updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        db.commit()
+        out = {
+            "rule_id": row.rule_id,
+            "trigger_id": row.trigger_id,
+            "platform": row.platform,
+            "label": row.label,
+            "effects": list(row.effects_json or []),
+            "enabled": bool(row.enabled),
+        }
+    finally:
+        db.close()
+    return ok({"rule": out}, msg="已更新")
+
+
 @router.get("/account-pool-templates")
 def get_account_pool_templates(_sess: dict = Depends(current_session)):
     from mino_nexus.services.account_pool_templates import list_templates_catalog

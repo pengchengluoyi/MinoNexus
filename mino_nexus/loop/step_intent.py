@@ -56,6 +56,25 @@ _STRUCTURAL_CAPS = frozenset(
 
 
 _CANCEL_TAP_RE = re.compile(r"取消|关闭|返回|拒绝|不允许", re.I)
+_PROFILE_SHAPE_FORM_RE = re.compile(
+    r"形象配置|配置页.{0,12}(形象|头像)|选择.{0,8}形象",
+    re.I,
+)
+_PROFILE_SHAPE_SAVE_RE = re.compile(r"保存|完成", re.I)
+_PROFILE_TEXT_FIELD_RE = re.compile(r"手机|验证码|密码|昵称|姓名|邮箱", re.I)
+
+
+def is_profile_shape_form_step(instruction: str) -> bool:
+    """形象向导：选头像/点完成，不是短信框 input_text。"""
+    text = str(instruction or "").strip()
+    if not text or not _PROFILE_SHAPE_FORM_RE.search(text):
+        return False
+    if _PROFILE_TEXT_FIELD_RE.search(text):
+        return False
+    return bool(
+        _PROFILE_SHAPE_SAVE_RE.search(text)
+        or re.search(r"填写必填", text, re.I)
+    )
 
 
 def mark_tap_intents_from_instruction(instruction: str, intents_done: set[str]) -> None:
@@ -103,6 +122,8 @@ def mark_tap_intents_from_tap(
             intents_done.add("logout")
         return
     mark_tap_intents_from_instruction(instr, intents_done)
+    if is_profile_shape_form_step(instr) and _PROFILE_SHAPE_SAVE_RE.search(label):
+        intents_done.add("input_fill")
 
 
 def cap_step_intent(cap_id: str, *, params: dict[str, Any] | None = None) -> str:
@@ -134,6 +155,8 @@ def instruction_required_intents(instruction: str) -> set[str]:
         out.discard("login_entry")
     if _logout_needs_confirm(text) and "logout" in out:
         out.discard("logout_pending")
+    if is_profile_shape_form_step(text):
+        out.discard("input_fill")
     return out
 
 

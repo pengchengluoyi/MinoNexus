@@ -63,6 +63,15 @@ async def lifespan(app: FastAPI):
     stale = reconcile_stale_running_runs()
     if stale:
         SLog.w(TAG, f"启动清扫 {len(stale)} 条僵尸 running 任务: {stale[:5]}")
+        from mino_nexus.services.device_resource_lease import release_device_leases_for_run
+
+        for rid in stale:
+            release_device_leases_for_run(rid)
+    from mino_nexus.services.device_resource_lease import purge_expired_device_leases
+
+    purged = purge_expired_device_leases()
+    if purged:
+        SLog.i(TAG, f"清扫过期设备租约 {purged} 条")
     configure_proxy_bypass()
     loop = asyncio.get_running_loop()
     ui_ws.set_loop(loop)

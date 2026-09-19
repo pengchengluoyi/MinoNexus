@@ -113,6 +113,46 @@ def format_accounts_brief(row: dict[str, Any]) -> str:
     return "；".join(bits)
 
 
+def _lease_unavailable_hint(
+    env_doc: dict[str, Any],
+    *,
+    project_id: str,
+    requirements: dict[str, Any],
+    run_id: str,
+) -> str:
+    """租号失败时附一句可操作的池内统计（不改变选号逻辑）。"""
+    from mino_nexus.services.account_pool_templates import merged_pool_field_defs
+    from mino_nexus.services.resource_pool import account_facet_values_for_match, match_requirements
+
+    defs = {
+        str(d.get("key") or ""): d
+        for d in merged_pool_field_defs(env_doc)
+        if str(d.get("key") or "")
+    }
+    rid = str(run_id or "").strip()
+    match_n = 0
+    busy = 0
+    locked_n = 0
+    for row in list_test_accounts(env_doc, project_id=project_id):
+        facets = account_facet_values_for_match(row)
+        ok, _, _ = match_requirements(facets, requirements, field_defs=defs)
+        if not ok:
+            continue
+        match_n += 1
+        if bool(row.get("locked")):
+            locked_n += 1
+        lease = row.get("lease") if isinstance(row.get("lease"), dict) else {}
+        other = str(lease.get("run_id") or "").strip()
+        if other and other != rid:
+            busy += 1
+    if match_n == 0:
+        return "；号池内 0 个账号满足当前 facet 硬约束（检查形象/环境标注或补号）"
+    free = match_n - busy - locked_n
+    if free <= 0:
+        return f"；满足约束 {match_n} 个，可用 {free}（占用 {busy}，锁定 {locked_n}）"
+    return ""
+
+
 def _purge_expired_leases(project_id: str) -> None:
     from mino_nexus.services.pool_account_store import set_account_lease
 
@@ -168,10 +208,20 @@ def _pick_row(
     return None
 
 
-def _mark_leased(project_id: str, account_id: str, run_id: str) -> None:
+def _mark_leased(
+    project_id: str,
+    account_id: str,
+    run_id: str,
+    *,
+    case_id: str = "",
+) -> None:
     from mino_nexus.services.pool_account_store import set_account_lease
 
-    rec = new_lease_record(run_id, ttl_sec=_lease_ttl_sec())
+    rec = new_lease_record(
+        run_id,
+        ttl_sec=_lease_ttl_sec(),
+        case_id=str(case_id or "")[:64],
+    )
     if not set_account_lease(project_id, account_id, rec):
         SLog.w(TAG, f"mark lease failed project={project_id[:8]} account={account_id[:8]}")
 
@@ -201,7 +251,7 @@ def renew_run_lease(ctx: Any) -> bool:
     if not pid or not aid or not rid:
         return False
     try:
-        _mark_leased(pid, aid, rid)
+        _mark_leased(pid, aid, rid, case_id=str(getattr(ctx, "case_id", "") or "")[:64])
     except Exception as exc:
         SLog.w(TAG, f"renew lease failed: {exc!r}")
         return False
@@ -288,11 +338,15 @@ def restore_lease_for_run(ctx: Any, run_id: str) -> tuple[dict[str, Any] | None,
     _purge_expired_leases(project_id)
     env_doc = ps.project_env(project_id)
     rid = str(run_id or "").strip()
+    want_case = str(getattr(ctx, "case_id", "") or "").strip()
     for row in list_test_accounts(env_doc, project_id=project_id):
         lease = row.get("lease") if isinstance(row.get("lease"), dict) else {}
         if str(lease.get("run_id") or "").strip() != rid:
             continue
         if lease_expired(lease):
+            continue
+        leased_case = str(lease.get("case_id") or "").strip()
+        if want_case and leased_case and leased_case != want_case:
             continue
         apply_lease_to_ctx(ctx, row, project_id=project_id)
         renew_run_lease(ctx)
@@ -354,24 +408,52 @@ def lease_for_context(
         ai_reasoning=ai_reasoning,
         env_doc=env_doc,
     )
+    from mino_nexus.services.resource_pool import relax_pool_session_for_device_login
+
+    requirements = relax_pool_session_for_device_login(requirements)
     if not (requirements.get("all") or requirements.get("prefer")):
         return None, "缺少租号需求（用例前置 / requirements）"
+
+    prompt = str((params or {}).get("precondition") or ai_reasoning or "").strip()
+    from mino_nexus.services.account_ident_parse import (
+        account_row_matches_hints,
+        extract_account_ident_hints,
+    )
+
+    ident_hints = extract_account_ident_hints(prompt)
 
     obs_for_row: dict[str, str] | None = None
     if isinstance(observed_by_account, dict) and observed_by_account:
         obs_for_row = next(iter(observed_by_account.values()), None)
 
     restored, _rerr = restore_lease_for_run(ctx, run_id)
+    if restored and ident_hints and not account_row_matches_hints(restored, ident_hints):
+        SLog.i(
+            TAG,
+            f"run lease ident mismatch run={run_id[:12]} "
+            f"account={account_ident(restored)} hints={ident_hints[:2]}; re-pick",
+        )
+        _clear_leased(project_id, str(restored.get("id") or ""), run_id)
+        restored = None
     if restored:
         aid = str(restored.get("id") or "")
         obs = observed_by_account.get(aid) if isinstance(observed_by_account, dict) and aid else obs_for_row
         if row_satisfies_requirements(restored, requirements, env_doc, observed=obs):
-            return restored, ""
-        SLog.i(
-            TAG,
-            f"run lease mismatch run={run_id[:12]} account={account_ident(restored)}; re-pick for case",
-        )
-        release_ctx_lease(ctx)
+            if ident_hints and not account_row_matches_hints(restored, ident_hints):
+                SLog.i(
+                    TAG,
+                    f"restored account fails ident hints account={account_ident(restored)}",
+                )
+                _clear_leased(project_id, aid, run_id)
+                release_ctx_lease(ctx)
+            else:
+                return restored, ""
+        else:
+            SLog.i(
+                TAG,
+                f"run lease mismatch run={run_id[:12]} account={account_ident(restored)}; re-pick for case",
+            )
+            release_ctx_lease(ctx)
 
     accounts = list_test_accounts(env_doc, project_id=project_id)
     if not accounts:
@@ -380,7 +462,6 @@ def lease_for_context(
     env_profile = str(getattr(ctx, "env_profile", "") or "").strip()
     platform = str(getattr(ctx, "platform", "") or "android")
     target_id = str(getattr(ctx, "target_package", "") or "")
-    prompt = str((params or {}).get("precondition") or ai_reasoning or "").strip()
 
     wait_budget = wait_ms if wait_ms is not None else _acquire_wait_ms()
     deadline = time.monotonic() + (wait_budget / 1000.0) if wait_budget > 0 else time.monotonic()
@@ -406,12 +487,24 @@ def lease_for_context(
         sleep_wait(int((deadline - time.monotonic()) * 1000))
 
     if not row:
-        return None, "没有满足 Requirement 的可用账号（可能都被占用或状态不符）"
+        hint = _lease_unavailable_hint(
+            env_doc,
+            project_id=project_id,
+            requirements=requirements,
+            run_id=run_id,
+        )
+        base = "没有满足 Requirement 的可用账号（可能都被占用或状态不符）"
+        return None, f"{base}{hint}"
 
     account_id = str(row.get("id") or "")
     if account_id and run_id:
         try:
-            _mark_leased(project_id, account_id, run_id)
+            _mark_leased(
+                project_id,
+                account_id,
+                run_id,
+                case_id=str(getattr(ctx, "case_id", "") or "")[:64],
+            )
         except Exception as exc:
             SLog.w(TAG, f"mark lease failed: {exc!r}")
 
@@ -435,7 +528,26 @@ def ensure_case_account_lease(
 
     from mino_nexus.runtime.session_gate import ensure_case_scene
 
-    merged_scene = ensure_case_scene(case or {}, scene if isinstance(scene, dict) else None)
+    from mino_nexus.services import project_store as ps
+
+    project_id = ""
+    app_key = str(app_id or "").strip()
+    if app_key:
+        try:
+            app_row = ps.require_app(app_key)
+            project_id = str(app_row.get("project_id") or "").strip()
+        except KeyError:
+            project_id = ""
+    env_doc = ps.project_env(project_id) if project_id else None
+    merged_scene = ensure_case_scene(
+        case or {},
+        scene if isinstance(scene, dict) else None,
+        env_doc=env_doc,
+        target_package=str(target_package or ""),
+        env_profile=str(env_profile or "test"),
+    )
+    if isinstance(case, dict):
+        case["case_scene"] = merged_scene
     need = account_need_from_case(case, merged_scene)
     if not need.get("need_account"):
         return True, ""
@@ -443,6 +555,7 @@ def ensure_case_account_lease(
     cid = str((case or {}).get("case_id") or "")[:24]
     ctx = SimpleNamespace(
         run_id=rid,
+        case_id=cid,
         app_id=str(app_id or "").strip(),
         env_profile=str(env_profile or "test").strip(),
         platform=str(platform or "android").strip(),
@@ -453,7 +566,7 @@ def ensure_case_account_lease(
         ctx,
         {"precondition": prompt} if prompt else {},
         need_facets=need,
-        wait_ms=_acquire_wait_ms(),
+        wait_ms=min(_acquire_wait_ms(), 15_000),
     )
     if row:
         SLog.i(

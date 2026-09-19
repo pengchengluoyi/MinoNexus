@@ -4,6 +4,12 @@ from mino_nexus.models.auth import AuthSession, AuthState, User
 from mino_nexus.models.case import ProjectCase
 from mino_nexus.models.catalog import CatalogEntry, CatalogMeta
 from mino_nexus.models.device import Device
+from mino_nexus.models.device_app_session import DeviceAppSession
+from mino_nexus.models.resource_ops import (
+    DeviceResourceLease,
+    ResourceTransitionAudit,
+    ResourceTransitionRule,
+)
 from mino_nexus.models.dispatch import DispatchCall
 from mino_nexus.models.doc_library import DocChunk, DocSource
 from mino_nexus.models.knowledge import KnowledgeEntry
@@ -35,6 +41,7 @@ __all__ = [
     "CatalogEntry",
     "CatalogMeta",
     "Device",
+    "DeviceAppSession",
     "DispatchCall",
     "DocChunk",
     "DocSource",

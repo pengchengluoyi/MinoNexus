@@ -481,6 +481,10 @@ def _guard_require_session(ctx: dict[str, Any]) -> Optional[str]:
     from mino_nexus.loop.session_ensure import session_mismatch_reason
 
     scene = ctx.get("case_scene") if isinstance(ctx.get("case_scene"), dict) else {}
+    if bool(ctx.get("prep_clear_done")):
+        fact_sess = str(ctx.get("session_fact_session") or "").lower()
+        if fact_sess in ("logged_out", "guest"):
+            return None
     reason = session_mismatch_reason(
         scene=scene,
         session_block=str(ctx.get("session_block") or ""),
@@ -597,11 +601,9 @@ def _history_cap_passed(history: list[str], cap_id: str) -> bool:
     needle = str(cap_id or "").strip()
     if not needle:
         return False
+    pat = re.compile(rf"^\d+\.\s*{re.escape(needle)}\s*→\s*pass\b")
     for line in reversed(history or []):
-        text = str(line or "")
-        if needle not in text:
-            continue
-        if "→ pass" in text or "→ skipped:" in text:
+        if pat.search(str(line or "").strip()):
             return True
     return False
 

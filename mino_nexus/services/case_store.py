@@ -134,7 +134,15 @@ def _row_fields(
     project_id: str,
     requirement_id: str,
     sort_index: int,
+    force_recompile_resource_key: bool = False,
 ) -> dict[str, Any]:
+    from mino_nexus.services.case_resource_claim import sync_case_resource_metadata
+
+    raw = sync_case_resource_metadata(
+        dict(raw),
+        project_id=project_id,
+        force_recompile=force_recompile_resource_key,
+    )
     cid = str(raw.get("case_id") or "").strip()
     extra = dict(raw)
     return dict(
@@ -170,7 +178,17 @@ def save_case(project_id: str, row: dict[str, Any], *, requirement_id: str = "")
         cid = allocate_case_id(pid)
         row = {**row, "case_id": cid}
     rid = str(requirement_id or row.get("requirement_id") or "").strip()
-    fields = _row_fields(row, project_id=pid, requirement_id=rid, sort_index=int(row.get("index") or 0))
+    existing = get_case(pid, cid)
+    pre_new = str(row.get("precondition") or row.get("pre") or "").strip()
+    pre_old = str((existing or {}).get("precondition") or "").strip()
+    force_rk = bool(existing and pre_new != pre_old and "resource_key" not in row)
+    fields = _row_fields(
+        row,
+        project_id=pid,
+        requirement_id=rid,
+        sort_index=int(row.get("index") or 0),
+        force_recompile_resource_key=force_rk,
+    )
     with session_scope() as db:
         obj = (
             db.query(ProjectCase)

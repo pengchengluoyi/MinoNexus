@@ -11,10 +11,12 @@
 | `App` / 项目 / 环境 | `projects` / `apps` | UI / 飞书同步 |
 | 项目号池账号 | `pool_accounts` + `pool_account_facets` | Studio 账号管理；`projects.env.test_accounts` 仅迁移来源 |
 | 项目号池配置（扩展字段 / 启用模板 / 本地模板） | `project_pool_config` | Studio 号池与模板；`projects.env` 中对应键仅迁移来源 |
+| 用例资源声明（Claim 词汇 / 示例） | 用例 `meta.resource_key` + `case_scene`（真源词汇见 `case_resource_key_catalog.py`） | Console「用例密钥」；见 [CASE_RESOURCE_KEY.md](CASE_RESOURCE_KEY.md) |
 | 用例、前置、预期 | `project_cases`（按 `project_id` + `requirement_id`；需求/脑图仍在 `apps.env.automation.qa_process`） | UI / QA 推进 |
 | `AppRegressionRun`（批次结果） | `app_regression_runs` | Nexus 的循环 |
 | 逐步 trace / baseline | `m_case_run_trace` / `m_case_baseline` | Nexus 的循环 |
 | 设备身份 | `m_device` | **连通性来自 Scout 上报**，其余来自 UI |
+| 设备 × App 会话 | `device_app_sessions` | Scout 执行 + `inspect-session` / 清缓存转移；见 [CASE_RESOURCE_KEY.md](CASE_RESOURCE_KEY.md) |
 | 节点 / 工作台归属 | `nodes` / `studios` | 活连接在内存 `NodeRegistry` |
 | 账号 / 会话 | `users` / `sessions` / `auth_state` | UI 登录 |
 | 设置 / 知识机审开关 | `settings` | UI |

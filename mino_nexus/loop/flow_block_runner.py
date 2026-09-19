@@ -97,6 +97,7 @@ def try_run_login_flow_macro(
         ok = str(st) in ("pass", EventStatus.PASS.value)
         if ok:
             _macro_done(ctx).add(sid)
+            maybe_emit_login_flow_complete(ctx, app_id=app_id, history_lines=history_lines)
         return {
             "ok": ok,
             "status": st,
@@ -107,7 +108,56 @@ def try_run_login_flow_macro(
             "interrupt": bool(interrupt),
         }
     setattr(ctx, "login_flow_macro_active", False)
+    maybe_emit_login_flow_complete(ctx, app_id=app_id, history_lines=history_lines)
     return None
+
+
+def login_block_required_steps_done(
+    ctx: Any,
+    *,
+    app_id: str,
+    history_lines: list[str],
+) -> bool:
+    steps = resolve_effective_steps(app_id=app_id, block_id=LOGIN_BLOCK_ID)
+    if not steps:
+        return False
+    done = _macro_done(ctx)
+    for step in steps:
+        if step.get("optional"):
+            continue
+        cap = str(step.get("cap") or "")
+        sid = str(step.get("id") or cap)
+        if sid in done or _history_passed(history_lines, cap):
+            continue
+        return False
+    return True
+
+
+def maybe_emit_login_flow_complete(
+    ctx: Any,
+    *,
+    app_id: str,
+    history_lines: list[str],
+) -> bool:
+    """登录流块必做步骤完成且已登录（或 get_otp 已成功）时写 device_app + 号池。"""
+    if getattr(ctx, "_login_flow_transition_emitted", False):
+        return True
+    if not login_block_required_steps_done(ctx, app_id=app_id, history_lines=history_lines):
+        return False
+    from mino_nexus.services.resource_preflight import effective_device_session
+
+    sn = str(getattr(ctx, "sn", "") or "").strip()
+    pkg = str(getattr(ctx, "target_package", "") or "").strip()
+    sess = effective_device_session(ctx, sn=sn, package_id=pkg)
+    otp_ok = "otp_fill" in _macro_done(ctx) or _history_passed(history_lines, "get_otp")
+    if sess != "logged_in" and not otp_ok:
+        return False
+    from mino_nexus.services.resource_transition_engine import fire_transition
+
+    fire_transition(ctx, "login_flow_complete", source="flow_block")
+    setattr(ctx, "_login_flow_transition_emitted", True)
+    setattr(ctx, "login_flow_macro_active", False)
+    return True
 
 
 def try_run_system_dialog_macro(

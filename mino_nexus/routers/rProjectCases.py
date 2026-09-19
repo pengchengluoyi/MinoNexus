@@ -14,6 +14,13 @@ from mino_nexus.services import project_store as ps
 router = APIRouter(prefix="/project", tags=["Project Cases"])
 
 
+class ResourceKeyPreviewBody(BaseModel):
+    precondition: str = ""
+    platform: str = "android"
+    package_id: str = ""
+    env: str = "test"
+
+
 class CaseImportPreviewBody(BaseModel):
     requirement_id: str
     table: list[list[Any]] | None = None
@@ -53,6 +60,8 @@ class CaseUpdateBody(BaseModel):
     expected: list[str] = Field(default_factory=list)
     steps_raw: str = ""
     expected_raw: str = ""
+    resource_key: dict[str, Any] | None = None
+    case_scene: dict[str, Any] | None = None
 
 
 def _project(project_id: str) -> dict[str, Any]:
@@ -60,6 +69,36 @@ def _project(project_id: str) -> dict[str, Any]:
     if not row:
         raise HTTPException(status_code=404, detail="Project not found")
     return row
+
+
+@router.post("/{project_id}/resource-key/preview")
+def preview_resource_key(project_id: str, body: ResourceKeyPreviewBody, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services import project_store as ps
+    from mino_nexus.services.case_resource_claim import (
+        compile_resource_key_from_precondition,
+        default_package_for_project,
+    )
+    from mino_nexus.services.resource_claim_summary import resource_claim_summary
+
+    try:
+        env_doc = ps.project_env(project_id)
+    except KeyError:
+        env_doc = None
+    pkg = str(body.package_id or "").strip() or default_package_for_project(project_id)
+    claim = compile_resource_key_from_precondition(
+        body.precondition,
+        env_doc=env_doc,
+        platform=str(body.platform or "android"),
+        package=pkg,
+        env=str(body.env or "test"),
+    )
+    scene = claim.get("case_scene") if isinstance(claim.get("case_scene"), dict) else {}
+    return ok({
+        "resource_key": claim,
+        "case_scene": scene,
+        "summary": resource_claim_summary(claim, scene=scene, precondition=body.precondition),
+    })
 
 
 @router.get("/{project_id}/cases")
@@ -112,6 +151,22 @@ def update_one_case(
     rid = str(patch.get("requirement_id") or existing.get("requirement_id") or "").strip()
     saved = save_case(project_id, merged, requirement_id=rid)
     return ok({"case": saved}, msg="用例已保存")
+
+
+@router.post("/{project_id}/cases/{case_id}/resource-key/compile")
+def compile_case_resource_key(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.case_resource_claim import sync_case_resource_metadata
+    from mino_nexus.services.case_store import get_case, save_case
+
+    _project(project_id)
+    cid = str(case_id or "").strip()
+    existing = get_case(project_id, cid)
+    if not existing:
+        raise HTTPException(status_code=404, detail="用例不存在")
+    synced = sync_case_resource_metadata(dict(existing), project_id=project_id, force_recompile=True)
+    rid = str(existing.get("requirement_id") or "").strip()
+    saved = save_case(project_id, synced, requirement_id=rid)
+    return ok({"case": saved}, msg="已从前置编译 resource_key")
 
 
 @router.delete("/{project_id}/cases/{case_id}")

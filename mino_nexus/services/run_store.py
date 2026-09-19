@@ -523,6 +523,9 @@ def interrupt_runs(run_ids: list[str], *, reason: str) -> list[str]:
             if isinstance(finished.get("platforms_by_sn"), dict)
             else {},
         )
+        from mino_nexus.services.run_resource_release import release_run_resource_holdings
+
+        release_run_resource_holdings(finished, run_id=rid)
         emit_testing_task({
             "event": "task_finished",
             "run_id": rid,
@@ -551,4 +554,8 @@ def finish(run_id: str, *, status: str = "done", error: str = "") -> dict[str, A
     doc["finished_at"] = _now()
     _close_open_sessions(doc, summary=error or "")
     clear_cancel(run_id)
-    return put(doc)
+    out = put(doc)
+    from mino_nexus.services.run_resource_release import release_run_resource_holdings
+
+    release_run_resource_holdings(out)
+    return out

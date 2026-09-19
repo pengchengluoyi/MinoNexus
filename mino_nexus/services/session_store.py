@@ -230,10 +230,20 @@ def resolve_session_id(run_id: str, *, case_id: str = "") -> str:
     if get_meta(rid) is not None:
         return rid
     cid = str(case_id or "").strip()
+    if not cid and "::" in rid:
+        _batch, _, tail = rid.partition("::")
+        cid = str(tail.split("::", 1)[0] or "").strip()
+        want = f"{_batch}::{cid}" if _batch and cid else rid
+        if want != rid and get_meta(want) is not None:
+            return want
+        if cid and get_meta(rid) is None:
+            # 明确要某条 case 的 session，但库里没有 —— 禁止回退到同批其它 case
+            return rid
     if cid and "::" not in rid:
         want = f"{rid}::{cid}"
         if get_meta(want) is not None:
             return want
+        return want
     batch = rid.partition("::")[0]
     items, _ = list_sessions(run_id=batch, case_id=cid, limit=20)
     if len(items) == 1:
