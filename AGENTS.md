@@ -8,7 +8,7 @@
 
 MinoNexus 是服务端大脑。它决定"下一步做什么"，让 [MinoScout](../MinoScout) 去做。
 
-上游来源是 [MiniOrangeServer](../MiniOrangeServer)（**已停止维护，只读参考，禁止改动**）。搬迁映射见 [docs/MIGRATION.md](docs/MIGRATION.md)。
+上游来源是 [MiniOrangeServer](../MiniOrangeServer)（**已停止维护，只读参考，禁止改动**）。搬迁映射见 [docs/MIGRATION.md](docs/基础框架/MIGRATION.md)。
 
 ---
 
@@ -106,15 +106,15 @@ mino_nexus/
 
 | 你要做什么 | 先读 |
 |---|---|
-| 加一条能力 / 改能力的实现路径 | [docs/CAPABILITY_CATALOG.md](docs/CAPABILITY_CATALOG.md)。多数情况只改 YAML，**Scout 侧零改动** |
-| 改 prompt / 决策逻辑 | [docs/PROMPTS.md](docs/PROMPTS.md) — **真源是 `llm_jobs`，Console Jobs 页** |
-| 改与 Scout 的通信 | [docs/PROTOCOL.md](docs/PROTOCOL.md) + §5。**协议改动必须两仓同步** |
-| 派单 / 设备归属 / 多节点 | [docs/NODE_REGISTRY.md](docs/NODE_REGISTRY.md) |
-| 动数据模型 | [docs/DATA_MODEL.md](docs/DATA_MODEL.md) |
-| 打通 Console / Studio | [docs/HTTP.md](docs/HTTP.md) |
-| 动导航图 / 守卫 / hierarchy | [docs/NAVIGATION_ATLAS.md](docs/NAVIGATION_ATLAS.md)。配置在 `nav_fsm*` 表，**代码里不得硬编码被测 App 的文案或包名** |
+| 加一条能力 / 改能力的实现路径 | [docs/CAPABILITY_CATALOG.md](docs/基础框架/CAPABILITY_CATALOG.md)。多数情况只改 YAML，**Scout 侧零改动** |
+| 改 prompt / 决策逻辑 | [docs/PROMPTS.md](docs/基础框架/PROMPTS.md) — **真源是 `llm_jobs`，Console Jobs 页** |
+| 改与 Scout 的通信 | [docs/PROTOCOL.md](docs/基础框架/PROTOCOL.md) + §5。**协议改动必须两仓同步** |
+| 派单 / 设备归属 / 多节点 | [docs/NODE_REGISTRY.md](docs/基础框架/NODE_REGISTRY.md) |
+| 动数据模型 | [docs/DATA_MODEL.md](docs/基础框架/DATA_MODEL.md) |
+| 打通 Console / Studio | [docs/HTTP.md](docs/基础框架/HTTP.md) |
+| 动导航图 / 守卫 / hierarchy | [docs/NAVIGATION_ATLAS.md](docs/基础框架/NAVIGATION_ATLAS.md)。配置在 `nav_fsm*` 表，**代码里不得硬编码被测 App 的文案或包名** |
 | 动三渠道统一检索 / context-pack | [docs/9月12日_AppIntel信息基座.md](docs/9月12日_AppIntel信息基座.md)（规划真源） |
-| 从上游搬代码 | [docs/MIGRATION.md](docs/MIGRATION.md) |
+| 从上游搬代码 | [docs/MIGRATION.md](docs/基础框架/MIGRATION.md) |
 
 ---
 
@@ -209,8 +209,8 @@ app.include_router(r)
 2. 更隐蔽：`llm_client` 会检查 `provider["case_execution_use"]`（"允许用于跑用例"），
    而当时 `settings.py` **根本不返回这个 key** → `.get()` 得到 `None` → 即使读对文件也被拒。
 
-`tests/test_settings.py` 钉住了字段超集、UI 写入立刻可见、env 只覆盖指名的 provider、
-以及 `summary()` 不泄明文 key。
+`settings_store.get_ai_provider_credentials` 定义 provider 字段形状；`settings.py` 只做 env 覆盖与转发。
+`summary()` 不得泄明文 key。
 
 ### 环境变量（CI / 本地调试，不经 UI）
 

@@ -111,7 +111,7 @@
 
 0.6 把 declined 改成 BACK 之后，详情栈能退出，但 **Tab 根态仍然 `chosen=""`**：跑批读 published `v1`（只有 `page.tab_*` + 底栏文案），draft 里的 `page.sk*` / `state_wireframes` 没用上；底栏几个 Tab 同时可见时纯文案一律同分。
 
-**已落地**（契约见 [NAVIGATION_ATLAS.md](NAVIGATION_ATLAS.md) §2.2 / §17.4）：
+**已落地**（契约见 [NAVIGATION_ATLAS.md](../基础框架/NAVIGATION_ATLAS.md) §2.2 / §17.4）：
 
 | 改动 | 文件 |
 |------|------|

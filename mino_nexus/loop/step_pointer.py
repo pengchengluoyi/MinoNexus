@@ -635,6 +635,10 @@ class StepCursor:
             self.swipe_stuck_fp = post
         else:
             self.swipe_stuck_fp = post or pre or self.swipe_stuck_fp
+        if pre and post and pre != post:
+            self.swipe_stuck_dir = d
+            self.swipe_stuck_count = 0
+            return
         if self.swipe_stuck_dir == d:
             self.swipe_stuck_count += 1
         else:

@@ -62,7 +62,7 @@
 | 存储 | 内容 | 生命周期 | 谁读 |
 |---|---|---|---|
 | `agent_stream._RUNS` | 每步 thumb + decision + status | 内存，**上限 40 个 run** | `GET /case-runner/agent/steps`（热路径） |
-| **`session_events` + `session_meta`** | append-only 轨迹（见 [9月8日_Session_Event_Log.md](9月8日_Session_Event_Log.md)） | DB，永久 | `GET /case-runner/sessions/{id}/events` · `/trajectory` · `/llm` |
+| **`session_events` + `session_meta`** | append-only 轨迹（见 [9月8日_Session_Event_Log.md](9月8日_Session_Event_Log.md)；**排查**见 [排查手册](排查手册/README.md)） | DB，永久 | `GET /case-runner/sessions/{id}/events` · `/trajectory` · `/llm` |
 | `AppRegressionRun` | 批次级结论 + 用例级结果 | DB，永久 | `GET /case-runner/tasks/{id}` |
 
 Studio 读取顺序：**先内存 `_RUNS`，兜底 session log 投影**。

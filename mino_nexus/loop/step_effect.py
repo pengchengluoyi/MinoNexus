@@ -18,6 +18,8 @@ _PREFIXES = (
     "Tab",
 )
 _QUOTE_RE = re.compile(r"[「『\"“]([^」』\"”]{1,16})[」』\"”]")
+_ABSENCE_MARKERS = ("不显示", "不再显示", "不应出现", "没有出现", "未显示", "不可见")
+_LOGOUT_ABSENT_TERMS = ("退出登录", "注销", "登出")
 
 
 def _clean_chunk(text: str) -> str:
@@ -41,6 +43,76 @@ def _quoted_tokens(text: str) -> list[str]:
         if len(token) >= 2 and token not in out:
             out.append(token)
     return out
+
+
+def expected_absence_terms(expected: str) -> list[str]:
+    """否定类 expected：屏上应不存在某控件文案。"""
+    raw = str(expected or "").strip()
+    if not raw:
+        return []
+    if not any(m in raw for m in _ABSENCE_MARKERS):
+        return []
+    out: list[str] = []
+    for tok in _quoted_tokens(raw):
+        if tok not in out:
+            out.append(tok)
+    for term in _LOGOUT_ABSENT_TERMS:
+        if term in raw and term not in out:
+            out.append(term)
+    if not out and "退出" in raw:
+        out.append("退出登录")
+    return out[:6]
+
+
+def probe_absence(
+    nodes: list[dict[str, Any]],
+    terms: list[str],
+) -> tuple[bool, list[str]]:
+    """terms 在 hierarchy 上均不可见 → 命中。"""
+    if not terms or not nodes:
+        return False, []
+    missing: list[str] = []
+    for term in terms:
+        conds = [
+            {"text_contains": term},
+            {"content_desc_contains": term},
+        ]
+        if match_any(nodes, conds):
+            return False, []
+        missing.append(term)
+    return True, missing
+
+
+def probe_diagnostic(
+    expected: str,
+    nodes: list[dict[str, Any]],
+    *,
+    instruction: str = "",
+    defer_expected_to_check: bool = False,
+) -> dict[str, Any]:
+    """运维/日志：探针模式与命中摘要。"""
+    exp = str(expected or "").strip()
+    absent = expected_absence_terms(exp) if not defer_expected_to_check else []
+    if absent:
+        ok, kws = probe_absence(nodes, absent)
+        return {
+            "mode": "absence",
+            "hit": ok,
+            "keywords": kws,
+            "absence_terms": absent,
+        }
+    hit, kws = probe_expected_for_do(
+        exp,
+        nodes,
+        instruction=instruction,
+        defer_expected_to_check=defer_expected_to_check,
+    )
+    return {
+        "mode": "presence" if exp else "instruction_only",
+        "hit": hit,
+        "keywords": kws[:8],
+        "terms": _probe_terms(exp, instruction)[:8] if exp else [],
+    }
 
 
 def _probe_terms(expected: str, instruction: str = "") -> list[str]:
@@ -89,6 +161,9 @@ def probe(
     instruction: str = "",
 ) -> tuple[bool, list[str]]:
     """本步预期文案是否已在屏上出现。返回 (命中, 命中的关键词)。"""
+    absent = expected_absence_terms(expected)
+    if absent:
+        return probe_absence(nodes, absent)
     terms = _probe_terms(expected, instruction)
     if not terms or not nodes:
         return False, []

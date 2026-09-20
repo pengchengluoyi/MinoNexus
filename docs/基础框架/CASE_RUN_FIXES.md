@@ -140,6 +140,19 @@ GROUP BY 1;
 SELECT type, json_extract(payload,'$.summary'), json_extract(payload,'$.reason')
 FROM session_events WHERE session_id='<session_id>'
   AND type IN ('recovery/match','guard/block');
+
+-- guard 运维字段（2026-09）：step、导航、熔断、探针
+SELECT type,
+  json_extract(payload,'$.guard_id'),
+  json_extract(payload,'$.step_n'),
+  json_extract(payload,'$.instruction'),
+  json_extract(payload,'$.probe'),
+  json_extract(payload,'$.fuse_state_tail')
+FROM session_events WHERE session_id='<session_id>' AND type='guard/block';
+
+-- 会话结束汇总（仅当本 run 发生过 guard 拦截）
+SELECT type, payload FROM session_events
+WHERE session_id='<session_id>' AND type='ops/guard_summary';
 ```
 
 ---

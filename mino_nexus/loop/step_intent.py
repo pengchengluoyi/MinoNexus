@@ -15,7 +15,7 @@ _INTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("nav_tab", re.compile(r"底部|Tab|标签|「我的」|我的页", re.I)),
     ("open_content", re.compile(r"帖子|详情|卡片|动态|笔记|feed|Feed", re.I)),
     ("shutter_capture", re.compile(r"快门|拍摄按钮|拍照按钮|按下拍摄|点击拍摄", re.I)),
-    ("swipe_gesture", re.compile(r"上滑|下滑|左滑|右滑|滑动|向[上下左右]滑", re.I)),
+    ("swipe_gesture", re.compile(r"上滑|下滑|左滑|右滑|横滑|左右滑|滑动|向[上下左右]滑", re.I)),
     ("input_fill", re.compile(r"输入|填写|填入", re.I)),
 ]
 
@@ -62,6 +62,17 @@ _PROFILE_SHAPE_FORM_RE = re.compile(
 )
 _PROFILE_SHAPE_SAVE_RE = re.compile(r"保存|完成", re.I)
 _PROFILE_TEXT_FIELD_RE = re.compile(r"手机|验证码|密码|昵称|姓名|邮箱", re.I)
+
+
+def is_profile_shape_completion_step(instruction: str, expected: str = "") -> bool:
+    """形象向导内点「完成/保存」，含仅 instruction 为「点击完成」但 expected 为形象页。"""
+    if is_profile_shape_form_step(instruction):
+        return True
+    ins = str(instruction or "").strip()
+    exp = str(expected or "").strip()
+    if _PROFILE_SHAPE_SAVE_RE.search(ins) and _PROFILE_SHAPE_FORM_RE.search(exp):
+        return True
+    return False
 
 
 def is_profile_shape_form_step(instruction: str) -> bool:

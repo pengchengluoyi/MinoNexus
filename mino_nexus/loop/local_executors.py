@@ -155,6 +155,13 @@ def dispatch_local(
             target_package=target_package,
             t0=t0,
         )
+    if cap.startswith("signal_"):
+        return _result(
+            event,
+            status=EventStatus.PASS,
+            summary=cap,
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
     if cap.startswith("human_"):
         return _result(
             event,
@@ -785,6 +792,32 @@ def _fsm_navigate(
     to_raw = coerce_oral_nav_ref(fsm, to_raw)
     if from_raw:
         from_raw = coerce_oral_nav_ref(fsm, from_raw)
+
+    fork = getattr(ctx, "nav_guest_tab_fork", None)
+    if fork is not None:
+        from mino_nexus.loop.nav_session_fork import fsm_goal_conflicts_with_guest_fork
+
+        nodes_fork = list(getattr(ctx, "nav_hierarchy_nodes", None) or [])
+        block, fork_hint = fsm_goal_conflicts_with_guest_fork(
+            fork=fork,
+            to_raw=to_raw,
+            hierarchy_nodes=nodes_fork,
+            localized=localized,
+        )
+        if block:
+            return _result(
+                event,
+                status=EventStatus.DECLINED,
+                summary=fork_hint,
+                error="guest_tab_login_fork",
+                executor="internal",
+                elapsed_ms=int((time.time() - t0) * 1000),
+                raw_response={
+                    "local_reason": "nav_guest_fork",
+                    "correction_hint": fork_hint,
+                    "nav_attempt": _attempt(plan_ok=False, plan_error="guest_tab_login_fork"),
+                },
+            )
 
     plan_msg = ""
     step_cap = "tap_element"

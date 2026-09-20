@@ -363,6 +363,13 @@ def run_case(
         from mino_nexus.services.account_facet_commit import commit_case_facet_effects
 
         if not writer._closed:
+            step_cursor = getattr(ctx, "_step_cursor", None)
+            if step_cursor is not None:
+                from mino_nexus.loop.ops_guard_diag import session_end_guard_summary
+
+                gs = session_end_guard_summary(step_cursor)
+                if gs.get("guard_block_counts") or gs.get("last_guard_block"):
+                    writer.append("ops/guard_summary", gs)
             writer.close(
                 status=str(outcome.get("status") or "fail"),
                 summary=str(outcome.get("summary") or ""),
@@ -547,6 +554,7 @@ def _run_loop(
             build_seq_nodes(case),
             precondition=str(case.get("precondition") or "").strip(),
         )
+    setattr(ctx, "_step_cursor", cursor)
     inspect_slots: dict[str, str] = {
         "session_block": "", "hierarchy_text": "", "knowledge_hint": "", "knowledge_body": "",
         "nav_assist": "", "doc_context": "",
@@ -1227,6 +1235,22 @@ def _run_loop(
                 setattr(ctx, "system_dialog_macro_done", False)
                 setattr(ctx, "recovery_allow_back", False)
                 instr_nav = str(cur.instruction or "")
+                from mino_nexus.loop.nav_session_fork import (
+                    detect_guest_tab_login_fork,
+                    format_guest_tab_fork_hint,
+                    required_session_from_scene,
+                )
+
+                req_sess = required_session_from_scene(
+                    dict(getattr(ctx, "case_scene", None) or {})
+                )
+                exp_nav = str(cur.expected or "") if cur else ""
+                fork = detect_guest_tab_login_fork(
+                    instruction=instr_nav,
+                    expected=exp_nav,
+                    required_session=req_sess,
+                )
+                setattr(ctx, "nav_guest_tab_fork", fork)
                 if step_needs_nav_plan(instr_nav):
                     cursor.step_nav_plan_hint = build_step_nav_plan_hint(
                         instruction=instr_nav,
@@ -1234,9 +1258,13 @@ def _run_loop(
                         project_id=str(getattr(ctx, "nav_project_id", "") or ""),
                         localized=dict(getattr(ctx, "nav_localized", None) or {}),
                         app_version=str(getattr(ctx, "app_version", "") or ""),
+                        expected=exp_nav,
+                        required_session=req_sess,
                     )
                 else:
-                    cursor.step_nav_plan_hint = ""
+                    cursor.step_nav_plan_hint = (
+                        format_guest_tab_fork_hint(fork) if fork else ""
+                    )
         if nav is None or not nav.active:
             menu = [
                 c for c in menu
@@ -1381,6 +1409,14 @@ def _run_loop(
                 target_package=str(getattr(ctx, "target_package", "") or target_pkg),
             )
             if not macro:
+                from mino_nexus.loop.nav_session_fork import (
+                    login_flow_interrupt_allowed_for_step,
+                    required_session_from_scene,
+                )
+
+                _req_sess_macro = required_session_from_scene(
+                    dict(getattr(ctx, "case_scene", None) or {})
+                )
                 overlay_login = login_overlay_blocks_flow(
                     hierarchy_nodes=nodes,
                     instruction=str(cur.instruction or ""),
@@ -1389,6 +1425,12 @@ def _run_loop(
                     phase="do",
                     expected=str(cur.expected or ""),
                 )
+                if overlay_login and not login_flow_interrupt_allowed_for_step(
+                    instruction=str(cur.instruction or ""),
+                    expected=str(cur.expected or ""),
+                    required_session=_req_sess_macro,
+                ):
+                    overlay_login = False
                 if overlay_login:
                     setattr(ctx, "login_flow_interrupt", True)
                     macro = try_run_login_flow_macro(
@@ -1703,6 +1745,12 @@ def _run_loop(
 
         action = decision.action
         cap_id = str(action.capability_id) if action and action.capability_id else ""
+        if cap_id == "signal_done":
+            decision.status = "done"
+        if str(decision.status or "") == "done":
+            cap_id = "signal_done"
+            params = {}
+            action = AgentAction(capability_id="signal_done", params={})
         turn_decision_cap = cap_id or ("signal_done" if decision.status == "done" else "")
         turn_decision_status = str(decision.status or "")
         params = dict(action.params or {}) if action else {}
@@ -1714,6 +1762,30 @@ def _run_loop(
             target_package=str(getattr(ctx, "target_package", "") or target_pkg),
         )
         params = fill_input_text_from_ctx(params, cap_id=cap_id, ctx=ctx)
+        if cap_id == "swipe_direction" and params:
+            from mino_nexus.ai.coords import prepare_xy_params_for_execute
+
+            prepare_xy_params_for_execute(
+                params,
+                int(getattr(shot, "width", 0) or 0),
+                int(getattr(shot, "height", 0) or 0),
+            )
+        from mino_nexus.loop.thought_done import should_coerce_mutate_to_signal_done
+
+        if should_coerce_mutate_to_signal_done(
+            thought=thought,
+            cap_id=cap_id,
+            phase=str(cursor.phase or ""),
+        ):
+            if writer:
+                writer.append(
+                    "decision/thought_done_coerce",
+                    {"from_cap": cap_id, "thought": str(thought or "")[:240]},
+                )
+            cap_id = "signal_done"
+            params = {}
+            action = AgentAction(capability_id="signal_done", params={})
+            turn_decision_cap = "signal_done"
         fg_nodes: list[dict[str, Any]] = []
         if nav is not None and getattr(nav, "snapshot", None) is not None:
             snap_nodes = getattr(nav.snapshot, "nodes", None) or []
@@ -1939,14 +2011,14 @@ def _run_loop(
                 extra_vlm = decision.vlm_hierarchy if isinstance(decision.vlm_hierarchy, dict) else None
                 probe_nodes_guard = _effect_nodes(nav, ctx, extra_vlm=extra_vlm)
                 defer_do = _expected_defers_to_check(str(cur.expected or ""))
-                probe_hit_guard = False
-                if str(cur.expected or "").strip() or str(cur.instruction or "").strip():
-                    probe_hit_guard, _ = step_effect_mod.probe_expected_for_do(
-                        str(cur.expected or ""),
-                        probe_nodes_guard,
-                        instruction=str(cur.instruction or ""),
-                        defer_expected_to_check=defer_do,
-                    )
+                probe_diag_guard = step_effect_mod.probe_diagnostic(
+                    str(cur.expected or ""),
+                    probe_nodes_guard,
+                    instruction=str(cur.instruction or ""),
+                    defer_expected_to_check=defer_do,
+                )
+                probe_hit_guard = bool(probe_diag_guard.get("hit"))
+                setattr(ctx, "_last_probe_diag", probe_diag_guard)
                 loc_hit_guard = step_effect_mod.localized_matches_step(
                     loc_done,
                     instruction=str(cur.instruction or ""),
@@ -1985,12 +2057,36 @@ def _run_loop(
                         instruction=str(cur.instruction or ""),
                         intents_done=cursor.step_intents_done,
                     )
+                    mode = str(probe_diag_guard.get("mode") or "")
+                    extra = (
+                        f" 探针={mode} hit={probe_hit_guard}。"
+                        if mode
+                        else ""
+                    )
                     cursor.correction_hint = (
                         f"{do_work_reason}"
                         + (f" {prog}" if prog else "")
+                        + extra
                         + " 若屏上已达成本步目标，请补全未完成意图对应操作后再 signal_done。"
                     )
                 if do_work_reason:
+                    if writer:
+                        from mino_nexus.loop.ops_guard_diag import enrich_guard_block_payload
+
+                        writer.append(
+                            "guard/block",
+                            enrich_guard_block_payload(
+                                {
+                                    "capability_id": "signal_done",
+                                    "guard_id": "require_do_work",
+                                    "reason": do_work_reason,
+                                    "dispatch_gate_code": "require_do_work",
+                                },
+                                guard_ctx=guard_ctx,
+                                cur=cur,
+                                probe_diag=probe_diag_guard,
+                            ),
+                        )
                     rec(
                         seq,
                         capability_id="require_do_work",
@@ -2093,8 +2189,9 @@ def _run_loop(
         if skip_reason:
             skip_cap = guard_verdict.code or cap_id
             if writer:
-                writer.append(
-                    "guard/block",
+                from mino_nexus.loop.ops_guard_diag import enrich_guard_block_payload, note_guard_block
+
+                block_payload = enrich_guard_block_payload(
                     {
                         "capability_id": cap_id,
                         "reason": skip_reason,
@@ -2102,7 +2199,13 @@ def _run_loop(
                         "dispatch_gate_code": skip_cap,
                         "guard_id": guard_verdict.guard_id,
                     },
+                    guard_ctx=guard_ctx,
+                    cur=cur,
+                    probe_diag=dict(getattr(ctx, "_last_probe_diag", None) or {}),
                 )
+                writer.append("guard/block", block_payload)
+                if isinstance(cursor, StepCursor):
+                    note_guard_block(cursor, block_payload)
             rec(seq, capability_id=skip_cap, status="skipped", summary=skip_reason, thought=thought, thumb=thumb)
             emit(
                 "result",

@@ -1096,7 +1096,7 @@ seed 草稿可含占位符；**对 dev DB 执行 seed 前**必须通过 `validat
 `load_fsm_doc(..., use_live=False)`（`nav_runtime.for_run` / `fsm_navigate`）：
 
 1. 读已发布 `v1`；若同时有 `draft` 且 draft 含 `page.sk*` 或 `state_wireframes`，则 `overlay_atlas_for_runtime` 把骨骼页、wireframe、nav 边叠上去（`v1` 已是骨骼图则不再叠）。
-2. **叠完只留一代节点。** 图上出现 `page.sk*` 后，上一代 `page.tab_*` 由 `prune_superseded_tab_states` 连边一起删掉，`tab_bar.entries/labels` 与 `recover.default_*` 里指向已删节点的引用同步清掉。两代节点之间没有任何边，留着的后果不是多几个孤岛，而是 `resolve_state_ref` 优先命中旧节点（`tab_bar.labels` 还挂着它）、`shortest_nav_path` 恒空、`fsm_navigate` 每轮只会 BACK（复盘见 [9月16日-用例执行调用fsmnavigate能力异常.md](9月16日-用例执行调用fsmnavigate能力异常.md) §0.8）。合成侧 `merge_synthesized_doc` 同样剔除，否则每次重发都把旧节点带回来。
+2. **叠完只留一代节点。** 图上出现 `page.sk*` 后，上一代 `page.tab_*` 由 `prune_superseded_tab_states` 连边一起删掉，`tab_bar.entries/labels` 与 `recover.default_*` 里指向已删节点的引用同步清掉。两代节点之间没有任何边，留着的后果不是多几个孤岛，而是 `resolve_state_ref` 优先命中旧节点（`tab_bar.labels` 还挂着它）、`shortest_nav_path` 恒空、`fsm_navigate` 每轮只会 BACK（复盘见 [9月16日-用例执行调用fsmnavigate能力异常.md](../更新日志/9月16日-用例执行调用fsmnavigate能力异常.md) §0.8）。合成侧 `merge_synthesized_doc` 同样剔除，否则每次重发都把旧节点带回来。
 3. **屏态名要能落库。** `nav_fsm_states.meta`（`display_name` / `aliases` / `page_role`）必须随 `save` 落盘 —— 少这一列，`use_live=False` 读到的骨骼节点是无名节点，口语目标一个也解析不出来。
 4. **id 形态的 ref 只认精确存在。** `page.*` / `tab_*` / 裸 `sk<hex>` 解析不到就报 `unknown_state_id`，交给 `localized.chosen` 兜。骨骼 id 会随重新聚类换代且彼此字面相似度极高（`sk3f5a31a92f9fs4` vs `…fs0` = 0.94），模糊匹配会把失效 id 静默解析成隔壁那一屏，规划照样"成功"、走到的是别的页。
 5. 状态栏 / 通知头 landmark（`is_status_bar_chrome_text`）不算 required，避免整页 `required_miss`。

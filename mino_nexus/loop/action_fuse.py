@@ -230,6 +230,7 @@ class ProgressGate:
         has_get_otp: bool = False,
         leased: bool = False,
         has_hitl: bool = False,
+        profile_shape_completion: bool = False,
     ) -> Optional[str]:
         if not fuseable_cap(cap_id):
             return None
@@ -277,24 +278,42 @@ class ProgressGate:
             recent = states[-STATE_WINDOW:]
             uniq = len(set(recent))
             if uniq <= STATE_MAX_UNIQUE:
-                hint = fuse_hint(cap_id, params, reason="state_domination", **kw)
-                return (
-                    f"【熔断·困局】近 {len(recent)} 步仅在 {uniq} 个界面状态间打转（非实质进展）。"
-                    f"{hint}"
-                )
+                skip_dom = False
+                if profile_shape_completion and cap_id == "tap_element":
+                    lab = str((params or {}).get("selector_text") or (params or {}).get("text") or "")
+                    if re.search(r"完成|保存", lab):
+                        skip_dom = True
+                if not skip_dom:
+                    hint = fuse_hint(cap_id, params, reason="state_domination", **kw)
+                    return (
+                        f"【熔断·困局】近 {len(recent)} 步仅在 {uniq} 个界面状态间打转（非实质进展）。"
+                        f"{hint}"
+                    )
 
         if not explore:
             cycle = _detect_state_cycle(states)
             if cycle is not None:
                 period, _pat = cycle
-                hint = fuse_hint(cap_id, params, reason="state_cycle", **kw)
-                return (
-                    f"【熔断·状态循环】界面在 {period} 个状态间循环重复。{hint}"
-                )
+                if profile_shape_completion and cap_id == "tap_element":
+                    lab = str((params or {}).get("selector_text") or (params or {}).get("text") or "")
+                    if re.search(r"完成|保存", lab):
+                        cycle = None
+                if cycle is not None:
+                    period, _pat = cycle
+                    hint = fuse_hint(cap_id, params, reason="state_cycle", **kw)
+                    return (
+                        f"【熔断·状态循环】界面在 {period} 个状态间循环重复。{hint}"
+                    )
 
         if _detect_action_pattern_cycle(self._coarse_actions):
-            hint = fuse_hint(cap_id, params, reason="state_domination", **kw)
-            return f"【熔断·动作模式】近几步动作类型反复组合仍无进展。{hint}"
+            skip_pat = False
+            if profile_shape_completion and cap_id == "tap_element":
+                lab = str((params or {}).get("selector_text") or (params or {}).get("text") or "")
+                if re.search(r"完成|保存", lab):
+                    skip_pat = True
+            if not skip_pat:
+                hint = fuse_hint(cap_id, params, reason="state_domination", **kw)
+                return f"【熔断·动作模式】近几步动作类型反复组合仍无进展。{hint}"
 
         # 连续 N 次操作后界面指纹未变 → 第 N+1 次前熔断（先于动作级规则）
         if self.no_progress_streak >= NO_PROGRESS_THRESHOLD - 1:

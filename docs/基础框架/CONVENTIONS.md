@@ -35,7 +35,7 @@ Nexus 侧的额外规定：
 
 ## 4. 硬约束
 
-见 [CLAUDE.md](../CLAUDE.md) §1。不另设守门脚本。
+见 [CLAUDE.md](../../CLAUDE.md) §1。不另设守门脚本。
 
 ## 5. 提交与 PR
 

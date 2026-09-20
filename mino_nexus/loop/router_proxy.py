@@ -49,7 +49,7 @@ def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
 
 # 这四个 capability 由 Nexus 本地 executor 处理，**不出网**（CLAUDE.md §2.3）。
 # 搞错会让 Scout 收到它 supports() 返回 False 的能力，白跑一圈 fallback。
-LOCAL_CAP_PREFIXES = ("human_", "recover_")
+LOCAL_CAP_PREFIXES = ("human_", "recover_", "signal_")
 LOCAL_CAPS = frozenset({
     "assert_visual",
     "persona_subtask",

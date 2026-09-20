@@ -260,4 +260,4 @@ PY
 
 ## 10. 后续（2026-09-17）
 
-深层页 `from_state` 口语对不上 Tab 图，是因为跑批没用上 draft 骨骼。已用 `overlay_atlas_for_runtime` 叠图，localize 按 wireframe 认 `page.sk*`。详见 [NAVIGATION_ATLAS.md](NAVIGATION_ATLAS.md) §17.4。
+深层页 `from_state` 口语对不上 Tab 图，是因为跑批没用上 draft 骨骼。已用 `overlay_atlas_for_runtime` 叠图，localize 按 wireframe 认 `page.sk*`。详见 [NAVIGATION_ATLAS.md](../基础框架/NAVIGATION_ATLAS.md) §17.4。

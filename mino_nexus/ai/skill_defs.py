@@ -20,7 +20,7 @@ ALIASES = {
 DEFAULT_SOP = {
     "phases": [
         {"id": "prep", "job": "agent-decide", "tool_kinds": ["prep", "generic", "recovery"], "guards": ["skip_repeat_check_run_env", "skip_repeat_get_app_version", "skip_repeat_read_device", "skip_repeat_clear_app_cache", "prep_clear_before_launch", "skip_repeat_launch_app", "action_fuse", "exec_script_params", "require_session", "block_login_flow_unless_step_scope", "block_mutate_when_thought_done", "block_prep_guest_mine_tab"], "advance_on": "signal_done"},
-        {"id": "do", "job": "agent-decide", "tool_kinds": ["do", "generic", "recovery"], "guards": ["action_fuse", "limit_recovery_retry", "block_mutate_when_thought_done", "block_back_without_nav_back_semantics", "block_login_after_guest", "block_login_flow_unless_step_scope", "block_do_after_step_goal", "block_idle_wait_in_do", "swipe_direction_vs_instruction", "skip_repeat_swipe_stuck", "skip_repeat_structural_cap", "skip_repeat_satisfied_step_action", "require_sms_send_before_otp", "require_do_work", "block_assert_in_do", "skip_repeat_launch_app"], "advance_on": "signal_done"},
+        {"id": "do", "job": "agent-decide", "tool_kinds": ["do", "generic", "recovery"], "guards": ["action_fuse", "limit_recovery_retry", "block_mutate_when_thought_done", "block_back_without_nav_back_semantics", "block_login_after_guest", "block_login_flow_unless_step_scope", "block_do_after_step_goal", "block_idle_wait_in_do", "swipe_direction_vs_instruction", "skip_repeat_swipe_stuck", "skip_repeat_structural_cap", "require_sms_send_before_otp", "require_do_work", "block_assert_in_do", "skip_repeat_launch_app"], "advance_on": "signal_done"},
         {
             "id": "check",
             "job": "agent-decide",

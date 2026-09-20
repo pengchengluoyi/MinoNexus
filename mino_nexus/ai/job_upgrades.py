@@ -17,6 +17,7 @@ AGENT_DECIDE_V12_MARKER = "prompt_version >= 12（tool 参数承载 screen_layou
 AGENT_DECIDE_V13_MARKER = "prompt_version >= 13 (drop forced visual JSON)"
 AGENT_DECIDE_V14_MARKER = "prompt_version >= 14 (low-conf nav: don't freeze on wait_ms)"
 AGENT_DECIDE_V15_MARKER = "prompt_version >= 15 (do_subphase + thought/action 对齐)"
+AGENT_DECIDE_V16_MARKER = "prompt_version >= 16 (swipe_direction from/to 千分比)"
 DOC_CONTEXT_SLOT = "doc_context"
 ASSERT_VISION_V2_MARKER = "prompt_version >= 2（screen_layout 布局线框）"
 ASSERT_VISION_V3_MARKER = "prompt_version >= 3 (drop forced visual JSON)"
@@ -826,6 +827,66 @@ def _patch_agent_decide_v15(text: str) -> str:
     if AGENT_DECIDE_V15_MARKER not in out:
         out = out.rstrip() + f"\n\n<!-- {AGENT_DECIDE_V15_MARKER} -->\n"
     return out
+
+
+_SWIPE_DIRECTION_HINT = """
+### swipe_direction（横条 / 列表 / 局部滚动）
+
+- 底部风格条、横向 Tab、RecyclerView 列表等**局部可滑区域**：必须根据截图/`screen_layout` 给出 **`from_x, from_y, to_x, to_y`（0–1000 千分比）**，沿目标控件滑动。
+- **禁止**仅靠 `direction` 在**屏中心**做全屏滑动手势（常带不动横条、造成空转）。
+- 若目标文案已在屏上可见，优先 **`tap_element`** 点选，不必盲滑。
+"""
+
+
+def _patch_agent_decide_v16(text: str) -> str:
+    out = str(text or "")
+    if _SWIPE_DIRECTION_HINT.strip() not in out:
+        out = out.rstrip() + "\n\n" + _SWIPE_DIRECTION_HINT.strip() + "\n"
+    if AGENT_DECIDE_V16_MARKER not in out:
+        out = out.rstrip() + f"\n\n<!-- {AGENT_DECIDE_V16_MARKER} -->\n"
+    return out
+
+
+def upgrade_agent_decide_to_v16() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 16:
+        return 0
+    if int(row.get("prompt_version") or 1) < 15:
+        upgrade_agent_decide_to_v15()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_agent_decide_v16(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 15),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v15 before swipe_direction from/to milli coords",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 16
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
 
 
 def upgrade_agent_decide_to_v15() -> int:

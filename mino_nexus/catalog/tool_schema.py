@@ -96,10 +96,19 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
     "swipe_direction": {
         "type": "object",
         "properties": {
-            "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
+            "direction": {
+                "type": "string",
+                "enum": ["up", "down", "left", "right"],
+                "description": "未给起止点时按方向在屏内默认区域滑动",
+            },
+            "from_x": COORD,
+            "from_y": COORD,
+            "to_x": COORD,
+            "to_y": COORD,
             "duration_ms": {"type": "integer"},
         },
         "required": ["direction"],
+        "description": "提供 from_x/from_y/to_x/to_y（0–1000 千分比）时沿该线段滑动；否则仅用 direction 走默认手势",
     },
     "press_key": {
         "type": "object",

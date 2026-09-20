@@ -231,9 +231,17 @@ def _guard_require_do_work(ctx: dict[str, Any]) -> Optional[str]:
             if not ok_int:
                 return f"本步意图未达成，不能 signal_done。{int_msg}"
         if exp and not goal_met:
+            from mino_nexus.loop.step_effect import expected_absence_terms
             from mino_nexus.loop.step_pointer import _expected_defers_to_check
 
             defer_chk = _expected_defers_to_check(exp)
+            if expected_absence_terms(exp) and need_int:
+                ok_int, _ = step_intents_satisfied(
+                    instruction=instr,
+                    intents_done=getattr(step_cursor, "step_intents_done", None),
+                )
+                if ok_int:
+                    return None
             if defer_chk:
                 if need_int:
                     return None
@@ -285,12 +293,10 @@ def _guard_block_mutate_when_thought_done(ctx: dict[str, Any]) -> Optional[str]:
     phase = str(ctx.get("phase") or "")
     if phase not in ("do", "prep"):
         return None
+    from mino_nexus.loop.thought_done import thought_implies_signal_done
+
     thought = str(ctx.get("decision_thought") or "")
-    if not re.search(
-        r"signal_done|本步.{0,8}完成|操作.{0,6}完成|应收工|前置.{0,8}(已|完成)|结束前置",
-        thought,
-        re.I,
-    ):
+    if not thought_implies_signal_done(thought):
         return None
     cap = str(ctx.get("cap_id") or "")
     if not cap or cap.startswith("signal_") or cap in ("wait_ms",):
@@ -560,6 +566,11 @@ def _guard_action_fuse(ctx: dict[str, Any]) -> Optional[str]:
     if gate is None:
         return None
     cap_id = str(ctx.get("cap_id") or "")
+    cur = ctx.get("cursor")
+    instr = str(getattr(cur, "instruction", "") or "") if cur else ""
+    exp = str(getattr(cur, "expected", "") or "") if cur else ""
+    from mino_nexus.loop.step_intent import is_profile_shape_completion_step
+
     return gate.check(
         phase=str(ctx.get("phase") or ""),
         cap_id=cap_id,
@@ -568,6 +579,7 @@ def _guard_action_fuse(ctx: dict[str, Any]) -> Optional[str]:
         has_get_otp=_menu_has_cap(ctx, "get_otp"),
         leased=_leased_account(ctx),
         has_hitl=_menu_has_hitl(ctx),
+        profile_shape_completion=is_profile_shape_completion_step(instr, exp),
     )
 
 
@@ -745,7 +757,7 @@ def _guard_skip_repeat_swipe_stuck(ctx: dict[str, Any]) -> Optional[str]:
 
 
 def _guard_skip_repeat_satisfied_step_action(ctx: dict[str, Any]) -> Optional[str]:
-    """仅当无明确业务意图时，用动作族次数限制超额 swipe/tap（兼容旧步骤）。"""
+    """动作族次数上限（legacy）。do 阶段已从 skill_defs 移除，避免与 LLM 空转对打。"""
     if str(ctx.get("phase") or "") != "do":
         return None
     cap = str(ctx.get("cap_id") or "")

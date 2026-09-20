@@ -20,7 +20,7 @@
 
 所以现在的铁律：**provider 字段的形状由 `settings_store.get_ai_provider_credentials`
 定义，本模块不得自行拼装**。env 覆盖也必须在它的返回值上做叠加，不能另起一个 dict。
-`tests/test_settings.py` 钉住了这一点。
+行为契约见本模块 docstring 与 `settings_store.get_ai_provider_credentials` 的字段形状。
 
 ## 环境变量（给 CI 和本地调试用，不经 UI）
 

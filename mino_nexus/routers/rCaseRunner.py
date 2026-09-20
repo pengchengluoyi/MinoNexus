@@ -248,7 +248,13 @@ def retry_failed_cases(task_id: str, body: Optional[RetryFailedRequest] = None, 
         busy = run_store.busy_task_for_sn(sn)
         if busy:
             raise HTTPException(status_code=409, detail={"message": "device busy", "busy_task_id": busy, "sn": sn})
-    result = cr.retry_failed(task_id, sn=sn)
+    try:
+        result = cr.retry_failed(task_id, sn=sn)
+    except cr.DeviceBusy as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "device busy", "busy_task_id": exc.busy_task_id, "sn": exc.sn},
+        ) from exc
     if not result.get("ok"):
         raise HTTPException(status_code=int(result.get("code") or 400), detail=result.get("reason") or "retry failed")
     snapshot = result.get("data") or {}

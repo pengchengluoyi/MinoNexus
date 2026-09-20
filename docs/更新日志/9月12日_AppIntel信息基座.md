@@ -8,11 +8,11 @@
 
 | 文档 | 关系 |
 |------|------|
-| [NAVIGATION_ATLAS.md](NAVIGATION_ATLAS.md) | 渠道 A：操作导航图 NavFSM |
-| [DOC_LIBRARY.md](DOC_LIBRARY.md) | 渠道 C：原始文档库 |
-| [HTTP.md](HTTP.md) §知识库 | 渠道 B：执行知识条 `knowledge_entries` |
-| [PROMPTS.md](PROMPTS.md) | `agent-decide` 槽：`nav_assist` / `knowledge_*` / `doc_context` |
-| [DATA_MODEL.md](DATA_MODEL.md) | 三渠道 ORM 真源表 |
+| [NAVIGATION_ATLAS.md](../基础框架/NAVIGATION_ATLAS.md) | 渠道 A：操作导航图 NavFSM |
+| [DOC_LIBRARY.md](../基础框架/DOC_LIBRARY.md) | 渠道 C：原始文档库 |
+| [HTTP.md](../基础框架/HTTP.md) §知识库 | 渠道 B：执行知识条 `knowledge_entries` |
+| [PROMPTS.md](../基础框架/PROMPTS.md) | `agent-decide` 槽：`nav_assist` / `knowledge_*` / `doc_context` |
+| [DATA_MODEL.md](../基础框架/DATA_MODEL.md) | 三渠道 ORM 真源表 |
 
 ---
 
@@ -50,8 +50,8 @@
 
 - 不引入第三套「Obsidian 式」几百页 Markdown wiki 真源（编译结果仍是 `knowledge_entries`）。
 - 不把整篇 PRD 塞进 prompt（文档渠道仅 top-K 片段，预算见 §6）。
-- 不自动把 runtime 候选合并进 `nav_fsm*`（仍须人审，见 [NAVIGATION_ATLAS.md](NAVIGATION_ATLAS.md) §7）。
-- 不在 Nexus 内做 OCR / 扫描件 PDF 识别（见 [CLAUDE.md](../CLAUDE.md) §1）。
+- 不自动把 runtime 候选合并进 `nav_fsm*`（仍须人审，见 [NAVIGATION_ATLAS.md](../基础框架/NAVIGATION_ATLAS.md) §7）。
+- 不在 Nexus 内做 OCR / 扫描件 PDF 识别（见 [CLAUDE.md](../../CLAUDE.md) §1）。
 
 ---
 
@@ -303,7 +303,7 @@ session_log.emit("intel/context_pack", citations=pack.citations)
 
 ## 11. 数据模型补充（规划）
 
-在 [DATA_MODEL.md](DATA_MODEL.md) 真源表之外，可选：
+在 [DATA_MODEL.md](../基础框架/DATA_MODEL.md) 真源表之外，可选：
 
 ```sql
 -- P1 起，可选
@@ -327,11 +327,11 @@ CREATE INDEX idx_intel_links_app ON app_intel_links(app_id);
 
 动 AppIntel / agent_loop 注入前确认：
 
-1. 读 [NAVIGATION_ATLAS.md](NAVIGATION_ATLAS.md) §6 — 文档库 ≠ 执行知识条。
-2. 读 [DOC_LIBRARY.md](DOC_LIBRARY.md) — 执行期不现场解析 PDF；`doc_context` 有字数上限。
-3. 读 [PROMPTS.md](PROMPTS.md) — `agent-decide` 槽版本（`doc_context` ≥ v9）。
-4. Nav 代码不硬编码被测 App 文案（[no-app-keywords](../.cursor/skills/no-app-keywords/SKILL.md)）。
-5. 循环代码不出现 `scout_connected` 等网络分支（[CLAUDE.md](../CLAUDE.md) §2.2）。
+1. 读 [NAVIGATION_ATLAS.md](../基础框架/NAVIGATION_ATLAS.md) §6 — 文档库 ≠ 执行知识条。
+2. 读 [DOC_LIBRARY.md](../基础框架/DOC_LIBRARY.md) — 执行期不现场解析 PDF；`doc_context` 有字数上限。
+3. 读 [PROMPTS.md](../基础框架/PROMPTS.md) — `agent-decide` 槽版本（`doc_context` ≥ v9）。
+4. Nav 代码不硬编码被测 App 文案（[no-app-keywords](../../.cursor/skills/no-app-keywords/SKILL.md)）。
+5. 循环代码不出现 `scout_connected` 等网络分支（[CLAUDE.md](../../CLAUDE.md) §2.2）。
 
 ---
 

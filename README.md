@@ -25,7 +25,7 @@ mino-nexus               # :10104，并注册 mino.local
 
 文档库上传 PDF 依赖 `pypdf`（已写在 `pyproject.toml`）。若报「PDF 解析需要 pypdf」，在当前 Python 环境重新执行 `pip install -e .` 后重启 Nexus。
 
-Console / Studio / Scout 打 `http://mino.local:10104`（Nexus 启动后 mDNS 注册）。首次启动写入本地账号 `admin` / `Mino@local`（可用 `MINO_BOOTSTRAP_PASSWORD` 覆盖）。契约见 [docs/HTTP.md](docs/HTTP.md)。
+Console / Studio / Scout 打 `http://mino.local:10104`（Nexus 启动后 mDNS 注册）。首次启动写入本地账号 `admin` / `Mino@local`（可用 `MINO_BOOTSTRAP_PASSWORD` 覆盖）。契约见 [docs/HTTP.md](docs/基础框架/HTTP.md)。
 
 Scout 安装包不在本仓：`GET /releases/scout/latest` 只在设置了 `MINO_SCOUT_MANIFEST_URL` 时代理 GitHub 的 `manifest.json`，数据目录里不要放 zip。凭证仍走 `POST /runtime/nodes/install-token`。
 
@@ -47,24 +47,24 @@ Electron UI ──HTTP :10104──► MinoNexus ──WS /node──◄ MinoSco
 ```
 
 执行循环在 Nexus：每一步 `EXECUTE screenshot` 取屏幕 → 本地跑 LLM 决策 → `EXECUTE` 派给 Scout。
-因此 trace 天然写在 UI 要读的这个进程里，`agent_stream` 与前端接口无需改造。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+因此 trace 天然写在 UI 要读的这个进程里，`agent_stream` 与前端接口无需改造。详见 [docs/ARCHITECTURE.md](docs/基础框架/ARCHITECTURE.md)。
 
 ## 文档
 
 | 文档 | 内容 |
 |---|---|
 | [CLAUDE.md](CLAUDE.md) | 硬约束、目录与命名约定、改动前必读 |
-| [docs/HTTP.md](docs/HTTP.md) | Console / Studio 登录、节点、Scout 安装契约 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 四层套娃、循环、`RouterProxy` |
-| [docs/PROTOCOL.md](docs/PROTOCOL.md) | 五条消息的字段级定义（与 Scout 同一份） |
-| [docs/CAPABILITY_CATALOG.md](docs/CAPABILITY_CATALOG.md) | 能力目录三层抽象、怎么加一条能力 |
-| [docs/NODE_REGISTRY.md](docs/NODE_REGISTRY.md) | `node_id` / `sn` / 设备归属与派单 |
-| [docs/PROMPTS.md](docs/PROMPTS.md) | 各 job 的 prompt 归属与铁律 |
-| [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | 数据模型与归属 |
-| [docs/DOC_LIBRARY.md](docs/DOC_LIBRARY.md) | 文档库：PDF/Markdown 上传与全文检索 |
+| [docs/HTTP.md](docs/基础框架/HTTP.md) | Console / Studio 登录、节点、Scout 安装契约 |
+| [docs/ARCHITECTURE.md](docs/基础框架/ARCHITECTURE.md) | 四层套娃、循环、`RouterProxy` |
+| [docs/PROTOCOL.md](docs/基础框架/PROTOCOL.md) | 五条消息的字段级定义（与 Scout 同一份） |
+| [docs/CAPABILITY_CATALOG.md](docs/基础框架/CAPABILITY_CATALOG.md) | 能力目录三层抽象、怎么加一条能力 |
+| [docs/NODE_REGISTRY.md](docs/基础框架/NODE_REGISTRY.md) | `node_id` / `sn` / 设备归属与派单 |
+| [docs/PROMPTS.md](docs/基础框架/PROMPTS.md) | 各 job 的 prompt 归属与铁律 |
+| [docs/DATA_MODEL.md](docs/基础框架/DATA_MODEL.md) | 数据模型与归属 |
+| [docs/DOC_LIBRARY.md](docs/基础框架/DOC_LIBRARY.md) | 文档库：PDF/Markdown 上传与全文检索 |
 | [docs/9月12日_AppIntel信息基座.md](docs/9月12日_AppIntel信息基座.md) | 导航 + 知识 + 文档库统一信息基座（AppIntel，规划） |
-| [docs/CONVENTIONS.md](docs/CONVENTIONS.md) | 日志、异常、硬约束约定 |
-| [docs/MIGRATION.md](docs/MIGRATION.md) | 从 MiniOrangeServer 搬哪些文件、怎么改 |
+| [docs/CONVENTIONS.md](docs/基础框架/CONVENTIONS.md) | 日志、异常、硬约束约定 |
+| [docs/MIGRATION.md](docs/基础框架/MIGRATION.md) | 从 MiniOrangeServer 搬哪些文件、怎么改 |
 
 ## 守门
 

@@ -101,7 +101,8 @@ Projection       从 event 列表推导出的只读视图（给 UI / eval / 调�
 | `llm/response` | 调 LLM 后 | raw_hash, parsed decision, tokens, latency_ms, dispatch_id |
 | `tool/call` | dispatch 前 | capability_id, executor, params（坐标保留） |
 | `tool/result` | dispatch 后 | EventResult：status, reason, evidence 摘要 |
-| `guard/block` | registry 拦截 | rule_id, reason, rewritten_cap |
+| `guard/block` | registry 拦截 | guard_id, reason, capability_id, step_n, instruction, expected, phase, nav_state_id, probe, fuse_state_tail |
+| `ops/guard_summary` | session 收尾 | guard_block_counts, last_guard_block, require_do_work_streak |
 | `recovery/match` | recovery preflight / apply | rule_id, cap_id, match_reason |
 | `inspection/done` | run_inspections 后 | job_id, session_block 摘要 |
 | `phase/change` | SOP 阶段切换 | from, to, trigger |

@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from mino_nexus.core.http_util import ok
@@ -68,6 +69,13 @@ class TestAccountPickBody(BaseModel):
     env: str = ""
     surface: str = ""
     requirements: dict[str, Any] = {}
+
+
+class AccountImportBody(BaseModel):
+    text: str = ""
+    rows: list[dict[str, Any]] = []
+    default_env: str = "test"
+    on_duplicate: str = "merge"  # skip | merge | overwrite_credentials
 
 
 class ResourceTrialBody(BaseModel):
@@ -377,6 +385,187 @@ def create_project_account(
     persist_env_strip_test_accounts_if_needed(project_id, doc)
     public = _public_accounts([saved], doc, include_password=True)[0]
     return ok({"account": public}, msg="已保存")
+
+
+_IMPORT_MODES = frozenset({"skip", "merge", "overwrite_credentials"})
+_IMPORT_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _parse_import_mode(raw: str) -> str:
+    mode = str(raw or "merge").strip().lower()
+    if mode not in _IMPORT_MODES:
+        raise HTTPException(status_code=400, detail="on_duplicate 无效")
+    return mode
+
+
+@router.get("/{project_id}/accounts/import/template")
+def download_accounts_import_template(
+    project_id: str,
+    _sess: dict = Depends(current_session),
+):
+    """CSV 表头模板（含项目扩展字段 label）。"""
+    project_id = _resolve_project_id(project_id)
+    try:
+        doc = ps.project_env(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    from mino_nexus.services.account_pool_templates import merged_pool_field_defs
+
+    cols = [
+        "手机号",
+        "展示名",
+        "邮箱",
+        "用户名",
+        "密码",
+        "登录态",
+        "健康",
+        "备注",
+        "环境",
+    ]
+    for d in merged_pool_field_defs(doc):
+        lab = str(d.get("label") or d.get("key") or "").strip()
+        if lab and lab not in cols:
+            cols.append(lab)
+    line = ",".join(cols) + "\n"
+    body = (
+        line
+        + "13800000001,示例账号A,,,secret,logged_out,available,批量导入,test\n"
+    ).encode("utf-8-sig")
+    return Response(
+        content=body,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="account-import-template.csv"'},
+    )
+
+
+@router.post("/{project_id}/accounts/import/preview")
+def preview_project_accounts_import(
+    project_id: str,
+    body: AccountImportBody,
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.account_pool_import import preview_import
+
+    project_id = _resolve_project_id(project_id)
+    try:
+        doc = ps.project_env(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    mode = _parse_import_mode(body.on_duplicate)
+    if not str(body.text or "").strip() and not body.rows:
+        raise HTTPException(status_code=400, detail="请提供 text 或 rows")
+    out = preview_import(
+        env_doc=doc,
+        project_id=project_id,
+        text=str(body.text or ""),
+        rows=body.rows or None,
+        default_env=str(body.default_env or "test"),
+        on_duplicate=mode,
+    )
+    if not out.get("ok"):
+        raise HTTPException(status_code=400, detail=str(out.get("error") or "preview failed"))
+    return ok(out)
+
+
+@router.post("/{project_id}/accounts/import/preview-file")
+async def preview_project_accounts_import_file(
+    project_id: str,
+    file: UploadFile = File(...),
+    default_env: str = Form("test"),
+    on_duplicate: str = Form("merge"),
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.account_pool_import import preview_import
+
+    project_id = _resolve_project_id(project_id)
+    try:
+        doc = ps.project_env(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    mode = _parse_import_mode(on_duplicate)
+    data = await file.read()
+    if len(data) > _IMPORT_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="文件过大（上限 5MB）")
+    fname = str(file.filename or "import.csv")
+    low = fname.lower()
+    if not (low.endswith(".csv") or low.endswith(".txt") or low.endswith(".xlsx")):
+        raise HTTPException(status_code=400, detail="仅支持 .csv / .txt / .xlsx")
+    out = preview_import(
+        env_doc=doc,
+        project_id=project_id,
+        filename=fname,
+        file_data=data,
+        default_env=str(default_env or "test"),
+        on_duplicate=mode,
+    )
+    if not out.get("ok"):
+        raise HTTPException(status_code=400, detail=str(out.get("error") or "preview failed"))
+    return ok(out)
+
+
+@router.post("/{project_id}/accounts/import/commit")
+def commit_project_accounts_import(
+    project_id: str,
+    body: AccountImportBody,
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.account_pool_import import commit_import
+
+    project_id = _resolve_project_id(project_id)
+    try:
+        doc = ps.project_env(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    mode = _parse_import_mode(body.on_duplicate)
+    if not str(body.text or "").strip() and not body.rows:
+        raise HTTPException(status_code=400, detail="请提供 text 或 rows")
+    out = commit_import(
+        env_doc=doc,
+        project_id=project_id,
+        text=str(body.text or ""),
+        rows=body.rows or None,
+        default_env=str(body.default_env or "test"),
+        on_duplicate=mode,
+    )
+    if not out.get("ok"):
+        raise HTTPException(status_code=400, detail=str(out.get("error") or "import failed"))
+    return ok(out, msg="导入完成")
+
+
+@router.post("/{project_id}/accounts/import/commit-file")
+async def commit_project_accounts_import_file(
+    project_id: str,
+    file: UploadFile = File(...),
+    default_env: str = Form("test"),
+    on_duplicate: str = Form("merge"),
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.account_pool_import import commit_import
+
+    project_id = _resolve_project_id(project_id)
+    try:
+        doc = ps.project_env(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    mode = _parse_import_mode(on_duplicate)
+    data = await file.read()
+    if len(data) > _IMPORT_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="文件过大（上限 5MB）")
+    fname = str(file.filename or "import.csv")
+    low = fname.lower()
+    if not (low.endswith(".csv") or low.endswith(".txt") or low.endswith(".xlsx")):
+        raise HTTPException(status_code=400, detail="仅支持 .csv / .txt / .xlsx")
+    out = commit_import(
+        env_doc=doc,
+        project_id=project_id,
+        filename=fname,
+        file_data=data,
+        default_env=str(default_env or "test"),
+        on_duplicate=mode,
+    )
+    if not out.get("ok"):
+        raise HTTPException(status_code=400, detail=str(out.get("error") or "import failed"))
+    return ok(out, msg="导入完成")
 
 
 @router.delete("/{project_id}/accounts/{account_id}")

@@ -446,14 +446,16 @@ def reconcile_stale_running_runs(*, reason: str = "Nexus 重启，任务中断")
 
 
 def patch_case(run_id: str, case_id: str, **fields: Any) -> dict[str, Any]:
-    doc = get(run_id)
-    if not doc:
-        raise KeyError(run_id)
-    for case in doc.get("cases") or []:
-        if str(case.get("case_id")) == str(case_id):
-            case.update({k: v for k, v in fields.items() if v is not None})
-            break
-    return put(doc)
+    """多设备并行跑批时可能并发 patch 不同 case，须在锁内读-改-写。"""
+    with _LOCK:
+        doc = get(run_id)
+        if not doc:
+            raise KeyError(run_id)
+        for case in doc.get("cases") or []:
+            if str(case.get("case_id")) == str(case_id):
+                case.update({k: v for k, v in fields.items() if v is not None})
+                break
+        return put(doc)
 
 
 def _session_status_for_close(case_status: str) -> str:

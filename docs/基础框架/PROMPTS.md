@@ -115,3 +115,9 @@ v7 同时往 system 块插了一节「导航 assist」，讲**怎么读这段**�
 
 升级入口：`upgrade_agent_decide_to_v14`，启动时 bootstrap 幂等。
 
+## 10. 横滑须带起止点（v16）
+
+底部风格条、横向列表等局部滚动：`swipe_direction` 应带 **`from_x/from_y/to_x/to_y`（0–1000 千分比）**，不要只靠 `direction` 在屏中心滑；可见目标名优先 `tap_element`。
+
+升级入口：`upgrade_agent_decide_to_v16`；v15 全文存 `revisions`（见 [prompts/agent-decide-v15-snapshot.md](../prompts/agent-decide-v15-snapshot.md)）。启动 bootstrap 幂等。
+

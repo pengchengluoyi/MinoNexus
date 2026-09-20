@@ -64,6 +64,38 @@ def _platform_of(sn: str, fallback: str = "android") -> str:
     return fallback
 
 
+def _sn_for_case_index(
+    index: int,
+    device_sns: list[str],
+    *,
+    coverage: str,
+) -> str:
+    """once + 多机：轮询分片；单机或 per_device 外层已展开。"""
+    if not device_sns:
+        return ""
+    cov = str(coverage or "once").strip().lower()
+    if cov == "once" and len(device_sns) > 1:
+        return device_sns[index % len(device_sns)]
+    return device_sns[0]
+
+
+def _worker_sns_for_cases(cases: list[dict[str, Any]], doc: dict[str, Any]) -> list[str]:
+    """本 run 上实际有 case 绑定的设备列表（保持 sns 顺序）。"""
+    bound = {str(c.get("sn") or "").strip() for c in cases if str(c.get("sn") or "").strip()}
+    if not bound:
+        head = str(doc.get("sn") or "").strip()
+        return [head] if head else []
+    order: list[str] = []
+    for sn in list(doc.get("sns") or []):
+        s = str(sn or "").strip()
+        if s and s in bound and s not in order:
+            order.append(s)
+    for s in sorted(bound):
+        if s not in order:
+            order.append(s)
+    return order
+
+
 def run_cases(
     app: dict[str, Any],
     *,
@@ -129,7 +161,13 @@ def run_cases(
     playbook = aas.get_playbook(app)
     run_id = run_store.new_run_id()
     seeded = [
-        run_store.seed_case(run_id, c, i, sn=device_sns[0] if device_sns and cov != "per_device" else "", coverage=cov)
+        run_store.seed_case(
+            run_id,
+            c,
+            i,
+            sn=_sn_for_case_index(i, device_sns, coverage=cov) if cov != "per_device" else "",
+            coverage=cov,
+        )
         for i, c in enumerate(cases)
     ]
     if cov == "per_device" and len(device_sns) > 1:
@@ -246,64 +284,110 @@ def _record_case_preflight_fail(
         SLog.w(TAG, f"preflight session log failed {stream_id}: {exc!r}")
 
 
-def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id: str) -> None:
+def _run_case_list(
+    *,
+    run_id: str,
+    package: str,
+    playbook: dict,
+    provider_id: str,
+    cases: list[dict[str, Any]],
+    doc: dict[str, Any],
+) -> None:
     from mino_nexus.loop.agent_loop import run_case
 
-    doc = run_store.get(run_id)
-    if not doc or not run_store.task_is_live(doc):
-        return
-    try:
-        env_brief = str(doc.get("env_brief") or "")
-        cases = list(doc.get("cases") or [])
-        for case_seq, case in enumerate(cases):
-            if not _task_still_running(run_id):
-                break
-            cid = str(case.get("case_id") or "")
-            sn = str(case.get("sn") or doc.get("sn") or "")
-            run_store.patch_case(run_id, cid, status="running")
+    env_brief = str(doc.get("env_brief") or "")
+    for case_seq, case in enumerate(cases):
+        if not _task_still_running(run_id):
+            break
+        cid = str(case.get("case_id") or "")
+        sn = str(case.get("sn") or doc.get("sn") or "")
+        run_store.patch_case(run_id, cid, status="running")
+        emit_testing_task({
+            "event": "case_running",
+            "run_id": run_id,
+            "task_id": run_id,
+            "case_id": cid,
+            "sn": sn,
+            "app_id": str(doc.get("app_id") or ""),
+        })
+        scene = case.get("case_scene") if isinstance(case.get("case_scene"), dict) else None
+        if scene is None and isinstance(case.get("scene"), dict):
+            scene = case.get("scene")
+        from mino_nexus.services import project_store as ps
+        from mino_nexus.services.case_resource_claim import (
+            ensure_resource_key_on_case,
+            preflight_device_app_gap,
+        )
+        from mino_nexus.services.resource_preflight import run_start_resource_blockers
+
+        app_id = str(doc.get("app_id") or "")
+        project_id = ""
+        if app_id:
+            try:
+                project_id = str(ps.require_app(app_id).get("project_id") or "")
+            except KeyError:
+                project_id = ""
+        env_doc = ps.project_env(project_id) if project_id else None
+        ensure_resource_key_on_case(
+            case,
+            env_doc=env_doc,
+            env=str(doc.get("env_profile") or "test"),
+            package=str(package or ""),
+        )
+        rk = case.get("resource_key") if isinstance(case.get("resource_key"), dict) else None
+        merged_scene = case.get("case_scene") if isinstance(case.get("case_scene"), dict) else scene
+        blockers = run_start_resource_blockers(
+            rk,
+            scene=merged_scene,
+            precondition=str(case.get("precondition") or ""),
+            sn=sn,
+            package_id=str(package or ""),
+        )
+        if blockers:
+            reason = blockers[0]
+            _record_case_preflight_fail(
+                run_id=run_id,
+                case=case,
+                reason=reason,
+                app_id=app_id,
+                sn=sn,
+                provider_id=str(doc.get("provider_id") or ""),
+            )
+            run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason)
             emit_testing_task({
-                "event": "case_running",
+                "event": "case_finished",
                 "run_id": run_id,
                 "task_id": run_id,
                 "case_id": cid,
-                "sn": sn,
-                "app_id": str(doc.get("app_id") or ""),
+                "status": "fail",
+                "app_id": app_id,
             })
-            scene = case.get("case_scene") if isinstance(case.get("case_scene"), dict) else None
-            if scene is None and isinstance(case.get("scene"), dict):
-                scene = case.get("scene")
-            from mino_nexus.services import project_store as ps
-            from mino_nexus.services.case_resource_claim import (
-                ensure_resource_key_on_case,
-                preflight_device_app_gap,
-            )
-            from mino_nexus.services.resource_preflight import run_start_resource_blockers
+            continue
+        gaps = preflight_device_app_gap(rk, sn=sn, package_id=str(package or ""))
+        if gaps:
+            from mino_nexus.core.log import SLog
 
-            app_id = str(doc.get("app_id") or "")
-            project_id = ""
-            if app_id:
-                try:
-                    project_id = str(ps.require_app(app_id).get("project_id") or "")
-                except KeyError:
-                    project_id = ""
-            env_doc = ps.project_env(project_id) if project_id else None
-            ensure_resource_key_on_case(
-                case,
-                env_doc=env_doc,
-                env=str(doc.get("env_profile") or "test"),
-                package=str(package or ""),
-            )
-            rk = case.get("resource_key") if isinstance(case.get("resource_key"), dict) else None
-            merged_scene = case.get("case_scene") if isinstance(case.get("case_scene"), dict) else scene
-            blockers = run_start_resource_blockers(
-                rk,
-                scene=merged_scene,
-                precondition=str(case.get("precondition") or ""),
+            SLog.i("CaseRunner", f"resource preflight case={cid} " + "; ".join(gaps[:3]))
+        platform = str(doc.get("platform") or case.get("platform") or "android")
+        if isinstance(rk, dict) and rk.get("platform"):
+            platform = str(rk.get("platform") or platform)
+        from mino_nexus.services.device_resource_lease import (
+            acquire_device_lease,
+            release_device_lease,
+        )
+
+        device_held = False
+        try:
+            ok_dev, dev_err = acquire_device_lease(
                 sn=sn,
                 package_id=str(package or ""),
+                run_id=run_id,
+                case_id=cid,
+                project_id=project_id,
+                platform=platform,
             )
-            if blockers:
-                reason = blockers[0]
+            if not ok_dev and dev_err:
+                reason = f"设备租约：{dev_err}"
                 _record_case_preflight_fail(
                     run_id=run_id,
                     case=case,
@@ -322,160 +406,151 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
                     "app_id": app_id,
                 })
                 continue
-            gaps = preflight_device_app_gap(rk, sn=sn, package_id=str(package or ""))
-            if gaps:
-                from mino_nexus.core.log import SLog
+            device_held = True
+            from mino_nexus.services.account_lease import ensure_case_account_lease
 
-                SLog.i("CaseRunner", f"resource preflight case={cid} " + "; ".join(gaps[:3]))
-            platform = str(doc.get("platform") or case.get("platform") or "android")
-            if isinstance(rk, dict) and rk.get("platform"):
-                platform = str(rk.get("platform") or platform)
-            from mino_nexus.services.device_resource_lease import (
-                acquire_device_lease,
-                release_device_lease,
+            ok, lease_err = ensure_case_account_lease(
+                run_id,
+                app_id=str(doc.get("app_id") or ""),
+                env_profile=str(doc.get("env_profile") or "test"),
+                platform=str(doc.get("platform") or "android"),
+                target_package=str(package or ""),
+                case=case if isinstance(case, dict) else {},
+                scene=scene,
             )
-
-            device_held = False
-            try:
-                ok_dev, dev_err = acquire_device_lease(
-                    sn=sn,
-                    package_id=str(package or ""),
-                    run_id=run_id,
-                    case_id=cid,
-                    project_id=project_id,
-                    platform=platform,
-                )
-                if not ok_dev and dev_err:
-                    reason = f"设备租约：{dev_err}"
-                    _record_case_preflight_fail(
-                        run_id=run_id,
-                        case=case,
-                        reason=reason,
-                        app_id=app_id,
-                        sn=sn,
-                        provider_id=str(doc.get("provider_id") or ""),
-                    )
-                    run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason)
-                    emit_testing_task({
-                        "event": "case_finished",
-                        "run_id": run_id,
-                        "task_id": run_id,
-                        "case_id": cid,
-                        "status": "fail",
-                        "app_id": app_id,
-                    })
-                    continue
-                device_held = True
-                from mino_nexus.services.account_lease import ensure_case_account_lease
-
-                ok, lease_err = ensure_case_account_lease(
-                    run_id,
-                    app_id=str(doc.get("app_id") or ""),
-                    env_profile=str(doc.get("env_profile") or "test"),
-                    platform=str(doc.get("platform") or "android"),
-                    target_package=str(package or ""),
-                    case=case if isinstance(case, dict) else {},
-                    scene=scene,
-                )
-                if not ok and lease_err:
-                    reason = f"账号租约：{lease_err}"
-                    _record_case_preflight_fail(
-                        run_id=run_id,
-                        case=case,
-                        reason=reason,
-                        app_id=app_id,
-                        sn=sn,
-                        provider_id=str(doc.get("provider_id") or ""),
-                    )
-                    run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason)
-                    emit_testing_task({
-                        "event": "case_finished",
-                        "run_id": run_id,
-                        "task_id": run_id,
-                        "case_id": cid,
-                        "status": "fail",
-                        "app_id": str(doc.get("app_id") or ""),
-                    })
-                    continue
-                from mino_nexus.services.resource_task_card import build_resource_card
-
-                lease_snap: dict = {}
-                try:
-                    from mino_nexus.services.account_lease import restore_lease_for_run
-
-                    class _LeaseCtx:
-                        pass
-
-                    lc = _LeaseCtx()
-                    lc.app_id = app_id
-                    row, _ = restore_lease_for_run(lc, run_id)
-                    if isinstance(row, dict):
-                        lease_snap = {
-                            "account_id": str(row.get("id") or ""),
-                            "login": str(row.get("login") or row.get("name") or ""),
-                        }
-                except Exception:
-                    lease_snap = {}
-                resource_card = build_resource_card(
-                    case=case if isinstance(case, dict) else {},
-                    resource_key=rk,
-                    sn=sn,
-                    package_id=str(package or ""),
-                    platform=platform,
-                    project_id=project_id,
-                    run_id=run_id,
-                    preflight_gaps=gaps,
-                    account_lease=lease_snap,
-                )
-                run_store.patch_case(run_id, cid, resource_card=resource_card)
-                emit_testing_task({
-                    "event": "case_resource",
-                    "run_id": run_id,
-                    "task_id": run_id,
-                    "case_id": cid,
-                    "app_id": app_id,
-                    "resource_card": resource_card,
-                })
-                result = run_case(
+            if not ok and lease_err:
+                reason = f"账号租约：{lease_err}"
+                _record_case_preflight_fail(
                     run_id=run_id,
                     case=case,
+                    reason=reason,
+                    app_id=app_id,
                     sn=sn,
-                    app_id=str(doc.get("app_id") or ""),
-                    app_name=str(doc.get("app_name") or ""),
-                    package=package,
-                    provider_id=provider_id,
-                    playbook=playbook if isinstance(playbook, dict) else {},
-                    cancel_check=lambda: run_store.cancel_requested(run_id),
-                    case_seq=case_seq,
-                    playwright_headless=bool(doc.get("playwright_headless", True)),
-                    run_env_brief=env_brief,
+                    provider_id=str(doc.get("provider_id") or ""),
                 )
-                if not _task_still_running(run_id):
-                    break
-                doc = run_store.get(run_id) or doc
-                env_brief = str(doc.get("env_brief") or env_brief)
-                run_store.patch_case(
-                    run_id, cid,
-                    status=result.get("status") or "fail",
-                    summary=result.get("summary") or "",
-                    error=result.get("summary") or "",
-                    elapsed_ms=result.get("elapsed_ms") or 0,
-                    engine_steps=result.get("steps") or [],
-                    skill_id=result.get("skill_id") or "",
-                    view_id=result.get("view_id") or "",
-                    slots=result.get("slots") if isinstance(result.get("slots"), dict) else {},
-                )
+                run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason)
                 emit_testing_task({
                     "event": "case_finished",
                     "run_id": run_id,
                     "task_id": run_id,
                     "case_id": cid,
-                    "status": result.get("status"),
+                    "status": "fail",
                     "app_id": str(doc.get("app_id") or ""),
                 })
-            finally:
-                if device_held:
-                    release_device_lease(sn, str(package or ""), run_id)
+                continue
+            from mino_nexus.services.resource_task_card import build_resource_card
+
+            lease_snap: dict = {}
+            try:
+                from mino_nexus.services.account_lease import restore_lease_for_run
+
+                class _LeaseCtx:
+                    pass
+
+                lc = _LeaseCtx()
+                lc.app_id = app_id
+                row, _ = restore_lease_for_run(lc, run_id)
+                if isinstance(row, dict):
+                    lease_snap = {
+                        "account_id": str(row.get("id") or ""),
+                        "login": str(row.get("login") or row.get("name") or ""),
+                    }
+            except Exception:
+                lease_snap = {}
+            resource_card = build_resource_card(
+                case=case if isinstance(case, dict) else {},
+                resource_key=rk,
+                sn=sn,
+                package_id=str(package or ""),
+                platform=platform,
+                project_id=project_id,
+                run_id=run_id,
+                preflight_gaps=gaps,
+                account_lease=lease_snap,
+            )
+            run_store.patch_case(run_id, cid, resource_card=resource_card)
+            emit_testing_task({
+                "event": "case_resource",
+                "run_id": run_id,
+                "task_id": run_id,
+                "case_id": cid,
+                "app_id": app_id,
+                "resource_card": resource_card,
+            })
+            result = run_case(
+                run_id=run_id,
+                case=case,
+                sn=sn,
+                app_id=str(doc.get("app_id") or ""),
+                app_name=str(doc.get("app_name") or ""),
+                package=package,
+                provider_id=provider_id,
+                playbook=playbook if isinstance(playbook, dict) else {},
+                cancel_check=lambda: run_store.cancel_requested(run_id),
+                case_seq=case_seq,
+                playwright_headless=bool(doc.get("playwright_headless", True)),
+                run_env_brief=env_brief,
+            )
+            if not _task_still_running(run_id):
+                break
+            doc = run_store.get(run_id) or doc
+            env_brief = str(doc.get("env_brief") or env_brief)
+            run_store.patch_case(
+                run_id, cid,
+                status=result.get("status") or "fail",
+                summary=result.get("summary") or "",
+                error=result.get("summary") or "",
+                elapsed_ms=result.get("elapsed_ms") or 0,
+                engine_steps=result.get("steps") or [],
+                skill_id=result.get("skill_id") or "",
+                view_id=result.get("view_id") or "",
+                slots=result.get("slots") if isinstance(result.get("slots"), dict) else {},
+            )
+            emit_testing_task({
+                "event": "case_finished",
+                "run_id": run_id,
+                "task_id": run_id,
+                "case_id": cid,
+                "status": result.get("status"),
+                "app_id": str(doc.get("app_id") or ""),
+            })
+        finally:
+            if device_held:
+                release_device_lease(sn, str(package or ""), run_id)
+
+
+def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id: str) -> None:
+    doc = run_store.get(run_id)
+    if not doc or not run_store.task_is_live(doc):
+        return
+    try:
+        cases = list(doc.get("cases") or [])
+        worker_sns = _worker_sns_for_cases(cases, doc)
+        list_kwargs = {
+            "run_id": run_id,
+            "package": package,
+            "playbook": playbook,
+            "provider_id": provider_id,
+            "doc": doc,
+        }
+        if len(worker_sns) <= 1:
+            _run_case_list(cases=cases, **list_kwargs)
+        else:
+            threads: list[threading.Thread] = []
+            for sn in worker_sns:
+                subset = [c for c in cases if str(c.get("sn") or "").strip() == sn]
+                if not subset:
+                    continue
+                t = threading.Thread(
+                    target=_run_case_list,
+                    kwargs={**list_kwargs, "cases": subset},
+                    daemon=True,
+                    name=f"case-run-{run_id}-{sn}",
+                )
+                threads.append(t)
+                t.start()
+            for t in threads:
+                t.join()
         if not _task_still_running(run_id):
             return
         latest = run_store.get(run_id) or doc
