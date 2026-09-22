@@ -87,13 +87,14 @@ def commit_case_facet_effects(
     from mino_nexus.services.account_pool_templates import merged_pool_field_defs
 
     env_doc = ps.project_env(pid)
+    defs = merged_pool_field_defs(env_doc)
     ext_keys = frozenset(
         str(d.get("key") or "")
-        for d in merged_pool_field_defs(env_doc)
+        for d in defs
         if str(d.get("key") or "")
     )
     updated, errors = apply_facet_updates(
-        current, effects, source=source, extension_keys=ext_keys
+        current, effects, source=source, extension_keys=ext_keys, field_defs=defs
     )
     if errors:
         SLog.w(TAG, f"facet transition blocked: {errors[:3]}")
@@ -102,7 +103,14 @@ def commit_case_facet_effects(
     stored = facets_for_storage({**current, **updated}, merged_pool_field_defs(env_doc))
     if stored == facets_for_storage(current, merged_pool_field_defs(env_doc)):
         return
-    persist_account_facets(pid, aid, stored)
+    from mino_nexus.services.account_facet_sync import log_context_from_run_ctx
+
+    persist_account_facets(
+        pid,
+        aid,
+        stored,
+        log_ctx=log_context_from_run_ctx(ctx, source=source),
+    )
     updated = stored
     if isinstance(picked, dict):
         picked["facets"] = updated

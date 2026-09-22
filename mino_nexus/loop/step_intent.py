@@ -31,7 +31,6 @@ _TAP_MARKS_INTENT: list[tuple[str, re.Pattern[str]]] = [
 _CAP_INTENT: dict[str, str] = {
     "accept_legal_consent": "legal_consent",
     "request_sms_code": "sms_send",
-    "get_otp": "otp_fill",
     "lease_account": "account_lease",
     "clear_app_cache": "clear_cache",
     "system_pkg_clear": "clear_cache",
@@ -48,7 +47,6 @@ _STRUCTURAL_CAPS = frozenset(
         "accept_legal_consent",
         "request_sms_code",
         "dismiss_ime",
-        "get_otp",
         "clear_app_cache",
         "system_pkg_clear",
     }
@@ -142,9 +140,14 @@ def cap_step_intent(cap_id: str, *, params: dict[str, Any] | None = None) -> str
     base = str(_CAP_INTENT.get(cap) or "")
     if cap == "input_text":
         field = str((params or {}).get("field") or "").lower()
+        text = str((params or {}).get("text") or "").strip()
         if field in ("phone",):
             return "login_phone"
-        if field in ("sms_code", "验证码"):
+        if field in ("sms_code", "验证码", "otp"):
+            return "otp_fill"
+        if field in ("password", "密码"):
+            return "login_password"
+        if re.fullmatch(r"\d{4,8}", text) and field not in ("phone",):
             return "otp_fill"
     if cap == "tap_element" and base:
         return base
@@ -187,6 +190,7 @@ _INTENT_LABELS: dict[str, str] = {
     "sms_send": "发送验证码",
     "login_phone": "填写手机号",
     "otp_fill": "填写验证码",
+    "login_password": "填写密码",
 }
 
 

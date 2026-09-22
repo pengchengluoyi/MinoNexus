@@ -53,3 +53,22 @@ async def switch_adb_keyboard(sn: str, _sess: dict = Depends(current_session)):
             detail=data.get("error") or data.get("summary") or "切换失败",
         )
     return ok(data, msg=data.get("summary") or "已切换为 ADB Keyboard")
+
+
+@router.post("/{sn}/ime/system")
+async def restore_system_ime(sn: str, _sess: dict = Depends(current_session)):
+    """经 Scout 关闭 ADB Keyboard，切回系统输入法。"""
+    try:
+        data = await dim.restore_system_input_method(sn)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        msg = str(exc)
+        code = 409 if "离线" in msg or "未应答" in msg else 404
+        raise HTTPException(status_code=code, detail=msg) from exc
+    if not data.get("ok"):
+        raise HTTPException(
+            status_code=502,
+            detail=data.get("error") or data.get("summary") or "关闭失败",
+        )
+    return ok(data, msg=data.get("summary") or "已关闭 ADB Keyboard")

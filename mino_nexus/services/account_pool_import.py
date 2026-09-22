@@ -236,6 +236,39 @@ def _validate_row(row: dict[str, Any]) -> str:
     return ""
 
 
+def _resolve_import_default_env(env_doc: dict[str, Any], default_env: str) -> str:
+    from mino_nexus.services.project_env import resolve_run_env_profile
+
+    doc = env_doc if isinstance(env_doc, dict) else {}
+    return resolve_run_env_profile(
+        doc,
+        requested=str(default_env or "").strip(),
+        automation_default=str(doc.get("default_profile") or "test"),
+    )
+
+
+def _normalize_row_env(row: dict[str, Any], env_doc: dict[str, Any], *, default_env: str) -> str:
+    """空 env 用导入默认；有值须在项目 environments 内。"""
+    from mino_nexus.services.project_env import profile_keys
+
+    doc = env_doc if isinstance(env_doc, dict) else {}
+    keys = set(profile_keys(doc))
+    cell = str(row.get("env") or "").strip()
+    if not cell:
+        row["env"] = default_env
+        return ""
+    if keys and cell not in keys:
+        labels = {
+            str(e.get("key") or ""): str(e.get("label") or e.get("key") or "")
+            for e in (doc.get("environments") or [])
+            if isinstance(e, dict)
+        }
+        hint = "、".join(f"{labels.get(k, k)}({k})" for k in sorted(keys)[:8]) or "（空）"
+        return f"环境「{cell}」不在项目环境配置中。可选：{hint}"
+    row["env"] = cell
+    return ""
+
+
 def _apply_duplicate_policy(
     incoming: dict[str, Any],
     existing: dict[str, Any],
@@ -356,6 +389,7 @@ def preview_import(
 
     pid = str(project_id or "").strip()
     doc = env_doc if isinstance(env_doc, dict) else {}
+    default_env = _resolve_import_default_env(doc, default_env)
     existing = list_test_accounts(doc, project_id=pid)
     by_key: dict[str, dict[str, Any]] = {}
     for acc in existing:
@@ -398,6 +432,8 @@ def preview_import(
     for i, raw in enumerate(parsed_rows):
         row_num = i + 1
         err = _validate_row(raw)
+        if not err:
+            err = _normalize_row_env(raw, doc, default_env=default_env)
         mk = _match_key(raw)
         if err:
             preview.append({"row": row_num, "action": "error", "error": err, "incoming": raw})
@@ -498,6 +534,7 @@ def commit_import(
 
     pid = str(project_id or "").strip()
     doc = dict(env_doc or {})
+    default_env = _resolve_import_default_env(doc, default_env)
     existing = {str(a.get("id")): a for a in list_test_accounts(doc, project_id=pid)}
     by_key: dict[str, dict[str, Any]] = {}
     for acc in existing.values():
@@ -525,6 +562,8 @@ def commit_import(
     for i, raw in enumerate(source_rows):
         row_num = i + 1
         err = _validate_row(raw)
+        if not err:
+            err = _normalize_row_env(raw, doc, default_env=default_env)
         if err:
             errors.append({"row": row_num, "error": err})
             continue

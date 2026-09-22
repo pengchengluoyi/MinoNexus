@@ -47,7 +47,8 @@ def _result(
 
 _FSM_DEGRADE_HINT = (
     "【导航降级】路线图未能从当前屏执行跳转（常见：深层页不在架构图、或当前无底栏 Tab）。"
-    "请 press_back 退出栈顶，或 recover_restart_target_app 冷启动后再点 Tab；勿重复盲目 fsm_navigate。"
+    "若处于 onboarding 无底栏墙，请开环 tap_element 沿主流程出墙，勿重复 fsm_navigate；"
+    "否则请 press_back 退出栈顶，或 recover_restart_target_app 冷启动后再点 Tab。"
 )
 _FSM_SAME_PAGE_HINT = (
     "【导航】路线图判定当前已在目标节点，本次未执行点击。"
@@ -819,6 +820,41 @@ def _fsm_navigate(
                 },
             )
 
+    scene = getattr(ctx, "case_scene", None) if hasattr(ctx, "case_scene") else {}
+    if not isinstance(scene, dict):
+        scene = {}
+    cur_instr = str(getattr(getattr(ctx, "cursor", None), "instruction", "") or "")
+    cur_exp = str(getattr(getattr(ctx, "cursor", None), "expected", "") or "")
+    from mino_nexus.loop.nav_session_fork import (
+        fsm_blocked_logged_in_session_drift,
+        required_session_from_scene,
+    )
+
+    req_sess = required_session_from_scene(scene)
+    nodes_drift = list(getattr(ctx, "nav_hierarchy_nodes", None) or [])
+    drift_block, drift_hint = fsm_blocked_logged_in_session_drift(
+        required_session=req_sess,
+        instruction=cur_instr,
+        expected=cur_exp,
+        to_raw=to_raw,
+        hierarchy_nodes=nodes_drift,
+        localized=localized,
+    )
+    if drift_block:
+        return _result(
+            event,
+            status=EventStatus.DECLINED,
+            summary=drift_hint,
+            error="logged_in_session_drift",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+            raw_response={
+                "local_reason": "logged_in_session_drift",
+                "correction_hint": drift_hint,
+                "nav_attempt": _attempt(plan_ok=False, plan_error="logged_in_session_drift"),
+            },
+        )
+
     plan_msg = ""
     step_cap = "tap_element"
     step_params: dict[str, Any] = {}
@@ -943,7 +979,7 @@ def _fsm_navigate(
                             nav_attempt["allow_back"] = False
                             return _degrade(
                                 f"{plan_msg}；目标 Tab「{dest_tab}」但无底栏且首 hop 非返回边，"
-                                "请 fsm_navigate 直点 Tab 或探索补边（D1-C）。",
+                                "请 tap_element 沿 onboarding 主流程出墙或探索补边（D1-C·开环）。",
                                 "tab_not_visible_no_back_edge",
                                 nav_attempt,
                             )

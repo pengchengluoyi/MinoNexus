@@ -107,8 +107,11 @@ def probe_diagnostic(
         instruction=instruction,
         defer_expected_to_check=defer_expected_to_check,
     )
+    mode = "presence" if exp else "instruction_only"
+    if expected_profile_shape_config(exp):
+        mode = "profile_shape"
     return {
-        "mode": "presence" if exp else "instruction_only",
+        "mode": mode,
         "hit": hit,
         "keywords": kws[:8],
         "terms": _probe_terms(exp, instruction)[:8] if exp else [],
@@ -141,6 +144,104 @@ def _probe_terms(expected: str, instruction: str = "") -> list[str]:
     return terms[:12]
 
 
+_PROFILE_SHAPE_EXPECT_RE = re.compile(
+    r"形象配置|选择.{0,8}形象|多个头像|头像.{0,6}完成",
+    re.I,
+)
+_CAMERA_NOT_PROFILE_RE = re.compile(
+    r"完整入镜|确保物品|取景|快门|拍摄按钮|拍照按钮|重拍",
+    re.I,
+)
+
+
+def expected_profile_shape_config(expected: str) -> bool:
+    return bool(_PROFILE_SHAPE_EXPECT_RE.search(str(expected or "")))
+
+
+def is_camera_not_profile_config(nodes: list[dict[str, Any]]) -> bool:
+    """相机取景/拍摄页：常有入镜提示或快门，但不是形象向导（无独立「完成」保存）。"""
+    if not nodes:
+        return False
+    cam = match_any(
+        nodes,
+        [
+            {"text_contains": "入镜"},
+            {"text_contains": "完整入镜"},
+            {"text_contains": "确保物品"},
+            {"content_desc_contains": "快门"},
+        ],
+    )
+    if not cam and not _CAMERA_NOT_PROFILE_RE.search(_nodes_text_blob(nodes)):
+        return False
+    wizard = match_any(
+        nodes,
+        [
+            {"text_contains": "选择你的形象"},
+            {"text_contains": "形象配置"},
+            {"text_equals": "完成"},
+        ],
+    )
+    return not wizard
+
+
+def _nodes_text_blob(nodes: list[dict[str, Any]]) -> str:
+    bits: list[str] = []
+    for n in nodes[:80]:
+        if not isinstance(n, dict):
+            continue
+        bits.append(str(n.get("text") or ""))
+        bits.append(str(n.get("content_desc") or ""))
+    return " ".join(bits)
+
+
+def probe_profile_shape_config(
+    expected: str,
+    nodes: list[dict[str, Any]],
+) -> tuple[bool, list[str]]:
+    if is_camera_not_profile_config(nodes):
+        return False, []
+    hits: list[str] = []
+    need_complete = "完成" in str(expected or "")
+    if need_complete:
+        if match_any(nodes, [{"text_equals": "完成"}, {"text_contains": "完成"}]):
+            hits.append("完成")
+    for term in ("形象", "头像", "配置"):
+        if term in str(expected or "") and match_any(
+            nodes,
+            [{"text_contains": term}, {"content_desc_contains": term}],
+        ):
+            hits.append(term)
+    avatar_like = sum(
+        1
+        for n in nodes
+        if isinstance(n, dict)
+        and str(n.get("class") or "").lower() in ("imageview", "image", "img")
+    )
+    if avatar_like >= 3 and need_complete and "完成" in hits:
+        hits.append("头像区")
+    return bool(hits) and (not need_complete or "完成" in hits), hits
+
+
+def profile_shape_mismatch_hint(
+    expected: str,
+    nodes: list[dict[str, Any]],
+) -> str:
+    if not expected_profile_shape_config(expected):
+        return ""
+    if is_camera_not_profile_config(nodes):
+        return (
+            "【形象配置】当前为相机/取景页，不是「选择形象配置」向导。"
+            "请先返回或走 onboarding，直到屏上出现可选头像网格与「完成」按钮，再 signal_done。"
+        )
+    hit, kws = probe_profile_shape_config(expected, nodes)
+    if hit:
+        return ""
+    return (
+        "【形象配置】尚未命中形象向导：需要屏上同时可见「完成」与形象/头像相关文案。"
+        "勿在拍照页反复点同一控件。"
+    )
+
+
 def probe_expected_for_do(
     expected: str,
     nodes: list[dict[str, Any]],
@@ -151,6 +252,8 @@ def probe_expected_for_do(
     """do 阶段探针：expected 延后到 check 时，只用 instruction 引号内目标，避免「生成中」等弱命中拖住 do。"""
     if defer_expected_to_check:
         return probe("", nodes, instruction=instruction)
+    if expected_profile_shape_config(expected):
+        return probe_profile_shape_config(expected, nodes)
     return probe(expected, nodes, instruction=instruction)
 
 
@@ -246,6 +349,50 @@ def should_auto_enter_check(
         return int(hit_streak or 0) >= 2
     if probe_hit and kws and all(len(str(k)) <= 4 for k in kws):
         return int(hit_streak or 0) >= 2
+    return True
+
+
+def maybe_mark_deferred_nav_tab(
+    cursor: Any,
+    *,
+    instruction: str,
+    expected: str,
+    localized: dict[str, Any] | None,
+    nodes: list[dict[str, Any]] | None,
+    thought: str = "",
+    coerce_done: bool = False,
+) -> bool:
+    """expected 延后到 check 时，人已在目标页则 nav_tab 意图视为完成（底栏 Tab 可能已不可见）。"""
+    from mino_nexus.loop.step_intent import instruction_required_intents
+    from mino_nexus.loop.step_pointer import _expected_defers_to_check
+    from mino_nexus.loop.thought_done import thought_implies_signal_done
+
+    if not _expected_defers_to_check(expected):
+        return False
+    if "nav_tab" not in instruction_required_intents(instruction):
+        return False
+    defer = True
+    hit, _ = probe_expected_for_do(
+        expected,
+        list(nodes or []),
+        instruction=instruction,
+        defer_expected_to_check=defer,
+    )
+    loc_hit = localized_matches_step(
+        localized,
+        instruction=instruction,
+        expected=expected,
+    )
+    thought_ok = bool(coerce_done and thought_implies_signal_done(thought))
+    if not (hit or loc_hit or thought_ok):
+        return False
+    done = getattr(cursor, "step_intents_done", None)
+    if not isinstance(done, set):
+        return False
+    done.add("nav_tab")
+    refresh = getattr(cursor, "refresh_do_subphase", None)
+    if callable(refresh):
+        refresh()
     return True
 
 

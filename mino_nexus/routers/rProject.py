@@ -64,6 +64,26 @@ class TestAccountPatchBody(BaseModel):
     facets: Optional[dict[str, Any]] = None
 
 
+class AccountTemplateStateBody(BaseModel):
+    """执行任务或 Console 写回号池模板状态（facets + 参数字段）。"""
+
+    facets: Optional[dict[str, Any]] = None
+    env: Optional[str] = None
+    display_name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    otp: Optional[str] = None
+    note: Optional[str] = None
+    run_id: str = ""
+    case_id: str = ""
+    sn: str = ""
+    package_id: str = ""
+    source: str = "run_task"
+    message: str = ""
+
+
 class TestAccountPickBody(BaseModel):
     prompt: str = ""
     env: str = ""
@@ -91,6 +111,113 @@ class DeviceAppSessionPatchBody(BaseModel):
     bound_account_id: str = ""
     identity_hint: str = ""
     app_version: str = ""
+
+
+@router.get("/{project_id}/resource-allocation-logs")
+def list_project_resource_allocation_logs(
+    project_id: str,
+    page: int = 1,
+    page_size: int = 20,
+    run_id: str = "",
+    case_id: str = "",
+    action: str = "",
+    account_ident: str = "",
+    sn: str = "",
+    env: str = "",
+    _sess: dict = Depends(current_session),
+):
+    try:
+        ps.require_project(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    from mino_nexus.services.resource_allocation_log import list_allocation_logs
+
+    payload = list_allocation_logs(
+        project_id,
+        page=page,
+        page_size=page_size,
+        run_id=run_id,
+        case_id=case_id,
+        action=action,
+        account_ident=account_ident,
+        sn=sn,
+        env=env,
+    )
+    return ok(payload)
+
+
+@router.post("/{project_id}/resource-allocation-logs/{log_id}/restore")
+def restore_project_account_from_log(
+    project_id: str,
+    log_id: int,
+    _sess: dict = Depends(current_session),
+):
+    try:
+        ps.require_project(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    from mino_nexus.services.account_facet_sync import restore_account_from_allocation_log
+
+    saved, err = restore_account_from_allocation_log(project_id, log_id)
+    if not saved:
+        raise HTTPException(status_code=400, detail=err or "恢复失败")
+    doc = ps.project_env(project_id)
+    public = _public_accounts([saved], doc, include_password=True)[0]
+    return ok({"account": public, "log_id": log_id}, msg="已从资源日志恢复账号模板状态")
+
+
+@router.patch("/{project_id}/accounts/{account_id}/template-state")
+def patch_account_template_state(
+    project_id: str,
+    account_id: str,
+    body: AccountTemplateStateBody,
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.account_facet_sync import FacetLogContext, apply_account_template_state
+
+    try:
+        ps.require_project(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    raw = body.model_dump(exclude_unset=True)
+    facets = raw.pop("facets", None)
+    meta_keys = ("run_id", "case_id", "sn", "package_id", "source", "message")
+    meta = {k: raw.pop(k) for k in list(raw.keys()) if k in meta_keys}
+    row_patch = raw
+    log_ctx = FacetLogContext(
+        source=str(meta.get("source") or "run_task")[:32],
+        run_id=str(meta.get("run_id") or "")[:80],
+        case_id=str(meta.get("case_id") or "")[:80],
+        sn=str(meta.get("sn") or "")[:64],
+        package_id=str(meta.get("package_id") or "")[:120],
+        env=str(row_patch.get("env") or "")[:32],
+        message=str(meta.get("message") or "")[:2000],
+    )
+    if facets is not None:
+        from mino_nexus.services.account_facet_schema import facets_for_storage
+        from mino_nexus.services.account_pool_templates import merged_pool_field_defs
+
+        doc = ps.project_env(project_id)
+        stored = facets_for_storage(facets, merged_pool_field_defs(doc))
+        saved, errors = apply_account_template_state(
+            project_id,
+            account_id,
+            stored_facets=stored,
+            row_patch=row_patch or None,
+            log_ctx=log_ctx,
+        )
+    else:
+        saved, errors = apply_account_template_state(
+            project_id,
+            account_id,
+            row_patch=row_patch or None,
+            log_ctx=log_ctx,
+        )
+    if not saved:
+        raise HTTPException(status_code=400, detail=errors[0] if errors else "保存失败")
+    doc = ps.project_env(project_id)
+    public = _public_accounts([saved], doc, include_password=True)[0]
+    return ok({"account": public, "warnings": errors}, msg="模板状态已同步到号池")
 
 
 class FacetExtensionsBody(BaseModel):
@@ -305,9 +432,15 @@ def list_project_accounts(project_id: str, env: str = "", _sess: dict = Depends(
     rows = list_test_accounts(doc, project_id=project_id)
     if env:
         rows = [x for x in rows if str(x.get("env") or "") == env]
+    from mino_nexus.services.account_pool_templates import merged_pool_field_defs
+
+    pool_defs = merged_pool_field_defs(doc)
     return ok({
         "accounts": _public_accounts(rows, doc, include_password=True),
+        "pool_field_defs": pool_defs,
+        "account_facet_extensions": _facet_extensions(doc),
         "environments": doc.get("environments") or [],
+        "default_profile": doc.get("default_profile") or "test",
         "channels": doc.get("channels") or [],
     })
 
@@ -343,6 +476,9 @@ def patch_project_account(
     body: TestAccountPatchBody,
     _sess: dict = Depends(current_session),
 ):
+    from mino_nexus.services.account_facet_schema import facets_for_storage
+    from mino_nexus.services.account_facet_sync import FacetLogContext, apply_account_template_state
+    from mino_nexus.services.account_pool_templates import merged_pool_field_defs
     from mino_nexus.services.project_env import save_one_test_account
 
     from mino_nexus.services.pool_account_store import persist_env_strip_test_accounts_if_needed
@@ -352,13 +488,54 @@ def patch_project_account(
     except KeyError as exc:
         _missing(exc)
     row = body.model_dump(exclude_unset=True)
-    try:
-        saved = save_one_test_account(doc, row, project_id=project_id, account_id=account_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    persist_env_strip_test_accounts_if_needed(project_id, doc)
+    locked = row.pop("locked", None)
+    facets = row.pop("facets", None)
+    template_patch = bool(facets is not None or row)
+    saved = None
+    errors: list[str] = []
+    if template_patch:
+        log_ctx = FacetLogContext(source="manual_console", message="Console 编辑账号")
+        if facets is not None:
+            stored = facets_for_storage(facets, merged_pool_field_defs(doc))
+            saved, errors = apply_account_template_state(
+                project_id,
+                account_id,
+                stored_facets=stored,
+                row_patch=row or None,
+                log_ctx=log_ctx,
+            )
+        else:
+            saved, errors = apply_account_template_state(
+                project_id,
+                account_id,
+                row_patch=row or None,
+                log_ctx=log_ctx,
+            )
+        if not saved:
+            raise HTTPException(status_code=400, detail=errors[0] if errors else "保存失败")
+        doc = ps.project_env(project_id)
+    if locked is not None:
+        try:
+            saved = save_one_test_account(
+                doc,
+                {"locked": locked},
+                project_id=project_id,
+                account_id=account_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        persist_env_strip_test_accounts_if_needed(project_id, doc)
+    elif not template_patch:
+        try:
+            saved = save_one_test_account(doc, row, project_id=project_id, account_id=account_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        persist_env_strip_test_accounts_if_needed(project_id, doc)
+    if saved is None:
+        raise HTTPException(status_code=400, detail="无变更")
+    doc = ps.project_env(project_id)
     public = _public_accounts([saved], doc, include_password=True)[0]
-    return ok({"account": public}, msg="已保存")
+    return ok({"account": public, "warnings": errors}, msg="已保存")
 
 
 @router.post("/{project_id}/accounts")
@@ -625,6 +802,75 @@ def put_project_account_pool_local(
     )
     saved = ps.save_project_env(project_id, merged)
     return ok(project_pool_payload(saved), msg="已保存项目模板与字段")
+
+
+class ProjectPoolCustomTemplateBody(BaseModel):
+    template: dict[str, Any] = {}
+
+
+class ProjectPoolExtensionFieldsBody(BaseModel):
+    fields: list[dict[str, Any]] = []
+
+
+@router.put("/{project_id}/account-pool-local/templates/{template_id}")
+def put_project_pool_local_template(
+    project_id: str,
+    template_id: str,
+    body: ProjectPoolCustomTemplateBody,
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.project_account_pool import project_pool_payload, upsert_project_local_template
+
+    try:
+        doc = ps.project_env(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    row = dict(body.template or {})
+    row["id"] = str(template_id or row.get("id") or "").strip()
+    try:
+        merged = upsert_project_local_template(doc, row)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    saved = ps.save_project_env(project_id, merged)
+    return ok(project_pool_payload(saved), msg="已保存项目模板")
+
+
+@router.put("/{project_id}/account-pool-local/builtin/{template_id}/fields")
+def put_project_pool_builtin_fields(
+    project_id: str,
+    template_id: str,
+    body: ProjectPoolExtensionFieldsBody,
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.project_account_pool import project_pool_payload, upsert_project_extension_addon
+
+    try:
+        doc = ps.project_env(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    try:
+        merged = upsert_project_extension_addon(doc, template_id, body.fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    saved = ps.save_project_env(project_id, merged)
+    return ok(project_pool_payload(saved), msg="已保存该模板字段")
+
+
+@router.delete("/{project_id}/account-pool-local/templates/{template_id}")
+def delete_project_pool_local_template(
+    project_id: str,
+    template_id: str,
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.project_account_pool import delete_project_local_template, project_pool_payload
+
+    try:
+        doc = ps.project_env(project_id)
+    except KeyError as exc:
+        _missing(exc)
+    merged = delete_project_local_template(doc, template_id)
+    saved = ps.save_project_env(project_id, merged)
+    return ok(project_pool_payload(saved), msg="已删除项目模板")
 
 
 @router.put("/{project_id}/account-template-ids")

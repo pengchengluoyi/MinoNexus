@@ -38,8 +38,12 @@ def reset_native_app_before_case(
     case_seq: int,
     case: dict[str, Any] | None = None,
     login_module: bool = False,
+    defer_launch: bool = False,
 ) -> bool:
-    """可选开环：close_app → wait → launch_app。仅当调用方显式 login_module=True 时执行（默认不自动冷启动）。"""
+    """可选开环：close_app → wait → launch_app。仅当调用方显式 login_module=True 时执行（默认不自动冷启动）。
+
+    defer_launch=True：仅关进程不 launch（前置须先 clear_app_cache 再打开应用）。
+    """
     if is_web_slot(str(getattr(ctx, "sn", "") or ""), str(getattr(ctx, "platform", "") or "")):
         return False
     if not login_module:
@@ -64,6 +68,8 @@ def reset_native_app_before_case(
         params={"duration_ms": 1500},
         label="冷启动等待",
     )
+    if defer_launch:
+        return ok_close
     ok_launch = _dispatch(
         proxy,
         run_id=run_id,

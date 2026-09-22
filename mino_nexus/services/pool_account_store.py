@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from mino_nexus.core.database import session_scope
@@ -24,7 +25,17 @@ def _facets_for_account(db, project_id: str, account_id: str) -> dict[str, str]:
     return {str(r.facet_key): str(r.facet_value or "unknown") for r in rows}
 
 
+def _registered_at_iso(ts: int) -> str:
+    if not ts or int(ts) <= 0:
+        return ""
+    try:
+        return datetime.fromtimestamp(int(ts), timezone.utc).astimezone().isoformat(timespec="seconds")
+    except (OSError, ValueError, OverflowError):
+        return ""
+
+
 def _account_to_dict(row: PoolAccount, facets: dict[str, str]) -> dict[str, Any]:
+    created = int(row.created_at or 0)
     return {
         "id": row.id,
         "account_id": row.id,
@@ -42,6 +53,9 @@ def _account_to_dict(row: PoolAccount, facets: dict[str, str]) -> dict[str, Any]
         "locked": bool(row.locked),
         "lease": row.lease if isinstance(row.lease, dict) else {},
         "facets": dict(facets),
+        "created_at": created,
+        "registered_at": _registered_at_iso(created),
+        "updated_at": int(row.updated_at or 0),
     }
 
 
@@ -212,6 +226,37 @@ def set_account_lease(project_id: str, account_id: str, lease: dict[str, Any] | 
         return True
 
 
+def try_claim_account_lease(
+    project_id: str,
+    account_id: str,
+    lease: dict[str, Any],
+) -> bool:
+    """原子占号：仅当未被其它 run/设备占用（或同 run+同 sn 续租）时写入。"""
+    from mino_nexus.services.resource_pool import lease_blocks_other_holder
+
+    pid = str(project_id or "").strip()
+    aid = str(account_id or "").strip()
+    payload = dict(lease or {})
+    if not pid or not aid or not str(payload.get("run_id") or "").strip():
+        return False
+    rid = str(payload.get("run_id") or "").strip()
+    sn = str(payload.get("sn") or "").strip()
+    with session_scope() as db:
+        row = (
+            db.query(PoolAccount)
+            .filter(PoolAccount.project_id == pid, PoolAccount.id == aid)
+            .one_or_none()
+        )
+        if row is None:
+            return False
+        existing = row.lease if isinstance(row.lease, dict) else {}
+        if lease_blocks_other_holder(existing, run_id=rid, sn=sn):
+            return False
+        row.lease = payload
+        row.updated_at = _now()
+        return True
+
+
 def clear_leases_for_run(project_id: str, run_id: str) -> int:
     """清空指定 run 在号池上的租约，返回释放条数。"""
     pid = str(project_id or "").strip()
@@ -225,6 +270,31 @@ def clear_leases_for_run(project_id: str, run_id: str) -> int:
             lease = row.lease if isinstance(row.lease, dict) else {}
             if str(lease.get("run_id") or "").strip() != rid:
                 continue
+            try:
+                from mino_nexus.services.resource_allocation_log import append_allocation_log
+                from mino_nexus.services.project_env import account_ident as _ident_fn
+
+                stub = {
+                    "id": row.id,
+                    "phone": row.phone,
+                    "email": row.email,
+                    "username": row.username,
+                    "display_name": row.display_name,
+                }
+                ident = _ident_fn(stub)
+                append_allocation_log(
+                    project_id=pid,
+                    action="lease_release",
+                    message=f"跑批结束释放 {ident}",
+                    run_id=rid,
+                    case_id=str(lease.get("case_id") or "")[:80],
+                    sn=str(lease.get("sn") or "")[:64],
+                    account_id=str(row.id or ""),
+                    account_ident=ident,
+                    detail={"reason": "run_end"},
+                )
+            except Exception:
+                pass
             row.lease = {}
             row.updated_at = _now()
             n += 1

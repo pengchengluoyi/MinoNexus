@@ -452,6 +452,14 @@ def _checkpoints_from_expected(case_spec: CaseSpec) -> list[CaseCheckpoint]:
         )
         for n, desc in rows
     ]
+def _parse_allow_foreign_raw(val: Any) -> Optional[bool]:
+    if val is True or str(val).strip().lower() in ("true", "1", "yes", "allow"):
+        return True
+    if val is False or str(val).strip().lower() in ("false", "0", "no", "deny"):
+        return False
+    return None
+
+
 def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> AgentDecision:
     warnings: list[str] = []
     status = (raw.get("status") or "continue").strip().lower()
@@ -500,6 +508,9 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
                 vlm_hierarchy["page_summary"] = str(raw_vlm.get("page_summary") or "").strip()
         else:
             warnings.append("vlm_hierarchy 缺少 nodes 数组，已忽略")
+    allow_ff: Optional[bool] = None
+    if "allow_foreign_foreground_llm_image" in raw:
+        allow_ff = _parse_allow_foreign_raw(raw.get("allow_foreign_foreground_llm_image"))
     return AgentDecision(
         thought=str(raw.get("thought") or "").strip(),
         action=action,
@@ -513,6 +524,7 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
         published=published,
         screen_layout=screen_layout,
         vlm_hierarchy=vlm_hierarchy,
+        allow_foreign_foreground_llm_image=allow_ff,
         raw_llm=raw,
         parse_warnings=warnings,
     )

@@ -53,6 +53,7 @@ class RunRequest(BaseModel):
     release_id: str = ""
     provider_id: str = ""
     playwright_headless: bool = True
+    env_profile: str = ""
 
 
 class PromoteBaselineRequest(BaseModel):
@@ -89,6 +90,25 @@ class SessionHarvestRequest(BaseModel):
     expect_status: str = ""
     max_steps: int | None = None
     menu_must_include: Optional[List[str]] = None
+
+
+class TaskAccountTemplateStateBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    account_id: str
+    facets: Optional[dict[str, Any]] = None
+    env: Optional[str] = None
+    display_name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    otp: Optional[str] = None
+    note: Optional[str] = None
+    case_id: str = ""
+    sn: str = ""
+    package_id: str = ""
+    message: str = ""
 
 
 @router.get("/devices")
@@ -130,6 +150,7 @@ def run_cases(body: RunRequest, _sess: dict = Depends(current_session)):
             instruction=str(body.instruction or "").strip(),
             provider_id=str(body.provider_id or "").strip(),
             playwright_headless=bool(body.playwright_headless),
+            env_profile=str(body.env_profile or "").strip(),
         )
         return ok(snapshot, msg="AI-led 回归任务已启动")
     except cr.DeviceBusy as exc:
@@ -208,6 +229,130 @@ def get_task(task_id: str, _sess: dict = Depends(current_session)):
     if doc is None:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
     return ok(run_store.to_task_json(doc))
+
+
+@router.get("/tasks/{task_id}/resource-restore-logs")
+def list_task_resource_restore_logs(
+    task_id: str,
+    page: int = 1,
+    page_size: int = 30,
+    case_id: str = "",
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.account_facet_sync import resolve_task_project_id
+    from mino_nexus.services.resource_allocation_log import ACTION_FACET_UPDATE, list_allocation_logs
+
+    project_id, _app_id, err = resolve_task_project_id(task_id)
+    if not project_id:
+        raise HTTPException(status_code=400, detail=err or "无法解析项目")
+    payload = list_allocation_logs(
+        project_id,
+        page=page,
+        page_size=page_size,
+        run_id=str(task_id or "").strip(),
+        case_id=str(case_id or "").strip(),
+        action=ACTION_FACET_UPDATE,
+    )
+    payload["project_id"] = project_id
+    payload["task_id"] = str(task_id or "").strip()
+    return ok(payload)
+
+
+@router.post("/tasks/{task_id}/resource-restore-logs/{log_id}/restore")
+def restore_task_resource_log(
+    task_id: str,
+    log_id: int,
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.resource_ops import ResourceAllocationLog
+    from mino_nexus.services.account_facet_sync import resolve_task_project_id, restore_account_from_allocation_log
+
+    project_id, _app_id, err = resolve_task_project_id(task_id)
+    if not project_id:
+        raise HTTPException(status_code=400, detail=err or "无法解析项目")
+    tid = str(task_id or "").strip()
+    with session_scope() as db:
+        row = (
+            db.query(ResourceAllocationLog)
+            .filter(ResourceAllocationLog.project_id == project_id, ResourceAllocationLog.id == int(log_id))
+            .one_or_none()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="日志不存在")
+        if tid and tid not in str(row.run_id or ""):
+            raise HTTPException(status_code=400, detail="该日志不属于本任务")
+    saved, rerr = restore_account_from_allocation_log(project_id, log_id)
+    if not saved:
+        raise HTTPException(status_code=400, detail=rerr or "恢复失败")
+    return ok({"account_id": str(saved.get("id") or ""), "log_id": log_id, "project_id": project_id}, msg="已从任务资源日志恢复")
+
+
+@router.patch("/tasks/{task_id}/account-template-state")
+def patch_task_account_template_state(
+    task_id: str,
+    body: TaskAccountTemplateStateBody,
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.account_facet_schema import facets_for_storage
+    from mino_nexus.services.account_facet_sync import FacetLogContext, apply_account_template_state, resolve_task_project_id
+    from mino_nexus.services.account_pool_templates import merged_pool_field_defs
+
+    doc = run_store.get(task_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    project_id, _app_id, err = resolve_task_project_id(task_id)
+    if not project_id:
+        raise HTTPException(status_code=400, detail=err or "无法解析项目")
+    account_id = str(body.account_id or "").strip()
+    if not account_id:
+        raise HTTPException(status_code=400, detail="account_id required")
+    raw = body.model_dump(exclude_unset=True)
+    raw.pop("account_id", None)
+    facets = raw.pop("facets", None)
+    message = str(raw.pop("message", "") or "执行任务修改模板参数")[:2000]
+    case_id = str(raw.pop("case_id", "") or "")[:80]
+    sn = str(raw.pop("sn", "") or doc.get("sn") or "")[:64]
+    package_id = str(raw.pop("package_id", "") or "")[:120]
+    log_ctx = FacetLogContext(
+        source="run_task",
+        run_id=str(task_id or "")[:80],
+        case_id=case_id,
+        sn=sn,
+        package_id=package_id,
+        env=str(raw.get("env") or doc.get("env_profile") or "")[:32],
+        message=message,
+    )
+    row_patch = raw
+    if facets is not None:
+        env_doc = ps.project_env(project_id)
+        stored = facets_for_storage(facets, merged_pool_field_defs(env_doc))
+        saved, errors = apply_account_template_state(
+            project_id,
+            account_id,
+            stored_facets=stored,
+            row_patch=row_patch or None,
+            log_ctx=log_ctx,
+        )
+    else:
+        saved, errors = apply_account_template_state(
+            project_id,
+            account_id,
+            row_patch=row_patch or None,
+            log_ctx=log_ctx,
+        )
+    if not saved:
+        raise HTTPException(status_code=400, detail=errors[0] if errors else "同步失败")
+    env_doc = ps.project_env(project_id)
+    from mino_nexus.services.account_pool_templates import merged_pool_field_defs
+    from mino_nexus.services.project_env import public_test_accounts
+
+    public = public_test_accounts(
+        [saved],
+        include_password=False,
+        pool_field_defs=merged_pool_field_defs(env_doc),
+    )[0]
+    return ok({"account": public, "project_id": project_id, "warnings": errors}, msg="已同步到号池资源")
 
 
 @router.post("/tasks/{task_id}/cancel")

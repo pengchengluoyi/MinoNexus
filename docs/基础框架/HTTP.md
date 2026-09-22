@@ -59,6 +59,9 @@ https://github.com/<owner>/MinoScout/releases/latest/download/manifest.json
 | POST | `/runtime/nodes/install-token` | 短 TTL 节点凭证。Studio 写入 Scout 配置 |
 | PATCH | `/runtime/nodes/{node_id}` | **Console 管理员**：改 `owner_user_id` / `studio_id`（离线节点也生效） |
 | POST | `/runtime/nodes/{node_id}/command` | Studio 对已连接节点下发 `stop` / `restart` / `update`。离线 409。`start` 400 |
+| GET | `/runtime/nodes/{node_id}/workload` | 合并 Scout `device_workload` 与 Nexus 在途 run（按 sn） |
+| GET | `/runtime/nodes/{node_id}/logs?lines=` | `EXECUTE node.log_tail`（Scout ≥ 下一版含该指令） |
+| POST | `/device/{sn}/ime/system` | Android 设备恢复系统输入法（关闭 ADB Keyboard） |
 | GET | `/releases/scout/latest` | **客户端不用。** 兼容旧调用的可选代理；未设 `MINO_SCOUT_MANIFEST_URL` 时 404。不存文件 |
 
 Console 不提供 Scout 安装或包配置。
@@ -89,6 +92,7 @@ Nexus 不直连 adb；经在线 Scout 下发 `set_input_method`。设备未安�
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/device/{sn}/ime/adbkeyboard` | 将该 sn 对应 Android 设备默认输入法切到 ADB Keyboard。设备离线或 Scout 无应答时 409/502 |
+| POST | `/device/{sn}/ime/system` | 关闭 ADB Keyboard，切回其它已启用系统输入法（经 Scout `set_input_method` + `ime=system`） |
 
 旧 `POST /app-automation/qa-process/import/{app_id}` 的 `kind=cases` 已停用，请走上述 preview/commit。
 

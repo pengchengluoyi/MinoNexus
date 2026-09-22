@@ -206,8 +206,8 @@ def infer_foreground(
             fg = sorted(app_pkgs)[0]
             kind = "app"
     elif target:
-        fg = target
-        kind = "app"
+        fg = ""
+        kind = "unknown"
     else:
         fg = ""
         kind = "unknown"

@@ -43,6 +43,140 @@ def format_session_block(result: dict[str, Any], *, required: str = "any") -> st
     return " ".join(str(x) for x in bits if x).strip()
 
 
+def program_session_block_from_hierarchy(
+    ctx,
+    nodes: list[Any],
+    *,
+    case: dict[str, Any] | None = None,
+) -> str:
+    """hierarchy 能定论时跳过 inspect-session VLM，避免隐私弹窗被误判为系统权限页。"""
+    if not nodes:
+        return ""
+    from mino_nexus.loop.ui_consent import find_consent_control
+
+    if find_consent_control(list(nodes)) is not None:
+        return (
+            "session=unknown identity=unknown seen=in_app_legal_consent "
+            "next=accept_legal_consent "
+            "reason=应用内隐私/用户协议弹窗（hierarchy），请 accept_legal_consent；"
+            "非系统权限页，勿 recover_bring_target_app_foreground"
+        )
+    pkg = str(getattr(ctx, "target_package", "") or "").strip()
+    from mino_nexus.services.nav_capture_store import run_guard_foreground
+
+    fg = run_guard_foreground(
+        list(nodes),
+        target_package=pkg,
+        platform=str(getattr(ctx, "platform", "") or ""),
+    )
+    overlay = str(fg.get("system_overlay") or "").strip().lower()
+    af = str(fg.get("app_foreground") or "").strip().lower()
+    sk = str(fg.get("screen_kind") or "").strip().lower()
+    if af == "no" or sk in ("foreign", "launcher") or overlay == "yes":
+        # 前台非被测 App：送图已 withhold，勿再写 session_block 误导模型。
+        return ""
+    if af == "yes" and overlay != "yes":
+        return (
+            "session=unknown identity=unknown seen=target_app_foreground "
+            "next=observe "
+            "reason=被测 App 已在前台（probe/hierarchy）；会话态待本步判定，"
+            "优先 accept_legal_consent 或 tap，勿仅凭截图猜系统权限"
+        )
+    return ""
+
+
+def _append_required_to_program_block(line: str, *, required: str = "any") -> str:
+    req = str(required or "any").strip().lower()
+    if req == "guest":
+        return f"{line.strip()} required=guest"
+    if req == "logged_in":
+        return f"{line.strip()} required=logged_in"
+    return line.strip()
+
+
+def _clear_foreign_session_block(slot_sink: dict[str, str]) -> None:
+    raw = str(slot_sink.get("session_block") or "")
+    if not raw:
+        return
+    if "seen=foreign_screen" in raw or "return_to_target_app" in raw:
+        slot_sink["session_block"] = ""
+        return
+    if _vlm_session_block_looks_foreign_pollution(raw):
+        slot_sink["session_block"] = ""
+
+
+def llm_session_block(ctx, block: str) -> str:
+    """前台非被测 App 时不向 decide 传 session_block（与送图 withhold 一致）。"""
+    try:
+        from mino_nexus.loop.llm_screenshot_gate import should_withhold_llm_image
+
+        if should_withhold_llm_image(ctx):
+            return ""
+    except Exception:
+        pass
+    return str(block or "").strip()
+
+
+def _vlm_session_block_looks_foreign_pollution(block: str) -> bool:
+    raw = str(block or "")
+    if "seen=foreign_screen" in raw:
+        return False
+    markers = (
+        "系统应用",
+        "系统设置",
+        "不属于",
+        "无法判断",
+        "存储页面",
+        "应用信息",
+    )
+    if any(m in raw for m in markers) and "session=" in raw:
+        return True
+    return False
+
+
+def hierarchy_nodes_from_nav(nav: Any, ctx: Any) -> list[Any]:
+    nodes: list[Any] = list(getattr(ctx, "nav_hierarchy_nodes", None) or [])
+    if nav is not None:
+        snap = getattr(nav, "snapshot", None)
+        if snap is not None:
+            nodes = list(getattr(snap, "nodes", None) or [])
+    return nodes
+
+
+def reconcile_session_block_with_hierarchy(
+    ctx,
+    slot_sink: dict[str, str],
+    nav: Any,
+    case: dict[str, Any],
+) -> None:
+    """每 turn 用 hierarchy 结论覆盖过期的 inspect-session VLM 槽（尤其错包/设置页）。"""
+    from mino_nexus.runtime.session_gate import ensure_case_scene, required_session as required_session_enum
+
+    nodes = hierarchy_nodes_from_nav(nav, ctx)
+    prog = program_session_block_from_hierarchy(ctx, nodes, case=case)
+    af = str(getattr(ctx, "app_foreground", "") or "").strip().lower()
+    if not prog and af == "no":
+        _clear_foreign_session_block(slot_sink)
+        return
+    if not prog:
+        existing = str(slot_sink.get("session_block") or "")
+        if _vlm_session_block_looks_foreign_pollution(existing) and af == "no":
+            _clear_foreign_session_block(slot_sink)
+        return
+    existing = str(slot_sink.get("session_block") or "")
+    if "in_app_legal_consent" in prog:
+        req = required_session_enum(scene=ensure_case_scene(case, getattr(ctx, "case_scene", None)))
+        slot_sink["session_block"] = _append_required_to_program_block(prog, required=req)
+        return
+    if _session_block_is_conclusive(existing) and not _vlm_session_block_looks_foreign_pollution(existing):
+        return
+    if "target_app_foreground" in prog or _vlm_session_block_looks_foreign_pollution(existing):
+        req = required_session_enum(scene=ensure_case_scene(case, getattr(ctx, "case_scene", None)))
+        slot_sink["session_block"] = _append_required_to_program_block(prog, required=req)
+    if str(getattr(ctx, "app_foreground", "") or "").strip().lower() == "no":
+        _clear_foreign_session_block(slot_sink)
+
+
 def refresh_session_block(
     *,
     shot,
@@ -71,9 +205,25 @@ def refresh_session_block(
     existing = str(slot_sink.get("session_block") or "")
     if not force and _session_block_is_conclusive(existing):
         return {"ok": True, "skipped": True, "reason": "already_observed"}
+    nodes: list[Any] = list(getattr(ctx, "nav_hierarchy_nodes", None) or [])
+    if nav is not None:
+        snap = getattr(nav, "snapshot", None)
+        if snap is not None:
+            nodes = list(getattr(snap, "nodes", None) or [])
+    prog = program_session_block_from_hierarchy(ctx, nodes, case=case)
     scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
     ctx.case_scene = scene
     req_enum = required_session_enum(scene=scene)
+    if prog and (not force or "in_app_legal_consent" in prog):
+        slot_sink["session_block"] = _append_required_to_program_block(prog, required=req_enum)
+        return {"ok": True, "program": True, "reason": "hierarchy_session"}
+    af_ctx = str(getattr(ctx, "app_foreground", "") or "").strip().lower()
+    if af_ctx == "no":
+        _clear_foreign_session_block(slot_sink)
+        return {"ok": True, "program": True, "reason": "probe_foreign_skip"}
+    if af_ctx not in ("yes", "") and not nodes:
+        slot_sink["session_block"] = ""
+        return {"ok": True, "program": True, "reason": "foreground_unknown_skip"}
     row = inspect_session(
         required_session=format_required_session_brief(scene),
         knowledge_hint=str(slot_sink.get("knowledge_hint") or ""),

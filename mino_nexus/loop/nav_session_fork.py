@@ -196,6 +196,36 @@ def fsm_goal_conflicts_with_guest_fork(
     return False, ""
 
 
+def fsm_blocked_logged_in_session_drift(
+    *,
+    required_session: str,
+    instruction: str,
+    expected: str,
+    to_raw: str,
+    hierarchy_nodes: list[dict[str, Any]] | None,
+    localized: dict[str, Any] | None,
+) -> tuple[bool, str]:
+    """前置已登录、本步验收个人页，却在登录屏 — 禁止 fsm 回 Tab/我的（防 fuse 连坐）。"""
+    rs = str(required_session or "").strip().lower()
+    if rs != "logged_in":
+        return False, ""
+    exp = str(expected or "")
+    instr = str(instruction or "")
+    if not _PROFILE_DEST_EXPECT_RE.search(exp) and "我的" not in instr:
+        return False, ""
+    if not on_login_destination_screen(hierarchy_nodes=hierarchy_nodes, localized=localized):
+        return False, ""
+    want = _fold_label(to_raw)
+    tab = _fold_label(click_label_from_nav_ref(instr) or "我的")
+    if want and (want == tab or tab in want or "个人" in to_raw or "我的" in to_raw):
+        msg = (
+            "【登录态漂移】前置要求已登录，但当前在登录页；"
+            "无法通过 fsm 进入「我的/个人页」。请先 recover 或确认设备登录态与租号账号。"
+        )
+        return True, msg
+    return False, ""
+
+
 def required_session_from_scene(scene: dict[str, Any] | None) -> str:
     from mino_nexus.runtime.session_gate import required_session
 

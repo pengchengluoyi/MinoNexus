@@ -24,7 +24,11 @@ def _slug_key(raw: str) -> str:
 def _norm_option(row: Any) -> dict[str, str] | None:
     if not isinstance(row, dict):
         return None
-    val = _slug_key(str(row.get("value") or row.get("id") or ""))
+    raw_val = str(row.get("value") or row.get("id") or "").strip().lower()
+    if re.match(r"^[0-9]{1,4}$", raw_val):
+        val = raw_val
+    else:
+        val = _slug_key(raw_val)
     if not val:
         return None
     label = str(row.get("label") or val).strip()[:40] or val
@@ -46,12 +50,16 @@ def normalize_extension(raw: Any, seen: set[str]) -> dict[str, Any] | None:
     if not opts:
         opts = [{"value": "unknown", "label": "未设置"}, {"value": "yes", "label": "是"}, {"value": "no", "label": "否"}]
     seen.add(key)
+    kind = str(raw.get("data_kind") or "").strip().lower()
+    if kind not in ("static", "dynamic"):
+        kind = "static"
     return {
         "key": key,
         "label": label,
         "options": opts[:16],
         "help": str(raw.get("help") or "").strip()[:200],
         "source": str(raw.get("source") or "manual").strip()[:16] or "manual",
+        "data_kind": kind,
     }
 
 

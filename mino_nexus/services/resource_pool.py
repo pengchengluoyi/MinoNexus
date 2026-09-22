@@ -527,6 +527,8 @@ def pick_accounts_by_requirements(
     *,
     env: str = "",
     run_id: str = "",
+    holder_sn: str = "",
+    project_id: str = "",
     account_ident_fn: Callable[[dict | None], str],
     observed_by_account: dict[str, dict[str, str]] | None = None,
     ident_query: str = "",
@@ -569,12 +571,25 @@ def pick_accounts_by_requirements(
         lease = row.get("lease") if isinstance(row.get("lease"), dict) else {}
         other_run = str(lease.get("run_id") or "").strip()
         rid = str(run_id or "").strip()
-        if other_run and other_run != rid:
+        sn_key = str(holder_sn or "").strip()
+        if lease_blocks_other_holder(lease, run_id=rid, sn=sn_key):
             score -= 100
             reasons.append("租用中")
         elif other_run and other_run == rid:
             score += 50
             reasons.append("本 run 已租")
+
+        pid = str(project_id or "").strip()
+        aid = str(row.get("id") or "")
+        if pid and aid:
+            from mino_nexus.services.resource_allocation_log import account_recent_pick_penalty
+
+            pen, pen_reason = account_recent_pick_penalty(
+                pid, aid, run_id=rid, holder_sn=sn_key
+            )
+            if pen:
+                score -= pen
+                reasons.append(pen_reason or "近期占用降权")
 
         ident = account_ident_fn(row)
         if q and q in ident.lower():
@@ -596,6 +611,18 @@ def pick_accounts_by_requirements(
 
 # --- Facet 转移（用例执行写回号池）---
 
+_DYNAMIC_TRANSITION_SOURCES = frozenset({
+    "case_pass",
+    "probe",
+    "manual",
+    "capability",
+    "flow_block",
+    "ai_case_end",
+    "resource_transition",
+    "provision",
+    "reset",
+})
+
 _ALLOWED_TRANSITIONS: dict[tuple[str, str, str], set[str]] = {
     ("lifecycle", "unregistered", "registered"): {"case_pass", "manual", "provision"},
     ("session", "logged_out", "logged_in"): {"case_pass", "probe", "manual", "capability", "flow_block"},
@@ -610,34 +637,101 @@ _ALLOWED_TRANSITIONS: dict[tuple[str, str, str], set[str]] = {
 }
 
 
+def _field_defs_by_key(field_defs: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for row in field_defs or []:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("key") or "").strip()
+        if key:
+            out[key] = row
+    return out
+
+
+def _ordered_flow_values(defn: dict[str, Any]) -> list[str]:
+    vals: list[str] = []
+    for opt in defn.get("options") or []:
+        if not isinstance(opt, dict):
+            continue
+        val = str(opt.get("value") or "").strip().lower()
+        if val and val != "unknown" and val not in vals:
+            vals.append(val)
+    return vals
+
+
+def transitions_for_dynamic_field(defn: dict[str, Any]) -> dict[tuple[str, str, str], set[str]]:
+    if str(defn.get("data_kind") or "") != "dynamic":
+        return {}
+    key = str(defn.get("key") or "").strip()
+    vals = _ordered_flow_values(defn)
+    if not key or len(vals) < 2:
+        return {}
+    table: dict[tuple[str, str, str], set[str]] = {}
+    init_sources = {"manual", "case_pass", "ai_case_end", "probe", "provision"}
+    for val in vals:
+        table[(key, "unknown", val)] = set(init_sources)
+    for i, fr in enumerate(vals):
+        for j, to in enumerate(vals):
+            if fr == to:
+                continue
+            edge = (key, fr, to)
+            if j == i + 1:
+                table[edge] = set(_DYNAMIC_TRANSITION_SOURCES)
+            elif j < i:
+                table[edge] = {"manual", "reset", "case_pass", "ai_case_end"}
+            else:
+                table[edge] = {"manual", "case_pass", "ai_case_end", "capability", "flow_block"}
+    return table
+
+
+def build_facet_transition_table(field_defs: list[dict[str, Any]] | None = None) -> dict[tuple[str, str, str], set[str]]:
+    table = dict(_ALLOWED_TRANSITIONS)
+    for defn in field_defs or []:
+        table.update(transitions_for_dynamic_field(defn))
+    return table
+
+
 def apply_facet_updates(
     facets: dict[str, str],
     updates: dict[str, str],
     *,
     source: str = "case_pass",
     extension_keys: frozenset[str] | None = None,
+    field_defs: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, str], list[str]]:
     out = account_facet_values_for_match({"facets": facets})
     errors: list[str] = []
     ext = extension_keys or frozenset()
+    defs_by_key = _field_defs_by_key(field_defs)
+    trans_table = build_facet_transition_table(field_defs)
+    static_ext = frozenset(
+        k
+        for k in ext
+        if k not in DEFAULT_FACETS
+        and str(defs_by_key.get(k, {}).get("data_kind") or "static") == "static"
+    )
     for key, new_val in (updates or {}).items():
         key = str(key).strip()
         new_val = str(new_val).strip().lower()
-        if key in ext and key not in DEFAULT_FACETS:
+        if key in static_ext:
             out[key] = new_val
             continue
-        if key not in DEFAULT_FACETS:
+        if key not in DEFAULT_FACETS and key not in ext:
             continue
         old = out.get(key, "unknown")
         if old == new_val:
             continue
         edge = (key, old, new_val)
-        allowed = _ALLOWED_TRANSITIONS.get(edge)
+        allowed = trans_table.get(edge)
         if allowed and source not in allowed:
             if source == "ai_case_end" and ("case_pass" in allowed or "manual" in allowed):
                 pass
             else:
                 errors.append(f"禁止转移 {key}: {old}→{new_val} source={source}")
+                continue
+        elif key in ext and str(defs_by_key.get(key, {}).get("data_kind") or "") == "dynamic":
+            if not allowed:
+                errors.append(f"禁止转移 {key}: {old}→{new_val}（未定义的流转边）")
                 continue
         if key == "lifecycle" and new_val not in LIFECYCLE:
             continue
@@ -741,6 +835,7 @@ def new_lease_record(
     *,
     ttl_sec: int = DEFAULT_LEASE_TTL_SEC,
     case_id: str = "",
+    sn: str = "",
 ) -> dict[str, str]:
     rid = str(run_id or "").strip()
     now = datetime.now()
@@ -753,7 +848,33 @@ def new_lease_record(
     cid = str(case_id or "").strip()
     if cid:
         rec["case_id"] = cid[:64]
+    device_sn = str(sn or "").strip()
+    if device_sn:
+        rec["sn"] = device_sn[:64]
     return rec
+
+
+def lease_blocks_other_holder(
+    lease: dict[str, Any] | None,
+    *,
+    run_id: str,
+    sn: str = "",
+) -> bool:
+    """租约是否被其它 run 或同 run 其它设备占用。"""
+    row = lease if isinstance(lease, dict) else {}
+    if not str(row.get("run_id") or "").strip():
+        return False
+    if lease_expired(row):
+        return False
+    rid = str(run_id or "").strip()
+    other = str(row.get("run_id") or "").strip()
+    if other != rid:
+        return True
+    holder_sn = str(sn or "").strip()
+    lease_sn = str(row.get("sn") or "").strip()
+    if holder_sn and lease_sn and lease_sn != holder_sn:
+        return True
+    return False
 
 
 def sleep_wait(remaining_ms: int) -> None:

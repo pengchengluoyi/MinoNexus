@@ -109,6 +109,7 @@ def bootstrap() -> None:
             upgrade_agent_decide_to_v14,
             upgrade_agent_decide_to_v15,
             upgrade_agent_decide_to_v16,
+            upgrade_agent_decide_to_v17,
             upgrade_assert_vision_to_v2,
             upgrade_assert_vision_to_v3,
             upgrade_inspect_session_to_v2,
@@ -142,6 +143,9 @@ def bootstrap() -> None:
         v16 = upgrade_agent_decide_to_v16()
         if v16:
             SLog.i(TAG, "agent-decide upgraded to prompt v16")
+        v17 = upgrade_agent_decide_to_v17()
+        if v17:
+            SLog.i(TAG, "agent-decide upgraded to prompt v17")
         av2 = upgrade_assert_vision_to_v2()
         if av2:
             SLog.i(TAG, "assert-vision upgraded to prompt v2")

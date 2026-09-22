@@ -81,16 +81,29 @@ class RouterProxy:
         sn: str,
         *,
         run_id: str = "",
+        task_id: str = "",
         timeout_pad_sec: float = 2.0,
         target_package: str = "",
         playwright_headless: bool = True,
     ):
         self.sn = sn
         self.run_id = run_id
+        self.task_id = str(task_id or "").strip()
         self.target_package = str(target_package or "")
         self.playwright_headless = bool(playwright_headless)
         # 协议 §6：等 RESULT 用 payload.timeout_sec + 宽限
         self.timeout_pad_sec = timeout_pad_sec
+
+    def _task_aborted(self) -> bool:
+        tid = self.task_id
+        if not tid:
+            return False
+        try:
+            from mino_nexus.services import run_store
+
+            return run_store.task_cancelled(tid)
+        except Exception:
+            return False
 
     # ---------------- 对外：与上游 dispatch 同签名 ----------------
 
@@ -168,6 +181,16 @@ class RouterProxy:
         started = _now_iso()
         t0 = time.time()
 
+        if self._task_aborted():
+            return _fail(
+                event,
+                started,
+                t0,
+                "任务已取消",
+                executor_used="router_proxy",
+                local_reason="task_cancelled",
+            )
+
         if is_local_cap(event.capability_id):
             from mino_nexus.loop.local_executors import dispatch_local
 
@@ -234,6 +257,8 @@ class RouterProxy:
         timeout_sec: float = _OBSERVE_TIMEOUT_SEC,
         compress_ratio: float = 2.0,
     ) -> CapturedScreen:
+        if self._task_aborted():
+            return CapturedScreen(ok=False, source="router_proxy", error="任务已取消")
         node, why = get_registry().resolve(self.sn)
         if node is None:
             return CapturedScreen(ok=False, source="router_proxy", error=why)

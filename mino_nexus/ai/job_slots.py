@@ -39,12 +39,16 @@ def assemble_agent_decide_slots(
     target_app = (
         f"{target_app_name}（{target_package}）" if target_package else "（未指定，谨慎启动应用）"
     )
+    ph = str(phase or "do").strip().lower()
+    if ph == "prep":
+        sess_default = "（前置不观察登录态；按 precondition 完成即可 signal_done。）"
+    else:
+        sess_default = "（尚未观察；首页/信息流看不出登录态属正常，继续按目标操作）"
     slots = {
         "goal": (goal or "").strip() or "（未提供目标）",
         "success_criteria": (success_criteria or "").strip() or "（未提供，凭目标自行判断）",
         "target_app": target_app,
-        "session_block": (session_block or "").strip()
-        or "（尚未观察；首页/信息流看不出登录态属正常，继续按目标操作）",
+        "session_block": (session_block or "").strip() or sess_default,
         "accounts_brief": (accounts_brief or "").strip() or EMPTY_ACCOUNTS_BRIEF,
         "checkpoints_block": checkpoints_block or "（无）",
         "device_brief_json": json.dumps(device_brief, ensure_ascii=False, indent=2, default=str),

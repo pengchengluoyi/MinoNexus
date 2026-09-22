@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 # --- 阈值（可后续抽到 sop）---
 NO_PROGRESS_THRESHOLD = 3
+INPUT_REPEAT_BLOCK = 3
 FUSE_BLOCK_STOP_THRESHOLD = 2
 STATE_WINDOW = 10
 STATE_MAX_UNIQUE = 2
@@ -37,6 +38,13 @@ _FUSE_CAPS = frozenset({
 
 # wait_ms 计入里程碑，但不走「同屏无进展」——生成/加载本来就会在同一屏空等几轮。
 _WAIT_CAPS = frozenset({"wait_ms", "wait_screen_ready"})
+# 本地/数据类 cap 不改变界面指纹仍算进展（OTP/发码/填码等同屏完成登录微步）。
+_FP_NEUTRAL_CAPS = frozenset({
+    "get_otp",
+    "read_device_data",
+    "lease_account",
+    "request_sms_code",
+})
 _WAIT_WARN_AFTER = 4
 
 _SMS_RE = re.compile(r"验证码|短信|OTP|sms", re.I)
@@ -125,6 +133,42 @@ def _fps_equal(a: str, b: str) -> bool:
     return str(a or "").strip() == str(b or "").strip() and bool(str(a or "").strip())
 
 
+def fp_neutral_cap(
+    cap_id: str,
+    params: dict[str, Any] | None,
+    *,
+    intents_done: set[str] | None = None,
+    login_flow_step: bool = False,
+) -> bool:
+    """登录链上常同屏的操作：不计入「指纹未变」熔断，但会写入合成进展指纹。"""
+    cid = str(cap_id or "").strip()
+    if cid in _FP_NEUTRAL_CAPS:
+        return True
+    done = set(intents_done or set())
+    if cid == "input_text":
+        p = dict(params or {})
+        field = str(p.get("field") or p.get("target") or "").strip().lower()
+        text = str(p.get("text") or "")
+        if login_flow_step and field in ("phone", "sms_code", "验证码", "otp", "password", "密码"):
+            return True
+        if field in ("sms_code", "验证码", "otp"):
+            return True
+        if field in ("password", "密码"):
+            return "login_password" not in done
+        if _SMS_RE.search(f"{field}{text}"):
+            return True
+        if login_flow_step and field in ("phone",) and "login_phone" not in done:
+            return True
+    if cid == "tap_element":
+        sel = str((params or {}).get("selector_text") or (params or {}).get("text") or "")
+        if login_flow_step and "sms_send" in done and "otp_fill" in done:
+            return True
+        if re.search(r"登录|立即登录", sel):
+            if "sms_send" in done and ("otp_fill" in done or "input_fill" in done):
+                return True
+    return False
+
+
 def _detect_state_cycle(fps: list[str]) -> Optional[tuple[int, list[str]]]:
     """检测末尾是否出现 period=2..4 的状态循环（至少重复 3 轮）。"""
     seq = [str(x) for x in fps if str(x).strip()]
@@ -143,7 +187,11 @@ def _detect_state_cycle(fps: list[str]) -> Optional[tuple[int, list[str]]]:
 
 def _detect_action_pattern_cycle(keys: list[str]) -> bool:
     """粗动作序列末尾是否呈 AAABBB 式或 ABCABC 式循环（防「换一点规避」）。"""
-    seq = [str(x) for x in keys if str(x).strip()]
+    seq = [
+        str(x)
+        for x in keys
+        if str(x).strip() and str(x) not in _WAIT_CAPS
+    ]
     if len(seq) < 6:
         return False
     tail = seq[-9:]
@@ -194,6 +242,8 @@ class ProgressGate:
         self.warning_hint = ""
         self.last_intervention = ""
         self._milestone_exhausted = False
+        self._post_states = []
+        self._coarse_actions = []
 
     def record_fuse_block(self, reason: str) -> Optional[str]:
         """连续 block 后升级 stop，避免「熔断本身」形成空转循环。"""
@@ -231,12 +281,23 @@ class ProgressGate:
         leased: bool = False,
         has_hitl: bool = False,
         profile_shape_completion: bool = False,
+        intents_done: set[str] | None = None,
+        login_flow_step: bool = False,
     ) -> Optional[str]:
         if not fuseable_cap(cap_id):
             return None
 
         kw = dict(has_get_otp=has_get_otp, leased=leased, has_hitl=has_hitl)
         exit_to = _exit_clause(has_hitl=has_hitl)
+        done = set(intents_done or set())
+
+        if fp_neutral_cap(
+            cap_id,
+            params,
+            intents_done=done,
+            login_flow_step=login_flow_step,
+        ):
+            return None
 
         if self.fuse_block_streak >= FUSE_BLOCK_STOP_THRESHOLD:
             return (
@@ -315,13 +376,45 @@ class ProgressGate:
                 hint = fuse_hint(cap_id, params, reason="state_domination", **kw)
                 return f"【熔断·动作模式】近几步动作类型反复组合仍无进展。{hint}"
 
+        coarse_now = coarse_action_key(cap_id, params)
+        if coarse_now.startswith("input|") and len(self._coarse_actions) >= INPUT_REPEAT_BLOCK:
+            if not login_flow_step:
+                tail = self._coarse_actions[-INPUT_REPEAT_BLOCK:]
+                if len(tail) == INPUT_REPEAT_BLOCK and all(x == coarse_now for x in tail):
+                    hint = fuse_hint(
+                        cap_id,
+                        params,
+                        reason="no_progress",
+                        **kw,
+                    )
+                    return (
+                        f"【熔断·重复输入】同字段已连续输入 {INPUT_REPEAT_BLOCK} 次仍无实质进展。"
+                        f"{hint}"
+                    )
+            elif "login_flow" not in done and not (
+                {"sms_send", "otp_fill", "login_phone"}.issubset(done)
+            ):
+                tail = self._coarse_actions[-INPUT_REPEAT_BLOCK:]
+                if len(tail) == INPUT_REPEAT_BLOCK and all(x == coarse_now for x in tail):
+                    hint = fuse_hint(cap_id, params, reason="no_progress", **kw)
+                    return (
+                        f"【熔断·重复输入】同字段已连续输入 {INPUT_REPEAT_BLOCK} 次仍无实质进展。"
+                        f"{hint}"
+                    )
+
         # 连续 N 次操作后界面指纹未变 → 第 N+1 次前熔断（先于动作级规则）
         if self.no_progress_streak >= NO_PROGRESS_THRESHOLD - 1:
-            hint = fuse_hint(cap_id, params, reason="no_progress", **kw)
-            return (
-                f"【熔断·无进展】连续 {self.no_progress_streak} 次操作后界面指纹未变。"
-                f"{hint}"
-            )
+            if not fp_neutral_cap(
+                cap_id,
+                params,
+                intents_done=done,
+                login_flow_step=login_flow_step,
+            ):
+                hint = fuse_hint(cap_id, params, reason="no_progress", **kw)
+                return (
+                    f"【熔断·无进展】连续 {self.no_progress_streak} 次操作后界面指纹未变。"
+                    f"{hint}"
+                )
 
         if self.no_progress_streak >= NO_PROGRESS_THRESHOLD - 2:
             self.warning_hint = (
@@ -340,13 +433,28 @@ class ProgressGate:
         params: dict[str, Any] | None,
         pre_fp: str,
         post_fp: str,
+        intents_done: set[str] | None = None,
+        login_flow_step: bool = False,
     ) -> None:
         if not fuseable_cap(cap_id):
             return
         self.milestone_turns += 1
         pre = str(pre_fp or "").strip() or "_"
         post = str(post_fp or "").strip() or "_"
-        if _fps_equal(pre, post):
+        neutral = fp_neutral_cap(
+            cap_id,
+            params,
+            intents_done=intents_done,
+            login_flow_step=login_flow_step,
+        )
+        if neutral:
+            self.no_progress_streak = 0
+            if _fps_equal(pre, post):
+                coarse = coarse_action_key(cap_id, params)
+                post = f"{post}#neutral:{coarse}"
+            if not self.warning_hint.startswith("【熔断·强制转向】"):
+                self.warning_hint = ""
+        elif _fps_equal(pre, post):
             self.no_progress_streak += 1
         else:
             self.no_progress_streak = 0
@@ -377,4 +485,5 @@ __all__ = [
     "coarse_action_key",
     "fuse_hint",
     "fuseable_cap",
+    "fp_neutral_cap",
 ]

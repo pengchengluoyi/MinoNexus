@@ -102,7 +102,7 @@ def compile_resource_key_from_precondition(
         device_app_session = "logged_in"
 
     if required_session == "logged_in":
-        session_prep = "relogin"
+        session_prep = "skip"
     elif required_session in ("guest", "logged_out"):
         session_prep = "logout"
     else:

@@ -90,6 +90,13 @@ def _yes_no(cond: Optional[bool]) -> str:
     return "yes" if cond else "no"
 
 
+def _looks_like_android_pkg(name: str) -> bool:
+    s = str(name or "").strip()
+    if not s or s in ("android", "system"):
+        return False
+    return "." in s and len(s) >= 5
+
+
 def _payload_dict(result: Any) -> dict[str, Any]:
     """Scout RESULT：raw_response / extra / data 里都可能带着 low_level。"""
     raw = dict(getattr(result, "raw_response", None) or {})
@@ -103,6 +110,86 @@ def _payload_dict(result: Any) -> dict[str, Any]:
     if isinstance(low, dict):
         return low
     return raw
+
+
+def _enrich_evidence_from_run_context(
+    ev: Evidence,
+    ctx: Any,
+    *,
+    target_package: str = "",
+) -> None:
+    """probe_device_state 在部分机型上 dumpsys/grep 为空时，用 hierarchy / 本 turn 前台结论补全。"""
+    pkg = str(target_package or getattr(ctx, "target_package", "") or "").strip()
+    menu_fg = str(getattr(ctx, "app_foreground", "") or "").strip().lower()
+    if menu_fg == "yes" and pkg:
+        ev.app_foreground = "yes"
+        if not ev.foreground_pkg:
+            ev.foreground_pkg = pkg
+            ev.top_window_pkg = pkg
+    elif menu_fg == "no":
+        ev.app_foreground = "no"
+    if ev.foreground_pkg and ev.app_foreground != "unknown":
+        return
+    nodes = getattr(ctx, "nav_hierarchy_nodes", None)
+    if not isinstance(nodes, list) or not nodes:
+        return
+    from mino_nexus.services.nav_capture_store import infer_screen_package
+
+    inf = infer_screen_package(
+        nodes,
+        target_package=pkg,
+        platform=str(getattr(ctx, "platform", "") or ""),
+    )
+    fpkg = str(inf.get("foreground_package") or inf.get("foreground_id") or "").strip()
+    kind = str(inf.get("screen_kind") or "").strip()
+    if fpkg and not _looks_like_android_pkg(fpkg):
+        fpkg = ""
+    if kind in ("launcher", "foreign"):
+        ev.app_foreground = "no"
+        if fpkg:
+            ev.foreground_pkg = fpkg
+            ev.top_window_pkg = fpkg
+        return
+    if pkg and fpkg:
+        ev.foreground_pkg = fpkg
+        ev.top_window_pkg = fpkg
+        ev.app_foreground = _yes_no(fpkg == pkg or pkg in fpkg)
+    elif kind == "app" and pkg and fpkg == pkg:
+        ev.app_foreground = "yes"
+        ev.foreground_pkg = pkg
+        ev.top_window_pkg = pkg
+
+
+def _fill_foreground_from_get_app(
+    ev: Evidence,
+    router: Any,
+    ctx: Any,
+    *,
+    target_package: str,
+) -> None:
+    if ev.foreground_pkg and ev.app_foreground in ("yes", "no"):
+        return
+    pkg = str(target_package or "").strip()
+    event = PlanEvent(
+        seq=0,
+        capability_id="get_foreground_app",
+        event_kind="get_foreground_app",
+        params={"package": pkg},
+        ai_reasoning="L0 取证 fallback",
+        label="读前台包名",
+    )
+    try:
+        result = _dispatch(router, ctx, event, agent_turn=0, action_idx=0)
+    except Exception:
+        return
+    raw = _payload_dict(result)
+    fg_pkg = str(raw.get("package") or "").strip()
+    if not _looks_like_android_pkg(fg_pkg):
+        return
+    ev.foreground_pkg = fg_pkg
+    ev.top_window_pkg = fg_pkg
+    if pkg:
+        ev.app_foreground = _yes_no(fg_pkg == pkg)
 
 
 def collect_evidence(ctx, router, *, target_package: str = "") -> Evidence:
@@ -126,7 +213,9 @@ def collect_evidence(ctx, router, *, target_package: str = "") -> Evidence:
             step_idx=frame_step(case_seq, 2),
         )
     except Exception as exc:
-        return Evidence(error=f"取证 dispatch 异常: {exc}")
+        ev = Evidence(error=f"取证 dispatch 异常: {exc}")
+        _enrich_evidence_from_run_context(ev, ctx, target_package=pkg)
+        return ev
 
     low = _payload_dict(result)
     ev = Evidence(raw=low)
@@ -176,8 +265,38 @@ def collect_evidence(ctx, router, *, target_package: str = "") -> Evidence:
     elif ev.awake == "yes" and ev.locked == "no":
         ev.screen_blocked = "no"
 
+    _enrich_evidence_from_run_context(ev, ctx, target_package=pkg)
+    if router is not None:
+        _fill_foreground_from_get_app(ev, router, ctx, target_package=pkg)
     SLog.i(TAG, f"evidence: {ev.brief()}")
     return ev
+
+
+def resolve_app_foreground_guard(
+    ctx,
+    router,
+    *,
+    nodes: list[Any] | None,
+    target_package: str = "",
+) -> dict[str, str]:
+    """hierarchy guard + get_foreground_app，减少 app_foreground=unknown。"""
+    pkg = str(target_package or getattr(ctx, "target_package", "") or "").strip()
+    from mino_nexus.services.nav_capture_store import run_guard_foreground
+
+    fg = run_guard_foreground(
+        list(nodes or []),
+        target_package=pkg,
+        platform=str(getattr(ctx, "platform", "") or ""),
+    )
+    af = str(fg.get("app_foreground") or "").strip().lower()
+    if af != "unknown" or router is None or not pkg:
+        return fg
+    ev = Evidence()
+    _fill_foreground_from_get_app(ev, router, ctx, target_package=pkg)
+    probed = str(ev.app_foreground or "").strip().lower()
+    if probed in ("yes", "no"):
+        return {**fg, "app_foreground": probed}
+    return fg
 
 
 def _match_conditions(match, evidence: Evidence, screen_texts: list[str]) -> tuple[bool, list[str]]:
@@ -325,6 +444,12 @@ def apply_rule(
 
     max_attempts = max(1, int(rule.max_attempts or 1))
     verify = rule.verify
+    if rule.id == "bring_target_app_foreground":
+        ev_pre = collect_evidence(ctx, router, target_package=target_package)
+        if ev_pre.app_foreground == "yes":
+            out.recovered = True
+            out.evidence = ev_pre.brief()
+            return out
     for attempt in range(1, max_attempts + 1):
         out.attempts = attempt
         from mino_nexus.loop.system_dialog_recovery import (
@@ -414,6 +539,7 @@ def recover_if_needed(
     target_package: str = "",
     shot: Any = None,
     execute_only: bool = False,
+    exclude_rule_ids: frozenset[str] | None = None,
 ) -> Optional[RecoveryOutcome]:
     """取证 → 可选合并截图信号 → 匹配 → 执行第一条命中规则。"""
     try:
@@ -433,6 +559,11 @@ def recover_if_needed(
     hits = match_rules(ev, platform=plat)
     if execute_only:
         hits = [h for h in hits if str(getattr(h.rule, "mode", "") or "") != "advise"]
+    from mino_nexus.loop.launch_grace import filter_foreground_recovery_hits
+
+    hits = filter_foreground_recovery_hits(ctx, hits)
+    if exclude_rule_ids:
+        hits = [h for h in hits if h.rule_id not in exclude_rule_ids]
     if not hits:
         return None
     out = apply_rule(hits[0], ctx, router, target_package=target_package)
@@ -466,6 +597,10 @@ def ensure_target_app_foreground(
     if ev.app_foreground == "yes":
         return None
     if ev.screen_blocked == "yes":
+        return None
+    from mino_nexus.loop.launch_grace import in_launch_grace
+
+    if in_launch_grace(ctx):
         return None
     away = ev.app_foreground == "no" or (
         bool(ev.foreground_pkg) and bool(pkg) and ev.foreground_pkg != pkg

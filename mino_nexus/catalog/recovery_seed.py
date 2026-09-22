@@ -226,6 +226,7 @@ _SYSTEM_PERMISSION_WHILE_USING_DETERMINISTIC: dict[str, Any] = {
             "仅在使用该应用时允许",
             "仅在使用中允许",
             "使用时允许",
+            "使用应用时",
             "While using the app",
             "Allow while using the app",
         ],
@@ -242,6 +243,8 @@ _SYSTEM_PERMISSION_WHILE_USING_DETERMINISTIC: dict[str, Any] = {
         {"capability": "tap_element", "params": {}, "target": {"text": "仅在使用该应用时允许"}, "fallback_xy": []},
         {"capability": "wait_ms", "params": {"ms": 350}, "target": {}, "fallback_xy": []},
         {"capability": "tap_element", "params": {}, "target": {"text": "使用时允许"}, "fallback_xy": []},
+        {"capability": "wait_ms", "params": {"ms": 350}, "target": {}, "fallback_xy": []},
+        {"capability": "tap_element", "params": {}, "target": {"text": "使用应用时"}, "fallback_xy": []},
         {"capability": "wait_ms", "params": {"ms": 350}, "target": {}, "fallback_xy": []},
         {"capability": "tap_element", "params": {}, "target": {"text": "允许"}, "fallback_xy": []},
         {"capability": "wait_ms", "params": {"ms": 350}, "target": {}, "fallback_xy": []},
@@ -261,7 +264,7 @@ _SYSTEM_PERMISSION_WHILE_USING_DETERMINISTIC: dict[str, Any] = {
     "max_attempts": 3,
     "evidence_notes": [
         "MIUI/HyperOS 常见文案「仅在使用中允许」与 AOSP「仅在使用该应用时允许」并存，actions 须都覆盖。",
-        "apply_rule 入口优先 system_dialog_recovery.try_unified_system_permission_recovery（hierarchy/VLM 点 allow 或 dismiss），本 actions 为 fallback。",
+        "apply_rule 入口优先 system_dialog_recovery.try_unified_system_permission_recovery（hierarchy 点 allow/grant 文案），本 actions 为 fallback；禁止点拒绝/不允许。",
         "连续失败后 agent 应改用 tap_element 直点或 signal_give_up（limit_recovery_retry 守卫）。",
     ],
 }

@@ -87,17 +87,39 @@ def run_programmatic_checks(
                 )
         elif pt.kind == "hierarchy":
             term = str(pt.natural_language or "").strip()
-            conds = [{"text_contains": term}, {"content_desc_contains": term}]
-            hit = bool(nodes and match_any(nodes, conds))
-            out.append(
-                _evidence(
-                    pt,
-                    status="pass" if hit else "fail",
-                    confidence=0.92 if hit else 0.85,
-                    executor="hierarchy",
-                    summary=f"屏上{'有' if hit else '无'}「{term[:24]}」",
-                )
+            from mino_nexus.loop.step_effect import (
+                expected_profile_shape_config,
+                probe_profile_shape_config,
             )
+
+            if expected_profile_shape_config(plan.raw_expected or term):
+                hit, kws = probe_profile_shape_config(plan.raw_expected or term, nodes)
+                out.append(
+                    _evidence(
+                        pt,
+                        status="pass" if hit else "fail",
+                        confidence=0.93 if hit else 0.88,
+                        executor="hierarchy",
+                        summary=(
+                            f"形象配置页命中 {','.join(kws[:4])}"
+                            if hit
+                            else "非形象配置向导（可能仍在相机/取景页）"
+                        ),
+                        raw={"keywords": kws},
+                    )
+                )
+            else:
+                conds = [{"text_contains": term}, {"content_desc_contains": term}]
+                hit = bool(nodes and match_any(nodes, conds))
+                out.append(
+                    _evidence(
+                        pt,
+                        status="pass" if hit else "fail",
+                        confidence=0.92 if hit else 0.85,
+                        executor="hierarchy",
+                        summary=f"屏上{'有' if hit else '无'}「{term[:24]}」",
+                    )
+                )
         elif pt.kind == "session":
             blob = str(session_block or "")
             nl = str(pt.natural_language or "")

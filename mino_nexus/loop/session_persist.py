@@ -114,6 +114,12 @@ def effective_session_block(ctx: Any, slot_block: str = "") -> str:
         line = f"{line} required=guest"
     elif req == "logged_in":
         line = f"{line} required=logged_in"
+    try:
+        from mino_nexus.loop.llm_screenshot_gate import execution_line as _llm_img_line
+
+        line = f"{line} | {_llm_img_line(ctx)}"
+    except Exception:
+        pass
     return line
 
 

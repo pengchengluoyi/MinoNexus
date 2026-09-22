@@ -75,6 +75,68 @@ def save_project_pool_local(env_doc: dict, block: dict[str, Any] | None) -> dict
     return doc
 
 
+def upsert_project_local_template(env_doc: dict, row: dict[str, Any]) -> dict[str, Any]:
+    doc = dict(env_doc or {})
+    local = get_project_pool_local(doc)
+    tid = str(row.get("id") or "").strip()
+    if not tid.startswith("ptpl_"):
+        tid = f"ptpl_{tid}" if tid else f"ptpl_{len(local['templates']) + 1}"
+    row = {**row, "id": tid[:48], "builtin": False, "enabled": bool(row.get("enabled", True))}
+    seen: set[str] = set(_builtin_ids())
+    seen.update(str(t.get("id") or "") for t in get_custom_templates_from_settings())
+    for t in local["templates"]:
+        if str(t.get("id") or "") != tid:
+            seen.add(str(t.get("id") or ""))
+    n = _norm_template(row, seen)
+    if not n:
+        raise ValueError("项目模板无效")
+    n["builtin"] = False
+    if len(n.get("facet_extensions") or []) < 2:
+        n["facet_extensions"] = normalize_template_extensions(
+            (n.get("facet_extensions") or []) + _base_extensions()
+        )
+    out: list[dict] = []
+    replaced = False
+    for t in local["templates"]:
+        if str(t.get("id") or "") == tid:
+            out.append(n)
+            replaced = True
+        else:
+            out.append(t)
+    if not replaced:
+        out.append(n)
+    local["templates"] = out
+    doc["account_pool_local"] = local
+    return doc
+
+
+def upsert_project_extension_addon(env_doc: dict, template_id: str, fields: list[dict] | None) -> dict:
+    doc = dict(env_doc or {})
+    local = get_project_pool_local(doc)
+    tid = str(template_id or "").strip()
+    if not tid:
+        raise ValueError("template_id required")
+    normed = normalize_template_extensions(fields or [])
+    normed = [e for e in normed if str(e.get("key") or "") not in ACCOUNT_BASIC_FACET_KEYS]
+    addons = dict(local.get("extension_addons") or {})
+    if normed:
+        addons[tid] = normed
+    else:
+        addons.pop(tid, None)
+    local["extension_addons"] = addons
+    doc["account_pool_local"] = local
+    return doc
+
+
+def delete_project_local_template(env_doc: dict, template_id: str) -> dict:
+    doc = dict(env_doc or {})
+    local = get_project_pool_local(doc)
+    tid = str(template_id or "").strip()
+    local["templates"] = [t for t in local["templates"] if str(t.get("id") or "") != tid]
+    doc["account_pool_local"] = local
+    return doc
+
+
 def list_templates_for_project(env_doc: dict | None) -> list[dict[str, Any]]:
     """全局启用模板 + 项目追加字段 + 项目本地模板。"""
     doc = env_doc if isinstance(env_doc, dict) else {}

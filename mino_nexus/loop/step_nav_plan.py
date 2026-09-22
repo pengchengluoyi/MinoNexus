@@ -46,6 +46,7 @@ def build_step_nav_plan_hint(
     app_version: str = "",
     expected: str = "",
     required_session: str = "any",
+    precondition: str = "",
 ) -> str:
     """规划最短路并格式化为 prompt 一行；失败则返回降级说明。"""
     from mino_nexus.loop.nav_session_fork import (
@@ -54,6 +55,7 @@ def build_step_nav_plan_hint(
         on_login_destination_screen,
         step_nav_plan_to_ref,
     )
+    from mino_nexus.loop.nav_onboarding_open_loop import static_onboarding_wall_nav_hint
 
     fork = detect_guest_tab_login_fork(
         instruction=instruction,
@@ -93,6 +95,12 @@ def build_step_nav_plan_hint(
     from_ref = chosen if chosen else ""
 
     fork_line = format_guest_tab_fork_hint(fork) if fork else ""
+    open_pre = static_onboarding_wall_nav_hint(
+        precondition=precondition,
+        instruction=instruction,
+    )
+    if open_pre:
+        fork_line = f"{fork_line}\n{open_pre}".strip() if fork_line else open_pre
 
     plan = plan_route_resolved(fsm, from_ref=from_ref, to_ref=to_ref, localized=loc)
     if plan.get("ok"):

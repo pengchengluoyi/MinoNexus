@@ -78,8 +78,11 @@ def run_guard_foreground(
     target_scope: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """跑批 guard：是否被测 App 前台 / 系统挡屏（权限、相册选择器等）。"""
-    turn = {"nodes": list(nodes or [])}
-    overlay = is_overlay_screen(turn)
+    turn = {
+        "nodes": list(nodes or []),
+        "target_package": str(target_package or ""),
+        "platform": str(platform or ""),
+    }
     pkg = infer_screen_package(
         turn.get("nodes") or [],
         target_package=target_package,
@@ -87,9 +90,28 @@ def run_guard_foreground(
         target_scope=target_scope,
     )
     kind = str(pkg.get("screen_kind") or "").strip()
-    if overlay:
+    fpkg = str(pkg.get("foreground_package") or pkg.get("foreground_id") or "").strip()
+    tgt = str(target_package or "").strip()
+    on_target = bool(
+        tgt
+        and fpkg
+        and kind not in ("foreign", "launcher")
+        and (fpkg == tgt or tgt in fpkg)
+    )
+    overlay = is_overlay_screen(turn)
+    if overlay and not on_target:
         return {"app_foreground": "no", "system_overlay": "yes"}
+    if overlay and on_target:
+        return {"app_foreground": "yes", "system_overlay": "no"}
+    if not list(nodes or []):
+        return {"app_foreground": "unknown", "system_overlay": "no"}
     if kind in ("foreign", "launcher"):
+        return {"app_foreground": "no", "system_overlay": "no"}
+    if kind == "unknown":
+        return {"app_foreground": "unknown", "system_overlay": "no"}
+    if on_target:
+        return {"app_foreground": "yes", "system_overlay": "no"}
+    if tgt and fpkg and fpkg != tgt:
         return {"app_foreground": "no", "system_overlay": "no"}
     return {"app_foreground": "yes", "system_overlay": "no"}
 
@@ -112,7 +134,17 @@ def is_overlay_screen(turn: dict[str, Any]) -> bool:
         return True
     from mino_nexus.services.nav_screen_layout import is_modal_button_stack
 
-    return is_modal_button_stack(nodes)
+    if not is_modal_button_stack(nodes):
+        return False
+    tgt = str(turn.get("target_package") or "").strip()
+    if tgt:
+        plat = str(turn.get("platform") or "").strip()
+        fg = infer_screen_package(nodes, target_package=tgt, platform=plat)
+        kind = str(fg.get("screen_kind") or "").strip()
+        fpkg = str(fg.get("foreground_package") or fg.get("foreground_id") or "").strip()
+        if kind == "app" and fpkg and (fpkg == tgt or tgt in fpkg):
+            return False
+    return True
 
 
 def is_system_screen(

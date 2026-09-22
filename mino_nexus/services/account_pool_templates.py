@@ -23,6 +23,8 @@ def normalize_template_extensions(raw: Any) -> list[dict[str, Any]]:
         key = _slug_key(str(item.get("key") or item.get("id") or ""))
         if not key or not _KEY_RE.match(key) or key in seen:
             continue
+        if key in ACCOUNT_LEVEL_FACET_KEYS:
+            continue
         label = str(item.get("label") or key).strip()[:24] or key
         opts = []
         for row in item.get("options") or []:
@@ -32,12 +34,16 @@ def normalize_template_extensions(raw: Any) -> list[dict[str, Any]]:
         if not opts:
             opts = [{"value": "unknown", "label": "未设置"}]
         seen.add(key)
+        kind = str(item.get("data_kind") or "").strip().lower()
+        if kind not in (FACET_DATA_KIND_STATIC, FACET_DATA_KIND_DYNAMIC):
+            kind = FACET_DATA_KIND_STATIC
         out.append({
             "key": key,
             "label": label,
             "options": opts[:16],
             "help": str(item.get("help") or "").strip()[:200],
             "source": str(item.get("source") or "builtin").strip()[:16] or "builtin",
+            "data_kind": kind,
         })
     return out[:32]
 
@@ -47,9 +53,32 @@ CATEGORIES = [
     {"id": "content", "label": "内容"},
     {"id": "im", "label": "IM 通信"},
     {"id": "social", "label": "社交"},
+    {"id": "flow", "label": "业务流转"},
 ]
 
 DEFAULT_TEMPLATE_ID = "tpl_personal"
+
+FACET_DATA_KIND_STATIC = "static"
+FACET_DATA_KIND_DYNAMIC = "dynamic"
+
+FACET_DATA_KINDS: dict[str, dict[str, str]] = {
+    FACET_DATA_KIND_STATIC: {
+        "label": "静态侧写",
+        "help": "描述账号在某业务线上的快照（有无资料、是否填地址等）；运维或 Studio 可直接改值，无强制步骤顺序。",
+    },
+    FACET_DATA_KIND_DYNAMIC: {
+        "label": "动态流转",
+        "help": "注册/登录/审核等流程态；选项顺序即推荐流转路径，写回须满足转移规则（用例、能力、手动）。",
+    },
+}
+
+# 账号级维度（五维中的注册/登录/健康），不出现在业务模板字段里
+ACCOUNT_LEVEL_FACET_KEYS = frozenset({"lifecycle", "session", "health"})
+
+TEMPLATE_GUIDE = (
+    "业务模板分两类字段：静态侧写（资料/地址/收藏等快照）与动态流转（注册/登录/审核等流程态）。"
+    "同一测试账号可并行启用多个模板；注册、登录、健康在账号级维护。"
+)
 
 _EXT_LIFECYCLE = {
     "key": "lifecycle",
@@ -102,16 +131,108 @@ _EXT_ADDRESS = {
 
 # 账号「基础信息」编辑，不属于模板字段
 ACCOUNT_BASIC_FACET_KEYS = frozenset({"health"})
-
 ACCOUNT_HEALTH_FIELD: dict[str, Any] = dict(_EXT_HEALTH)
+ACCOUNT_CORE_FACET_FIELDS: list[dict[str, Any]] = [
+    {**dict(_EXT_LIFECYCLE), "data_kind": FACET_DATA_KIND_DYNAMIC},
+    {**dict(_EXT_SESSION), "data_kind": FACET_DATA_KIND_DYNAMIC},
+    {**dict(_EXT_HEALTH), "data_kind": FACET_DATA_KIND_STATIC},
+]
+
+
+def _flow_options(steps: list[tuple[str, str]]) -> list[dict[str, str]]:
+    opts: list[dict[str, str]] = [{"value": "unknown", "label": "未设置"}]
+    for val, label in steps:
+        opts.append({"value": val, "label": label})
+    return opts
+
+
+def _dynamic_field(key: str, label: str, steps: list[tuple[str, str]], *, help: str = "") -> dict[str, Any]:
+    return {
+        "key": key,
+        "label": label,
+        "options": _flow_options(steps),
+        "data_kind": FACET_DATA_KIND_DYNAMIC,
+        "help": help[:200],
+        "source": "builtin",
+    }
+
+
+DYNAMIC_FLOW_STARTERS: list[dict[str, Any]] = [
+    _dynamic_field(
+        "register_flow",
+        "注册流程",
+        [
+            ("not_started", "未开始"),
+            ("phone_entered", "已填手机号"),
+            ("sms_ok", "短信验证通过"),
+            ("registered", "注册完成"),
+        ],
+        help="App 内注册步骤；完成时可对齐账号级 lifecycle=registered",
+    ),
+    _dynamic_field(
+        "login_flow",
+        "登录流程",
+        [
+            ("logged_out", "未登录"),
+            ("credential_ok", "凭证已提交"),
+            ("otp_ok", "验证码通过"),
+            ("logged_in", "已登录"),
+        ],
+        help="登录中间态；终态 logged_in 时可对齐账号级 session=logged_in",
+    ),
+    _dynamic_field(
+        "audit_flow",
+        "审核流程",
+        [
+            ("none", "无"),
+            ("submitted", "已提交"),
+            ("reviewing", "审核中"),
+            ("approved", "已通过"),
+            ("rejected", "已拒绝"),
+        ],
+    ),
+    _dynamic_field(
+        "kyc_flow",
+        "实名/KYC",
+        [
+            ("none", "未实名"),
+            ("pending", "审核中"),
+            ("verified", "已通过"),
+            ("failed", "未通过"),
+        ],
+    ),
+]
+
+
+def _strip_account_level_from_template(tpl: dict[str, Any]) -> dict[str, Any]:
+    """Catalog 展示：去掉注册/登录/健康，只留业务扩展字段。"""
+    out = dict(tpl)
+    defs = []
+    for ext in normalize_template_extensions(out.get("facet_extensions") or []):
+        key = str(ext.get("key") or "")
+        if key in ACCOUNT_LEVEL_FACET_KEYS:
+            continue
+        defs.append(ext)
+    out["facet_extensions"] = defs
+    shipped = []
+    for ext in normalize_template_extensions(out.get("builtin_facet_extensions") or []):
+        key = str(ext.get("key") or "")
+        if key in ACCOUNT_LEVEL_FACET_KEYS:
+            continue
+        shipped.append(ext)
+    if shipped:
+        out["builtin_facet_extensions"] = shipped
+    df = normalize_facets(out.get("default_facets"))
+    out["default_facets"] = {k: v for k, v in df.items() if k not in ACCOUNT_LEVEL_FACET_KEYS}
+    return out
 
 
 def _base_extensions(*, profile: bool = False, address: bool = False) -> list[dict[str, Any]]:
-    exts = [_EXT_LIFECYCLE, _EXT_SESSION]
+    exts: list[dict[str, Any]] = []
     if profile:
-        exts.append(_EXT_PROFILE)
+        exts.append(dict(_EXT_PROFILE))
     if address:
-        exts.append(_EXT_ADDRESS)
+        exts.append(dict(_EXT_ADDRESS))
     return exts
 
 
@@ -141,14 +262,11 @@ _BUILTIN: list[dict[str, Any]] = [
         "id": "tpl_personal",
         "category": "personal",
         "label": "个人账号",
-        "description": "头像/资料、手机号、邮箱、密码等基础身份",
+        "description": "同一账号的身份侧写：头像、绑定手机/邮箱等（不含注册/登录状态）",
+        "scope": "business",
         "builtin": True,
         "credential_fields": ["phone", "email", "username", "password", "otp"],
-        "default_facets": {
-            "lifecycle": "registered",
-            "session": "logged_out",
-            "health": "available",
-        },
+        "default_facets": {},
         "facet_extensions": _base_extensions()
         + [
             {
@@ -184,15 +302,13 @@ _BUILTIN: list[dict[str, Any]] = [
         "id": "tpl_ecommerce",
         "category": "ecommerce",
         "label": "电商买家",
-        "description": "收货地址、订单、购物车等交易态",
+        "description": "同一账号在电商业务线的侧写：收货地址、订单、购物车等",
+        "scope": "business",
         "builtin": True,
         "credential_fields": ["phone", "email", "password", "otp"],
         "default_facets": {
-            "lifecycle": "registered",
-            "session": "logged_in",
             "profile_data": "filled",
             "address": "filled",
-            "health": "available",
         },
         "facet_extensions": _base_extensions(profile=True, address=True)
         + [
@@ -229,14 +345,11 @@ _BUILTIN: list[dict[str, Any]] = [
         "id": "tpl_content",
         "category": "content",
         "label": "内容消费",
-        "description": "收藏、点赞、阅读记录",
+        "description": "同一账号在内容场景的侧写：收藏、点赞、阅读记录",
+        "scope": "business",
         "builtin": True,
         "credential_fields": ["phone", "email", "password"],
-        "default_facets": {
-            "lifecycle": "registered",
-            "session": "logged_in",
-            "health": "available",
-        },
+        "default_facets": {},
         "facet_extensions": _base_extensions()
         + [
             {
@@ -272,14 +385,11 @@ _BUILTIN: list[dict[str, Any]] = [
         "id": "tpl_im",
         "category": "im",
         "label": "IM 会话",
-        "description": "消息记录、会话列表",
+        "description": "同一账号在 IM 场景的侧写：会话与聊天记录",
+        "scope": "business",
         "builtin": True,
         "credential_fields": ["phone", "username", "password"],
-        "default_facets": {
-            "lifecycle": "registered",
-            "session": "logged_in",
-            "health": "available",
-        },
+        "default_facets": {},
         "facet_extensions": _base_extensions()
         + [
             {
@@ -297,15 +407,11 @@ _BUILTIN: list[dict[str, Any]] = [
         "id": "tpl_social",
         "category": "social",
         "label": "社交关系",
-        "description": "关注、粉丝、互关",
+        "description": "同一账号在社交场景的侧写：关注、粉丝、互关",
+        "scope": "business",
         "builtin": True,
         "credential_fields": ["phone", "email", "password"],
-        "default_facets": {
-            "lifecycle": "registered",
-            "session": "logged_in",
-            "profile_data": "filled",
-            "health": "available",
-        },
+        "default_facets": {"profile_data": "filled"},
         "facet_extensions": _base_extensions(profile=True)
         + [
             {
@@ -328,6 +434,17 @@ _BUILTIN: list[dict[str, Any]] = [
             },
         ],
     },
+    {
+        "id": "tpl_dynamic",
+        "category": "flow",
+        "label": "账号业务流转",
+        "description": "注册/登录/审核/KYC 等流程态（有序流转，与静态侧写模板并行启用）",
+        "scope": "flow",
+        "builtin": True,
+        "credential_fields": ["phone", "email", "password", "otp"],
+        "default_facets": {},
+        "facet_extensions": [dict(x) for x in DYNAMIC_FLOW_STARTERS],
+    },
 ]
 
 
@@ -343,6 +460,7 @@ def _norm_template(raw: dict[str, Any], seen: set[str]) -> dict[str, Any] | None
         e
         for e in normalize_template_extensions(raw.get("facet_extensions") or [])
         if str(e.get("key") or "") not in ACCOUNT_BASIC_FACET_KEYS
+        and str(e.get("key") or "") not in ACCOUNT_LEVEL_FACET_KEYS
     ]
     creds = [str(x).strip() for x in (raw.get("credential_fields") or []) if str(x).strip()]
     if not creds:
@@ -364,15 +482,40 @@ def _builtin_ids() -> set[str]:
     return {str(t["id"]) for t in _BUILTIN}
 
 
+def _builtin_shipped_facet_extensions(template_id: str) -> list[dict[str, Any]]:
+    tid = str(template_id or "").strip()
+    for row in _BUILTIN:
+        if str(row.get("id") or "") != tid:
+            continue
+        seen: set[str] = set()
+        n = _norm_template(row, seen)
+        if not n:
+            return []
+        return normalize_template_extensions(n.get("facet_extensions") or [])
+    return []
+
+
+def _facet_def_equiv(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    aa = normalize_template_extensions([a])
+    bb = normalize_template_extensions([b])
+    if not aa or not bb:
+        return False
+    return aa[0] == bb[0]
+
+
 def _apply_extension_addons(tpl: dict[str, Any], addons: list[dict] | None) -> dict[str, Any]:
     if not addons:
         return tpl
-    base_keys = {str(e.get("key") or "") for e in (tpl.get("facet_extensions") or [])}
-    merged = list(tpl.get("facet_extensions") or [])
+    merged = [dict(e) for e in normalize_template_extensions(tpl.get("facet_extensions") or [])]
+    index_by_key = {str(e.get("key") or ""): i for i, e in enumerate(merged)}
     for ext in normalize_template_extensions(addons):
         key = str(ext.get("key") or "")
-        if key and key not in base_keys and key not in ACCOUNT_BASIC_FACET_KEYS:
-            base_keys.add(key)
+        if not key or key in ACCOUNT_BASIC_FACET_KEYS:
+            continue
+        if key in index_by_key:
+            merged[index_by_key[key]] = ext
+        else:
+            index_by_key[key] = len(merged)
             merged.append(ext)
     out = dict(tpl)
     out["facet_extensions"] = merged
@@ -390,6 +533,7 @@ def merge_template_catalog(
         n = _norm_template(row, seen)
         if n:
             n["builtin"] = True
+            n["builtin_facet_extensions"] = normalize_template_extensions(n.get("facet_extensions") or [])
             n = _apply_extension_addons(n, addons_map.get(n["id"]))
             out.append(n)
     for row in custom or []:
@@ -445,10 +589,8 @@ def save_template_catalog(
         n = _norm_template(row, seen)
         if n:
             n["builtin"] = False
-            if len(n.get("facet_extensions") or []) < 3:
-                n["facet_extensions"] = normalize_template_extensions(
-                    (n.get("facet_extensions") or []) + _base_extensions()
-                )
+            if not n.get("facet_extensions"):
+                n["facet_extensions"] = []
             custom.append(n)
     addons_out: dict[str, list[dict]] = {}
     if isinstance(extension_addons, dict):
@@ -468,6 +610,105 @@ def save_template_catalog(
     return {"templates": custom, "extension_addons": addons_out}
 
 
+def upsert_custom_template(row: dict[str, Any]) -> dict[str, Any]:
+    """只 upsert 一条自定义模板，不覆盖其它模板或 extension_addons。"""
+    from mino_nexus.services import settings_store as ss
+
+    if not isinstance(row, dict) or bool(row.get("builtin")):
+        raise ValueError("仅支持非内置自定义模板")
+    root = ss._root()
+    block = root.get("account_pool_templates")
+    if not isinstance(block, dict):
+        block = {"templates": [], "extension_addons": {}, "version": 2}
+    existing = [x for x in (block.get("templates") or []) if isinstance(x, dict)]
+    tid = str(row.get("id") or "").strip()
+    seen: set[str] = set(_builtin_ids())
+    for t in existing:
+        if str(t.get("id") or "") != tid:
+            seen.add(str(t.get("id") or ""))
+    n = _norm_template(row, seen)
+    if not n:
+        raise ValueError("模板无效")
+    n["builtin"] = False
+    if len(n.get("facet_extensions") or []) < 3:
+        n["facet_extensions"] = normalize_template_extensions(n.get("facet_extensions") or [])
+    out_list: list[dict] = []
+    replaced = False
+    for t in existing:
+        if str(t.get("id") or "") == str(n.get("id") or ""):
+            out_list.append(n)
+            replaced = True
+        else:
+            out_list.append(t)
+    if not replaced:
+        out_list.append(n)
+    block["templates"] = out_list
+    block["version"] = 2
+    root["account_pool_templates"] = block
+    ss._save(root)
+    return n
+
+
+def upsert_extension_addon(template_id: str, fields: list[dict] | None) -> list[dict[str, Any]]:
+    """保存内置模板的字段定制：覆盖同名内置字段或追加新 key（相对出厂定义 diff 落盘）。"""
+    from mino_nexus.services import settings_store as ss
+
+    tid = str(template_id or "").strip()
+    if tid not in _builtin_ids():
+        raise ValueError("仅支持内置模板字段定制")
+    edited = normalize_template_extensions(fields or [])
+    shipped = _builtin_shipped_facet_extensions(tid)
+    shipped_by = {str(e.get("key") or ""): e for e in shipped}
+    stored: list[dict[str, Any]] = []
+    for ext in edited:
+        key = str(ext.get("key") or "")
+        if not key:
+            continue
+        base = shipped_by.get(key)
+        if base is not None:
+            if _facet_def_equiv(ext, base):
+                continue
+            stored.append(ext)
+        else:
+            stored.append(ext)
+    root = ss._root()
+    block = root.get("account_pool_templates")
+    if not isinstance(block, dict):
+        block = {"templates": [], "extension_addons": {}, "version": 2}
+    addons = block.get("extension_addons")
+    if not isinstance(addons, dict):
+        addons = {}
+    if stored:
+        addons[tid] = stored
+    else:
+        addons.pop(tid, None)
+    block["extension_addons"] = addons
+    block["version"] = 2
+    root["account_pool_templates"] = block
+    ss._save(root)
+    return stored
+
+
+def delete_custom_template(template_id: str) -> bool:
+    from mino_nexus.services import settings_store as ss
+
+    tid = str(template_id or "").strip()
+    if not tid or tid in _builtin_ids():
+        return False
+    root = ss._root()
+    block = root.get("account_pool_templates")
+    if not isinstance(block, dict):
+        return False
+    existing = [x for x in (block.get("templates") or []) if isinstance(x, dict)]
+    nxt = [t for t in existing if str(t.get("id") or "") != tid]
+    if len(nxt) == len(existing):
+        return False
+    block["templates"] = nxt
+    root["account_pool_templates"] = block
+    ss._save(root)
+    return True
+
+
 def save_custom_templates(templates: list[dict]) -> list[dict]:
     saved = save_template_catalog(templates)
     return saved["templates"]
@@ -480,10 +721,14 @@ def list_templates_catalog(*, include_disabled: bool = False) -> dict[str, Any]:
     if not include_disabled:
         templates = [t for t in templates if t.get("enabled", True)]
     return {
+        "guide": TEMPLATE_GUIDE,
         "categories": CATEGORIES,
-        "templates": templates,
+        "facet_data_kinds": FACET_DATA_KINDS,
+        "dynamic_flow_starters": [dict(x) for x in DYNAMIC_FLOW_STARTERS],
+        "templates": [_strip_account_level_from_template(t) for t in templates],
         "extension_addons": addons,
-        "starter_extensions": _base_extensions(),
+        "starter_extensions": [],
+        "account_core_facets": ACCOUNT_CORE_FACET_FIELDS,
         "account_health_field": ACCOUNT_HEALTH_FIELD,
     }
 
@@ -530,6 +775,8 @@ def merged_template_field_defs(env_doc: dict | None = None) -> list[dict[str, An
         for ext in template_facet_extensions(tpl):
             key = str(ext.get("key") or "")
             if not key or key in seen or key in ACCOUNT_BASIC_FACET_KEYS:
+                continue
+            if key in ACCOUNT_LEVEL_FACET_KEYS:
                 continue
             seen.add(key)
             out.append(ext)
@@ -590,6 +837,7 @@ _TEMPLATE_HINTS: list[tuple[str, re.Pattern[str]]] = [
     ("tpl_im", re.compile(r"IM|聊天|消息记录|会话列表", re.I)),
     ("tpl_social", re.compile(r"关注|粉丝|互关|社交关系", re.I)),
     ("tpl_personal", re.compile(r"头像|个人资料|绑定手机|绑定邮箱", re.I)),
+    ("tpl_dynamic", re.compile(r"注册流程|登录流程|审核|KYC|实名|流转", re.I)),
 ]
 
 

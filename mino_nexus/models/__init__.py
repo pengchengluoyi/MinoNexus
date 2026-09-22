@@ -7,6 +7,7 @@ from mino_nexus.models.device import Device
 from mino_nexus.models.device_app_session import DeviceAppSession
 from mino_nexus.models.resource_ops import (
     DeviceResourceLease,
+    ResourceAllocationLog,
     ResourceTransitionAudit,
     ResourceTransitionRule,
 )

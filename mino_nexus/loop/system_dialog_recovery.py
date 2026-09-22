@@ -36,7 +36,7 @@ def try_unified_system_permission_recovery(
     if router is None:
         return False
     from mino_nexus.core.log import SLog
-    from mino_nexus.loop.recovery_permission import pick_permission_allow_text, pick_permission_dismiss_text
+    from mino_nexus.loop.recovery_permission import pick_permission_tap_for_grant
 
     def _dispatch(event, action_idx):
         from mino_nexus.loop.recovery import _dispatch as rd
@@ -59,15 +59,12 @@ def try_unified_system_permission_recovery(
     vlm = getattr(ctx, "nav_vlm_hierarchy", None)
     if isinstance(vlm, dict):
         nodes = nodes + [n for n in (vlm.get("nodes") or []) if isinstance(n, dict)]
-    allow = pick_permission_allow_text(
+    tap_text, kind = pick_permission_tap_for_grant(
         hierarchy_nodes=nodes,
         match_reasons=list(getattr(match, "reasons", None) or []),
     )
-    dismiss = pick_permission_dismiss_text(hierarchy_nodes=nodes) if not allow else None
-    tap_text = allow or dismiss
     if not tap_text:
         return False
-    kind = "allow" if allow else "dismiss"
     pre = PlanEvent(
         seq=0,
         capability_id="tap_element",
@@ -109,35 +106,6 @@ def try_unified_system_permission_recovery(
         out.recovered = True
         SLog.i(TAG, f"[{rule.id}] unified {kind}「{tap_text}」恢复成功")
         return True
-    if kind == "allow" and dismiss and dismiss != tap_text:
-        res2 = _dispatch(
-            PlanEvent(
-                seq=0,
-                capability_id="tap_element",
-                event_kind="tap_element",
-                params={"selector_text": dismiss},
-                ai_reasoning="allow 未过 verify，尝试 dismiss",
-                label=dismiss[:40],
-            ),
-            3,
-        )
-        out.actions.append(
-            {
-                "capability": "tap_element",
-                "status": str(getattr(res2.status, "value", res2.status)),
-                "summary": res2.summary,
-                "unified_kind": "dismiss_fallback",
-            }
-        )
-        ev2 = _evidence()
-        if hasattr(router, "observe"):
-            from mino_nexus.loop.screen_capture import merge_shot_evidence
-
-            merge_shot_evidence(ev2, router.observe("screenshot", force_fresh=True))
-        ok2, _ = _verify(ev2, verify)
-        if ok2:
-            out.recovered = True
-            return True
     return False
 
 
@@ -153,7 +121,7 @@ def try_proactive_system_permission(
         return None
     from mino_nexus.core.protocol import EventStatus
     from mino_nexus.loop.recovery import _dispatch as recovery_dispatch
-    from mino_nexus.loop.recovery_permission import pick_permission_allow_text, pick_permission_dismiss_text
+    from mino_nexus.loop.recovery_permission import pick_permission_tap_for_grant
 
     _ = target_package  # 与 recovery unified 一致，包名由 ctx / router 携带
 
@@ -161,12 +129,9 @@ def try_proactive_system_permission(
     vlm = getattr(ctx, "nav_vlm_hierarchy", None)
     if isinstance(vlm, dict):
         nodes = nodes + [n for n in (vlm.get("nodes") or []) if isinstance(n, dict)]
-    allow = pick_permission_allow_text(hierarchy_nodes=nodes, match_reasons=[])
-    dismiss = pick_permission_dismiss_text(hierarchy_nodes=nodes) if not allow else None
-    tap_text = allow or dismiss
+    tap_text, kind = pick_permission_tap_for_grant(hierarchy_nodes=nodes, match_reasons=[])
     if not tap_text:
         return None
-    kind = "allow" if allow else "dismiss"
     agent_turn = int(turn_seq or 0)
 
     def _tap(text: str, *, kind_tag: str, action_idx: int) -> Any:
@@ -190,14 +155,6 @@ def try_proactive_system_permission(
     st = res.status.value if hasattr(res.status, "value") else str(res.status)
     ok = str(st) in ("pass", EventStatus.PASS.value)
     summary = str(res.summary or res.error or tap_text)
-    if not ok and allow and dismiss and dismiss != tap_text:
-        res2 = _tap(dismiss, kind_tag="dismiss_fallback", action_idx=2)
-        st2 = res2.status.value if hasattr(res2.status, "value") else str(res2.status)
-        if str(st2) in ("pass", EventStatus.PASS.value):
-            ok = True
-            st = st2
-            summary = str(res2.summary or res2.error or dismiss)
-            kind = "dismiss_fallback"
     if ok:
         recovery_dispatch(
             router,

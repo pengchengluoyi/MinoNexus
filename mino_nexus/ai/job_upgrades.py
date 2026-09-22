@@ -18,6 +18,7 @@ AGENT_DECIDE_V13_MARKER = "prompt_version >= 13 (drop forced visual JSON)"
 AGENT_DECIDE_V14_MARKER = "prompt_version >= 14 (low-conf nav: don't freeze on wait_ms)"
 AGENT_DECIDE_V15_MARKER = "prompt_version >= 15 (do_subphase + thought/action 对齐)"
 AGENT_DECIDE_V16_MARKER = "prompt_version >= 16 (swipe_direction from/to 千分比)"
+AGENT_DECIDE_V17_MARKER = "prompt_version >= 17 (allow_foreign_foreground_llm_image)"
 DOC_CONTEXT_SLOT = "doc_context"
 ASSERT_VISION_V2_MARKER = "prompt_version >= 2（screen_layout 布局线框）"
 ASSERT_VISION_V3_MARKER = "prompt_version >= 3 (drop forced visual JSON)"
@@ -845,6 +846,65 @@ def _patch_agent_decide_v16(text: str) -> str:
     if AGENT_DECIDE_V16_MARKER not in out:
         out = out.rstrip() + f"\n\n<!-- {AGENT_DECIDE_V16_MARKER} -->\n"
     return out
+
+
+_FOREIGN_FG_IMAGE_HINT = """
+### allow_foreign_foreground_llm_image（送图准入，与 session 字段同级）
+
+`【执行上下文·送图】` 中 `app_foreground=no` 时，本回合可能**未附截图**；若必须分析当前系统/第三方屏，在 JSON 根设 `"allow_foreign_foreground_llm_image": true`，系统会用同屏截图重试决策一次。
+分析完成后设 `false` 或勿再申请。默认 withhold，勿假设每轮都有图。
+"""
+
+
+def _patch_agent_decide_v17(text: str) -> str:
+    out = str(text or "")
+    if _FOREIGN_FG_IMAGE_HINT.strip() not in out:
+        out = out.rstrip() + "\n\n" + _FOREIGN_FG_IMAGE_HINT.strip() + "\n"
+    if AGENT_DECIDE_V17_MARKER not in out:
+        out = out.rstrip() + f"\n\n<!-- {AGENT_DECIDE_V17_MARKER} -->\n"
+    return out
+
+
+def upgrade_agent_decide_to_v17() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 17:
+        return 0
+    if int(row.get("prompt_version") or 1) < 16:
+        upgrade_agent_decide_to_v16()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_agent_decide_v17(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 16),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v16 before foreign foreground llm image gate",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 17
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
 
 
 def upgrade_agent_decide_to_v16() -> int:

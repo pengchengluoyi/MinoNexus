@@ -330,7 +330,7 @@ def version_from_execute_result(raw: dict[str, Any] | None) -> str:
         return ""
     for key in ("app_version", "version", "version_name", "versionName", "name"):
         val = str(raw.get(key) or "").strip()
-        if val and not val.startswith("{"):
+        if val and not val.startswith("{") and not version_string_looks_invalid(val):
             return val[:64]
     data = raw.get("data")
     if isinstance(data, dict):
@@ -339,6 +339,22 @@ def version_from_execute_result(raw: dict[str, Any] | None) -> str:
     if isinstance(extra, dict):
         return version_from_execute_result(extra)
     return ""
+
+
+def version_string_looks_invalid(ver: str) -> bool:
+    v = str(ver or "").strip().lower()
+    if not v:
+        return True
+    if "强停" in ver or "force-stop" in v or "force_stop" in v:
+        return True
+    if v.startswith("fail") or "error" in v[:24]:
+        return True
+    return False
+
+
+def execute_result_ok(result: Any) -> bool:
+    st = getattr(getattr(result, "status", None), "value", None) or getattr(result, "status", "")
+    return str(st or "").lower() in ("pass", "passed", "ok", "success")
 
 
 def stamp_app_version(ctx: Any, version: str) -> None:

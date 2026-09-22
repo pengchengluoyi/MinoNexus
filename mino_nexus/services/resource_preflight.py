@@ -1,6 +1,7 @@
 """跑批 Preflight：Claim 对照登记簿与 RunContext，prep 收工硬门槛。"""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from mino_nexus.loop.step_contract import precondition_requires_clear_cache
@@ -124,6 +125,41 @@ def run_start_resource_blockers(
     return blockers
 
 
+def _pre_avatar_setup_lane(precondition: str) -> bool:
+    return bool(re.search(r"未配置形象", str(precondition or ""), re.I))
+
+
+def prep_avatar_setup_gate_issues(ctx: Any, precondition: str) -> list[str]:
+    """前置「未配置形象」：禁止在未清缓存/换号前对 filled 租约空 signal_done。"""
+    pre = str(precondition or "").strip()
+    if not _pre_avatar_setup_lane(pre):
+        return []
+    if bool(getattr(ctx, "prep_clear_done", False)):
+        return []
+    lease = getattr(ctx, "resource_lease", None) or {}
+    facets: dict[str, Any] = {}
+    if isinstance(lease, dict) and isinstance(lease.get("facets"), dict):
+        facets = lease["facets"]
+    issues: list[str] = []
+    pd = str(facets.get("profile_data") or "").strip().lower()
+    if pd == "filled":
+        issues.append(
+            "【资源门槛】前置「未配置形象」，但租约账号 profile_data=filled；"
+            "须本任务 clear_app_cache 或 lease 无资料账号，禁止空 signal_done。"
+        )
+    from mino_nexus.services.account_requirement_compile import PROFILE_SHAPE_FACETS
+
+    for fk in PROFILE_SHAPE_FACETS:
+        fv = str(facets.get(fk) or "").strip().lower()
+        if fv in ("yes", "有", "filled"):
+            issues.append(
+                f"【资源门槛】前置「未配置形象」，但租约 {fk}={fv}；"
+                "须清缓存或换号后再 prep 收工。"
+            )
+            break
+    return issues
+
+
 def prep_resource_gate_issues(ctx: Any, case: dict[str, Any] | None) -> list[str]:
     """prep 阶段 signal_done 前必须为空。"""
     if not isinstance(case, dict):
@@ -166,18 +202,30 @@ def prep_resource_gate_issues(ctx: Any, case: dict[str, Any] | None) -> list[str
         req_sess == "logged_in"
         and prep_intent == "relogin"
         and not bool(getattr(ctx, "_login_flow_transition_emitted", False))
+        and bool(getattr(ctx, "login_flow_macro_active", False))
     )
-    if req_sess and req_sess not in ("any", "") and not defer_device_session_gate:
+    skip_prep_session_registry_check = (
+        req_sess == "logged_in" and prep_intent == "skip"
+    )
+    if (
+        req_sess
+        and req_sess not in ("any", "")
+        and not defer_device_session_gate
+        and not skip_prep_session_registry_check
+    ):
         cur = effective_device_session(ctx, sn=sn, package_id=pkg)
         defer_unknown = False
         if req_sess == "logged_in" and cur == "unknown":
-            fact = dict(getattr(ctx, "session_fact", None) or {})
-            if str(fact.get("session") or "").strip().lower() == "logged_in":
-                defer_unknown = True
+            if bool(getattr(ctx, "session_dirty", False)):
+                defer_unknown = False
+            else:
+                fact = dict(getattr(ctx, "session_fact", None) or {})
+                if str(fact.get("session") or "").strip().lower() == "logged_in":
+                    defer_unknown = True
         if not defer_unknown and not _session_allows_required(req_sess, cur, allow):
             hint = ""
             if req_sess == "logged_in" and cur == "unknown":
-                hint = "请先 inspect_session 或完成登录流块。"
+                hint = "请先完成登录流块或刷新登记簿机态。"
             issues.append(
                 f"【资源门槛】device_app.session 需要 {req_sess}"
                 f"（允许 {allow or [req_sess]}），当前 {cur}。{hint}"
@@ -191,7 +239,12 @@ def prep_resource_gate_issues(ctx: Any, case: dict[str, Any] | None) -> list[str
             issues.append("【资源门槛】登记簿仍为 logged_in，清缓存未写入 device_app_sessions。")
 
     binding = str(da.get("binding") or "").strip()
-    if binding == "must_match_lease" and req_sess == "logged_in" and not defer_device_session_gate:
+    if (
+        binding == "must_match_lease"
+        and req_sess == "logged_in"
+        and not defer_device_session_gate
+        and not skip_prep_session_registry_check
+    ):
         pid, lease_aid = "", ""
         lease = getattr(ctx, "resource_lease", None) or {}
         if isinstance(lease, dict):
@@ -206,6 +259,9 @@ def prep_resource_gate_issues(ctx: Any, case: dict[str, Any] | None) -> list[str
                 issues.append(
                     f"【资源门槛】设备绑定账号 {bound} 与租约 {lease_aid} 不一致。"
                 )
+
+    if not issues:
+        issues.extend(prep_avatar_setup_gate_issues(ctx, pre))
 
     return issues
 

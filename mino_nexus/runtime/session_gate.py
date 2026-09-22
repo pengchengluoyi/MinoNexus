@@ -170,6 +170,12 @@ def clamp_case_scene(raw: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         out["account_template_id"] = account_template_id
     if lease_requirements:
         out["lease_requirements"] = lease_requirements
+    ff_raw = str(row.get("foreign_foreground_llm_image") or "deny").strip().lower()
+    if ff_raw not in ("deny", "allow_always"):
+        if ff_raw:
+            warnings.append(f"foreign_foreground_llm_image={ff_raw!r} → deny")
+        ff_raw = "deny"
+    out["foreign_foreground_llm_image"] = ff_raw
     pre = str(row.get("precondition") or "").strip()
     if pre:
         out["precondition"] = pre[:2000]
@@ -292,16 +298,19 @@ def ensure_case_scene(
     if pre and re.search(r"登录成功|已登录", pre):
         if str(merged.get("required_session") or "any") in ("", "any"):
             merged["required_session"] = "logged_in"
-        if str(merged.get("session_prep") or "skip") == "skip":
-            merged["session_prep"] = "relogin"
+        # 前置「已登录」= 核验机态/inspect，不在 prep 内走登录流；relogin 会触发资源门槛 defer。
+        merged["session_prep"] = "skip"
     if pre and re.search(r"未登录|游客", pre):
         if str(merged.get("required_session") or "any") in ("", "any"):
             merged["required_session"] = "guest"
         if str(merged.get("session_prep") or "skip") == "skip":
             merged["session_prep"] = "logout"
-    if str(merged.get("required_session") or "") == "logged_in" and str(
-        merged.get("session_prep") or "skip"
-    ) == "skip":
+    if (
+        str(merged.get("required_session") or "") == "logged_in"
+        and str(merged.get("session_prep") or "skip") == "skip"
+        and pre
+        and re.search(r"退出.*(再)?登录|重新登录", pre)
+    ):
         merged["session_prep"] = "relogin"
     if (
         str(merged.get("required_session") or "") in _REQUIRED

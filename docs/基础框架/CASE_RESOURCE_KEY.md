@@ -70,6 +70,28 @@ case.meta.resource_key
 |------|------|
 | `resource_transition_rules` | 配置化 trigger → effects（启动时 seed，Console 可读 `GET /settings/resource-transition-rules`） |
 | `resource_transition_audit` | 结构化审计行（run / case / sn / trigger） |
+| `resource_allocation_logs` | 租号审计 + **`facet_update` / `facet_restore`**（模板 facets 与参数字段变更快照，`detail.recover` 可 POST 恢复） |
 | `session_events` type=`resource/transition` | **与跑批同一条 session 轨迹**，Console「会话日志」可检索；有 `SessionWriter` 时走 `append`，否则按 `report_run_id` 直写 |
 
 原则：**机态/号池真源仍是登记簿与号池表**；`SLog` 只作运维旁路，产品侧以 session log + 审计表为准。
+
+## 7. 号池业务模板 vs 账号级状态
+
+| 层级 | 含义 | 维护位置 |
+|------|------|----------|
+| **静态侧写** (`data_kind=static`) | 同一账号在某业务线上的**快照**（资料/地址/收藏等）；Studio 可直接改值 | 各业务模板 `facet_extensions` |
+| **动态流转** (`data_kind=dynamic`) | **注册/登录/审核/KYC** 等流程态；选项顺序即推荐路径，写回走转移表 | 内置模板 `tpl_dynamic` 或自定义流程字段 |
+| **账号级** | `lifecycle` / `session`（动态）· `health`（静态） | 账号编辑 / 租号 Claim；不出现在业务模板列表 |
+| **入库时间** | `registered_at` ← `pool_accounts.created_at` | 追溯进池时间 |
+
+Catalog：`GET /settings/account-pool-templates` 返回 `facet_data_kinds`、`dynamic_flow_starters`、`guide`。
+
+## 8. 租号审计与 Session 轨迹
+
+| 存储 | 内容 |
+|------|------|
+| `resource_allocation_logs` | `lease_claim` / `lease_release` / `lease_fail`、`facet_update` / `facet_restore`；`detail.session_id` 与列表顶层 `session_id` |
+| `session_events` type=`resource/account` | 与上表同动作的镜像（需 session 已 open；否则仅资源日志可查） |
+| `session_events` type=`resource/transition` | 机态/号池转移规则触发（见上节） |
+
+**同一账号多条「租号成功」、case 有时为空**：run 开跑或 prep 阶段可能尚无 `case_id`；进入具体用例后会再记一条（同 run 同 case 续租已去重）。Studio 资源日志「轨迹」列链到 Session Log。

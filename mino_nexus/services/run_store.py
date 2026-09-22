@@ -80,9 +80,15 @@ def new_run_id() -> str:
 
 
 def report_run_id(run_id: str, case_id: str, *, sn: str = "", coverage: str = "once") -> str:
-    if coverage == "per_device" and sn:
-        return f"{run_id}::{case_id}::{sn}"
-    return f"{run_id}::{case_id}"
+    """Session / stream 主键：有机型绑定时带 sn，避免多机并行写同一条 log。"""
+    rid = str(run_id or "").strip()
+    cid = str(case_id or "").strip()
+    device = str(sn or "").strip()
+    if not cid:
+        return rid
+    if device:
+        return f"{rid}::{cid}::{device}"
+    return f"{rid}::{cid}"
 
 
 def line_text(item: Any) -> str:
@@ -407,6 +413,19 @@ def request_cancel(run_id: str) -> dict[str, Any]:
 def cancel_requested(run_id: str) -> bool:
     with _LOCK:
         return run_id in _CANCEL
+
+
+def task_cancelled(run_id: str) -> bool:
+    """用户取消或任务已非 running：agent / RouterProxy / DisplayGuard 应立刻停调度。"""
+    rid = str(run_id or "").strip()
+    if not rid:
+        return False
+    if cancel_requested(rid):
+        return True
+    doc = get(rid)
+    if not doc:
+        return False
+    return not task_is_live(doc)
 
 
 def clear_cancel(run_id: str) -> None:

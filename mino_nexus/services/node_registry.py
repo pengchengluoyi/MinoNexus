@@ -54,7 +54,9 @@ class NodeSession:
     last_seen: float = field(default_factory=time.time)
     busy: bool = False
     active_runs: list[str] = field(default_factory=list)
+    device_workload: list[P.DeviceWorkload] = field(default_factory=list)
     draining: bool = False
+    update_job: dict[str, Any] = field(default_factory=dict)
     hostname: str = ""
     studio_id: str = ""
     owner_user_id: str = ""
@@ -94,6 +96,15 @@ class NodeSession:
             "busy": self.busy,
             "draining": self.draining,
             "active_runs": list(self.active_runs),
+            "device_workload": [
+                {
+                    "sn": w.sn,
+                    "run_id": w.run_id,
+                    "step_idx": w.step_idx,
+                    "capability_id": w.capability_id,
+                }
+                for w in (self.device_workload or [])
+            ],
             "executors": {
                 k: {"available": v.available, "provides": len(v.provides or []), "reason": v.reason}
                 for k, v in sorted(self.executors.items())
@@ -102,6 +113,7 @@ class NodeSession:
             "device_count": len(self.devices),
             "last_seen": self.last_seen,
             "last_seen_ago_sec": round(time.time() - self.last_seen, 1),
+            "update_job": dict(self.update_job or {}),
         }
 
     def persist_snapshot(self) -> None:
@@ -285,6 +297,10 @@ class NodeRegistry:
             node.last_seen = time.time()
             node.busy = hb.busy
             node.active_runs = list(hb.active_runs or [])
+            node.device_workload = list(hb.device_workload or [])
+            ver = str(getattr(hb, "scout_version", "") or "").strip()
+            if ver:
+                node.scout_version = ver
             for d in hb.device_delta or []:
                 if is_legacy_web_sn(d.sn) and not _channel_connected(d.channels):
                     node.devices.pop(d.sn, None)
@@ -337,6 +353,21 @@ class NodeRegistry:
                 node.busy = False
                 interrupted = list(node.active_runs or [])
                 node.active_runs = []
+            elif event == "update_progress":
+                raw = params.get("progress")
+                if isinstance(raw, dict):
+                    node.update_job = dict(raw)
+                else:
+                    node.update_job = {
+                        "active": bool(params.get("active", True)),
+                        "stage": str(params.get("stage") or ""),
+                        "label": str(params.get("label") or detail),
+                        "percent": int(params.get("percent") or 0),
+                        "layer": str(params.get("layer") or ""),
+                        "error": str(params.get("error") or ""),
+                    }
+                if not node.update_job.get("active"):
+                    node.update_job = dict(node.update_job)
             self._purge_orphaned_legacy_web_slots()
             if node is not None:
                 node.persist_snapshot()

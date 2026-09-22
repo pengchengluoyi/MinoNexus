@@ -113,6 +113,7 @@ def run_cases(
     instruction: str = "",
     provider_id: str = "",
     playwright_headless: bool = True,
+    env_profile: str = "",
 ) -> dict[str, Any]:
     device_sns = _normalize_sns(sn, sns)
     cov = str(coverage or "").strip().lower()
@@ -157,7 +158,22 @@ def run_cases(
         task_platform = "mixed"
 
     cfg = aas.get_automation_config(app)
-    package = aas.package_for_app(app, platform=task_platform if task_platform in ("android", "ios", "web") else "android")
+    project_id = str(app.get("project_id") or "")
+    env_doc: dict[str, Any] = {}
+    if project_id:
+        try:
+            env_doc = ps.project_env(project_id)
+        except KeyError:
+            env_doc = {}
+    from mino_nexus.services.project_env import resolve_run_env_profile
+
+    plat_for_pkg = task_platform if task_platform in ("android", "ios", "web") else "android"
+    resolved_env = resolve_run_env_profile(
+        env_doc,
+        requested=str(env_profile or "").strip(),
+        automation_default=str(cfg.get("env_profile") or "").strip(),
+    )
+    package = aas.package_for_app(app, env_profile=resolved_env, platform=plat_for_pkg)
     playbook = aas.get_playbook(app)
     run_id = run_store.new_run_id()
     seeded = [
@@ -190,7 +206,7 @@ def run_cases(
         "coverage": cov,
         "platform": task_platform,
         "platforms_by_sn": platforms_by_sn,
-        "env_profile": cfg.get("env_profile") or "test",
+        "env_profile": resolved_env,
         "package": package,
         "playbook": playbook if isinstance(playbook, dict) else {},
         "requirement_id": str(requirement_id or "").strip(),
@@ -294,8 +310,14 @@ def _run_case_list(
     doc: dict[str, Any],
 ) -> None:
     from mino_nexus.loop.agent_loop import run_case
+    from mino_nexus.loop.device_run_continuity import (
+        continuity_blockers,
+        get_sn_state,
+        update_after_case,
+    )
 
     env_brief = str(doc.get("env_brief") or "")
+    continuity_by_sn: dict = {}
     for case_seq, case in enumerate(cases):
         if not _task_still_running(run_id):
             break
@@ -336,6 +358,31 @@ def _run_case_list(
         )
         rk = case.get("resource_key") if isinstance(case.get("resource_key"), dict) else None
         merged_scene = case.get("case_scene") if isinstance(case.get("case_scene"), dict) else scene
+        sn_state = get_sn_state(continuity_by_sn, sn)
+        cont_block = continuity_blockers(
+            sn_state,
+            precondition=str(case.get("precondition") or ""),
+        )
+        if cont_block:
+            reason = cont_block[0]
+            _record_case_preflight_fail(
+                run_id=run_id,
+                case=case,
+                reason=reason,
+                app_id=app_id,
+                sn=sn,
+                provider_id=str(doc.get("provider_id") or ""),
+            )
+            run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason)
+            emit_testing_task({
+                "event": "case_finished",
+                "run_id": run_id,
+                "task_id": run_id,
+                "case_id": cid,
+                "status": "fail",
+                "app_id": app_id,
+            })
+            continue
         blockers = run_start_resource_blockers(
             rk,
             scene=merged_scene,
@@ -486,7 +533,7 @@ def _run_case_list(
                 package=package,
                 provider_id=provider_id,
                 playbook=playbook if isinstance(playbook, dict) else {},
-                cancel_check=lambda: run_store.cancel_requested(run_id),
+                cancel_check=lambda: run_store.task_cancelled(run_id),
                 case_seq=case_seq,
                 playwright_headless=bool(doc.get("playwright_headless", True)),
                 run_env_brief=env_brief,
@@ -514,6 +561,13 @@ def _run_case_list(
                 "status": result.get("status"),
                 "app_id": str(doc.get("app_id") or ""),
             })
+            update_after_case(
+                sn_state,
+                status=str(result.get("status") or "fail"),
+                precondition=str(case.get("precondition") or ""),
+                case=case if isinstance(case, dict) else {},
+                summary=str(result.get("summary") or ""),
+            )
         finally:
             if device_held:
                 release_device_lease(sn, str(package or ""), run_id)

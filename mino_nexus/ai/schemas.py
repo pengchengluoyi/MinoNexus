@@ -412,5 +412,9 @@ class AgentDecision(BaseModel):
         default_factory=dict,
         description="v10：弱 hierarchy 时 VLM 补全的 accessibility_json 形节点树",
     )
+    allow_foreign_foreground_llm_image: Optional[bool] = Field(
+        None,
+        description="前台非被测 App 时：true 申请本回合送截图重决策；false 保持 withhold",
+    )
     raw_llm: dict[str, Any] = Field(default_factory=dict)
     parse_warnings: list[str] = Field(default_factory=list)

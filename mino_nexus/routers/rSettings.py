@@ -826,6 +826,14 @@ class AccountPoolTemplatesBody(BaseModel):
     extension_addons: dict[str, list[dict[str, Any]]] = {}
 
 
+class AccountPoolCustomTemplateBody(BaseModel):
+    template: dict[str, Any] = {}
+
+
+class AccountPoolExtensionFieldsBody(BaseModel):
+    fields: list[dict[str, Any]] = []
+
+
 @router.get("/case-resource-key")
 def get_case_resource_key_catalog(_sess: dict = Depends(current_session)):
     from mino_nexus.services.case_resource_key_catalog import catalog_payload
@@ -918,6 +926,49 @@ def put_account_pool_templates(body: AccountPoolTemplatesBody, _sess: dict = Dep
 
     save_template_catalog(body.templates, extension_addons=body.extension_addons)
     return ok(list_templates_catalog(include_disabled=True), msg="已保存号池模板")
+
+
+@router.put("/account-pool-templates/custom/{template_id}")
+def put_account_pool_custom_template(
+    template_id: str,
+    body: AccountPoolCustomTemplateBody,
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.account_pool_templates import list_templates_catalog, upsert_custom_template
+
+    row = dict(body.template or {})
+    row["id"] = str(template_id or row.get("id") or "").strip()
+    if not row["id"]:
+        raise HTTPException(status_code=400, detail="template_id required")
+    try:
+        upsert_custom_template(row)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ok(list_templates_catalog(include_disabled=True), msg="已保存该模板")
+
+
+@router.put("/account-pool-templates/builtin/{template_id}/fields")
+def put_account_pool_builtin_fields(
+    template_id: str,
+    body: AccountPoolExtensionFieldsBody,
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.account_pool_templates import list_templates_catalog, upsert_extension_addon
+
+    try:
+        upsert_extension_addon(template_id, body.fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ok(list_templates_catalog(include_disabled=True), msg="已保存该模板字段")
+
+
+@router.delete("/account-pool-templates/custom/{template_id}")
+def delete_account_pool_custom_template(template_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.account_pool_templates import delete_custom_template, list_templates_catalog
+
+    if not delete_custom_template(template_id):
+        raise HTTPException(status_code=404, detail="模板不存在或不可删")
+    return ok(list_templates_catalog(include_disabled=True), msg="已删除模板")
 
 
 @router.delete("/knowledge/{kid}")

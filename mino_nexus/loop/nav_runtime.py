@@ -175,6 +175,65 @@ class NavRuntime:
 
         nodes = snap.nodes if snap.usable() else []
         hierarchy_weak = bool(snap.ok and nodes and hierarchy_is_weak(nodes))
+
+        from mino_nexus.services.nav_capture_store import run_guard_foreground
+
+        fg_obs = (
+            run_guard_foreground(
+                nodes,
+                target_package=self.target_package,
+                platform=self.platform,
+            )
+            if nodes
+            else {}
+        )
+        if nodes and str(fg_obs.get("app_foreground") or "") != "yes":
+            fpkg = str(
+                fg_obs.get("foreground_package") or fg_obs.get("foreground_id") or ""
+            ).strip()
+            self.localized = {
+                "chosen": "",
+                "confidence": 0.0,
+                "band": "recover",
+                "ambiguous": False,
+                "degraded": True,
+                "evidence_tier": "foreign_screen",
+                "foreign_package": fpkg,
+            }
+            slot_sink["nav_assist"] = (
+                "【导航】当前 hierarchy 判定前台非被测 App"
+                f"{('（' + fpkg + '）') if fpkg else ''}，暂停 FSM 页定位；"
+                "请先 launch_app 或 BACK 回到被测 App，勿按 App 内页做 fsm/recover。"
+            )
+            nav_telemetry.localize(
+                turn_id=turn_id,
+                run_id=self._run_id,
+                case_id=str(self.case.get("case_id") or ""),
+                state_id="",
+                confidence=0.0,
+                hierarchy_stale=snap.stale,
+                observe_hierarchy=True,
+                result="foreign",
+                band="recover",
+                ambiguous=False,
+                degraded=True,
+            )
+            self.plan = F.build_plan(
+                self.fsm,
+                state_id="",
+                confidence=0.0,
+                band="recover",
+                nodes=nodes,
+                case=self.case,
+                recover_caps=[],
+                hits=[],
+            )
+            self.gate.observe(self.plan.guards, hierarchy_ok=bool(nodes))
+            self._record_capture(
+                snap, writer=writer, localized=self.localized, screenshot=screenshot
+            )
+            return snap
+
         if not self.active:
             slot_sink["nav_assist"] = ""
             self._record_capture(snap, writer=writer, localized={}, screenshot=screenshot)

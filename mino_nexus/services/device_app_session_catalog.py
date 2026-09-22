@@ -6,6 +6,50 @@ from typing import Any
 from mino_nexus.services.case_resource_claim import project_package_ids
 from mino_nexus.services.device_app_session_store import list_sessions
 from mino_nexus.services.ui_devices import ui_devices
+from mino_nexus.runtime.run_context import version_string_looks_invalid
+
+
+def _enrich_session_row(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    registered = bool(out.get("registered"))
+    sess = str(out.get("session") or "unknown").strip().lower()
+    if not registered:
+        out["session_display"] = "未观测"
+    elif sess == "unknown":
+        out["session_display"] = "未知（待 inspect）"
+    elif sess == "logged_in":
+        out["session_display"] = "已登录"
+    elif sess in ("logged_out", "guest"):
+        out["session_display"] = "未登录/游客"
+    else:
+        out["session_display"] = sess
+
+    ver = str(out.get("app_version") or "").strip()
+    if ver and version_string_looks_invalid(ver):
+        out["app_version_display"] = "无效（误写入，可重跑用例刷新）"
+        out["app_version_bad"] = True
+    else:
+        out["app_version_display"] = ver or "—"
+
+    hint = str(out.get("identity_hint") or "").strip()
+    bound = str(out.get("bound_account_id") or "").strip()
+    if hint:
+        out["identity_display"] = hint
+    elif bound:
+        out["identity_display"] = f"已绑定 {bound[:20]}"
+    elif registered:
+        out["identity_display"] = "未核对"
+    else:
+        out["identity_display"] = "—"
+
+    stale_reason = str(out.get("stale_reason") or "").strip()
+    if stale_reason:
+        out["stale_note"] = stale_reason
+    elif out.get("stale"):
+        out["stale_note"] = "机态可能过期"
+    else:
+        out["stale_note"] = ""
+    return out
 
 
 def _device_sns(*, online_only: bool = True) -> list[dict[str, Any]]:
@@ -112,6 +156,7 @@ def list_project_device_app_matrix(
                         _placeholder(key[0], key[1], dev)
 
     out = list(by_key.values())
+    out = [_enrich_session_row(r) for r in out]
     out.sort(key=lambda r: (str(r.get("sn") or ""), str(r.get("package_id") or "")))
     if len(out) > limit:
         out = out[:limit]

@@ -51,3 +51,23 @@ class DeviceResourceLease(Base):
     platform = Column(String, default="android")
     leased_at = Column(String, default="")
     expires_at = Column(String, default="")
+
+
+class ResourceAllocationLog(Base):
+    """测试资源申请/释放审计（Studio「测试资源-日志」）。"""
+
+    __tablename__ = "resource_allocation_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_at = Column(String, default="", index=True)
+    project_id = Column(String, default="", index=True)
+    env = Column(String, default="")
+    run_id = Column(String, default="", index=True)
+    case_id = Column(String, default="", index=True)
+    sn = Column(String, default="", index=True)
+    package_id = Column(String, default="")
+    account_id = Column(String, default="", index=True)
+    account_ident = Column(String, default="")
+    action = Column(String, default="", index=True)
+    message = Column(Text, default="")
+    detail_json = Column(JSON, default=dict)

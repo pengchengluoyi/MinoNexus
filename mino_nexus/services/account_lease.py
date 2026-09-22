@@ -174,6 +174,7 @@ def _pick_row(
     platform: str,
     target_id: str,
     run_id: str,
+    holder_sn: str = "",
     prompt: str = "",
     observed_by_account: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any] | None:
@@ -195,6 +196,7 @@ def _pick_row(
         env_doc=env_doc,
         requirements=requirements,
         run_id=run_id,
+        holder_sn=holder_sn,
         observed_by_account=observed_by_account,
     )
     rid = str(run_id or "").strip()
@@ -214,16 +216,59 @@ def _mark_leased(
     run_id: str,
     *,
     case_id: str = "",
-) -> None:
-    from mino_nexus.services.pool_account_store import set_account_lease
+    sn: str = "",
+    env: str = "",
+) -> bool:
+    from mino_nexus.services.pool_account_store import try_claim_account_lease
+
+    doc = ps.project_env(project_id)
+    rows = list_test_accounts(doc, project_id=project_id)
+    row = next((r for r in rows if str(r.get("id") or "") == account_id), None)
+    existing = row.get("lease") if isinstance(row, dict) and isinstance(row.get("lease"), dict) else {}
+    prev_run = str(existing.get("run_id") or "").strip()
+    prev_case = str(existing.get("case_id") or "").strip()
+    cid = str(case_id or "").strip()
 
     rec = new_lease_record(
         run_id,
         ttl_sec=_lease_ttl_sec(),
-        case_id=str(case_id or "")[:64],
+        case_id=cid,
+        sn=str(sn or "")[:64],
     )
-    if not set_account_lease(project_id, account_id, rec):
-        SLog.w(TAG, f"mark lease failed project={project_id[:8]} account={account_id[:8]}")
+    ok = try_claim_account_lease(project_id, account_id, rec)
+    if not ok:
+        SLog.w(
+            TAG,
+            f"claim lease failed project={project_id[:8]} account={account_id[:8]} "
+            f"run={run_id[:12]} sn={str(sn or '')[:12]}",
+        )
+        return False
+
+    from mino_nexus.services.resource_allocation_log import append_allocation_log
+    from mino_nexus.services.project_env import account_ident as _ident_fn
+
+    try:
+        ident = _ident_fn(row) if row else account_id[:12]
+    except Exception:
+        ident = account_id[:12]
+
+    same_run = prev_run == str(run_id or "").strip() and prev_run
+    should_log = not same_run or (cid and cid != prev_case) or (cid and not prev_case)
+    if should_log:
+        phase = "run" if not cid else "case"
+        append_allocation_log(
+            project_id=project_id,
+            action="lease_claim",
+            message=f"租号成功 {ident}" + (f" ({phase})" if phase == "run" and not cid else ""),
+            env=str(env or "")[:32],
+            run_id=run_id,
+            case_id=cid,
+            sn=sn,
+            account_id=account_id,
+            account_ident=ident,
+            detail={"score_reason": "claim", "lease_phase": phase},
+        )
+    return True
 
 
 def _clear_leased(project_id: str, account_id: str, run_id: str) -> None:
@@ -238,6 +283,23 @@ def _clear_leased(project_id: str, account_id: str, run_id: str) -> None:
     lease = row.get("lease") if isinstance(row.get("lease"), dict) else {}
     if str(lease.get("run_id") or "") != str(run_id or ""):
         return
+    from mino_nexus.services.resource_allocation_log import append_allocation_log
+    from mino_nexus.services.project_env import account_ident as _ident_fn
+
+    rid = str(run_id or "").strip()
+    aid = str(account_id or "").strip()
+    ident = _ident_fn(row) if row else aid[:12]
+    append_allocation_log(
+        project_id=project_id,
+        action="lease_release",
+        message=f"释放租约 {ident}",
+        run_id=rid,
+        case_id=str(lease.get("case_id") or "")[:80],
+        sn=str(lease.get("sn") or "")[:64],
+        account_id=aid,
+        account_ident=ident,
+        detail={"reason": "clear_leased"},
+    )
     set_account_lease(project_id, account_id, {})
 
 
@@ -251,7 +313,7 @@ def renew_run_lease(ctx: Any) -> bool:
     if not pid or not aid or not rid:
         return False
     try:
-        _mark_leased(pid, aid, rid, case_id=str(getattr(ctx, "case_id", "") or "")[:64])
+        _mark_leased(pid, aid, rid, case_id=str(getattr(ctx, "case_id", "") or "")[:64], sn=str(getattr(ctx, "sn", "") or ""), env=str(getattr(ctx, "env_profile", "") or ""))
     except Exception as exc:
         SLog.w(TAG, f"renew lease failed: {exc!r}")
         return False
@@ -339,6 +401,7 @@ def restore_lease_for_run(ctx: Any, run_id: str) -> tuple[dict[str, Any] | None,
     env_doc = ps.project_env(project_id)
     rid = str(run_id or "").strip()
     want_case = str(getattr(ctx, "case_id", "") or "").strip()
+    want_sn = str(getattr(ctx, "sn", "") or "").strip()
     for row in list_test_accounts(env_doc, project_id=project_id):
         lease = row.get("lease") if isinstance(row.get("lease"), dict) else {}
         if str(lease.get("run_id") or "").strip() != rid:
@@ -347,6 +410,9 @@ def restore_lease_for_run(ctx: Any, run_id: str) -> tuple[dict[str, Any] | None,
             continue
         leased_case = str(lease.get("case_id") or "").strip()
         if want_case and leased_case and leased_case != want_case:
+            continue
+        lease_sn = str(lease.get("sn") or "").strip()
+        if want_sn and lease_sn and lease_sn != want_sn:
             continue
         apply_lease_to_ctx(ctx, row, project_id=project_id)
         renew_run_lease(ctx)
@@ -358,17 +424,16 @@ def persist_account_facets(
     project_id: str,
     account_id: str,
     facets: dict[str, str],
+    *,
+    log_ctx: Any = None,
 ) -> None:
-    from mino_nexus.services.project_env import save_one_test_account
-
-    doc = ps.project_env(project_id)
-    save_one_test_account(
-        doc,
-        {"facets": dict(facets)},
-        project_id=project_id,
-        account_id=account_id,
+    from mino_nexus.services.account_facet_sync import (
+        FacetLogContext,
+        persist_account_facets_with_log,
     )
-    ps.save_project_env(project_id, doc)
+
+    ctx = log_ctx if isinstance(log_ctx, FacetLogContext) else None
+    persist_account_facets_with_log(project_id, account_id, facets, log_ctx=ctx)
 
 
 def lease_for_context(
@@ -462,6 +527,7 @@ def lease_for_context(
     env_profile = str(getattr(ctx, "env_profile", "") or "").strip()
     platform = str(getattr(ctx, "platform", "") or "android")
     target_id = str(getattr(ctx, "target_package", "") or "")
+    holder_sn = str(getattr(ctx, "sn", "") or "").strip()
 
     wait_budget = wait_ms if wait_ms is not None else _acquire_wait_ms()
     deadline = time.monotonic() + (wait_budget / 1000.0) if wait_budget > 0 else time.monotonic()
@@ -469,7 +535,7 @@ def lease_for_context(
     row: dict[str, Any] | None = None
     while True:
         _purge_expired_leases(project_id)
-        row = _pick_row(
+        candidate = _pick_row(
             env_doc,
             project_id=project_id,
             requirements=requirements,
@@ -477,11 +543,27 @@ def lease_for_context(
             platform=platform,
             target_id=target_id,
             run_id=run_id,
+            holder_sn=holder_sn,
             prompt=prompt,
             observed_by_account=observed_by_account,
         )
-        if row:
-            break
+        if candidate:
+            account_id = str(candidate.get("id") or "")
+            if account_id and run_id:
+                claimed = _mark_leased(
+                    project_id,
+                    account_id,
+                    run_id,
+                    case_id=str(getattr(ctx, "case_id", "") or "")[:64],
+                    sn=holder_sn,
+                    env=env_profile,
+                )
+                if claimed:
+                    row = candidate
+                    break
+            else:
+                row = candidate
+                break
         if wait_budget <= 0 or time.monotonic() >= deadline:
             break
         sleep_wait(int((deadline - time.monotonic()) * 1000))
@@ -494,19 +576,20 @@ def lease_for_context(
             run_id=run_id,
         )
         base = "没有满足 Requirement 的可用账号（可能都被占用或状态不符）"
-        return None, f"{base}{hint}"
+        from mino_nexus.services.resource_allocation_log import append_allocation_log
 
-    account_id = str(row.get("id") or "")
-    if account_id and run_id:
-        try:
-            _mark_leased(
-                project_id,
-                account_id,
-                run_id,
-                case_id=str(getattr(ctx, "case_id", "") or "")[:64],
-            )
-        except Exception as exc:
-            SLog.w(TAG, f"mark lease failed: {exc!r}")
+        append_allocation_log(
+            project_id=project_id,
+            action="lease_fail",
+            message=f"{base}{hint}"[:500],
+            env=env_profile,
+            run_id=run_id,
+            case_id=str(getattr(ctx, "case_id", "") or ""),
+            sn=holder_sn,
+            package_id=target_id,
+            detail={"requirements": requirements},
+        )
+        return None, f"{base}{hint}"
 
     apply_lease_to_ctx(ctx, row, project_id=project_id)
     SLog.i(TAG, f"leased {account_ident(row)} for run={run_id[:12]} score={row.get('score')}")
@@ -553,9 +636,11 @@ def ensure_case_account_lease(
         return True, ""
     rid = str(run_id or "").strip()
     cid = str((case or {}).get("case_id") or "")[:24]
+    device_sn = str((case or {}).get("sn") or "").strip()
     ctx = SimpleNamespace(
         run_id=rid,
         case_id=cid,
+        sn=device_sn,
         app_id=str(app_id or "").strip(),
         env_profile=str(env_profile or "test").strip(),
         platform=str(platform or "android").strip(),

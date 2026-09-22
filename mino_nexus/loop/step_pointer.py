@@ -17,7 +17,7 @@ _POINTER_TEMPLATES: dict[str, str] = {
         "每任务仅需一次 check_run_env（history 已有 env= 即满足）；"
         "禁止重复 read_device_data（history 已有 sim=READY 即满足）。"
         "前置满足后立刻 signal_done。锁屏/黑屏用 recover_*，不要用 prep 工具唤醒。"
-        "登录态未确认时不要 signal_done。禁止进步骤、禁止验预期。"
+        "禁止进步骤、禁止验预期。"
     ),
     "do_header": (
         "【执行纪律：严格按步骤编号。禁止跳到后面的步骤，禁止提前验后面的预期。】"
@@ -52,6 +52,8 @@ _POINTER_TEMPLATES: dict[str, str] = {
     "step_active_do": "[>] 步骤 {n} 操作中：{instruction} ｜ 达成信号：{achievement}",
     "step_active_check": "[>] 步骤 {n} 校验中：{instruction} ｜ 预期：{expected}",
     "step_pending_check": "[ ] 步骤 {n} 未到，禁止执行：{instruction} ｜ 做完后校验",
+    "step_unlock_hint": "【进度】当前第 {cur}/{total} 步；尚未到达的步骤不在本块展示。",
+    "step_achievement_pending": "（本步子动作未完成，达成信号待解锁）",
     "all_done": "全部步骤已完成。不要再操作设备。",
 }
 
@@ -135,7 +137,17 @@ def enrich_assert_expectation(instruction: str, expected: str) -> str:
 
 _GUEST_STEP_RE = re.compile(r"游客|访客")
 _GUEST_ENTRY_RE = re.compile(r"游客|访客")
-_LOGIN_ENTRY_RE = re.compile(r"手机号|微信|登录|一键|账号密码|苹果|Apple", re.I)
+_LOGIN_ENTRY_RE = re.compile(
+    r"手机号|"
+    r"微信(?:登录|登陆|授权)?|"
+    r"(?:去|立即|点击)?登录|"
+    r"一键登录|"
+    r"账号密码|"
+    r"Sign in with Apple|"
+    r"(?:通过)?Apple.{0,12}登录|"
+    r"苹果.{0,8}(?:登录|账号|授权|ID)",
+    re.I,
+)
 
 
 def is_guest_entry_step(instruction: str) -> bool:
@@ -151,6 +163,21 @@ def tap_summary_is_login_entry(summary: str) -> bool:
     if _GUEST_ENTRY_RE.search(text):
         return False
     return bool(_LOGIN_ENTRY_RE.search(text))
+
+
+def tap_params_guard_summary(params: dict[str, Any] | None) -> str:
+    """Guard 判定登录入口时只用 tap 参数，勿用 LLM thought（易误含「登录」字样）。"""
+    p = params if isinstance(params, dict) else {}
+    parts = [
+        str(p.get("selector_text") or "").strip(),
+        str(p.get("text") or "").strip(),
+        str(p.get("content_desc") or "").strip(),
+    ]
+    target = p.get("target")
+    if isinstance(target, dict):
+        parts.append(str(target.get("text") or "").strip())
+        parts.append(str(target.get("content_desc") or "").strip())
+    return " ".join(x for x in parts if x).strip()
 
 
 def compile_guest_entry_hint(instruction: str, *, entry_tapped: bool) -> str:
@@ -426,6 +453,7 @@ class StepCursor:
         self.correction_hint: str = ""
         self.prep_session_skip_streak: int = 0
         self.prep_guard_streak: int = 0
+        self.login_scope_block_streak: int = 0
         self.require_do_work_streak: int = 0
         self.recovery_block_streak: int = 0
         self.do_subphase: str = "operation"
@@ -466,6 +494,7 @@ class StepCursor:
         self.prep_session_skip_streak = 0
         self.prep_guard_streak = 0
         self.prep_resource_gate_streak = 0
+        self.login_scope_block_streak = 0
         self.recovery_block_streak = 0
         self.do_subphase = "operation"
         self.step_nav_plan_hint = ""
@@ -743,34 +772,48 @@ class StepCursor:
         lines = [_pt("do_header")]
         if self.precondition:
             lines.append(f"[x] 前置（已完成）：{self.precondition}")
+        total = len(self.nodes)
+        cur_idx = self.index
+        if total > 0:
+            cur_n = self.nodes[cur_idx].n if 0 <= cur_idx < total else total
+            lines.append(_pt("step_unlock_hint", cur=cur_n, total=total))
         for i, node in enumerate(self.nodes):
-            if i < self.index:
+            if i > cur_idx:
+                continue
+            if i < cur_idx:
                 bit = _pt("step_done", n=node.n, instruction=node.instruction or "（无操作）")
-            elif i == self.index and self.phase == "do":
-                ach_line = (
-                    "（操作阶段不展示 expected 全文，校验在 check 阶段）"
-                    if _expected_defers_to_check(node.expected)
-                    else _achievement_label(node.expected)
-                )
+                exp_done = str(node.expected or "").strip()
+                if exp_done:
+                    bit += f" ｜ 预期：{exp_done}"
+                elif not self.all_uncheckable():
+                    bit += " ｜ 本步无预期（已完成）"
+                lines.append(bit)
+                continue
+            if self.phase == "do":
+                self.refresh_do_subphase()
+                if self.do_subphase == "achievement":
+                    ach_line = (
+                        _do_phase_achievement_brief(node.instruction, node.expected)
+                        if _expected_defers_to_check(node.expected)
+                        else _achievement_label(node.expected)
+                    )
+                else:
+                    ach_line = _pt("step_achievement_pending")
                 bit = _pt(
                     "step_active_do",
                     n=node.n,
                     instruction=node.instruction or "（无操作）",
                     achievement=ach_line,
                 )
-            elif i == self.index:
+            else:
                 bit = _pt(
                     "step_active_check",
                     n=node.n,
                     instruction=node.instruction or "（无操作）",
                     expected=node.expected,
                 )
-            else:
-                bit = _pt("step_pending_check", n=node.n, instruction=node.instruction or "（无操作）")
             if not node.expected:
                 bit += " ｜ 本步无预期（做完即过）" if not self.all_uncheckable() else " ｜ 本步无预期（无法校验）"
-            elif i < self.index:
-                bit += " ｜ 已校验"
             lines.append(bit)
         cur = self.current()
         if not cur:
@@ -875,10 +918,16 @@ class StepCursor:
                 "用 assert_visual 判断当前屏。不要操作设备。"
             )
         exp = str(cur.expected or "").strip()
-        if exp:
+        self.refresh_do_subphase()
+        if exp and self.do_subphase == "achievement":
             return (
                 f"完成步骤 {cur.n} 的操作：{cur.instruction}。"
                 f"达成信号：{exp}。以达成信号为准，不以操作对象是否可见为准。"
+            )
+        if exp:
+            return (
+                f"完成步骤 {cur.n} 的操作：{cur.instruction}。"
+                "先完成 instruction 中的全部子动作；达成信号将在子动作达标后展示。"
             )
         return (
             f"完成步骤 {cur.n} 的操作：{cur.instruction}。"

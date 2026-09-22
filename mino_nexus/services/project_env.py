@@ -463,6 +463,9 @@ def _norm_test_accounts(raw: Any, env_doc: dict | None = None) -> List[dict]:
                 "leased_at": str(lease_raw.get("leased_at") or lease_raw.get("at") or "").strip()[:40],
                 "expires_at": str(lease_raw.get("expires_at") or "").strip()[:40],
             }
+            lease_sn = str(lease_raw.get("sn") or "").strip()
+            if lease_sn:
+                lease["sn"] = lease_sn[:64]
         out.append(
             {
                 "id": aid,
@@ -761,6 +764,8 @@ def pick_test_accounts(
     need_facets: Optional[dict] = None,
     requirements: Optional[dict] = None,
     run_id: str = "",
+    holder_sn: str = "",
+    project_id: str = "",
     observed_by_account: Optional[dict] = None,
 ) -> List[dict]:
     from mino_nexus.services.resource_pool import pick_accounts_by_requirements
@@ -791,6 +796,8 @@ def pick_test_accounts(
         req,
         env=env_key,
         run_id=run_id,
+        holder_sn=holder_sn,
+        project_id=project_id,
         account_ident_fn=account_ident,
         observed_by_account=observed_by_account,
         ident_query=ident_q,
@@ -817,6 +824,32 @@ def pipeline_keys(env_doc: dict) -> List[str]:
         if out:
             return out
     return profile_keys(env_doc)
+
+
+def resolve_run_env_profile(
+    env_doc: dict | None,
+    *,
+    requested: str = "",
+    automation_default: str = "",
+) -> str:
+    """跑批启动时选定 env key：请求值须落在项目 environments，否则回落 default / automation。"""
+    doc = env_doc if isinstance(env_doc, dict) else {}
+    req = str(requested or "").strip()
+    keys = set(profile_keys(doc))
+    if req:
+        if keys and req not in keys:
+            labels = {
+                str(e.get("key") or ""): str(e.get("label") or e.get("key") or "")
+                for e in (doc.get("environments") or [])
+                if isinstance(e, dict)
+            }
+            hint = "、".join(f"{labels.get(k, k)}({k})" for k in sorted(keys)[:8]) or "（空）"
+            raise ValueError(f"运行环境「{req}」不在项目环境配置中。可选：{hint}")
+        return req
+    auto = str(automation_default or "").strip()
+    if auto and (not keys or auto in keys):
+        return resolve_profile_name(doc, auto)
+    return resolve_profile_name(doc, None)
 
 
 def resolve_profile_name(env_doc: dict, env_profile: Optional[str] = None) -> str:

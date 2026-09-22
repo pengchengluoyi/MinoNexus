@@ -1,6 +1,7 @@
 """单用例看图闭环。prep / do / check 都由 Agent 看图决策。"""
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Optional
 
@@ -13,8 +14,10 @@ from mino_nexus.loop.registry import apply_force_case_expectation, run_guards
 from mino_nexus.loop.inspections import (
     _session_block_is_conclusive,
     expand_named_knowledge,
+    llm_session_block,
     match_stuck_docs,
     refresh_session_block,
+    reconcile_session_block_with_hierarchy,
     run_inspections,
 )
 from mino_nexus.services.app_intel import context_pack_for_step, log_context_pack
@@ -42,6 +45,7 @@ from mino_nexus.loop.step_pointer import (
     compute_case_wall_budget_sec,
     enrich_assert_expectation,
     screen_fingerprint,
+    tap_params_guard_summary,
 )
 from mino_nexus.catalog import registry as catalog
 from mino_nexus.core.protocol import EventStatus
@@ -95,6 +99,31 @@ def _history_line(
     return f"{seq}. {capability_id} → {status}: {text}"
 
 
+def _sync_app_foreground_ctx(
+    ctx,
+    nav: Any,
+    target_pkg: str,
+    router: Any = None,
+) -> dict[str, Any]:
+    nodes: list[Any] = []
+    if nav is not None:
+        snap = getattr(nav, "snapshot", None)
+        if snap is not None:
+            nodes = list(getattr(snap, "nodes", None) or [])
+    setattr(ctx, "nav_hierarchy_nodes", nodes)
+    from mino_nexus.loop.recovery import resolve_app_foreground_guard
+
+    fg = resolve_app_foreground_guard(
+        ctx,
+        router,
+        nodes=nodes,
+        target_package=str(target_pkg or getattr(ctx, "target_package", "") or ""),
+    )
+    setattr(ctx, "system_overlay", str(fg.get("system_overlay") or ""))
+    setattr(ctx, "app_foreground", str(fg.get("app_foreground") or ""))
+    return fg
+
+
 def _screen_fp(shot, hierarchy_text: str = "") -> str:
     return screen_fingerprint(
         hierarchy_text=hierarchy_text,
@@ -139,6 +168,35 @@ def _log_turn_end(
     payload: dict[str, Any] = {"decision_cap": cap, "decision_status": status}
     payload.update(extra)
     writer.append("turn/end", payload)
+
+
+def _log_program_tool(
+    writer: SessionWriter | None,
+    *,
+    capability_id: str,
+    params: dict[str, Any],
+    status: str,
+    summary: str,
+    executor_used: str = "adb",
+    source: str = "program",
+) -> None:
+    if writer is None:
+        return
+    writer.append(
+        "tool/call",
+        {"capability_id": capability_id, "params": dict(params or {}), "source": source},
+    )
+    writer.append(
+        "tool/result",
+        {
+            "capability_id": capability_id,
+            "status": status,
+            "summary": summary,
+            "error": "",
+            "executor_used": executor_used,
+            "source": source,
+        },
+    )
 
 
 def _llm_trace(decision: AgentDecision) -> dict[str, Any]:
@@ -224,7 +282,9 @@ def run_case(
 
     cid = str(case.get("case_id") or "")
     stream_id = str(case.get("report_run_id") or "").strip() or (
-        report_run_id(run_id, cid) if cid else run_id
+        report_run_id(run_id, cid, sn=str(sn or ""), coverage=str(case.get("coverage") or "once"))
+        if cid
+        else run_id
     )
     is_explore_case = str(case.get("source") or "") == "explore"
     overview = (
@@ -265,6 +325,7 @@ def run_case(
     proxy = RouterProxy(
         sn,
         run_id=scout_run_id,
+        task_id=run_id,
         target_package=package,
         playwright_headless=playwright_headless,
     )
@@ -431,6 +492,84 @@ def _record(
     return row
 
 
+def _consume_login_chain(
+    chain: list[dict[str, Any]],
+    *,
+    seq: int,
+    cursor: StepCursor,
+    rec,
+    emit,
+    thumb: str,
+    screen_fp: str = "",
+    login_flow_step: bool = False,
+) -> tuple[str, str]:
+    last_cap, last_st = "", "fail"
+    from mino_nexus.loop.action_fuse import fuseable_cap
+
+    intents = set(getattr(cursor, "step_intents_done", None) or set())
+    for item in chain:
+        cap = str(item.get("capability_id") or "noop")
+        st = str(item.get("status") or "fail")
+        summ = str(item.get("summary") or "")
+        if item.get("ran_get_otp"):
+            cursor.record_step_op("get_otp")
+        if cap == "input_text" and item.get("ok"):
+            cursor.record_step_op("input_text", params={"field": "sms_code"})
+        if cap == "tap_element" and item.get("ok"):
+            cursor.record_step_op("tap_element", params={"selector_text": "登录"})
+        if item.get("ok") and fuseable_cap(cap):
+            params: dict[str, Any] = {}
+            if cap == "input_text":
+                params = {"field": "sms_code"}
+            elif cap == "tap_element":
+                params = {"selector_text": "登录"}
+            cursor.progress_gate.record_pass(
+                cap_id=cap,
+                params=params,
+                pre_fp=screen_fp,
+                post_fp=screen_fp,
+                intents_done=set(getattr(cursor, "step_intents_done", None) or intents),
+                login_flow_step=login_flow_step,
+            )
+        rec(seq, capability_id=cap, status=st, summary=summ, thought=summ, thumb=thumb)
+        emit(
+            "result",
+            thought=summ,
+            step=seq,
+            capability_id=cap,
+            status=st,
+            summary=summ,
+            thumb=thumb,
+        )
+        last_cap, last_st = cap, st
+    return last_cap, last_st
+
+
+def _login_chain_guard(
+    chain: list[dict[str, Any]],
+    *,
+    cursor: StepCursor,
+) -> str:
+    """程序登录链全失败时累计 streak；误走本地 executor 时停用链。非空则 agent 应 fail 退出。"""
+    if not chain:
+        return ""
+    if any(bool(x.get("ok")) for x in chain):
+        cursor.login_chain_fail_streak = 0
+        return ""
+    streak = int(getattr(cursor, "login_chain_fail_streak", 0) or 0) + 1
+    cursor.login_chain_fail_streak = streak
+    if any("未知本地能力" in str(x.get("summary") or "") for x in chain):
+        setattr(cursor, "login_chain_broken", True)
+        cursor.correction_hint = (
+            "程序登录链曾误将 input_text/tap 当本地能力执行；已停用程序链，请由模型正常派发设备能力。"
+        )
+        return ""
+    if streak >= 8:
+        head = str(chain[0].get("summary") or chain[0].get("capability_id") or "login_chain")
+        return f"登录程序链连续失败 {streak} 轮：{head}"[:400]
+    return ""
+
+
 def _ensure_web_page(proxy: RouterProxy, ctx, *, run_id: str, case_seq: int = 0) -> Optional[dict[str, Any]]:
     from mino_nexus.runtime.run_context import is_web_slot
 
@@ -579,12 +718,22 @@ def _run_loop(
         provider_id=provider_id,
     )
 
+    display_guard: Optional[Any] = None
+    screen_recovery_exclude: frozenset[str] | None = None
+    target_pkg = str(getattr(ctx, "target_package", "") or "")
+
+    def _stop_display_guard() -> None:
+        if display_guard is not None:
+            display_guard.stop()
+
     def _leave(*, status: str, summary: str, pack=None):
+        _stop_display_guard()
         if nav is not None:
             nav.shutdown(writer=writer, status=status, summary=summary)
         return _finish(emit, status=status, summary=summary, steps=steps, t0=t0, pack=pack or _pack)
 
     def _leave_case(cursor):
+        _stop_display_guard()
         result = _finish_case(emit, cursor=cursor, steps=steps, t0=t0, pack=_pack)
         if nav is not None:
             nav.shutdown(
@@ -598,6 +747,12 @@ def _run_loop(
     last_phase_seen = ""
     ctx.case_scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
     ctx.case = case
+    from mino_nexus.loop.session_scope import begin_case_session_scope
+
+    begin_case_session_scope(ctx, case_id=str(cid or ""), scene=ctx.case_scene)
+    from mino_nexus.loop.llm_screenshot_gate import reset_case_llm_image_gate
+
+    reset_case_llm_image_gate(ctx)
     login_module_case = is_login_module_case(case=case, scene=ctx.case_scene)
     if isinstance(cursor, StepCursor):
         cursor.login_module_prompt = login_module_case
@@ -676,6 +831,14 @@ def _run_loop(
         return _leave(status="fail", summary=summary)
 
     reset_before_case(proxy, ctx, run_id=scout_run_id, case_seq=case_seq, case=case)
+    from mino_nexus.services.resource_preflight import claim_requires_clear_cache
+
+    _rk = case.get("resource_key") if isinstance(case.get("resource_key"), dict) else None
+    _clear_before_launch = claim_requires_clear_cache(
+        _rk,
+        getattr(ctx, "case_scene", None),
+        str(case.get("precondition") or ""),
+    )
     cold_started = reset_native_app_before_case(
         proxy,
         ctx,
@@ -683,9 +846,21 @@ def _run_loop(
         case_seq=case_seq,
         case=case,
         login_module=login_module_case,
+        defer_launch=_clear_before_launch,
     )
     if cold_started and writer:
-        writer.append("app/cold_start", {"login_module": True, "package": str(getattr(ctx, "target_package", "") or "")})
+        writer.append(
+            "app/cold_start",
+            {
+                "login_module": True,
+                "package": str(getattr(ctx, "target_package", "") or ""),
+                "defer_launch": _clear_before_launch,
+            },
+        )
+    if cold_started:
+        from mino_nexus.loop.launch_grace import stamp_launch_grace
+
+        stamp_launch_grace(ctx)
     opened = _ensure_web_page(proxy, ctx, run_id=scout_run_id, case_seq=case_seq)
     if opened:
         if writer:
@@ -721,6 +896,21 @@ def _run_loop(
             return _leave(status="fail", summary=summary)
 
     from mino_nexus.loop.recovery import recover_if_needed
+    from mino_nexus.loop.device_display_guard import DeviceDisplayGuard, platform_needs_display_guard
+
+    if platform_needs_display_guard(ctx):
+        try:
+            display_guard = DeviceDisplayGuard(
+                ctx,
+                proxy,
+                target_package=target_pkg,
+                cancel_check=cancel_check,
+            )
+            display_guard.start(initial_timeout=90.0)
+            screen_recovery_exclude = frozenset({"screen_asleep_or_locked"})
+        except Exception as exc:
+            SLog.w(TAG, f"DisplayGuard start failed: {exc!r}")
+            display_guard = None
 
     preflight_shot = None
     try:
@@ -730,8 +920,6 @@ def _run_loop(
             preflight_shot = proxy.observe("screenshot", force_fresh=True)
     except Exception:
         preflight_shot = None
-
-    target_pkg = str(getattr(ctx, "target_package", "") or "")
 
     def _log_preflight_recovery(out, *, source: str) -> None:
         cap_id = str(getattr(out, "rule_id", "") or "recovery")
@@ -772,6 +960,7 @@ def _run_loop(
         target_package=target_pkg,
         shot=preflight_shot,
         execute_only=True,
+        exclude_rule_ids=screen_recovery_exclude,
     )
     if recovery_out:
         _log_preflight_recovery(recovery_out, source="preflight")
@@ -782,11 +971,17 @@ def _run_loop(
         target_package=target_pkg,
         shot=preflight_shot,
     )
+    if _clear_before_launch and not bool(getattr(ctx, "prep_clear_done", False)):
+        fg_out = None
     if fg_out:
         _log_preflight_recovery(fg_out, source="preflight_fg")
 
     if not str(getattr(ctx, "app_version", "") or "").strip() and target_pkg:
-        from mino_nexus.runtime.run_context import stamp_app_version, version_from_execute_result
+        from mino_nexus.runtime.run_context import (
+            execute_result_ok,
+            stamp_app_version,
+            version_from_execute_result,
+        )
 
         ver_event = PlanEvent(
             seq=0,
@@ -798,9 +993,7 @@ def _run_loop(
         )
         ver_result = proxy.dispatch(ver_event, run_id=scout_run_id, step_idx=frame_step(case_seq, 1))
         raw_ver = ver_result.raw_response if isinstance(getattr(ver_result, "raw_response", None), dict) else {}
-        ver = version_from_execute_result(raw_ver)
-        if not ver and ver_result.summary:
-            ver = str(ver_result.summary or "").strip()[:64]
+        ver = version_from_execute_result(raw_ver) if execute_result_ok(ver_result) else ""
         if ver:
             stamp_app_version(ctx, ver)
             sn_v = str(getattr(ctx, "sn", "") or "").strip()
@@ -843,20 +1036,10 @@ def _run_loop(
     if cancel_check and cancel_check():
         return _leave(status="cancelled", summary="任务已取消")
 
-    if login_module_case and preflight_shot and preflight_shot.has_image():
-        refresh_session_block(
-            shot=preflight_shot,
-            ctx=ctx,
-            case=case,
-            provider_id=provider_id,
-            slot_sink=inspect_slots,
-            nav=nav,
-            turn_id=0,
-        )
-        ran_case_start_inspection = True
+    if login_module_case:
         pre_hint = compile_login_session_hint(
             getattr(ctx, "case_scene", None),
-            inspect_slots.get("session_block") or "",
+            "",
         )
         if pre_hint:
             history.append(f"0. program → info: {pre_hint}")
@@ -886,6 +1069,11 @@ def _run_loop(
         if cursor.done:
             return _leave_case(cursor)
 
+        if display_guard is not None:
+            if cancel_check and cancel_check():
+                return _leave(status="cancelled", summary="任务已取消")
+            display_guard.wait_ready(timeout=60.0)
+
         shot = proxy.observe("screenshot", force_fresh=True)
         thumb = make_thumb(shot.image_base64) if shot.has_image() else ""
         if writer and shot.has_image():
@@ -901,10 +1089,26 @@ def _run_loop(
             )
         if not shot.has_image():
             summary = shot.error or "Scout 截图失败"
+            if "任务已取消" in summary:
+                return _leave(status="cancelled", summary=summary)
             if "没有打开的页面" in summary:
                 summary = "浏览器还没有打开页面。请确认应用填了 Web 地址，或在前置里先打开网址。"
             emit("observe", thought=summary, step=seq, status="fail")
             return _leave(status="fail", summary=summary)
+
+        if nav is not None:
+            nav.observe(
+                proxy,
+                turn_id=seq,
+                slot_sink=inspect_slots,
+                session_block=inspect_slots.get("session_block") or "",
+                screenshot_turn_id=seq,
+                writer=writer,
+                screenshot=shot,
+            )
+            _sync_app_foreground_ctx(ctx, nav, target_pkg, proxy)
+        elif not is_explore:
+            _sync_app_foreground_ctx(ctx, nav, target_pkg, proxy)
 
         if login_module_case and cursor.phase in ("prep", "do"):
             conclusive = _session_block_is_conclusive(inspect_slots.get("session_block") or "")
@@ -926,27 +1130,32 @@ def _run_loop(
                 ran_case_start_inspection = True
         else:
             if not ran_case_start_inspection:
-                run_inspections(
-                    inspections,
-                    at="case_start",
-                    shot=shot,
-                    ctx=ctx,
-                    provider_id=provider_id,
-                    slot_sink=inspect_slots,
-                    case=case,
-                )
+                if login_module_case:
+                    run_inspections(
+                        inspections,
+                        at="case_start",
+                        shot=shot,
+                        ctx=ctx,
+                        provider_id=provider_id,
+                        slot_sink=inspect_slots,
+                        case=case,
+                    )
+                else:
+                    inspect_slots["session_block"] = ""
                 ran_case_start_inspection = True
 
             if cursor.phase != last_phase_seen:
-                run_inspections(
-                    inspections,
-                    at=f"phase_enter:{cursor.phase}",
-                    shot=shot,
-                    ctx=ctx,
-                    provider_id=provider_id,
-                    slot_sink=inspect_slots,
-                    case=case,
-                )
+                _ins_at = f"phase_enter:{cursor.phase}"
+                if login_module_case or cursor.phase != "prep":
+                    run_inspections(
+                        inspections,
+                        at=_ins_at,
+                        shot=shot,
+                        ctx=ctx,
+                        provider_id=provider_id,
+                        slot_sink=inspect_slots,
+                        case=case,
+                    )
 
         if cursor.phase != last_phase_seen:
             if writer:
@@ -995,6 +1204,10 @@ def _run_loop(
         inspect_slots["session_block"] = effective_session_block(
             ctx, str(inspect_slots.get("session_block") or "")
         )
+        reconcile_session_block_with_hierarchy(ctx, inspect_slots, nav, case)
+        inspect_slots["session_block"] = effective_session_block(
+            ctx, str(inspect_slots.get("session_block") or "")
+        )
         inspect_slots["session_execution"] = execution_context_session_line(ctx)
         from mino_nexus.services.account_facet_commit import record_session_probe
 
@@ -1005,22 +1218,11 @@ def _run_loop(
             inspect_slots.get("session_block") or "",
         )
 
-        # hierarchy 通道 + NavFSM（设计稿 §10.0.2）。失败只降级，本 turn 照常走。
         if nav is not None:
-            nav.observe(
-                proxy,
-                turn_id=seq,
-                slot_sink=inspect_slots,
-                session_block=inspect_slots.get("session_block") or "",
-                screenshot_turn_id=seq,
-                writer=writer,
-                screenshot=shot,
-            )
             if is_explore:
-                if nav is not None and nav.snapshot.usable():
+                if nav.snapshot.usable():
                     cursor.note_observation(nav.snapshot.nodes)
                 else:
-                    # hierarchy 不可用时仍计 idle，避免跑满 max_steps 空烧 LLM
                     cursor.note_observation([])
                 if cursor.done:
                     return _leave(status="pass", summary=cursor.summary(), pack=_pack())
@@ -1040,14 +1242,32 @@ def _run_loop(
             if nav is not None:
                 snap = getattr(nav, "snapshot", None)
                 hier_nodes = list(getattr(snap, "nodes", None) or []) if snap is not None else []
-            launched = launch_if_hierarchy_away(
-                proxy,
-                ctx,
-                run_id=scout_run_id,
-                case_seq=case_seq,
-                nodes=hier_nodes,
-            )
+            launched = None
+            if not (
+                cursor.phase == "prep"
+                and _clear_before_launch
+                and not bool(getattr(ctx, "prep_clear_done", False))
+            ):
+                launched = launch_if_hierarchy_away(
+                    proxy,
+                    ctx,
+                    run_id=scout_run_id,
+                    case_seq=case_seq,
+                    nodes=hier_nodes,
+                )
             if launched:
+                from mino_nexus.loop.launch_grace import stamp_launch_grace
+
+                stamp_launch_grace(ctx)
+                st = str(launched.get("status") or "pass")
+                summ = str(launched.get("summary") or "")
+                _log_program_tool(
+                    writer,
+                    capability_id="launch_app",
+                    params={"package": str(launched.get("package") or target_pkg)},
+                    status=st,
+                    summary=summ,
+                )
                 rec(
                     seq,
                     capability_id="launch_app",
@@ -1070,6 +1290,56 @@ def _run_loop(
                     writer,
                     cap="launch_app",
                     status=str(launched.get("status") or "pass"),
+                )
+                continue
+
+            fg_turn = ensure_target_app_foreground(
+                ctx,
+                proxy,
+                target_package=target_pkg,
+                shot=shot,
+            )
+            if (
+                _clear_before_launch
+                and cursor.phase == "prep"
+                and not bool(getattr(ctx, "prep_clear_done", False))
+            ):
+                fg_turn = None
+            if fg_turn and fg_turn.applied:
+                from mino_nexus.loop.launch_grace import stamp_launch_grace
+
+                stamp_launch_grace(ctx)
+                fg_st = "pass" if fg_turn.recovered else "fail"
+                fg_summ = fg_turn.summary()
+                _log_program_tool(
+                    writer,
+                    capability_id="launch_app",
+                    params={"package": target_pkg},
+                    status=fg_st,
+                    summary=fg_summ,
+                )
+                rec(
+                    seq,
+                    capability_id="launch_app",
+                    status=fg_st,
+                    summary=fg_summ,
+                    thought="程序将被测 App 带到前台",
+                    thumb=thumb,
+                    executor_used="adb",
+                )
+                emit(
+                    "result",
+                    thought=fg_summ,
+                    step=seq,
+                    capability_id="launch_app",
+                    status=fg_st,
+                    summary=fg_summ,
+                    thumb=thumb,
+                )
+                _log_turn_end(
+                    writer,
+                    cap="launch_app",
+                    status=fg_st,
                 )
                 continue
 
@@ -1114,11 +1384,19 @@ def _run_loop(
                         model_done=False,
                         keywords=keywords,
                     )
+                    from mino_nexus.loop.step_intent import instruction_required_intents
+
                     if hit or loc_hit:
                         cursor.note_step_effect_hit(
                             keywords,
                             expected=str(cur_probe.expected or ""),
                         )
+                        need_int_probe = instruction_required_intents(
+                            str(cur_probe.instruction or "")
+                        )
+                        if "nav_tab" in need_int_probe and (hit or loc_hit) and defer_chk:
+                            cursor.step_intents_done.add("nav_tab")
+                            cursor.refresh_do_subphase()
                         if (
                             cursor.phase == "do"
                             and step_effect_mod.should_auto_enter_check(
@@ -1163,6 +1441,15 @@ def _run_loop(
                                 cursor.correction_hint = ""
                     else:
                         cursor.reset_step_effect_streak()
+                    if probe_nodes and step_effect_mod.expected_profile_shape_config(
+                        str(cur_probe.expected or "")
+                    ):
+                        ps_hint = step_effect_mod.profile_shape_mismatch_hint(
+                            str(cur_probe.expected or ""),
+                            probe_nodes,
+                        )
+                        if ps_hint:
+                            cursor.correction_hint = ps_hint
                 except Exception as exc:  # noqa: BLE001 — 探针失败不能拖垮跑批
                     SLog.w(TAG, f"step_effect probe failed: {type(exc).__name__}: {exc}")
 
@@ -1218,6 +1505,32 @@ def _run_loop(
             snap = getattr(nav, "snapshot", None)
             nodes = list(getattr(snap, "nodes", None) or []) if snap is not None else []
             setattr(ctx, "nav_hierarchy_nodes", nodes)
+        from mino_nexus.loop.nav_onboarding_open_loop import (
+            clear_open_loop_if_tabs_visible,
+            format_open_loop_hint,
+        )
+
+        clear_open_loop_if_tabs_visible(ctx)
+        if (
+            not is_explore
+            and isinstance(cursor, StepCursor)
+            and cursor.phase == "do"
+            and cur
+        ):
+            _prec_open = str(
+                getattr(cursor, "precondition", "") or case.get("precondition") or ""
+            )
+            _ol = format_open_loop_hint(
+                ctx=ctx,
+                precondition=_prec_open,
+                instruction=str(cur.instruction or ""),
+            )
+            if _ol:
+                cursor.correction_hint = (
+                    f"{cursor.correction_hint}\n{_ol}".strip()
+                    if cursor.correction_hint
+                    else _ol
+                )
         if (
             not is_explore
             and isinstance(cursor, StepCursor)
@@ -1260,6 +1573,9 @@ def _run_loop(
                         app_version=str(getattr(ctx, "app_version", "") or ""),
                         expected=exp_nav,
                         required_session=req_sess,
+                        precondition=str(
+                            getattr(cursor, "precondition", "") or case.get("precondition") or ""
+                        ),
                     )
                 else:
                     cursor.step_nav_plan_hint = (
@@ -1272,19 +1588,31 @@ def _run_loop(
             ]
         if str(getattr(ctx, "app_version", "") or "").strip():
             menu = [c for c in menu if str(c.get("id") or "") != "get_app_version"]
-        from mino_nexus.services.nav_capture_store import run_guard_foreground
+        from mino_nexus.loop.recovery import resolve_app_foreground_guard
 
-        fg_menu = run_guard_foreground(
-            list(getattr(ctx, "nav_hierarchy_nodes", None) or []),
+        fg_menu = resolve_app_foreground_guard(
+            ctx,
+            proxy,
+            nodes=list(getattr(ctx, "nav_hierarchy_nodes", None) or []),
             target_package=str(getattr(ctx, "target_package", "") or target_pkg),
-            platform=str(getattr(ctx, "platform", "") or ""),
         )
         setattr(ctx, "system_overlay", str(fg_menu.get("system_overlay") or ""))
         setattr(ctx, "app_foreground", str(fg_menu.get("app_foreground") or ""))
         if str(fg_menu.get("app_foreground") or "") == "yes":
             menu = [
                 c for c in menu
-                if str(c.get("id") or "") not in ("launch_app", "open_app", "open_url")
+                if str(c.get("id") or "")
+                not in (
+                    "launch_app",
+                    "open_app",
+                    "open_url",
+                    "recover_bring_target_app_foreground",
+                )
+            ]
+        if bool(getattr(ctx, "display_guard_active", False)):
+            menu = [
+                c for c in menu
+                if str(c.get("id") or "") not in ("recover_screen_asleep_or_locked",)
             ]
         from mino_nexus.loop.step_contract import instruction_allows_login_flow
 
@@ -1354,7 +1682,13 @@ def _run_loop(
 
             hist_lines = list(history[-24:])
             nodes = list(getattr(ctx, "nav_hierarchy_nodes", None) or [])
-            from mino_nexus.loop.login_submit import try_auto_login_submit
+            from mino_nexus.loop.login_submit import (
+                _otp_code_already_entered,
+                run_login_otp_submit_chain,
+                run_post_sms_login_pipeline,
+            )
+            from mino_nexus.loop.step_contract import instruction_allows_login_flow
+            from mino_nexus.loop.step_flow_scope import login_flow_allowed
 
             _lf_ok, _lf_msg = login_flow_allowed(
                 cursor=cursor,
@@ -1362,46 +1696,88 @@ def _run_loop(
                 instruction=str(cur.instruction or ""),
                 expected=str(cur.expected or ""),
             )
-            submit_auto = None
-            if _lf_ok:
-                submit_auto = try_auto_login_submit(
-                    proxy,
-                    ctx,
-                    turn_seq=seq,
-                    instruction=str(cur.instruction or ""),
-                    hierarchy_nodes=nodes,
-                    intents_done=cursor.step_intents_done,
-                    history_lines=hist_lines,
-                    login_module_case=bool(login_module_case),
+            if _lf_ok and not getattr(cursor, "login_chain_broken", False):
+                _pending_sms = bool(getattr(cursor, "login_post_sms_pending", False))
+                from mino_nexus.loop.login_submit import (
+                    _otp_code_already_entered,
+                    run_login_otp_submit_chain,
+                    run_post_sms_login_pipeline,
                 )
-            if submit_auto:
-                st_sub = str(submit_auto.get("status") or "fail")
-                sum_sub = str(submit_auto.get("summary") or "")
-                if submit_auto.get("ok"):
-                    cursor.record_step_op(
-                        "tap_element",
-                        screen_fp=screen_fp_turn,
-                        selector_text="登录",
+
+                if _pending_sms:
+                    chain = run_post_sms_login_pipeline(
+                        proxy,
+                        ctx,
+                        turn_seq=seq,
+                        instruction=str(cur.instruction or ""),
+                        intents_done=cursor.step_intents_done,
+                        history_lines=hist_lines,
+                        hierarchy_nodes=nodes,
+                        login_module_case=bool(login_module_case),
+                        retries=2,
                     )
-                rec(
-                    seq,
-                    capability_id="tap_element",
-                    status=st_sub,
-                    summary=sum_sub,
-                    thought=sum_sub,
-                    thumb=thumb,
-                )
-                emit(
-                    "result",
-                    thought=sum_sub,
-                    step=seq,
-                    capability_id="tap_element",
-                    status=st_sub,
-                    summary=sum_sub,
-                    thumb=thumb,
-                )
-                _log_turn_end(writer, cap="tap_element", status=st_sub)
-                continue
+                else:
+                    chain = run_login_otp_submit_chain(
+                        proxy,
+                        ctx,
+                        turn_seq=seq,
+                        instruction=str(cur.instruction or ""),
+                        intents_done=cursor.step_intents_done,
+                        history_lines=hist_lines,
+                        hierarchy_nodes=nodes,
+                        login_module_case=bool(login_module_case),
+                    )
+                if chain:
+                    if len(chain) == 1 and str(chain[0].get("capability_id") or "") == "input_text":
+                        if chain[0].get("ok") and _otp_code_already_entered(
+                            hist_lines, cursor.step_intents_done
+                        ):
+                            chain = []
+                    if chain:
+                        if cancel_check and cancel_check():
+                            return _leave(status="cancelled", summary="任务已取消")
+                        fail_msg = _login_chain_guard(chain, cursor=cursor)
+                        if fail_msg:
+                            return _leave(status="fail", summary=fail_msg)
+                        lc, ls = _consume_login_chain(
+                            chain,
+                            seq=seq,
+                            cursor=cursor,
+                            rec=rec,
+                            emit=emit,
+                            thumb=thumb,
+                            screen_fp=screen_fp_turn,
+                            login_flow_step=bool(
+                                instruction_allows_login_flow(
+                                    str(cur.instruction or ""),
+                                    login_module_case=bool(login_module_case),
+                                )
+                            ),
+                        )
+                        if _pending_sms or getattr(cursor, "login_post_sms_pending", False):
+                            if _otp_code_already_entered(
+                                list(history[-24:]), cursor.step_intents_done
+                            ):
+                                cursor.login_post_sms_pending = False
+                                cursor.login_post_sms_stall = 0
+                            else:
+                                cursor.login_post_sms_stall = int(
+                                    getattr(cursor, "login_post_sms_stall", 0) or 0
+                                ) + 1
+                                if cursor.login_post_sms_stall >= 5:
+                                    cursor.login_post_sms_pending = False
+                        _log_turn_end(writer, cap=lc or "login_chain", status=ls)
+                        continue
+                elif _pending_sms:
+                    cursor.login_post_sms_stall = int(getattr(cursor, "login_post_sms_stall", 0) or 0) + 1
+                    if cursor.login_post_sms_stall >= 5:
+                        cursor.login_post_sms_pending = False
+                    cursor.correction_hint = (
+                        "发码后程序链未填上验证码：请稍候或检查测试环境 otp.fixed；"
+                        "勿重复 get_otp 空转。"
+                    )
+                    _log_turn_end(writer, cap="login_chain", status="wait")
+                    continue
             macro = try_run_system_dialog_macro(
                 proxy,
                 ctx,
@@ -1617,21 +1993,38 @@ def _run_loop(
                 ),
             )
         else:
-            def _decide() -> AgentDecision:
+            from mino_nexus.loop.llm_screenshot_gate import (
+                WITHHOLD_HINT,
+                apply_allow_foreign_flag,
+                clear_transient_llm_image_gate,
+                parse_allow_foreign_flag,
+                should_withhold_llm_image,
+            )
+
+            cp_block = cursor.prompt_block()
+            if should_withhold_llm_image(ctx):
+                cp_block = f"{cp_block}\n{WITHHOLD_HINT}"
+
+            def _decide(*, send_image: bool) -> AgentDecision:
+                img_b64 = shot.image_base64 if send_image and shot.has_image() else ""
                 return decide_next_action(
                     goal=cursor.decide_goal(),
-                    checkpoints_block=cursor.prompt_block(),
+                    checkpoints_block=cp_block,
                     run_context=ctx,
                     history_block=_history(history),
                     width=shot.width or 1080,
                     height=shot.height or 1920,
-                    image_base64=shot.image_base64,
+                    image_base64=img_b64,
                     image_mime=shot.image_mime or "image/png",
                     success_criteria=cursor.decide_success(),
                     provider_id=provider_id or None,
                     phase=cursor.phase,
                     tool_kinds=phase_tool_kinds or None,
-                    session_block=inspect_slots.get("session_block") or "",
+                    session_block=(
+                        ""
+                        if cursor.phase == "prep"
+                        else llm_session_block(ctx, inspect_slots.get("session_block") or "")
+                    ),
                     hierarchy_text=inspect_slots.get("hierarchy_text") or "",
                     knowledge_hint=inspect_slots.get("knowledge_hint") or "",
                     knowledge_body=inspect_slots.get("knowledge_body") or "",
@@ -1639,7 +2032,16 @@ def _run_loop(
                     doc_context=inspect_slots.get("doc_context") or "",
                 )
 
-            decision = _decide()
+            def _decide_gated() -> AgentDecision:
+                send_first = not should_withhold_llm_image(ctx)
+                dec = _decide(send_image=send_first)
+                apply_allow_foreign_flag(ctx, dec)
+                if not send_first and parse_allow_foreign_flag(dec) is True:
+                    dec = _decide(send_image=True)
+                    apply_allow_foreign_flag(ctx, dec)
+                return dec
+
+            decision = _decide_gated()
             # 点名了知识就展开正文重决策一次。只一次 —— 展开后再点名一律忽略。
             body, named = expand_named_knowledge(decision, know_rows, ctx=ctx)
             if body:
@@ -1649,8 +2051,9 @@ def _run_loop(
                     thought=f"点名知识 {', '.join(named)}，展开正文后重新决策本步",
                     step=seq, status="continue", knowledge_ids=named,
                 )
-                decision = _decide()
+                decision = _decide_gated()
                 inspect_slots["knowledge_body"] = ""
+            clear_transient_llm_image_gate(ctx)
         thought = decision.thought or ""
         trace = _llm_trace(decision)
         emit(
@@ -1786,17 +2189,34 @@ def _run_loop(
             params = {}
             action = AgentAction(capability_id="signal_done", params={})
             turn_decision_cap = "signal_done"
+            decision.status = "done"
+            if isinstance(cursor, StepCursor) and cur:
+                from mino_nexus.loop import step_effect as step_effect_mod
+
+                _vlm_coerce = (
+                    decision.vlm_hierarchy if isinstance(decision.vlm_hierarchy, dict) else None
+                )
+                step_effect_mod.maybe_mark_deferred_nav_tab(
+                    cursor,
+                    instruction=str(cur.instruction or ""),
+                    expected=str(cur.expected or ""),
+                    localized=dict(getattr(ctx, "nav_localized", None) or {}),
+                    nodes=_effect_nodes(nav, ctx, extra_vlm=_vlm_coerce),
+                    thought=thought,
+                    coerce_done=True,
+                )
         fg_nodes: list[dict[str, Any]] = []
         if nav is not None and getattr(nav, "snapshot", None) is not None:
             snap_nodes = getattr(nav.snapshot, "nodes", None) or []
             if snap_nodes:
                 fg_nodes = list(snap_nodes)
-        from mino_nexus.services.nav_capture_store import run_guard_foreground
+        from mino_nexus.loop.recovery import resolve_app_foreground_guard
 
-        fg_ctx = run_guard_foreground(
-            fg_nodes,
+        fg_ctx = resolve_app_foreground_guard(
+            ctx,
+            proxy,
+            nodes=fg_nodes,
             target_package=target_pkg,
-            platform=str(getattr(ctx, "platform", "") or ""),
         )
         guard_ctx = {
             "phase": cursor.phase,
@@ -1808,7 +2228,7 @@ def _run_loop(
             "screen_fp": screen_fp,
             "guards": list(phase_cfg.get("guards") or []),
             "history_lines": list(history[-12:]),
-            "tap_summary": str(params.get("selector_text") or thought or ""),
+            "tap_summary": tap_params_guard_summary(params),
             "menu": menu,
             "accounts_brief": str(getattr(ctx, "accounts_brief", "") or ""),
             "run_env_brief": task_env_brief,
@@ -1817,7 +2237,7 @@ def _run_loop(
             "nav_localized": dict(getattr(ctx, "nav_localized", None) or {}),
             "app_version": str(getattr(ctx, "app_version", "") or ""),
             "case_scene": dict(getattr(ctx, "case_scene", None) or {}),
-            "session_block": str(inspect_slots.get("session_block") or ""),
+            "session_block": llm_session_block(ctx, str(inspect_slots.get("session_block") or "")),
             "prep_clear_done": bool(getattr(ctx, "prep_clear_done", False)),
             "session_fact_session": str(
                 (getattr(ctx, "session_fact", None) or {}).get("session") or ""
@@ -1829,6 +2249,16 @@ def _run_loop(
             "login_flow_interrupt": bool(getattr(ctx, "login_flow_interrupt", False)),
             "login_flow_macro_active": bool(getattr(ctx, "login_flow_macro_active", False)),
             "recovery_allow_back": bool(getattr(ctx, "recovery_allow_back", False)),
+            "nav_open_loop_active": bool(getattr(ctx, "nav_open_loop_active", False)),
+            "nav_open_loop_blocked_target": str(
+                getattr(ctx, "nav_open_loop_blocked_target", "") or ""
+            ),
+            "fsm_last_decline_key": str(getattr(ctx, "fsm_last_decline_key", "") or ""),
+            "fsm_decline_repeat_streak": int(getattr(ctx, "fsm_decline_repeat_streak", 0) or 0),
+            "display_guard_active": bool(getattr(ctx, "display_guard_active", False)),
+            "sn": str(getattr(ctx, "sn", "") or ""),
+            "target_package": str(target_pkg or ""),
+            "run_ctx": ctx,
         }
         params = apply_force_case_expectation(params, guard_ctx)
         if cap_id == "tap_element":
@@ -1883,64 +2313,6 @@ def _run_loop(
                 _log_turn_end(writer, cap="signal_done", status="pass")
                 return _leave(status="pass", summary=cursor.summary(), pack=_pack())
             if in_prep:
-                from mino_nexus.runtime.session_gate import required_session as _req_sess_kind
-
-                if _req_sess_kind(scene=dict(getattr(ctx, "case_scene", None) or {})) == "guest" and shot.has_image():
-                    refresh_session_block(
-                        shot=shot,
-                        ctx=ctx,
-                        case=case,
-                        provider_id=provider_id,
-                        slot_sink=inspect_slots,
-                        force=True,
-                        nav=nav,
-                        turn_id=seq,
-                    )
-                inspect_slots["session_block"] = effective_session_block(
-                    ctx, str(inspect_slots.get("session_block") or "")
-                )
-                sess_reason = run_guards(
-                    ["require_session"],
-                    {
-                        **guard_ctx,
-                        "intent": "signal_done",
-                        "case_scene": dict(getattr(ctx, "case_scene", None) or {}),
-                        "session_block": str(inspect_slots.get("session_block") or ""),
-                    },
-                )
-                if sess_reason:
-                    if isinstance(cursor, StepCursor):
-                        cursor.correction_hint = sess_reason
-                        streak = int(getattr(cursor, "prep_session_skip_streak", 0) or 0) + 1
-                        cursor.prep_session_skip_streak = streak
-                        if streak >= 5:
-                            return _leave(
-                                status="blocked",
-                                summary=(
-                                    f"{sess_reason} "
-                                    "前置 session 与用例要求不一致且多次无法纠正，任务已停止（避免空转）。"
-                                    "请先 logout/清号池或调整前置。"
-                                ),
-                            )
-                    rec(
-                        seq,
-                        capability_id="require_session",
-                        status="skipped",
-                        summary=sess_reason,
-                        thought=thought,
-                        thumb=thumb,
-                    )
-                    emit(
-                        "result",
-                        thought=thought,
-                        step=seq,
-                        capability_id="require_session",
-                        status="skipped",
-                        summary=sess_reason,
-                        thumb=thumb,
-                    )
-                    _log_turn_end(writer, cap="require_session", status="skipped")
-                    continue
                 from mino_nexus.services.resource_preflight import prep_resource_gate_issues
 
                 resource_issues = prep_resource_gate_issues(ctx, case)
@@ -2023,6 +2395,18 @@ def _run_loop(
                     loc_done,
                     instruction=str(cur.instruction or ""),
                     expected="" if defer_do else str(cur.expected or ""),
+                )
+                step_effect_mod.maybe_mark_deferred_nav_tab(
+                    cursor,
+                    instruction=str(cur.instruction or ""),
+                    expected=str(cur.expected or ""),
+                    localized=loc_done,
+                    nodes=probe_nodes_guard,
+                    thought=thought,
+                    coerce_done=bool(
+                        str(decision.status or "") == "done"
+                        or str(cap_id or "") == "signal_done"
+                    ),
                 )
                 do_work_reason = run_guards(
                     ["require_do_work"],
@@ -2230,13 +2614,28 @@ def _run_loop(
                                 f"连续 {n_block} 次同类恢复被拒绝后仍重复尝试，判定陷入死循环。"
                                 f"{skip_reason}"
                             )
+            elif skip_cap == "block_login_flow_unless_step_scope" and cursor.phase == "do":
+                cursor.correction_hint = (
+                    f"{skip_reason} "
+                    "请按本步 instruction 点帖子/业务控件；勿点登录按钮，"
+                    "tap 的 selector 勿填登录相关文案。"
+                )
+                cursor.login_scope_block_streak = (
+                    int(getattr(cursor, "login_scope_block_streak", 0) or 0) + 1
+                )
+                if cursor.login_scope_block_streak >= 6:
+                    stop_msg = (
+                        f"连续 {cursor.login_scope_block_streak} 次登录 scope 拦截后仍重复 tap，"
+                        "判定陷入死循环。请 signal_give_up 或改点帖子/内容区。"
+                        f" 最近：{skip_reason[:120]}"
+                    )
             elif (
                 cursor.phase == "prep"
                 and isinstance(cursor, StepCursor)
                 and skip_cap in (
                     "block_prep_guest_mine_tab",
                     "skip_repeat_clear_app_cache",
-                    "require_session",
+                    "block_prep_login_when_logged_in_required",
                 )
             ):
                 cursor.prep_guard_streak = int(getattr(cursor, "prep_guard_streak", 0) or 0) + 1
@@ -2341,9 +2740,84 @@ def _run_loop(
                 hint = str(raw_resp.get("correction_hint") or "").strip()
                 if hint and isinstance(cursor, StepCursor):
                     cursor.correction_hint = hint
+                from mino_nexus.loop.nav_onboarding_open_loop import (
+                    format_open_loop_hint,
+                    note_fsm_degrade_for_open_loop,
+                )
+
+                note_fsm_degrade_for_open_loop(
+                    ctx,
+                    raw_resp=raw_resp,
+                    nav_target_hint=str((params or {}).get("to_state") or (params or {}).get("to") or ""),
+                )
+                if isinstance(cursor, StepCursor) and cur:
+                    _ol = format_open_loop_hint(
+                        ctx=ctx,
+                        precondition=str(
+                            getattr(cursor, "precondition", "") or case.get("precondition") or ""
+                        ),
+                        instruction=str(cur.instruction or ""),
+                    )
+                    if _ol:
+                        cursor.correction_hint = (
+                            f"{cursor.correction_hint}\n{_ol}".strip()
+                            if cursor.correction_hint
+                            else _ol
+                        )
             nav_attempt = raw_resp.get("nav_attempt")
             if isinstance(nav_attempt, dict) and writer:
                 writer.append("nav/attempt", nav_attempt)
+
+        if cap_id in ("fsm_navigate", "recover_fsm_navigate"):
+            nav_key = str(
+                (params or {}).get("to_state")
+                or (params or {}).get("to")
+                or (params or {}).get("selector_text")
+                or ""
+            )
+            if status_val == "declined":
+                prev_key = str(getattr(ctx, "fsm_last_decline_key", "") or "")
+                prev_fp = str(getattr(ctx, "fsm_last_decline_fp", "") or "")
+                if nav_key and nav_key == prev_key and screen_fp_turn == prev_fp:
+                    setattr(
+                        ctx,
+                        "fsm_decline_repeat_streak",
+                        int(getattr(ctx, "fsm_decline_repeat_streak", 0) or 0) + 1,
+                    )
+                else:
+                    setattr(ctx, "fsm_last_decline_key", nav_key)
+                    setattr(ctx, "fsm_last_decline_fp", screen_fp_turn)
+                    setattr(ctx, "fsm_decline_repeat_streak", 0)
+                if isinstance(cursor, StepCursor) and cur and (
+                    "tab_not_visible" in str(summary or "")
+                    or "无底栏" in str(summary or "")
+                ):
+                    from mino_nexus.loop import step_effect as step_effect_mod
+
+                    _vlm_decl = (
+                        decision.vlm_hierarchy
+                        if isinstance(decision.vlm_hierarchy, dict)
+                        else None
+                    )
+                    step_effect_mod.maybe_mark_deferred_nav_tab(
+                        cursor,
+                        instruction=str(cur.instruction or ""),
+                        expected=str(cur.expected or ""),
+                        localized=dict(getattr(ctx, "nav_localized", None) or {}),
+                        nodes=_effect_nodes(nav, ctx, extra_vlm=_vlm_decl),
+                        thought=thought,
+                        coerce_done=False,
+                    )
+            elif status_val == "pass" and isinstance(raw_resp, dict):
+                nav_attempt = raw_resp.get("nav_attempt") or {}
+                if isinstance(nav_attempt, dict) and nav_attempt.get("arrived_at_target"):
+                    setattr(ctx, "fsm_decline_repeat_streak", 0)
+                    setattr(ctx, "fsm_last_decline_key", "")
+                corr = str(raw_resp.get("correction_hint") or "")
+                if "已在目标屏" in corr or "signal_done" in corr:
+                    if isinstance(cursor, StepCursor):
+                        cursor.step_intents_done.add("nav_tab")
+                        cursor.refresh_do_subphase()
 
         if writer:
             payload = {
@@ -2462,20 +2936,39 @@ def _run_loop(
             maybe_fire_cap_transition(ctx, cap_id, status_val)
         if status_val == "pass" and cap_id in ("launch_app", "open_app", "open_url"):
             setattr(ctx, "app_launch_confirmed", True)
+            from mino_nexus.loop.launch_grace import stamp_launch_grace
+
+            stamp_launch_grace(ctx)
         if status_val == "pass" and cap_id == "press_key":
             key = str((params or {}).get("key") or "").strip().upper()
             if key in ("BACK", "BACK_KEY"):
                 setattr(ctx, "recovery_allow_back", False)
 
+        if status_val == "pass" and cap_id == "tap_element":
+            from mino_nexus.loop.nav_onboarding_open_loop import clear_open_loop_if_tabs_visible
+
+            clear_open_loop_if_tabs_visible(ctx)
+            if isinstance(cursor, StepCursor):
+                cursor.login_scope_block_streak = 0
         post_fp = ""
         if status_val == "pass" and (fuseable_cap(cap_id) or cap_id in ("fsm_navigate", "recover_fsm_navigate")):
             post_shot = proxy.observe("screenshot", force_fresh=True)
             post_fp = _screen_fp(post_shot, inspect_slots.get("hierarchy_text") or "")
+            _lf_record = False
+            if isinstance(cursor, StepCursor) and cur and cursor.phase == "do":
+                from mino_nexus.loop.step_contract import instruction_allows_login_flow
+
+                _lf_record = instruction_allows_login_flow(
+                    str(cur.instruction or ""),
+                    login_module_case=bool(login_module_case),
+                )
             cursor.progress_gate.record_pass(
                 cap_id=cap_id if fuseable_cap(cap_id) else "tap_element",
                 params=params if fuseable_cap(cap_id) else {},
                 pre_fp=screen_fp,
                 post_fp=post_fp,
+                intents_done=set(getattr(cursor, "step_intents_done", None) or set()),
+                login_flow_step=_lf_record,
             )
             if isinstance(cursor, StepCursor):
                 cursor.clear_recovery_block()
@@ -2487,6 +2980,141 @@ def _run_loop(
                         pre_fp=screen_fp,
                         post_fp=post_fp,
                     )
+
+        if (
+            status_val == "pass"
+            and cap_id == "request_sms_code"
+            and isinstance(cursor, StepCursor)
+            and cursor.phase == "do"
+            and cur
+        ):
+            from mino_nexus.loop.login_submit import (
+                _otp_code_already_entered,
+                run_post_sms_login_pipeline,
+            )
+            from mino_nexus.loop.step_contract import instruction_allows_login_flow
+            from mino_nexus.loop.step_flow_scope import login_flow_allowed
+
+            cursor.login_post_sms_pending = True
+            cursor.login_post_sms_stall = 0
+            setattr(ctx, "login_auto_submit_attempts", 0)
+
+            _lf_post, _ = login_flow_allowed(
+                cursor=cursor,
+                phase="do",
+                instruction=str(cur.instruction or ""),
+                expected=str(cur.expected or ""),
+            )
+            if _lf_post and not getattr(cursor, "login_chain_broken", False):
+                chain_post = run_post_sms_login_pipeline(
+                    proxy,
+                    ctx,
+                    turn_seq=seq,
+                    instruction=str(cur.instruction or ""),
+                    intents_done=cursor.step_intents_done,
+                    history_lines=list(history[-24:]),
+                    hierarchy_nodes=list(getattr(ctx, "nav_hierarchy_nodes", None) or []),
+                    login_module_case=bool(login_module_case),
+                    retries=2,
+                )
+                if chain_post:
+                    from mino_nexus.loop.login_submit import _otp_code_already_entered
+
+                    if len(chain_post) == 1 and str(chain_post[0].get("capability_id") or "") == "input_text":
+                        if chain_post[0].get("ok") and _otp_code_already_entered(
+                            list(history[-24:]), cursor.step_intents_done
+                        ):
+                            chain_post = []
+                    if chain_post:
+                        if cancel_check and cancel_check():
+                            return _leave(status="cancelled", summary="任务已取消")
+                        fail_msg = _login_chain_guard(chain_post, cursor=cursor)
+                        if fail_msg:
+                            return _leave(status="fail", summary=fail_msg)
+                        lc, ls = _consume_login_chain(
+                            chain_post,
+                            seq=seq,
+                            cursor=cursor,
+                            rec=rec,
+                            emit=emit,
+                            thumb=thumb,
+                            screen_fp=str(post_fp or screen_fp or ""),
+                            login_flow_step=bool(
+                                instruction_allows_login_flow(
+                                    str(cur.instruction or ""),
+                                    login_module_case=bool(login_module_case),
+                                )
+                            ),
+                        )
+                        if _otp_code_already_entered(
+                            list(history[-24:]), cursor.step_intents_done
+                        ):
+                            cursor.login_post_sms_pending = False
+                            cursor.login_post_sms_stall = 0
+                        _log_turn_end(writer, cap=lc or "login_chain", status=ls)
+                        continue
+
+        if (
+            status_val == "pass"
+            and cap_id == "tap_element"
+            and isinstance(cursor, StepCursor)
+            and cursor.phase == "do"
+            and cur
+        ):
+            _tap_sel = str(
+                (params or {}).get("selector_text")
+                or (params or {}).get("text")
+                or (params or {}).get("content_desc")
+                or summary
+                or ""
+            )
+            if re.search(r"发送验证码|重新发送|获取验证码", _tap_sel):
+                from mino_nexus.loop.login_submit import run_post_sms_login_pipeline
+                from mino_nexus.loop.step_contract import instruction_allows_login_flow
+                from mino_nexus.loop.step_flow_scope import login_flow_allowed
+
+                cursor.step_intents_done.add("sms_send")
+                cursor.login_post_sms_pending = True
+                cursor.login_post_sms_stall = 0
+                setattr(ctx, "login_auto_submit_attempts", 0)
+                _lf_tap, _ = login_flow_allowed(
+                    cursor=cursor,
+                    phase="do",
+                    instruction=str(cur.instruction or ""),
+                    expected=str(cur.expected or ""),
+                )
+                if _lf_tap and not getattr(cursor, "login_chain_broken", False):
+                    chain_tap = run_post_sms_login_pipeline(
+                        proxy,
+                        ctx,
+                        turn_seq=seq,
+                        instruction=str(cur.instruction or ""),
+                        intents_done=cursor.step_intents_done,
+                        history_lines=list(history[-24:]),
+                        hierarchy_nodes=list(getattr(ctx, "nav_hierarchy_nodes", None) or []),
+                        login_module_case=bool(login_module_case),
+                        retries=2,
+                    )
+                    if chain_tap:
+                        lc, ls = _consume_login_chain(
+                            chain_tap,
+                            seq=seq,
+                            cursor=cursor,
+                            rec=rec,
+                            emit=emit,
+                            thumb=thumb,
+                            screen_fp=str(post_fp or screen_fp or ""),
+                            login_flow_step=instruction_allows_login_flow(
+                                str(cur.instruction or ""),
+                                login_module_case=bool(login_module_case),
+                            ),
+                        )
+                        from mino_nexus.loop.login_submit import _otp_code_already_entered
+
+                        if _otp_code_already_entered(list(history[-24:]), cursor.step_intents_done):
+                            cursor.login_post_sms_pending = False
+                        _log_turn_end(writer, cap=lc or "login_chain", status=ls)
+                        continue
 
         if cap_id == "tap_element" and getattr(result, "status", None) == EventStatus.PASS:
             if not post_fp:
@@ -2504,6 +3132,31 @@ def _run_loop(
             if not cursor.advance():
                 return _leave_case(cursor)
             _log_turn_end(writer, cap=cap_id, status=status_val)
+            continue
+
+        if (
+            cap_id == "signal_done"
+            and status_val == "pass"
+            and isinstance(cursor, StepCursor)
+            and cursor.phase == "do"
+        ):
+            if cur:
+                from mino_nexus.loop import step_effect as step_effect_mod
+
+                _vlm_sd = (
+                    decision.vlm_hierarchy if isinstance(decision.vlm_hierarchy, dict) else None
+                )
+                step_effect_mod.maybe_mark_deferred_nav_tab(
+                    cursor,
+                    instruction=str(cur.instruction or ""),
+                    expected=str(cur.expected or ""),
+                    localized=dict(getattr(ctx, "nav_localized", None) or {}),
+                    nodes=_effect_nodes(nav, ctx, extra_vlm=_vlm_sd),
+                    thought=thought,
+                    coerce_done=True,
+                )
+            cursor.enter_check()
+            _log_turn_end(writer, cap="signal_done", status="pass")
             continue
 
         if decision.status == "done":
