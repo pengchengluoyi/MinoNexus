@@ -33,7 +33,17 @@ def resolve_effective_secrets(
     return env_secrets(doc, env_key)
 
 
-def gmail_inbox_address(env_doc: dict | None) -> str:
+def gmail_inbox_address(env_doc: dict | None, *, plugin_user_id: str = "") -> str:
+    uid = str(plugin_user_id or "").strip()
+    if uid:
+        try:
+            from mino_nexus.services import plugins_store
+
+            plug = plugins_store.get_gmail_inbox_address(uid)
+            if plug:
+                return plug
+        except Exception:
+            pass
     doc = env_doc if isinstance(env_doc, dict) else {}
     return str(_norm_gmail_inbox(doc.get("gmail_inbox")).get("address") or "").strip()
 
@@ -63,7 +73,8 @@ def filter_accounts_for_login_kind(
     if k not in ("phone", "email"):
         return list(rows or [])
     matched = [r for r in (rows or []) if account_row_matches_login_kind(r, k)]
-    return matched if matched else list(rows or [])
+    # 禁止回退：email 登录不能租到仅手机号的行，否则程序链静默失败、模型狂点 Email。
+    return matched
 
 
 def format_run_credential_hint(
@@ -71,6 +82,7 @@ def format_run_credential_hint(
     *,
     env_profile: str = "test",
     env_surface: str = "",
+    plugin_user_id: str = "",
 ) -> str:
     """跑批注入 history：与 project_env 登录/接码配置一致，避免模型走错手机/邮箱分支。"""
     doc = env_doc if isinstance(env_doc, dict) else {}
@@ -97,10 +109,10 @@ def format_run_credential_hint(
     if mode == "fixed":
         otp_bits.append("接码=fixed（环境固定码）")
     elif mode == "gmail":
-        inbox = gmail_inbox_address(doc)
+        inbox = gmail_inbox_address(doc, plugin_user_id=plugin_user_id)
         otp_bits.append(
             "接码=Gmail IMAP"
-            + (f"（收件箱 {inbox}）" if inbox else "（未配收件箱地址）")
+            + (f"（收件箱 {inbox}）" if inbox else "（未配收件箱：插件 Gmail 收信）")
         )
     elif mode == "hitl":
         otp_bits.append("接码=人工 hitl")

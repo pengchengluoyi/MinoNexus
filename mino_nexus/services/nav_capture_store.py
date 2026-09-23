@@ -76,28 +76,58 @@ def run_guard_foreground(
     target_package: str = "",
     platform: str = "",
     target_scope: dict[str, Any] | None = None,
+    launch_confirmed: bool = False,
 ) -> dict[str, str]:
     """跑批 guard：是否被测 App 前台 / 系统挡屏（权限、相册选择器等）。"""
+    from mino_nexus.services.nav_target_scope import (
+        TargetScope,
+        _looks_like_url,
+        _norm_platform,
+        scope_from_values,
+        web_page_matches_target,
+    )
+
     turn = {
         "nodes": list(nodes or []),
         "target_package": str(target_package or ""),
         "platform": str(platform or ""),
     }
+    plat = _norm_platform(platform)
+    tgt = str(target_package or "").strip()
+    scope = TargetScope.from_dict(target_scope) if target_scope else None
+    if scope is None and tgt:
+        scope = scope_from_values(plat, tgt)
     pkg = infer_screen_package(
         turn.get("nodes") or [],
         target_package=target_package,
         platform=platform,
-        target_scope=target_scope,
+        target_scope=target_scope or (scope.as_dict() if scope else None),
     )
     kind = str(pkg.get("screen_kind") or "").strip()
     fpkg = str(pkg.get("foreground_package") or pkg.get("foreground_id") or "").strip()
-    tgt = str(target_package or "").strip()
-    on_target = bool(
-        tgt
-        and fpkg
-        and kind not in ("foreign", "launcher")
-        and (fpkg == tgt or tgt in fpkg)
-    )
+    if plat == "web" and not list(nodes or []) and tgt and _looks_like_url(tgt):
+        if launch_confirmed or kind == "app":
+            return {
+                "app_foreground": "yes",
+                "system_overlay": "no",
+                "screen_kind": "app",
+                "foreground_package": fpkg or tgt,
+            }
+        return {"app_foreground": "unknown", "system_overlay": "no", "screen_kind": "unknown"}
+    if (scope and scope.kind == "url") or (plat == "web" and _looks_like_url(tgt)):
+        on_target = bool(
+            tgt
+            and fpkg
+            and kind not in ("foreign", "launcher")
+            and web_page_matches_target(tgt, fpkg)
+        )
+    else:
+        on_target = bool(
+            tgt
+            and fpkg
+            and kind not in ("foreign", "launcher")
+            and (fpkg == tgt or tgt in fpkg)
+        )
     overlay = is_overlay_screen(turn)
     if overlay and not on_target:
         return {"app_foreground": "no", "system_overlay": "yes"}
@@ -110,10 +140,14 @@ def run_guard_foreground(
     if kind == "unknown":
         return {"app_foreground": "unknown", "system_overlay": "no"}
     if on_target:
-        return {"app_foreground": "yes", "system_overlay": "no"}
-    if tgt and fpkg and fpkg != tgt:
-        return {"app_foreground": "no", "system_overlay": "no"}
-    return {"app_foreground": "yes", "system_overlay": "no"}
+        return {"app_foreground": "yes", "system_overlay": "no", "screen_kind": kind or "app"}
+    if tgt and fpkg:
+        if (scope and scope.kind == "url") or _looks_like_url(tgt):
+            if not web_page_matches_target(tgt, fpkg):
+                return {"app_foreground": "no", "system_overlay": "no", "screen_kind": kind or "foreign"}
+        elif fpkg != tgt and tgt not in fpkg:
+            return {"app_foreground": "no", "system_overlay": "no", "screen_kind": kind or "foreign"}
+    return {"app_foreground": "yes", "system_overlay": "no", "screen_kind": kind or "app"}
 
 
 def is_overlay_screen(turn: dict[str, Any]) -> bool:

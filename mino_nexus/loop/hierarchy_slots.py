@@ -139,6 +139,7 @@ class HierarchySnapshot:
     elapsed_ms: int = 0
     source: str = ""
     format: str = HIERARCHY_FORMAT
+    web_focus: dict[str, Any] = field(default_factory=dict)
 
     def usable(self) -> bool:
         """能不能拿来判 guard / effect_assert。空层级不算可用 —— 无输入不误判。"""
@@ -179,6 +180,8 @@ def capture(proxy: Any, *, turn_id: int, screenshot_turn_id: int | None = None) 
     try:
         detail = dict(getattr(shot, "remote_detail", None) or {})
         nodes = normalize_nodes(detail.get("nodes"))
+        wf = detail.get("web_focus")
+        web_focus = dict(wf) if isinstance(wf, dict) else {}
         stale = False
         if screenshot_turn_id is not None:
             stale = safe_int(screenshot_turn_id, 0) != safe_int(turn_id, 0)
@@ -193,6 +196,7 @@ def capture(proxy: Any, *, turn_id: int, screenshot_turn_id: int | None = None) 
                 0,
             ),
             source=str(detail.get("source") or getattr(shot, "source", "") or ""),
+            web_focus=web_focus,
         )
     except Exception as exc:  # noqa: BLE001 — 脏 bounds 只降级，不让整案崩溃
         return HierarchySnapshot(
@@ -396,6 +400,25 @@ def match_any(nodes: list[dict[str, Any]], conds: Any) -> Optional[dict[str, Any
 def match_none(nodes: list[dict[str, Any]], conds: Any) -> bool:
     """所有反证条件都不命中才为真。`match_none` 为空视为通过。"""
     return match_any(nodes, conds) is None
+
+
+def dom_structure_fingerprint(nodes: list[dict[str, Any]] | None) -> str:
+    """Web DOM 结构摘要（class+bounds，不含输入框实时文案），供熔断/进展判断。"""
+    import hashlib
+
+    parts: list[str] = []
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        cls = str(node.get("class") or "")[:48]
+        b = int_list(node.get("bounds"), 4)
+        # 不把 text/content_desc 纳入指纹：输入/焦点会让同屏误判为「有进展」或困局抖动。
+        parts.append(f"{cls}|{b}")
+    if not parts:
+        return ""
+    parts.sort()
+    raw = "\n".join(parts[:120]).encode("utf-8", errors="ignore")
+    return hashlib.sha1(raw).hexdigest()[:16]
 
 
 def screen_contains(nodes: list[dict[str, Any]], term: str) -> bool:

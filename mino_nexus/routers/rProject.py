@@ -45,6 +45,8 @@ class ProjectEnvUpdate(BaseModel):
     environments: Optional[list] = None
     channels: Optional[list] = None
     pipeline: Optional[list] = None
+    gmail_inbox: Optional[dict[str, Any]] = None
+    channel_secrets: Optional[dict[str, Any]] = None
 
 
 class TestAccountSaveBody(BaseModel):
@@ -379,15 +381,22 @@ def update_project_env(project_id: str, item: ProjectEnvUpdate, _sess: dict = De
                 row = {**row, "secrets": old.get("secrets")}
             merged_envs.append(row)
         incoming_envs = merged_envs
-    doc = normalize_project_env(
-        {
-            "default_profile": item.default_profile,
-            "profiles": item.profiles,
-            "environments": incoming_envs,
-            "channels": item.channels,
-            "pipeline": item.pipeline,
-        }
-    )
+    body: dict[str, Any] = {
+        "default_profile": item.default_profile,
+        "profiles": item.profiles,
+        "environments": incoming_envs,
+        "channels": item.channels,
+        "pipeline": item.pipeline,
+    }
+    if item.gmail_inbox is not None:
+        body["gmail_inbox"] = item.gmail_inbox
+    elif prev.get("gmail_inbox"):
+        body["gmail_inbox"] = prev.get("gmail_inbox")
+    if item.channel_secrets is not None:
+        body["channel_secrets"] = item.channel_secrets
+    elif prev.get("channel_secrets"):
+        body["channel_secrets"] = prev.get("channel_secrets")
+    doc = normalize_project_env(body)
     if not doc.get("environments"):
         raise HTTPException(status_code=400, detail="至少保留一个环境")
     if doc["default_profile"] not in {e["key"] for e in doc["environments"]}:

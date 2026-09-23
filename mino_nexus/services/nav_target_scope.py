@@ -81,6 +81,23 @@ def _kind_for(platform: str, target_id: str) -> str:
     return "package"
 
 
+def web_page_matches_target(target: str, page: str) -> bool:
+    """目标网址与当前页 URL / origin 是否同一被测站点。"""
+    tgt = str(target or "").strip()
+    pg = str(page or "").strip()
+    if not tgt or not pg:
+        return False
+    if _looks_like_url(tgt) or _looks_like_url(pg):
+        o_t = normalize_web_origin(tgt if _looks_like_url(tgt) else pg)
+        o_p = normalize_web_origin(pg if _looks_like_url(pg) else tgt)
+        if o_t and o_p and o_t == o_p:
+            return True
+        low_t = tgt.lower().rstrip("/")
+        low_p = pg.lower().rstrip("/")
+        return low_t == low_p or low_p.startswith(low_t) or low_t in low_p
+    return tgt == pg or tgt in pg or pg in tgt
+
+
 def normalize_web_origin(url: str) -> str:
     raw = str(url or "").strip()
     if not raw:
@@ -164,7 +181,9 @@ def infer_foreground(
         fg = page_url or target
         if is_launcher:
             kind = "launcher"
-        elif target and fg and fg != target:
+        elif target and page_url and not web_page_matches_target(target, page_url):
+            kind = "foreign"
+        elif target and not page_url and fg and not web_page_matches_target(target, fg):
             kind = "foreign"
         elif target:
             kind = "app"

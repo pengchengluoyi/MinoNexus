@@ -18,6 +18,7 @@ STATE_MAX_UNIQUE = 2
 STATE_MIN_SAMPLES = 6
 STATE_CYCLE_MIN_LEN = 6
 MILESTONE_BUDGET = {"prep": 12, "do": 10, "check": 8}
+WEB_LOGIN_REPEAT_TAP = 6
 
 _FUSE_CAPS = frozenset({
     "input_text",
@@ -168,6 +169,23 @@ def fp_neutral_cap(
             return True
     if cid == "tap_element":
         sel = str((params or {}).get("selector_text") or (params or {}).get("text") or "")
+        if login_flow_step:
+            # 勿用 login_entry 意图：instruction 含「点击登录」时首次 tap 就会打上该意图，导致 Log in/Email 无法中性。
+            if "login_email" not in done and "login_phone" not in done:
+                if re.search(r"log\s*in|sign\s*in|登录", sel, re.I):
+                    return True
+                if re.search(r"email|邮箱|e-mail", sel, re.I):
+                    return True
+                if re.search(r"手机|phone|mobile", sel, re.I):
+                    return True
+            if "login_email" in done and "sms_send" not in done and re.search(
+                r"发送|验证码|send|code|verify|获取", sel, re.I
+            ):
+                return True
+            if "sms_send" in done and "otp_fill" not in done:
+                return True
+            if "sms_send" in done and "otp_fill" in done:
+                return True
         if login_flow_step and "sms_send" in done and "otp_fill" in done:
             return True
         if re.search(r"登录|立即登录", sel):
@@ -231,6 +249,8 @@ class ProgressGate:
         self.total_fuse_blocks: int = 0
         self._post_states: list[str] = []
         self._coarse_actions: list[str] = []
+        self._web_coarse_actions: list[str] = []
+        self._last_web_focus_fp: str = ""
         self._milestone: str = ""
         self.milestone_turns: int = 0
         self.warning_hint: str = ""
@@ -251,6 +271,8 @@ class ProgressGate:
         self._milestone_exhausted = False
         self._post_states = []
         self._coarse_actions = []
+        self._web_coarse_actions = []
+        self._last_web_focus_fp = ""
 
     def record_fuse_block(self, reason: str) -> Optional[str]:
         """连续 block 后升级 stop，避免「熔断本身」形成空转循环。"""
@@ -290,6 +312,7 @@ class ProgressGate:
         profile_shape_completion: bool = False,
         intents_done: set[str] | None = None,
         login_flow_step: bool = False,
+        web_channel: bool = False,
     ) -> Optional[str]:
         if not fuseable_cap(cap_id):
             return None
@@ -298,7 +321,7 @@ class ProgressGate:
         exit_to = _exit_clause(has_hitl=has_hitl)
         done = set(intents_done or set())
 
-        if fp_neutral_cap(
+        if not web_channel and fp_neutral_cap(
             cap_id,
             params,
             intents_done=done,
@@ -327,6 +350,7 @@ class ProgressGate:
                 "若目标已达成请 signal_done，否则 signal_give_up。"
             )
         if self.milestone_turns >= budget:
+            self._milestone_exhausted = True
             hint = fuse_hint(cap_id, params, reason="milestone", **kw)
             return f"【熔断·里程碑】{phase} 阶段已用 {self.milestone_turns} 步仍未收工。{hint}"
 
@@ -341,7 +365,23 @@ class ProgressGate:
                 self.warning_hint = ""
             return None
 
+        if web_channel and cap_id == "tap_element":
+            from mino_nexus.loop.web_progress import web_tap_coarse_key
+
+            wk = web_tap_coarse_key(cap_id, params)
+            tail_w = self._web_coarse_actions[-WEB_LOGIN_REPEAT_TAP:]
+            if len(tail_w) >= WEB_LOGIN_REPEAT_TAP - 1 and all(
+                x == wk for x in tail_w[-(WEB_LOGIN_REPEAT_TAP - 1) :]
+            ):
+                hint = fuse_hint(cap_id, params, reason="no_progress", **kw)
+                return (
+                    f"【熔断·Web 重复点击】同一选择器已连续点击 {len(tail_w)} 次；"
+                    f"请换元素、先聚焦输入框再 input_text，或 signal_give_up。{hint}"
+                )
+
         states = self._post_states
+        if web_channel:
+            states = []
         if not explore and len(states) >= STATE_MIN_SAMPLES:
             recent = states[-STATE_WINDOW:]
             uniq = len(set(recent))
@@ -358,7 +398,7 @@ class ProgressGate:
                         f"{hint}"
                     )
 
-        if not explore:
+        if not explore and not web_channel:
             cycle = _detect_state_cycle(states)
             if cycle is not None:
                 period, _pat = cycle
@@ -373,7 +413,7 @@ class ProgressGate:
                         f"【熔断·状态循环】界面在 {period} 个状态间循环重复。{hint}"
                     )
 
-        if _detect_action_pattern_cycle(self._coarse_actions):
+        if not web_channel and _detect_action_pattern_cycle(self._coarse_actions):
             skip_pat = False
             if profile_shape_completion and cap_id == "tap_element":
                 lab = str((params or {}).get("selector_text") or (params or {}).get("text") or "")
@@ -384,6 +424,19 @@ class ProgressGate:
                 return f"【熔断·动作模式】近几步动作类型反复组合仍无进展。{hint}"
 
         coarse_now = coarse_action_key(cap_id, params)
+        if (
+            not web_channel
+            and login_flow_step
+            and cap_id == "tap_element"
+            and len(self._coarse_actions) >= 5
+        ):
+            tail_tap = [x for x in self._coarse_actions[-6:] if str(x).startswith("tap|")]
+            if len(tail_tap) >= 5 and len(set(tail_tap[-5:])) == 1:
+                hint = fuse_hint(cap_id, params, reason="no_progress", **kw)
+                return (
+                    f"【熔断·重复点击】登录流程已连续 5 次同位置/同文案 tap 仍无进展。"
+                    f"{hint}"
+                )
         if coarse_now.startswith("input|") and len(self._coarse_actions) >= INPUT_REPEAT_BLOCK:
             if not login_flow_step:
                 tail = self._coarse_actions[-INPUT_REPEAT_BLOCK:]
@@ -409,8 +462,8 @@ class ProgressGate:
                         f"{hint}"
                     )
 
-        # 连续 N 次操作后界面指纹未变 → 第 N+1 次前熔断（先于动作级规则）
-        if self.no_progress_streak >= NO_PROGRESS_THRESHOLD - 1:
+        # 连续 N 次操作后界面指纹未变 → 第 N+1 次前熔断（Web 不用 DOM/截图指纹，见 web_focus）
+        if not web_channel and self.no_progress_streak >= NO_PROGRESS_THRESHOLD - 1:
             if not fp_neutral_cap(
                 cap_id,
                 params,
@@ -422,6 +475,10 @@ class ProgressGate:
                     f"【熔断·无进展】连续 {self.no_progress_streak} 次操作后界面指纹未变。"
                     f"{hint}"
                 )
+
+        if web_channel:
+            self.warning_hint = ""
+            return None
 
         if self.no_progress_streak >= NO_PROGRESS_THRESHOLD - 2:
             self.warning_hint = (
@@ -442,12 +499,32 @@ class ProgressGate:
         post_fp: str,
         intents_done: set[str] | None = None,
         login_flow_step: bool = False,
+        web_channel: bool = False,
+        web_focus_fp: str = "",
     ) -> None:
         if not fuseable_cap(cap_id):
             return
         self.milestone_turns += 1
         pre = str(pre_fp or "").strip() or "_"
         post = str(post_fp or "").strip() or "_"
+        wff = str(web_focus_fp or "").strip()
+        if web_channel:
+            from mino_nexus.loop.web_progress import web_tap_coarse_key
+
+            if wff and wff != self._last_web_focus_fp:
+                self.fuse_block_streak = 0
+                self._last_web_focus_fp = wff
+            self._post_states.append(wff or post)
+            if len(self._post_states) > 32:
+                self._post_states = self._post_states[-32:]
+            wk = web_tap_coarse_key(cap_id, params)
+            self._web_coarse_actions.append(wk)
+            if len(self._web_coarse_actions) > 24:
+                self._web_coarse_actions = self._web_coarse_actions[-24:]
+            self._coarse_actions.append(coarse_action_key(cap_id, params))
+            if len(self._coarse_actions) > 24:
+                self._coarse_actions = self._coarse_actions[-24:]
+            return
         neutral = fp_neutral_cap(
             cap_id,
             params,

@@ -68,6 +68,7 @@ def program_session_block_from_hierarchy(
         list(nodes),
         target_package=pkg,
         platform=str(getattr(ctx, "platform", "") or ""),
+        launch_confirmed=bool(getattr(ctx, "app_launch_confirmed", False)),
     )
     overlay = str(fg.get("system_overlay") or "").strip().lower()
     af = str(fg.get("app_foreground") or "").strip().lower()
@@ -282,14 +283,7 @@ def run_inspections(
             continue
         job_id = str(spec.get("job") or "").strip()
         if job_id == "inspect-session":
-            row = refresh_session_block(
-                shot=shot,
-                ctx=ctx,
-                case=case or {},
-                provider_id=provider_id,
-                slot_sink=slot_sink,
-            )
-            _log_inspection(mark=mark, job_id=job_id, result=row, session_block=slot_sink["session_block"])
+            continue
         # 其它 observe job 后续按同一模式扩展
 
 

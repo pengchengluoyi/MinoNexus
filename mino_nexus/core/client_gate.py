@@ -23,12 +23,7 @@ _CONSOLE_DENY: list[tuple[str, set[str]]] = [
     (r"^/runtime/nodes/[^/]+/command$", {"POST"}),
 ]
 _STUDIO_DENY: list[tuple[str, set[str]]] = [
-    (r"^/auth/users(/|$)", {"POST", "PUT", "DELETE"}),
     (r"^/settings/ai/jobs(/|$)", {"PUT", "POST"}),
-    (r"^/packs(/|$)", {"POST", "PUT", "PATCH", "DELETE"}),
-    (r"^/settings/mail(/|$)", {"PUT", "POST"}),
-    (r"^/settings/plugins/[^/]+$", {"PUT", "DELETE"}),
-    (r"^/settings/plugins/(feishu|wechat|zentao)(/|$)", {"POST"}),
     (r"^/settings/robots(/|$)", {"POST", "PUT", "DELETE"}),
     (r"^/settings/figma(/|$)", {"PUT", "POST"}),
     (r"^/me/studio-nav$", {"PUT"}),
@@ -56,7 +51,7 @@ class ClientGateMiddleware(BaseHTTPMiddleware):
             )
         if client == "studio" and _hit(_STUDIO_DENY, path, method):
             return JSONResponse(
-                {"detail": "工作台不能改账号、发信邮箱、扩展包或插件配置。这些在 Mino Console。"},
+                {"detail": "该写操作仅允许 Mino Console（如 Jobs 编排、Studio 侧栏策略）。"},
                 status_code=403,
             )
         return await call_next(request)

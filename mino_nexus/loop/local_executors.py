@@ -381,11 +381,14 @@ def _dispatch_device(
     from mino_nexus.core.schemas import PlanEvent
     from mino_nexus.loop.web_env import agent_step_idx
 
+    from mino_nexus.loop.device_execute_params import prepare_device_execute_params
+
+    merged = prepare_device_execute_params(cap, dict(params or {}), ctx)
     event = PlanEvent(
         seq=seq,
         capability_id=cap,
         event_kind=cap,
-        params=dict(params or {}),
+        params=merged,
         ai_reasoning=label,
         label=label[:80],
     )
@@ -447,7 +450,8 @@ def _resolve_otp(ctx: Any) -> tuple[str, str]:
     if mode in ("gmail", "auto"):
         from mino_nexus.services.otp_resolve import gmail_inbox_address
 
-        if gmail_inbox_address(env_doc):
+        uid = str(getattr(ctx, "plugin_user_id", "") or "").strip() if ctx is not None else ""
+        if gmail_inbox_address(env_doc, plugin_user_id=uid):
             return "", "gmail"
     if mode == "fixed" and not fixed:
         return "", "missing"
@@ -470,11 +474,13 @@ def _fetch_gmail_otp(ctx: Any) -> str:
     from mino_nexus.services.otp_resolve import gmail_inbox_address
 
     env_doc, _secrets, otp = _otp_context(ctx)
-    inbox = gmail_inbox_address(env_doc)
     uid = str(getattr(ctx, "plugin_user_id", "") or "").strip()
+    inbox = gmail_inbox_address(env_doc, plugin_user_id=uid)
     app_password = plugins_store.get_gmail_app_password(uid)
     if not inbox:
-        raise GmailOtpError("项目环境未配置 Gmail 收件箱地址")
+        raise GmailOtpError(
+            "未配置 Gmail 收件箱：请在 Studio → 插件 → Gmail 收信 填写收件邮箱（与应用专用密码同一账号）"
+        )
     if not app_password:
         raise GmailOtpError("请在 Studio → 插件 → Gmail 收信 中配置应用专用密码")
     since = float(getattr(ctx, "otp_sent_at", 0) or 0) or None
@@ -493,6 +499,17 @@ def _fetch_gmail_otp(ctx: Any) -> str:
 def _get_otp(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
     code, source = _resolve_otp(ctx)
     if not code and source == "gmail":
+        if float(getattr(ctx, "otp_sent_at", 0) or 0) <= 0:
+            from mino_nexus.loop.login_verification import otp_not_sent_executor_summary
+
+            return _result(
+                event,
+                status=EventStatus.FAIL,
+                summary=otp_not_sent_executor_summary(ctx),
+                error="otp not sent",
+                executor="internal",
+                elapsed_ms=int((time.time() - t0) * 1000),
+            )
         try:
             code = _fetch_gmail_otp(ctx)
             source = "gmail"
@@ -658,8 +675,9 @@ def _web_tap_send_code(
             label=f"Web 发码：点「{lab}」",
         )
         if _exec_ok(tap):
-            if ctx is not None:
-                ctx.otp_sent_at = time.time()
+            from mino_nexus.loop.login_verification import record_verification_send
+
+            record_verification_send(ctx)
             return _result(
                 event,
                 status=EventStatus.PASS,
@@ -702,11 +720,6 @@ def _request_sms_code(
     ch_key = ui_channel_label(channel)
     anchor = credential_field_for_login(nodes, login_kind=login_kind, channel=ch_key)
     filled = credential_field_filled(nodes, login_kind=login_kind, channel=ch_key)
-    if channel == UiChannel.WEB and login_kind == "email" and not filled:
-        acc = dict(getattr(ctx, "picked_account", None) or {})
-        em = str(acc.get("email") or "").strip()
-        if "@" in em:
-            filled = True
     if channel == UiChannel.WEB and filled and anchor is None:
         return _web_tap_send_code(event, ctx=ctx, router=router, t0=t0)
     if anchor is None:
@@ -787,8 +800,9 @@ def _request_sms_code(
         label="点发送验证码控件",
     )
     if _exec_ok(tap):
-        if ctx is not None:
-            ctx.otp_sent_at = time.time()
+        from mino_nexus.loop.login_verification import record_verification_send
+
+        record_verification_send(ctx)
         return _result(
             event,
             status=EventStatus.PASS,

@@ -113,12 +113,48 @@ def format_accounts_brief(row: dict[str, Any]) -> str:
     return "；".join(bits)
 
 
+def _login_kind_for_ctx(ctx: Any, env_doc: dict[str, Any], *, prompt: str = "") -> str:
+    from mino_nexus.services.otp_resolve import login_kind_from_secrets, resolve_effective_secrets
+
+    env_profile = str(getattr(ctx, "env_profile", "") or "").strip() or "test"
+    surface = str(getattr(ctx, "env_surface", "") or "").strip()
+    if not surface:
+        surface = resolve_surface_id(
+            env_doc,
+            platform=str(getattr(ctx, "platform", "") or "android"),
+            target_id=str(getattr(ctx, "target_package", "") or ""),
+            prompt=str(prompt or "").strip(),
+            env_profile=env_profile,
+        )
+    secrets = resolve_effective_secrets(
+        env_doc,
+        env_profile=env_profile,
+        env_surface=surface,
+    )
+    return login_kind_from_secrets(secrets)
+
+
+def _row_matches_ctx_login_kind(
+    row: dict[str, Any] | None,
+    ctx: Any,
+    env_doc: dict[str, Any],
+    *,
+    prompt: str = "",
+) -> bool:
+    from mino_nexus.services.otp_resolve import account_row_matches_login_kind
+
+    kind = _login_kind_for_ctx(ctx, env_doc, prompt=prompt)
+    return account_row_matches_login_kind(row, kind)
+
+
 def _lease_unavailable_hint(
     env_doc: dict[str, Any],
     *,
     project_id: str,
     requirements: dict[str, Any],
     run_id: str,
+    ctx: Any | None = None,
+    prompt: str = "",
 ) -> str:
     """租号失败时附一句可操作的池内统计（不改变选号逻辑）。"""
     from mino_nexus.services.account_pool_templates import merged_pool_field_defs
@@ -150,6 +186,29 @@ def _lease_unavailable_hint(
     free = match_n - busy - locked_n
     if free <= 0:
         return f"；满足约束 {match_n} 个，可用 {free}（占用 {busy}，锁定 {locked_n}）"
+    if ctx is not None:
+        from mino_nexus.services.otp_resolve import account_row_matches_login_kind
+
+        kind = _login_kind_for_ctx(ctx, env_doc, prompt=prompt)
+        if kind == "email":
+            email_ok = 0
+            email_free = 0
+            rid = str(run_id or "").strip()
+            for row in list_test_accounts(env_doc, project_id=project_id):
+                facets = account_facet_values_for_match(row)
+                ok, _, _ = match_requirements(facets, requirements, field_defs=defs)
+                if not ok or not account_row_matches_login_kind(row, "email"):
+                    continue
+                email_ok += 1
+                lease = row.get("lease") if isinstance(row.get("lease"), dict) else {}
+                other = str(lease.get("run_id") or "").strip()
+                if bool(row.get("locked")) or (other and other != rid):
+                    continue
+                email_free += 1
+            if email_ok == 0:
+                return "；环境 login.kind=email，但号池内无填写 email 的账号（勿用手机号账号顶替）"
+            if email_free == 0:
+                return f"；有 {email_ok} 个邮箱账号满足 facet，但均被占用或锁定"
     return ""
 
 
@@ -210,10 +269,8 @@ def _pick_row(
         env_profile=env_profile,
         env_surface=surface,
     )
-    ranked = filter_accounts_for_login_kind(
-        ranked,
-        kind=login_kind_from_secrets(secrets),
-    )
+    kind = login_kind_from_secrets(secrets)
+    ranked = filter_accounts_for_login_kind(ranked, kind=kind)
     rid = str(run_id or "").strip()
     for row in ranked:
         if bool(row.get("locked")):
@@ -354,6 +411,7 @@ def apply_lease_to_ctx(ctx: Any, row: dict[str, Any], *, project_id: str) -> Non
         "id": lease_meta["account_id"],
         "account_id": lease_meta["account_id"],
         "display_name": str(row.get("display_name") or ""),
+        # ident：展示用（同 account_ident），登录填表只读 email/phone 字段
         "ident": ident,
         "phone": str(row.get("phone") or ""),
         "email": str(row.get("email") or ""),
@@ -515,6 +573,15 @@ def lease_for_context(
         )
         _clear_leased(project_id, str(restored.get("id") or ""), run_id)
         restored = None
+    if restored and not _row_matches_ctx_login_kind(restored, ctx, env_doc, prompt=prompt):
+        SLog.i(
+            TAG,
+            f"run lease login-kind mismatch run={run_id[:12]} "
+            f"account={account_ident(restored)} kind={_login_kind_for_ctx(ctx, env_doc, prompt=prompt)}; re-pick",
+        )
+        _clear_leased(project_id, str(restored.get("id") or ""), run_id)
+        release_ctx_lease(ctx)
+        restored = None
     if restored:
         aid = str(restored.get("id") or "")
         obs = observed_by_account.get(aid) if isinstance(observed_by_account, dict) and aid else obs_for_row
@@ -524,6 +591,9 @@ def lease_for_context(
                     TAG,
                     f"restored account fails ident hints account={account_ident(restored)}",
                 )
+                _clear_leased(project_id, aid, run_id)
+                release_ctx_lease(ctx)
+            elif not _row_matches_ctx_login_kind(restored, ctx, env_doc, prompt=prompt):
                 _clear_leased(project_id, aid, run_id)
                 release_ctx_lease(ctx)
             else:
@@ -589,6 +659,8 @@ def lease_for_context(
             project_id=project_id,
             requirements=requirements,
             run_id=run_id,
+            ctx=ctx,
+            prompt=prompt,
         )
         base = "没有满足 Requirement 的可用账号（可能都被占用或状态不符）"
         from mino_nexus.services.resource_allocation_log import append_allocation_log

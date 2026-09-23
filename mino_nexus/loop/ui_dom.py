@@ -122,3 +122,93 @@ def dom_email_field_filled(nodes: list[dict[str, Any]]) -> bool:
     if field is None:
         return False
     return bool(_EMAIL_AT_RE.search(_label_text(field)))
+
+
+_OTP_HINT_RE = re.compile(r"验证码|verification|one.?time|otp|code", re.I)
+_OTP_DIGITS_RE = re.compile(r"^\d{0,8}$")
+
+
+def find_dom_otp_field(
+    nodes: list[dict[str, Any]],
+    *,
+    email_field: dict[str, Any] | None = None,
+) -> Optional[dict[str, Any]]:
+    """Web 验证码/OTP 输入框（常与邮箱框同弹窗、在其下方）。"""
+    pool = [n for n in (nodes or []) if isinstance(n, dict)]
+    if not pool:
+        return None
+    email = email_field if email_field is not None else find_dom_email_field(pool)
+    sw, sh = _screen_wh(pool)
+    min_w = int(sw * _MIN_FIELD_WIDTH_RATIO) if sw > 0 else 160
+    ranked: list[tuple[int, dict[str, Any]]] = []
+    for node in pool:
+        if not _is_dom_text_input(node):
+            continue
+        if email is not None and node is email:
+            continue
+        b = _bounds(node)
+        w, h = _size(b)
+        if w < min_w or h <= 0:
+            continue
+        label = _label_text(node)
+        if _EMAIL_AT_RE.search(label):
+            continue
+        cls = str(node.get("class") or "").lower()
+        blob = f"{cls} {label}".lower()
+        score = min(30, w // max(1, min_w // 4))
+        if "one-time" in cls or "otp" in blob or _OTP_HINT_RE.search(label):
+            score += 90
+        if str(node.get("type") or "").lower() in ("tel", "number", "text"):
+            score += 15
+        if _OTP_DIGITS_RE.match(label.replace(" ", "")):
+            score += 25
+        from mino_nexus.loop.hierarchy_slots import node_flag
+
+        if node_flag(node, "focused"):
+            score += 40
+        if email is not None:
+            eb = _bounds(email)
+            _, ecy = _center(eb)
+            _, ncy = _center(b)
+            if ncy > ecy + 8:
+                score += 45
+            if _same_row(node, email):
+                score -= 20
+        ranked.append((score, node))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda row: row[0], reverse=True)
+    best_score, best = ranked[0]
+    if best_score < 35:
+        return None
+    return best
+
+
+def find_dom_text_input_below(
+    nodes: list[dict[str, Any]],
+    anchor: dict[str, Any] | None,
+) -> Optional[dict[str, Any]]:
+    """锚点（常为邮箱框）下方最近的 DOM 文本输入，用于 OTP 等第二输入框。"""
+    pool = [n for n in (nodes or []) if isinstance(n, dict)]
+    if not pool:
+        return None
+    below: list[tuple[int, dict[str, Any]]] = []
+    acy = _center(_bounds(anchor))[1] if anchor is not None else -1
+    sw, sh = _screen_wh(pool)
+    min_w = int(sw * _MIN_FIELD_WIDTH_RATIO) if sw > 0 else 160
+    for node in pool:
+        if not _is_dom_text_input(node):
+            continue
+        if anchor is not None and node is anchor:
+            continue
+        b = _bounds(node)
+        if _size(b)[0] < min_w:
+            continue
+        _, ncy = _center(b)
+        if anchor is not None and ncy <= acy + 6:
+            continue
+        below.append((ncy, node))
+    if not below:
+        return None
+    below.sort(key=lambda row: row[0])
+    return below[0][1]

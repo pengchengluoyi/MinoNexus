@@ -51,17 +51,48 @@ def primary_ident_query(text: str) -> str:
     return hints[0] if hints else ""
 
 
+_SCALAR_MATCH_KEYS = (
+    "phone",
+    "email",
+    "username",
+    "account_id",
+    "id",
+    "note",
+    "profile_id",
+    "env",
+)
+
+
+def account_lease_match_blob(row: dict | None) -> str:
+    """前置/租号标识命中用的拼接文本：含手机邮箱、facet、tags 等；**不含 display_name**。"""
+    r = row if isinstance(row, dict) else {}
+    parts: list[str] = []
+    for k in _SCALAR_MATCH_KEYS:
+        v = str(r.get(k) or "").strip()
+        if v:
+            parts.append(v)
+    for t in r.get("tags") or []:
+        s = str(t).strip()
+        if s:
+            parts.append(s)
+    from mino_nexus.services.resource_pool import account_facets
+
+    for v in account_facets(r).values():
+        s = str(v).strip()
+        if s:
+            parts.append(s)
+    return " ".join(parts).lower()
+
+
+def account_lease_match_compact(row: dict | None) -> str:
+    return re.sub(r"\s+", "", account_lease_match_blob(row))
+
+
 def account_row_matches_hints(row: dict, hints: list[str]) -> bool:
     if not hints:
         return True
-    from mino_nexus.services.project_env import account_ident
-
-    extra = " ".join(
-        str(row.get(k) or "")
-        for k in ("phone", "email", "username", "display_name", "account_id", "id")
-    )
-    blob = f"{account_ident(row)} {extra}".lower()
-    compact = re.sub(r"\s+", "", blob)
+    blob = account_lease_match_blob(row)
+    compact = account_lease_match_compact(row)
     for h in hints:
         raw = str(h or "").strip()
         if not raw:

@@ -32,7 +32,6 @@ DEFAULT_PHASES: dict[str, dict[str, Any]] = {
 }
 
 DEFAULT_INSPECTIONS: list[dict[str, Any]] = [
-    {"job": "inspect-session", "at": "case_start", "on_fail": "continue"},
 ]
 
 
@@ -102,7 +101,12 @@ def normalize_inspections(raw: Any) -> list[dict[str, Any]]:
         return list(DEFAULT_INSPECTIONS)
     if not raw:
         return []
-    return [normalize_inspection(item) for item in raw]
+    return [
+        row
+        for item in raw
+        for row in [normalize_inspection(item)]
+        if str(row.get("job") or "") != "inspect-session"
+    ]
 
 
 def phase_for_id(phases: list[dict[str, Any]], phase_id: str) -> dict[str, Any]:

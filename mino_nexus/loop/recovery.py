@@ -142,7 +142,9 @@ def _enrich_evidence_from_run_context(
     )
     fpkg = str(inf.get("foreground_package") or inf.get("foreground_id") or "").strip()
     kind = str(inf.get("screen_kind") or "").strip()
-    if fpkg and not _looks_like_android_pkg(fpkg):
+    from mino_nexus.services.nav_target_scope import _looks_like_url, web_page_matches_target
+
+    if fpkg and not _looks_like_android_pkg(fpkg) and not _looks_like_url(fpkg):
         fpkg = ""
     if kind in ("launcher", "foreign"):
         ev.app_foreground = "no"
@@ -153,7 +155,10 @@ def _enrich_evidence_from_run_context(
     if pkg and fpkg:
         ev.foreground_pkg = fpkg
         ev.top_window_pkg = fpkg
-        ev.app_foreground = _yes_no(fpkg == pkg or pkg in fpkg)
+        if _looks_like_url(pkg) or _looks_like_url(fpkg):
+            ev.app_foreground = _yes_no(web_page_matches_target(pkg, fpkg))
+        else:
+            ev.app_foreground = _yes_no(fpkg == pkg or pkg in fpkg)
     elif kind == "app" and pkg and fpkg == pkg:
         ev.app_foreground = "yes"
         ev.foreground_pkg = pkg
@@ -194,6 +199,22 @@ def _fill_foreground_from_get_app(
 
 def collect_evidence(ctx, router, *, target_package: str = "") -> Evidence:
     pkg = target_package or str(getattr(ctx, "target_package", "") or "")
+    try:
+        from mino_nexus.runtime.run_context import is_web_slot
+
+        if is_web_slot(str(getattr(ctx, "sn", "") or ""), str(getattr(ctx, "platform", "") or "")):
+            ev = Evidence()
+            _enrich_evidence_from_run_context(ev, ctx, target_package=pkg)
+            if not ev.foreground_pkg and pkg:
+                ev.foreground_pkg = pkg
+                ev.top_window_pkg = pkg
+            if str(ev.app_foreground or "").strip().lower() in ("", "unknown") and pkg:
+                if bool(getattr(ctx, "app_launch_confirmed", False)):
+                    ev.app_foreground = "yes"
+            SLog.i(TAG, f"evidence(web): {ev.brief()}")
+            return ev
+    except Exception:
+        pass
     event = PlanEvent(
         seq=0,
         capability_id="probe_device_state",
@@ -279,23 +300,34 @@ def resolve_app_foreground_guard(
     nodes: list[Any] | None,
     target_package: str = "",
 ) -> dict[str, str]:
-    """hierarchy guard + get_foreground_app，减少 app_foreground=unknown。"""
+    """hierarchy / DOM guard +（仅安卓）get_foreground_app，减少 app_foreground=unknown。"""
     pkg = str(target_package or getattr(ctx, "target_package", "") or "").strip()
+    plat = str(getattr(ctx, "platform", "") or "")
+    from mino_nexus.runtime.run_context import is_web_slot
     from mino_nexus.services.nav_capture_store import run_guard_foreground
 
+    launch_ok = bool(getattr(ctx, "app_launch_confirmed", False))
     fg = run_guard_foreground(
         list(nodes or []),
         target_package=pkg,
-        platform=str(getattr(ctx, "platform", "") or ""),
+        platform=plat,
+        launch_confirmed=launch_ok,
     )
     af = str(fg.get("app_foreground") or "").strip().lower()
+    if is_web_slot(str(getattr(ctx, "sn", "") or ""), plat):
+        if af == "unknown" and launch_ok and pkg:
+            fg = {**fg, "app_foreground": "yes", "screen_kind": "app"}
+        setattr(ctx, "app_foreground", str(fg.get("app_foreground") or ""))
+        return fg
     if af != "unknown" or router is None or not pkg:
+        setattr(ctx, "app_foreground", str(fg.get("app_foreground") or ""))
         return fg
     ev = Evidence()
     _fill_foreground_from_get_app(ev, router, ctx, target_package=pkg)
     probed = str(ev.app_foreground or "").strip().lower()
     if probed in ("yes", "no"):
-        return {**fg, "app_foreground": probed}
+        fg = {**fg, "app_foreground": probed}
+    setattr(ctx, "app_foreground", str(fg.get("app_foreground") or ""))
     return fg
 
 
@@ -578,15 +610,15 @@ def ensure_target_app_foreground(
     target_package: str = "",
     shot: Any = None,
 ) -> Optional[RecoveryOutcome]:
-    """Case 开环：前台不是被测 App 时 launch 目标包（不处理锁屏/黑屏 advise）。"""
+    """Case 开环：前台不是被测 App 时 launch 目标包/网址（不处理锁屏/黑屏 advise）。"""
+    pkg = target_package or str(getattr(ctx, "target_package", "") or "")
+    web_slot = False
     try:
         from mino_nexus.runtime.run_context import is_web_slot
 
-        if is_web_slot(str(getattr(ctx, "sn", "") or ""), str(getattr(ctx, "platform", "") or "")):
-            return None
+        web_slot = is_web_slot(str(getattr(ctx, "sn", "") or ""), str(getattr(ctx, "platform", "") or ""))
     except Exception:
-        pass
-    pkg = target_package or str(getattr(ctx, "target_package", "") or "")
+        web_slot = False
     if not pkg:
         return None
     ev = collect_evidence(ctx, router, target_package=pkg)
@@ -602,18 +634,26 @@ def ensure_target_app_foreground(
 
     if in_launch_grace(ctx):
         return None
-    away = ev.app_foreground == "no" or (
-        bool(ev.foreground_pkg) and bool(pkg) and ev.foreground_pkg != pkg
-    )
+    from mino_nexus.services.nav_target_scope import _looks_like_url, web_page_matches_target
+
+    if web_slot and pkg and _looks_like_url(pkg):
+        away = ev.app_foreground == "no" or (
+            bool(ev.foreground_pkg) and not web_page_matches_target(pkg, ev.foreground_pkg)
+        )
+    else:
+        away = ev.app_foreground == "no" or (
+            bool(ev.foreground_pkg) and bool(pkg) and ev.foreground_pkg != pkg
+        )
     if not away:
         return None
+    launch_params = {"url": pkg} if web_slot and _looks_like_url(pkg) else {"package": pkg}
     event = PlanEvent(
         seq=0,
         capability_id="launch_app",
         event_kind="launch_app",
-        params={"package": pkg},
-        ai_reasoning="开环前台不是被测 App，程序启动目标包",
-        label="程序启动被测 App",
+        params=launch_params,
+        ai_reasoning="开环前台不是被测目标，程序 launch_app",
+        label="程序启动被测目标",
     )
     res = _dispatch(router, ctx, event, agent_turn=0, action_idx=1)
     status = getattr(res.status, "value", res.status)

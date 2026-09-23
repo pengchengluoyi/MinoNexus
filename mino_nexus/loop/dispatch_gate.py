@@ -37,6 +37,8 @@ GUARD_CODES: dict[str, str] = {
     "block_prep_guest_mine_tab": "block_prep_guest_mine_tab",
     "block_do_after_step_goal": "block_do_after_step_goal",
     "require_sms_send_before_otp": "require_sms_send_before_otp",
+    "block_repeat_email_tab": "block_repeat_email_tab",
+    "block_repeat_continue_submit": "block_repeat_continue_submit",
     "require_otp_before_login_tap": "require_otp_before_login_tap",
     "exec_script_params": "exec_script_params",
     "require_do_work": "require_do_work",

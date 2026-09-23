@@ -458,6 +458,8 @@ class StepCursor:
         self.require_do_work_streak: int = 0
         self.recovery_block_streak: int = 0
         self.do_subphase: str = "operation"
+        self._finish_ctx: Any = None
+        self._finish_history: list[str] = []
         self.step_nav_plan_hint: str = ""
         self.step_nav_plan_step_n: int = 0
         self.swipe_stuck_fp: str = ""
@@ -563,6 +565,22 @@ class StepCursor:
                     self.step_intents_done.add("swipe_gesture")
         self.refresh_do_subphase()
 
+    def bind_finish_context(self, ctx: Any, history_lines: list[str] | None) -> None:
+        self._finish_ctx = ctx
+        self._finish_history = [str(x) for x in (history_lines or []) if str(x).strip()][-64:]
+
+    def _login_completion_allows_do_finish(self, instruction: str) -> bool:
+        from mino_nexus.loop.login_submit import login_flow_do_may_finish
+
+        ok, msg = login_flow_do_may_finish(
+            instruction=instruction,
+            history_lines=self._finish_history,
+            ctx=self._finish_ctx,
+        )
+        if not ok and msg:
+            self.correction_hint = msg[:280]
+        return ok
+
     def try_auto_finish_do_when_intents_met(self) -> bool:
         """do 阶段业务意图已达成时立即进入 check（或无 expected 时下一步），不等模型 signal_done。"""
         if self.phase != "do":
@@ -593,6 +611,8 @@ class StepCursor:
             )
             if not fam_ok:
                 return False
+        if not self._login_completion_allows_do_finish(instr):
+            return False
         self.step_goal_met = True
         self.require_do_work_streak = 0
         self.correction_hint = ""
@@ -619,6 +639,8 @@ class StepCursor:
             family_counts=self.step_family_counts,
         )
         op_done = int_ok if need_int else fam_ok
+        if op_done:
+            op_done = self._login_completion_allows_do_finish(instr)
         self.do_subphase = "achievement" if op_done else "operation"
 
     def bump_advise_recovery(self, rule_id: str) -> int:

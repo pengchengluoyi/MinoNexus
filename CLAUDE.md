@@ -20,6 +20,7 @@ MinoNexus 是服务端大脑。它决定"下一步做什么"，让 [MinoScout](.
 | 2 | **不含图像算法依赖** —— 不 import `torch` / `open_clip` / `paddleocr` / `ultralytics` / `cv2` | 拆分时已确认批次路径运行时零调用（见 `docs/MIGRATION.md` §0）。引回来等于把 45% 的旧代码拖回来 |
 | 3 | **不 import Scout** | 依赖必须单向 |
 | 4 | **协议契约一致** | 两仓 `protocol.py` 必须能 round-trip 同一份 golden fixture |
+| 5 | **不写/不改单元测试** —— 禁止新增或修改 `tests/test_*.py`、禁止为「验证修复」跑 pytest；**唯一例外**是 §5 协议 golden fixture（`tests/fixtures/protocol/`） | 跑批/登录等问题以 **`session_events` + `session_meta`** 为准（[docs/排查手册/01-Session-Log与数据库.md](docs/排查手册/01-Session-Log与数据库.md)）；缺字段就补 session 写入，不靠测试脚本 |
 
 > 约束 2 的例外只有 `pillow`：缩略图压缩（`make_thumb`）需要它，且只做重采样，不做识别。
 
@@ -116,6 +117,7 @@ mino_nexus/
 | 动三渠道统一检索 / context-pack | [docs/9月12日_AppIntel信息基座.md](docs/9月12日_AppIntel信息基座.md)（规划真源） |
 | 从上游搬代码 | [docs/MIGRATION.md](docs/基础框架/MIGRATION.md) |
 | 本地调试 / Agent 协作 | [docs/开发手册.md](docs/开发手册.md) — **禁止**调试时直接对 `mino.db` 增删改 |
+| 排查跑批/登录/租号问题 | [docs/排查手册/01-Session-Log与数据库.md](docs/排查手册/01-Session-Log与数据库.md) — **只查 session 轨迹**；不要写 pytest |
 
 ---
 
@@ -146,6 +148,7 @@ mino_nexus/
 - 不要假设至少有一个 Scout 在线 —— 无节点时必须能启动并在 UI 上说清楚
 - 不要让 Console / Studio 去发现 Nexus —— origin 编译进前端，登录失败只提示「无法连接服务器」
 - 不要在 `EXECUTE` 里省 `executor_order` —— Scout 不会自己算，会直接无路可走
+- **不要**为排查或自证修复去新增 `tests/test_*.py` 或跑 pytest（§1 约束 5）；查 `cr-…::case-…::sn` 的 `session_events`
 
 ---
 

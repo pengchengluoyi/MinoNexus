@@ -139,7 +139,7 @@ def assert_session_context(ctx: Any, *, instruction: str = "", expected: str = "
     session = parse_session_value(block)
     picked = getattr(ctx, "picked_account", None) or {}
     if isinstance(picked, dict):
-        phone = str(picked.get("phone") or picked.get("ident") or "").strip()
+        phone = str(picked.get("phone") or "").strip()
         if phone:
             tail = phone[-4:] if len(phone) >= 4 else phone
             extra += f" 本任务租号尾号 {tail}，判「登录成功」时须与屏上账号一致。"

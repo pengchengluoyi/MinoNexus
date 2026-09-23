@@ -374,6 +374,7 @@ def project_trajectory(session_id: str) -> dict[str, Any] | None:
     finished = status not in ("", "running")
 
     ui_events = _merge_resource_transition_events(events, ui_events)
+    ui_events = _enrich_stream_outcomes(events, ui_events)
 
     return {
         "run_id": sid,
@@ -411,6 +412,48 @@ def _resource_transition_summary(payload: dict[str, Any]) -> str:
     if isinstance(rules, list) and rules:
         parts.append(f"规则 {', '.join(str(x) for x in rules[:3])}")
     return " · ".join(parts)
+
+
+def _enrich_stream_outcomes(
+    events: list[dict[str, Any]],
+    ui_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """为 Studio 回放补齐 result_status / 是否下发设备 / 守卫跳过。"""
+    turn_ends: dict[int, dict[str, Any]] = {}
+    guard_turns: set[int] = set()
+    device_turns: set[int] = set()
+    for row in events:
+        typ = str(row.get("type") or "")
+        turn = int(row.get("turn") or 0)
+        if turn <= 0:
+            continue
+        if typ == "turn/end":
+            turn_ends[turn] = dict(row.get("payload") or {})
+        elif typ == "guard/block":
+            guard_turns.add(turn)
+        elif typ == "tool/call":
+            device_turns.add(turn)
+    out: list[dict[str, Any]] = []
+    for ev in ui_events:
+        row = dict(ev)
+        step = int(row.get("step") or 0)
+        if step > 0:
+            te = turn_ends.get(step) or {}
+            if te.get("decision_cap") and not row.get("decision_cap"):
+                row["decision_cap"] = te.get("decision_cap")
+            if te.get("decision_status") and not row.get("decision_status"):
+                row["decision_status"] = te.get("decision_status")
+            if row.get("phase") == "result":
+                st = str(row.get("status") or row.get("result_status") or "")
+                row.setdefault("result_status", st)
+                if step in guard_turns and step not in device_turns:
+                    row.setdefault("device_dispatched", False)
+                    row.setdefault("execution_kind", "guard_skip")
+                elif step in device_turns:
+                    row.setdefault("device_dispatched", True)
+                    row.setdefault("execution_kind", "device")
+        out.append(row)
+    return out
 
 
 def _merge_resource_transition_events(

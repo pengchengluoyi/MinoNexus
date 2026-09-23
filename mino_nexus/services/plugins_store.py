@@ -698,11 +698,20 @@ def get_gmail_app_password(user_id: str = "") -> str:
     return str(raw.get("app_password") or "").strip()
 
 
+def get_gmail_inbox_address(user_id: str = "") -> str:
+    """用户插件配置的 IMAP 收件箱（与 app_password 同一账号，优先于项目 env gmail_inbox）。"""
+    raw = _raw_plugin_config("gmail_otp", user_id)
+    return str(raw.get("inbox_address") or raw.get("address") or "").strip()[:200]
+
+
 def _gmail_otp_settings(user_id: str = "") -> dict[str, Any]:
     pwd = get_gmail_app_password(user_id)
+    inbox = get_gmail_inbox_address(user_id)
     return {
-        "configured": bool(pwd),
+        "configured": bool(pwd and inbox),
         "has_app_password": bool(pwd),
+        "has_inbox_address": bool(inbox),
+        "inbox_address": inbox,
         "app_password_masked": ss._mask_secret(pwd),
     }
 
@@ -731,7 +740,7 @@ def _plugin_configured(plugin_id: str, cfg: dict[str, Any], user_id: str = "") -
     if plugin_id == "figma":
         return bool(_figma_settings(user_id).get("configured"))
     if plugin_id == "gmail_otp":
-        return bool(get_gmail_app_password(user_id))
+        return bool(get_gmail_app_password(user_id) and get_gmail_inbox_address(user_id))
     if plugin_id == "zentao":
         return bool(str(cfg.get("url") or "").strip() and str(cfg.get("token") or "").strip())
     return False
@@ -965,6 +974,8 @@ def save_integration_plugin(plugin_id: str, body: dict[str, Any], user_id: str =
             current["app_password"] = ""
         elif str(incoming.get("app_password") or "").strip():
             current["app_password"] = str(incoming.get("app_password") or "").strip()
+        if "inbox_address" in incoming:
+            current["inbox_address"] = str(incoming.get("inbox_address") or "").strip()[:200]
     elif plugin_id == "figma":
         root = _load_user(uid)
         fig = root.setdefault("figma", {}) if isinstance(root.get("figma"), dict) else {}

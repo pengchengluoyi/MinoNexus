@@ -33,9 +33,10 @@ UI **只**打 MinoNexus。没有公网域名时用内网名 `mino.local`：Nexus
 
 | | Console | Studio |
 |---|---|---|
-| `/auth/users` 写 | 允许 | 403 |
-| `/settings/mail` 写 | 允许 | 403 |
-| `/packs` 写（builtin） | 允许 | 403 |
+| `/auth/users` 写 | 允许 | 允许 |
+| `/settings/mail` 写 | 允许 | 允许 |
+| `/packs` 写（builtin） | 允许 | 允许 |
+| `/settings/plugins` 写 | 允许 | 允许 |
 | `/settings/ai/providers` 写 | 403 | 允许 |
 | `/runtime/nodes/install-token` | 403 | 允许 |
 | `/runtime/nodes/{id}/command` | 403 | 允许 |

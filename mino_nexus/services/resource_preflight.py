@@ -160,7 +160,12 @@ def prep_avatar_setup_gate_issues(ctx: Any, precondition: str) -> list[str]:
     return issues
 
 
-def prep_resource_gate_issues(ctx: Any, case: dict[str, Any] | None) -> list[str]:
+def prep_resource_gate_issues(
+    ctx: Any,
+    case: dict[str, Any] | None,
+    *,
+    history_lines: list[str] | None = None,
+) -> list[str]:
     """prep 阶段 signal_done 前必须为空。"""
     if not isinstance(case, dict):
         return []
@@ -175,6 +180,17 @@ def prep_resource_gate_issues(ctx: Any, case: dict[str, Any] | None) -> list[str
     )
     pre = str(case.get("precondition") or scene.get("precondition") or "").strip()
     issues: list[str] = []
+
+    from mino_nexus.loop.session_prep_trust import prep_lease_account_signal_done_block_reason
+
+    lease_msg = prep_lease_account_signal_done_block_reason(
+        ctx=ctx,
+        case=case,
+        scene=scene,
+        history_lines=history_lines,
+    )
+    if lease_msg:
+        issues.append(lease_msg)
 
     if claim_requires_clear_cache(claim, scene, pre):
         if not bool(getattr(ctx, "prep_clear_done", False)):

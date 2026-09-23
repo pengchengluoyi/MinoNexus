@@ -453,7 +453,10 @@ def _norm_template_ids(raw: Any) -> List[str]:
 
 
 def account_ident(row: dict | None) -> str:
-    """展示/检索用标识：display_name → account_id → 手机号 → 邮箱 → 用户名（手机号等可重复，非唯一键）。"""
+    """Console/日志展示用短标签：display_name → account_id → 手机号 → 邮箱 → 用户名。
+
+    前置里指定账号命中见 account_lease_match_blob（不含 display_name）；facet 硬约束仍走 Requirement DSL。
+    """
     row = row if isinstance(row, dict) else {}
     display = str(row.get("display_name") or "").strip()
     if display:

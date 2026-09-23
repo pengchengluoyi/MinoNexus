@@ -13,6 +13,8 @@
 
 铁律（与 Harness 对齐）：**凡进入 `decide_next_action` / 改变 `StepCursor` 的事实，应能在 `session_events` 里找到对应 event。**
 
+Agent / 自动化排查：**禁止**为定位问题新增 `tests/test_*.py` 或跑 pytest；以本节 SQL / Console 会话日志为准。若缺关键字段（如 `tool/call` 完整 `params`、`guard/block` 原因），改 `session_log` / `agent_loop` 写入，而不是写测试复现。
+
 ## 2. 数据目录与库文件
 
 默认数据目录（macOS / Linux）：

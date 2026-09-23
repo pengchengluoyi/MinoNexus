@@ -76,8 +76,8 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
             "y": COORD,
             "field": {
                 "type": "string",
-                "enum": ["phone", "sms_code", "password", "text"],
-                "description": "登录页手机号/口令时必填，值由资源网关填",
+                "enum": ["email", "phone", "sms_code", "password", "text"],
+                "description": "邮箱登录用 email；手机号登录用 phone；验证码 sms_code。值由租号网关填，勿填 display_name",
             },
         },
         "required": ["text", "x", "y"],
@@ -499,25 +499,18 @@ def fill_input_text_from_ctx(
     cap_id: str,
     ctx: Any = None,
 ) -> dict[str, Any]:
-    """LLM 只填 field 时，由租号/OTP 网关补 params.text（Scout adb 必填）。"""
+    """租号/OTP 网关补 params.text；邮箱登录强制 email 字段与库内邮箱，phone 仅用 acc.phone。"""
     out = dict(params or {})
     if str(cap_id or "").strip() != "input_text":
         return out
-    if str(out.get("text") or "").strip():
-        return out
+    from mino_nexus.services.account_credential_text import normalize_input_text_for_lease
+
+    out = normalize_input_text_for_lease(out, ctx=ctx)
     acc = dict(getattr(ctx, "picked_account", None) or {}) if ctx is not None else {}
     field = str(out.get("field") or "text").strip().lower()
-    if field == "phone":
-        import re
-
-        from mino_nexus.services.project_env import account_ident
-
-        raw = str(acc.get("phone") or account_ident(acc) or "").strip()
-        digits = re.sub(r"\D", "", raw)
-        if len(digits) >= 11:
-            out["text"] = digits[-11:]
-        elif raw:
-            out["text"] = raw
+    if field in ("email", "login_email"):
+        return out
+    if field == "phone" and str(out.get("text") or "").strip():
         return out
     if field in ("sms_code", "验证码", "password"):
         code = str(acc.get("otp") or acc.get("sms_code") or acc.get("password") or "").strip()

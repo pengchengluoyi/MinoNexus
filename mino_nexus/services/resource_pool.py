@@ -300,6 +300,7 @@ def compile_requirements_from_text(
 
     if "新用户" in pre or "未注册" in pre:
         req["all"].append(_clause("lifecycle", "eq", "unregistered"))
+        req["all"].append(_clause("register_flow", "ne", "registered"))
         req["prefer"].append(_clause("session", "in", "logged_out,guest,unknown"))
     elif "老用户" in pre or ("已注册" in pre and "未注册" not in pre):
         req["all"].append(_clause("lifecycle", "eq", "registered"))
@@ -439,6 +440,14 @@ def _eval_clause(
     got = str(facets.get(facet) or "unknown").strip().lower()
     defn = _facet_field_def(field_defs, facet)
     from mino_nexus.services.account_requirement_compile import PROFILE_SHAPE_FACETS
+
+    if facet == "lifecycle" and op in ("eq", "in"):
+        opts = {x.strip() for x in want.split(",") if x.strip()}
+        wants_unreg = want == "unregistered" or "unregistered" in opts
+        if wants_unreg:
+            reg_flow = str(facets.get("register_flow") or "unknown").strip().lower()
+            if reg_flow == "registered":
+                return False
 
     if facet in PROFILE_SHAPE_FACETS and op == "eq":
         # 形象 facet 不对称：要「已配置」必须库内 yes；要「未配置」允许未标注，但排除 yes
@@ -607,8 +616,11 @@ def pick_accounts_by_requirements(
                 score -= pen
                 reasons.append(pen_reason or "近期占用降权")
 
-        ident = account_ident_fn(row)
-        if q and q in ident.lower():
+        from mino_nexus.services.account_ident_parse import account_lease_match_blob
+
+        cred = account_lease_match_blob(row)
+        q_low = str(q or "").strip().lower()
+        if q_low and q_low in cred:
             score += 20
             reasons.append("号码命中")
 
@@ -620,7 +632,11 @@ def pick_accounts_by_requirements(
         })
 
     scored.sort(
-        key=lambda x: (-int(x.get("score") or 0), account_ident_fn(x), str(x.get("env") or "")),
+        key=lambda x: (
+            -int(x.get("score") or 0),
+            str(x.get("id") or x.get("account_id") or ""),
+            str(x.get("env") or ""),
+        ),
     )
     return scored[:48]
 

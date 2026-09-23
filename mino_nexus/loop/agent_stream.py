@@ -99,9 +99,11 @@ def get_run_events(run_id: str) -> dict[str, Any] | None:
 
 
 _LLM_JPEG_EDGE_MIN = 720
-_LLM_JPEG_EDGE_MAX = 900
+_LLM_JPEG_EDGE_MAX = 1280
 _LLM_JPEG_EDGE_DEFAULT = 800
 _LLM_JPEG_QUALITY = 72
+_LLM_JPEG_WEB_EDGE = 1280
+_LLM_JPEG_WEB_QUALITY = 82
 
 
 def make_llm_jpeg(
@@ -126,6 +128,10 @@ def make_llm_jpeg(
         w, h = img.size
         long = max(w, h)
         edge = int(long_edge or _LLM_JPEG_EDGE_DEFAULT)
+        q = int(quality or _LLM_JPEG_QUALITY)
+        if long >= 1100:
+            edge = max(edge, min(_LLM_JPEG_WEB_EDGE, long))
+            q = max(q, _LLM_JPEG_WEB_QUALITY)
         edge = max(_LLM_JPEG_EDGE_MIN, min(_LLM_JPEG_EDGE_MAX, edge))
         if long > edge:
             scale = edge / float(long)
@@ -134,14 +140,14 @@ def make_llm_jpeg(
                 Image.Resampling.LANCZOS,
             )
         buf = BytesIO()
-        img.save(buf, format="JPEG", quality=max(40, min(90, int(quality or _LLM_JPEG_QUALITY))))
+        img.save(buf, format="JPEG", quality=max(40, min(90, q)))
         return base64.b64encode(buf.getvalue()).decode("ascii"), "image/jpeg"
     except Exception as e:
         SLog.d(TAG, f"make_llm_jpeg failed: {e}")
         return "", ""
 
 
-def make_thumb(png_b64: str, *, width: int = 360, quality: int = 70) -> str:
+def make_thumb(png_b64: str, *, width: int = 360, quality: int = 70, web: bool = False) -> str:
     if not png_b64:
         return ""
     try:
@@ -155,7 +161,10 @@ def make_thumb(png_b64: str, *, width: int = 360, quality: int = 70) -> str:
         w, h = img.size
         max_w = width
         q = quality
-        if w >= h and w <= 960:
+        if web or w >= 1100:
+            max_w = min(max(w, width), 1280)
+            q = max(quality, 84)
+        elif w >= h and w <= 960:
             max_w = w
             q = max(quality, 82)
         if max_w and w > max_w:
