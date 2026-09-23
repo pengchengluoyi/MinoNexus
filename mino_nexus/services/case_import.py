@@ -84,7 +84,35 @@ def _requirement_title(project_id: str, requirement_id: str) -> str:
     return rid
 
 
-def _norm_import_row(raw: dict[str, Any], index: int) -> dict[str, Any]:
+def _resolve_import_platform(value: str, env_doc: dict | None, *, default: str = "") -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return str(default or "").strip()
+    channels = env_doc.get("channels") if isinstance(env_doc, dict) else None
+    if not isinstance(channels, list):
+        return raw
+    low = raw.lower()
+    for ch in channels:
+        if not isinstance(ch, dict):
+            continue
+        cid = str(ch.get("id") or "").strip()
+        label = str(ch.get("label") or "").strip()
+        alias = str(ch.get("alias") or "").strip()
+        if cid and (raw == cid or low == cid.lower()):
+            return cid
+        if label and (raw == label or label in raw or raw in label):
+            return cid
+        if alias and (raw == alias or alias in raw or raw in alias):
+            return cid
+    return raw
+
+
+def _norm_import_row(
+    raw: dict[str, Any],
+    index: int,
+    default_platform: str = "",
+    env_doc: dict | None = None,
+) -> dict[str, Any]:
     steps = raw.get("steps")
     expected = raw.get("expected")
     if isinstance(steps, str):
@@ -112,7 +140,10 @@ def _norm_import_row(raw: dict[str, Any], index: int) -> dict[str, Any]:
         "expected": expected_list,
         "steps_raw": steps_raw,
         "expected_raw": expected_raw,
-        "platform": str(raw.get("platform") or "双端"),
+        "platform": _resolve_import_platform(
+            str(raw.get("platform") or default_platform or "").strip(),
+            env_doc,
+        ),
         "aspect": str(raw.get("aspect") or "正向"),
         "point_ids": [str(x) for x in (raw.get("point_ids") or []) if str(x).strip()],
         "index": index,
@@ -174,6 +205,7 @@ def preview_import(
     header_row: int = 0,
     skip_rows: list[int] | None = None,
     column_map: dict[str, int] | None = None,
+    default_platform: str = "",
 ) -> dict[str, Any]:
     _purge_previews()
     pid = str(project_id or "").strip()
@@ -197,8 +229,13 @@ def preview_import(
     )
     preview_rows: list[dict[str, Any]] = []
     conflicts: list[str] = []
+    default_plat = str(default_platform or "").strip()
+    try:
+        env_doc = ps.project_env(pid)
+    except KeyError:
+        env_doc = {}
     for i, raw in enumerate(parsed):
-        row = _norm_import_row(raw, i)
+        row = _norm_import_row(raw, i, default_plat, env_doc)
         name = str(row.get("name") or "").strip()
         cid = str(row.get("case_id") or "").strip()
         conflict = _conflict_info(pid, cid, rid) if cid else None
@@ -213,10 +250,11 @@ def preview_import(
             from mino_nexus.services.resource_claim_summary import resource_claim_summary
 
             env_doc = ps.project_env(pid)
+            preview_plat = str(row.get("platform") or default_plat or "").strip()
             claim = compile_resource_key_from_precondition(
                 str(pre),
                 env_doc=env_doc,
-                platform=str(row.get("platform") or "android"),
+                platform=preview_plat,
             )
             claim_summary = resource_claim_summary(
                 claim,
@@ -261,6 +299,7 @@ def preview_import(
         "created_at": _now(),
         "project_id": pid,
         "requirement_id": rid,
+        "default_platform": default_plat,
         "rows": copy.deepcopy(preview_rows),
         "meta": meta,
     }
@@ -287,6 +326,7 @@ def commit_import(
     preview_token: str = "",
     rows: list[dict[str, Any]] | None = None,
     default_on_conflict: ConflictAction = "skip",
+    default_platform: str = "",
 ) -> dict[str, Any]:
     pid = str(project_id or "").strip()
     rid = str(requirement_id or "").strip()
@@ -294,6 +334,7 @@ def commit_import(
         raise ValueError("缺少 project_id 或 requirement_id")
     _require_project(pid)
     work_rows: list[dict[str, Any]] = []
+    fill_plat = str(default_platform or "").strip()
     if preview_token:
         doc = _previews.get(str(preview_token))
         if not doc:
@@ -302,6 +343,8 @@ def commit_import(
             raise ValueError("预览与项目不匹配")
         if str(doc.get("requirement_id") or "") != rid:
             raise ValueError("预览与需求不匹配")
+        if not fill_plat:
+            fill_plat = str(doc.get("default_platform") or "").strip()
         work_rows = copy.deepcopy(list(doc.get("rows") or []))
         overrides = {
             item.get("row_index"): item
@@ -322,6 +365,10 @@ def commit_import(
         raise ValueError("请提供 preview_token 或 rows")
     if not work_rows:
         raise ValueError("没有可导入的行")
+    try:
+        env_doc = ps.project_env(pid)
+    except KeyError:
+        env_doc = {}
     created = updated = skipped = 0
     results: list[dict[str, Any]] = []
     for item in work_rows:
@@ -334,7 +381,20 @@ def commit_import(
         if not isinstance(payload, dict):
             skipped += 1
             continue
-        row = _norm_import_row(payload, int(item.get("index") or 0))
+        payload = dict(payload)
+        if fill_plat and not str(payload.get("platform") or "").strip():
+            payload["platform"] = fill_plat
+        idx = int(payload.get("index") or item.get("row_index") or 0)
+        row = _norm_import_row(payload, idx, "", env_doc)
+        if not str(row.get("platform") or "").strip():
+            skipped += 1
+            results.append({
+                "row_index": item.get("row_index"),
+                "case_id": str(row.get("case_id") or ""),
+                "status": "skipped",
+                "reason": "missing_platform",
+            })
+            continue
         action_raw = str(item.get("on_conflict") or default_on_conflict or "skip").strip().lower()
         on_conflict: ConflictAction = "overwrite" if action_raw == "overwrite" else "skip"
         status, saved = apply_import_row(pid, rid, row, on_conflict=on_conflict)

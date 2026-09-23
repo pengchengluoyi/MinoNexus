@@ -1,6 +1,7 @@
 """短信验证码请求按钮：只认布局，不猜 App 固定文案。
 
-常见形态：宽手机号 EditText，右侧同一行一个可点的短文案控件。
+安卓：宽 EditText + 同行发送钮（`android.widget.*`）。
+Web：走 `ui_dom` 的 DOM 输入框 + 同一套几何；禁止用 EditText 规则匹配 DOM。
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from mino_nexus.loop.ui_consent import (
 )
 
 _PHONE_DIGITS_RE = re.compile(r"^1\d{10}$")
+_EMAIL_AT_RE = re.compile(r"@")
 _ACTION_TEXT_MAX = 16
 _ACTION_TEXT_MIN = 1
 _MIN_PHONE_FIELD_WIDTH_RATIO = 0.28
@@ -98,11 +100,66 @@ def _action_right_of_phone(action: dict[str, Any], phone: dict[str, Any]) -> boo
     return acx > pcx + (pb[2] - pb[0]) * 0.15
 
 
+def find_android_email_field(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """安卓：最像邮箱输入框的 EditText（含 @ 或 email/邮箱 提示）。"""
+    pool = [n for n in (nodes or []) if isinstance(n, dict)]
+    if not pool:
+        return None
+    sw, sh = _screen_wh(pool)
+    min_w = int(sw * _MIN_PHONE_FIELD_WIDTH_RATIO) if sw > 0 else 200
+    ranked: list[tuple[int, dict[str, Any]]] = []
+    for node in pool:
+        if not _is_edittext(node):
+            continue
+        b = _bounds(node)
+        w, h = _size(b)
+        if w < min_w or h <= 0:
+            continue
+        label = _label_text(node)
+        score = min(40, w // max(1, min_w // 4))
+        low = label.lower()
+        if _EMAIL_AT_RE.search(label):
+            score += 90
+        if "email" in low or "邮箱" in label or "mail" in low:
+            score += 50
+        from mino_nexus.loop.hierarchy_slots import node_flag
+
+        if node_flag(node, "focused"):
+            score += 25
+        cy = _center(b)[1]
+        if sh > 0 and cy < sh * 0.72:
+            score += 10
+        ranked.append((score, node))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda row: row[0], reverse=True)
+    best_score, best = ranked[0]
+    if best_score < 30:
+        return None
+    return best
+
+
+def android_email_field_filled(nodes: list[dict[str, Any]]) -> bool:
+    field = find_android_email_field(nodes)
+    if field is None:
+        return False
+    return bool(_EMAIL_AT_RE.search(_label_text(field)))
+
+
+def find_email_field(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """兼容旧调用：默认安卓 EditText 规则。"""
+    return find_android_email_field(nodes)
+
+
+def email_field_filled(nodes: list[dict[str, Any]]) -> bool:
+    return android_email_field_filled(nodes)
+
+
 def find_send_code_button(
     nodes: list[dict[str, Any]],
     phone: dict[str, Any],
 ) -> Optional[dict[str, Any]]:
-    """手机号输入框同行、偏右的可点短文案控件。"""
+    """输入框同行、偏右的可点短文案控件（手机号或邮箱框作锚点）。"""
     pool = [n for n in (nodes or []) if isinstance(n, dict)]
     if not pool or phone is None:
         return None
@@ -166,6 +223,46 @@ def _find_send_button_below_or_inline(
 def phone_field_filled(nodes: list[dict[str, Any]]) -> bool:
     phone = find_phone_field(nodes)
     return phone is not None and _phone_digits_in_node(phone)
+
+
+def credential_field_for_login(
+    nodes: list[dict[str, Any]],
+    *,
+    login_kind: str = "phone",
+    channel: str = "android",
+) -> Optional[dict[str, Any]]:
+    from mino_nexus.loop.ui_channel import UiChannel
+    from mino_nexus.loop.ui_dom import find_dom_email_field, find_dom_phone_field
+
+    kind = str(login_kind or "phone").strip().lower()
+    ch = str(channel or UiChannel.ANDROID.value).strip().lower()
+    if ch in (UiChannel.WEB.value, "web_dom", "playwright"):
+        if kind == "email":
+            return find_dom_email_field(nodes)
+        return find_dom_phone_field(nodes)
+    if kind == "email":
+        return find_android_email_field(nodes)
+    return find_phone_field(nodes)
+
+
+def credential_field_filled(
+    nodes: list[dict[str, Any]],
+    *,
+    login_kind: str = "phone",
+    channel: str = "android",
+) -> bool:
+    from mino_nexus.loop.ui_channel import UiChannel
+    from mino_nexus.loop.ui_dom import dom_email_field_filled, dom_phone_field_filled
+
+    kind = str(login_kind or "phone").strip().lower()
+    ch = str(channel or UiChannel.ANDROID.value).strip().lower()
+    if ch in (UiChannel.WEB.value, "web_dom", "playwright"):
+        if kind == "email":
+            return dom_email_field_filled(nodes)
+        return dom_phone_field_filled(nodes)
+    if kind == "email":
+        return android_email_field_filled(nodes)
+    return phone_field_filled(nodes)
 
 
 def tap_params_for_send_button(node: dict[str, Any], nodes: list[dict[str, Any]]) -> dict[str, Any]:

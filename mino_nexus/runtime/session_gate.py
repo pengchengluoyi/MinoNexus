@@ -359,24 +359,27 @@ def compile_sms_send_hint(
     accounts_brief: str = "",
     hierarchy_nodes: list[dict[str, Any]] | None = None,
     has_request_sms_code: bool = False,
+    ui_channel: str = "android",
 ) -> str:
-    """手机号已填且屏上仍有发送控件时，引导 request_sms_code。"""
+    """凭证已填且屏上仍有发送控件时，引导 request_sms_code（按渠道选 DOM / 安卓 hierarchy）。"""
     brief = str(accounts_brief or "").strip()
     if not brief or "未租" in brief or brief.startswith("（未租"):
         return ""
     if not has_request_sms_code:
         return ""
     from mino_nexus.loop.ui_sms_request import (
-        find_phone_field,
+        credential_field_for_login,
+        credential_field_filled,
         find_send_code_button,
-        phone_field_filled,
     )
 
     nodes = [n for n in (hierarchy_nodes or []) if isinstance(n, dict)]
-    if not nodes or not phone_field_filled(nodes):
+    ch = str(ui_channel or "android").strip().lower()
+    kind = "phone"
+    if not nodes or not credential_field_filled(nodes, login_kind=kind, channel=ch):
         return ""
-    phone = find_phone_field(nodes)
-    if phone is None or find_send_code_button(nodes, phone) is None:
+    anchor = credential_field_for_login(nodes, login_kind=kind, channel=ch)
+    if anchor is None or find_send_code_button(nodes, anchor) is None:
         return ""
     return (
         "【短信登录】手机号已填入且右侧仍有发送控件："

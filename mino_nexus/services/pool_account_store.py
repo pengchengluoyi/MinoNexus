@@ -176,6 +176,7 @@ def upsert_one(project_id: str, row: dict[str, Any]) -> dict[str, Any] | None:
         return None
     with session_scope() as db:
         _upsert_row(db, pid, row)
+        db.flush()
         aid = str(row.get("account_id") or row.get("id") or "").strip()
         acc = (
             db.query(PoolAccount)

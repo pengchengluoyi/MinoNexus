@@ -79,8 +79,13 @@ class RunContext:
     case_scene: dict[str, Any] = field(default_factory=dict)
     app_version: str = ""
     env_profile: str = ""
+    env_surface: str = ""
     env_label: str = ""
     env_fact: dict[str, Any] = field(default_factory=dict)
+    # 发码时刻（unix），Gmail IMAP 取码时间窗
+    otp_sent_at: float = 0.0
+    # 跑批发起用户，用于读取 gmail_otp 插件密钥
+    plugin_user_id: str = ""
 
     # ---- 拆分新增：这条 run 派给了哪个节点 ----
     node_id: str = ""
@@ -282,6 +287,10 @@ LEGACY_WEB_SLOT_SNS = frozenset({"web-local", "web_local"})
 def _looks_ios_token(value: str) -> bool:
     t = str(value or "").lower()
     return "ios" in t or "iphone" in t or "ipad" in t
+
+
+# 单 Scout 节点 Web 槽 Playwright 并行上限（与 MinoScout PLAYWRIGHT_PARALLEL_LANES 一致）
+WEB_PLAYWRIGHT_PARALLEL_LANES = 4
 
 
 def is_legacy_web_sn(sn: str = "") -> bool:

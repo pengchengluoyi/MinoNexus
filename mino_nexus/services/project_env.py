@@ -84,6 +84,8 @@ def default_project_env() -> dict:
         "channels": channels,
         "pipeline": [e["key"] for e in environments],
         "profiles": profiles,
+        "gmail_inbox": _norm_gmail_inbox({}),
+        "channel_secrets": {},
     }
 
 
@@ -99,7 +101,7 @@ def _infer_kind_platform(cid: str, kind: str = "", platform: str = "") -> Tuple[
         preset = _PLATFORM_PRESET[cid]
         return str(preset["kind"]), str(preset["platform"])
     for prefix, pk, pp in _KIND_PREFIX:
-        if cid == prefix or cid.startswith(prefix + "-"):
+        if cid == prefix or cid.startswith(prefix + "-") or cid.startswith(prefix + "."):
             return pk, pp
     if k in CHANNEL_KINDS:
         fallback = {"app": "android", "web": "web", "server": "server"}[k]
@@ -146,7 +148,7 @@ def _norm_channel(raw: Any, seen: set) -> Optional[dict]:
     else:
         alias_slug = _slug(alias, "")
         if alias_slug and alias_slug != platform:
-            cid = f"{platform}-{alias_slug}"
+            cid = f"{platform}.{alias_slug}"
         else:
             cid = alias_slug or platform
         stem = cid or platform
@@ -165,11 +167,21 @@ def _norm_channel(raw: Any, seen: set) -> Optional[dict]:
         label = preset["label"]
     placeholder = str(raw.get("placeholder") or (preset or {}).get("placeholder") or "").strip()[:80]
     seen.add(cid)
+    app_ident = _slug(str(raw.get("app_identifier") or ""), "")
+    if not app_ident and alias:
+        app_ident = _slug(alias, "")
+    elif cid and cid not in _PLATFORM_PRESET and "." in cid:
+        app_ident = cid.split(".", 1)[-1]
+    elif cid and cid not in _PLATFORM_PRESET and "-" in cid:
+        parts = cid.split("-", 1)
+        if len(parts) == 2 and parts[0] in CHANNEL_PLATFORMS:
+            app_ident = parts[1]
     return {
         "id": cid,
         "kind": kind,
         "platform": platform,
         "alias": alias,
+        "app_identifier": app_ident,
         "third_party": bool(third_party),
         "label": alias or label,
         "field": field,
@@ -177,8 +189,9 @@ def _norm_channel(raw: Any, seen: set) -> Optional[dict]:
     }
 
 
-OTP_MODES = ("auto", "fixed", "adapter", "hitl")
-PHONE_MODES = ("auto", "pool", "adapter", "hitl")
+OTP_MODES = ("auto", "fixed", "gmail", "hitl")
+LOGIN_MODES = ("auto", "pool", "hitl")
+LOGIN_KINDS = ("phone", "email")
 
 
 def default_env_secrets() -> dict:
@@ -186,42 +199,107 @@ def default_env_secrets() -> dict:
         "otp": {
             "mode": "auto",
             "fixed": "",
-            "adapter": "http",
-            "adapter_url": "",
-            "adapter_header": "",
+            "from_allowlist": [],
+            "subject_contains": "",
+            "poll_interval_ms": 3000,
+            "max_wait_ms": 90000,
         },
-        "phone": {
-            "mode": "auto",
-            "adapter": "http",
-            "adapter_url": "",
-            "adapter_header": "",
-        },
+        "login": {"mode": "auto", "kind": "phone"},
+        "phone": {"mode": "auto"},
     }
 
 
-def _norm_secret_slot(raw: Any, *, slot: str) -> dict:
+def _migrate_legacy_mode(mode: str, *, slot: str) -> str:
+    m = str(mode or "auto").strip().lower()
+    if m == "adapter":
+        return "hitl"
+    allowed = OTP_MODES if slot == "otp" else LOGIN_MODES
+    if m not in allowed:
+        return "auto"
+    return m
+
+
+def _norm_otp_slot(raw: Any) -> dict:
     src = raw if isinstance(raw, dict) else {}
-    modes = OTP_MODES if slot == "otp" else PHONE_MODES
-    mode = str(src.get("mode") or "auto").strip().lower()
-    if mode not in modes:
-        mode = "auto"
-    out = {
+    mode = _migrate_legacy_mode(src.get("mode"), slot="otp")
+    allow = src.get("from_allowlist")
+    if isinstance(allow, str):
+        allow = [x.strip() for x in allow.split(",") if x.strip()]
+    elif not isinstance(allow, list):
+        allow = []
+    allow = [str(x).strip()[:120] for x in allow if str(x).strip()][:20]
+    return {
         "mode": mode,
-        "adapter": str(src.get("adapter") or "http").strip()[:40] or "http",
-        "adapter_url": str(src.get("adapter_url") or "").strip()[:400],
-        "adapter_header": str(src.get("adapter_header") or "").strip()[:240],
+        "fixed": str(src.get("fixed") or "").strip()[:32],
+        "from_allowlist": allow,
+        "subject_contains": str(src.get("subject_contains") or "").strip()[:120],
+        "poll_interval_ms": max(1000, min(int(src.get("poll_interval_ms") or 3000), 30_000)),
+        "max_wait_ms": max(5000, min(int(src.get("max_wait_ms") or 90_000), 180_000)),
     }
-    if slot == "otp":
-        out["fixed"] = str(src.get("fixed") or "").strip()[:32]
-    return out
+
+
+def _norm_login_slot(raw: Any) -> dict:
+    src = raw if isinstance(raw, dict) else {}
+    if not src and isinstance(raw, type(None)):
+        src = {}
+    mode = _migrate_legacy_mode(src.get("mode"), slot="login")
+    kind = str(src.get("kind") or "phone").strip().lower()
+    if kind not in LOGIN_KINDS:
+        kind = "phone"
+    return {"mode": mode, "kind": kind}
 
 
 def _norm_env_secrets(raw: Any) -> dict:
     src = raw if isinstance(raw, dict) else {}
+    login_src = src.get("login") if isinstance(src.get("login"), dict) else {}
+    if not login_src and isinstance(src.get("phone"), dict):
+        login_src = {"mode": src["phone"].get("mode"), "kind": src.get("login_kind")}
+    login = _norm_login_slot(login_src)
     return {
-        "otp": _norm_secret_slot(src.get("otp"), slot="otp"),
-        "phone": _norm_secret_slot(src.get("phone"), slot="phone"),
+        "otp": _norm_otp_slot(src.get("otp")),
+        "login": login,
+        "phone": {"mode": login["mode"]},
     }
+
+
+def _norm_gmail_inbox(raw: Any) -> dict:
+    import ast
+
+    src = raw if isinstance(raw, dict) else {}
+    addr = src.get("address") if isinstance(src, dict) else None
+    if isinstance(addr, dict):
+        addr = addr.get("address")
+    if addr is None and not isinstance(raw, dict):
+        addr = raw
+    s = str(addr or "").strip()
+    if s.startswith("{") and "address" in s:
+        try:
+            parsed = ast.literal_eval(s)
+            if isinstance(parsed, dict):
+                s = str(parsed.get("address") or "").strip()
+        except (SyntaxError, ValueError):
+            pass
+    return {"address": s[:120]}
+
+
+def _norm_channel_secrets(raw: Any, channels: List[dict], env_keys: set[str]) -> dict:
+    src = raw if isinstance(raw, dict) else {}
+    ch_ids = {str(c.get("id") or "") for c in channels if c.get("id")}
+    out: dict = {}
+    for cid, per_env in src.items():
+        if cid not in ch_ids or not isinstance(per_env, dict):
+            continue
+        row: dict = {}
+        for ek, slot in per_env.items():
+            env_k = _slug(str(ek or ""), "")
+            if env_k not in env_keys or not isinstance(slot, dict):
+                continue
+            if bool(slot.get("inherit")):
+                continue
+            row[env_k] = _norm_env_secrets(slot)
+        if row:
+            out[cid] = row
+    return out
 
 
 def env_secrets(env_doc: dict | None, env_key: str = "") -> dict:
@@ -335,12 +413,15 @@ def normalize_project_env(raw: Any) -> dict:
 
     from mino_nexus.services.account_facet_schema import normalize_extensions
 
+    env_keys = {e["key"] for e in environments}
     return {
         "default_profile": default_profile,
         "environments": environments,
         "channels": channels,
         "pipeline": pipeline,
         "profiles": profiles,
+        "gmail_inbox": _norm_gmail_inbox(raw.get("gmail_inbox")),
+        "channel_secrets": _norm_channel_secrets(raw.get("channel_secrets"), channels, env_keys),
         "account_facet_extensions": normalize_extensions(raw.get("account_facet_extensions")),
         "account_template_ids": _norm_template_ids(raw.get("account_template_ids")),
         "account_pool_local": raw.get("account_pool_local")
@@ -598,6 +679,8 @@ def save_one_test_account(
             for d in merged_pool_field_defs(doc)
             if str(d.get("key") or "")
         }
+        # 五维核心键不在模板 def 里，但 Studio 保存时会带 health
+        allowed_facet_keys = def_keys | {"health"}
         prev_f = old.get("facets") if isinstance(old.get("facets"), dict) else {}
         merged_f = dict(prev_f)
         incoming = payload["facets"]
@@ -605,7 +688,7 @@ def save_one_test_account(
         # 缺 key 不能当作「用户清空」，否则会擦掉 Console 配的扩展 facet（如 field_7065t5）。
         for key, raw in incoming.items():
             k = str(key or "").strip()
-            if not k or k not in def_keys:
+            if not k or k not in allowed_facet_keys:
                 continue
             if raw is None or not str(raw).strip():
                 if k != "health":

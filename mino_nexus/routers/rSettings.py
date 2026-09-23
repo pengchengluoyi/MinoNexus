@@ -15,6 +15,10 @@ from mino_nexus.services import settings_store as ss
 router = APIRouter(prefix="/settings", tags=["Settings"])
 
 
+def _plugin_user(sess: dict[str, Any]) -> str:
+    return str(sess.get("user_id") or "").strip()
+
+
 class MailBody(BaseModel):
     host: str = ""
     port: int = 587
@@ -399,21 +403,26 @@ class RobotIntegrationUpdate(BaseModel):
 
 
 @router.get("/robots/bots")
-def list_robot_bots(_sess: dict = Depends(current_session)):
-    return ok({"bots": ps.list_robot_integrations()})
+def list_robot_bots(sess: dict = Depends(current_session)):
+    return ok({"bots": ps.list_robot_integrations(_plugin_user(sess))})
 
 
 @router.post("/robots/bots")
-def create_robot_bot(body: RobotIntegrationCreate, _sess: dict = Depends(current_session)):
+def create_robot_bot(body: RobotIntegrationCreate, sess: dict = Depends(current_session)):
     try:
-        row = ps.create_robot_integration(platform=body.platform, name=body.name, credentials=body.credentials)
+        row = ps.create_robot_integration(
+            platform=body.platform,
+            name=body.name,
+            credentials=body.credentials,
+            user_id=_plugin_user(sess),
+        )
     except Exception as e:
         http_error(e)
     return ok(row, msg="机器人已添加")
 
 
 @router.put("/robots/bots/{bot_id}")
-def update_robot_bot(bot_id: str, body: RobotIntegrationUpdate, _sess: dict = Depends(current_session)):
+def update_robot_bot(bot_id: str, body: RobotIntegrationUpdate, sess: dict = Depends(current_session)):
     try:
         row = ps.update_robot_integration(
             bot_id,
@@ -421,6 +430,7 @@ def update_robot_bot(bot_id: str, body: RobotIntegrationUpdate, _sess: dict = De
             name=body.name,
             credentials=body.credentials,
             clear_secret=body.clear_secret,
+            user_id=_plugin_user(sess),
         )
     except Exception as e:
         http_error(e)
@@ -428,9 +438,9 @@ def update_robot_bot(bot_id: str, body: RobotIntegrationUpdate, _sess: dict = De
 
 
 @router.delete("/robots/bots/{bot_id}")
-def delete_robot_bot(bot_id: str, _sess: dict = Depends(current_session)):
+def delete_robot_bot(bot_id: str, sess: dict = Depends(current_session)):
     try:
-        ps.delete_robot_integration(bot_id)
+        ps.delete_robot_integration(bot_id, user_id=_plugin_user(sess))
     except Exception as e:
         http_error(e)
     return ok(msg="已删除")
@@ -489,8 +499,8 @@ class ZentaoBugTestBody(BaseModel):
 
 
 @router.get("/plugins")
-def list_plugins(_sess: dict = Depends(current_session)):
-    return ok(ps.list_integration_plugins())
+def list_plugins(sess: dict = Depends(current_session)):
+    return ok(ps.list_integration_plugins(_plugin_user(sess)))
 
 
 @router.post("/plugins/feishu/wiki/debug")
@@ -544,12 +554,13 @@ def test_zentao_plugin(body: ZentaoTestBody, _sess: dict = Depends(current_sessi
 
 
 @router.post("/plugins/zentao/token")
-def fetch_zentao_plugin_token(body: ZentaoTokenBody, _sess: dict = Depends(current_session)):
+def fetch_zentao_plugin_token(body: ZentaoTokenBody, sess: dict = Depends(current_session)):
     try:
         info = ps.fetch_zentao_token(url=body.url, account=body.account, password=body.password)
         plugin = ps.save_integration_plugin(
             "zentao",
             {"url": info.get("url") or "", "account": info.get("account") or "", "token": info.get("token") or ""},
+            _plugin_user(sess),
         )
     except Exception as e:
         http_error(e)
@@ -571,18 +582,22 @@ def test_zentao_plugin_bug(_body: ZentaoBugTestBody, _sess: dict = Depends(curre
 
 
 @router.get("/plugins/{plugin_id}")
-def get_plugin(plugin_id: str, _sess: dict = Depends(current_session)):
+def get_plugin(plugin_id: str, sess: dict = Depends(current_session)):
     try:
-        data = ps.get_integration_plugin(plugin_id)
+        data = ps.get_integration_plugin(plugin_id, _plugin_user(sess))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return ok(data)
 
 
 @router.put("/plugins/{plugin_id}")
-def save_plugin(plugin_id: str, body: PluginSaveBody, _sess: dict = Depends(current_session)):
+def save_plugin(plugin_id: str, body: PluginSaveBody, sess: dict = Depends(current_session)):
     try:
-        data = ps.save_integration_plugin(plugin_id, body.model_dump(exclude_unset=True))
+        data = ps.save_integration_plugin(
+            plugin_id,
+            body.model_dump(exclude_unset=True),
+            _plugin_user(sess),
+        )
     except Exception as e:
         http_error(e)
     return ok(data, msg="已保存")

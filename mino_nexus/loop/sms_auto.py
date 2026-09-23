@@ -15,6 +15,7 @@ def sms_send_geometry_ready(
     accounts_brief: str,
     hierarchy_nodes: list[dict[str, Any]] | None,
     has_request_sms_code: bool,
+    ui_channel: str = "android",
 ) -> bool:
     if not has_request_sms_code:
         return False
@@ -22,6 +23,7 @@ def sms_send_geometry_ready(
         accounts_brief=accounts_brief,
         hierarchy_nodes=hierarchy_nodes,
         has_request_sms_code=True,
+        ui_channel=ui_channel,
     )
     return bool(hint)
 

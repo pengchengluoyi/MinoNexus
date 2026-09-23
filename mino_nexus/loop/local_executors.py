@@ -399,6 +399,35 @@ def _exec_ok(result: Any) -> bool:
     return st in ("pass", "done")
 
 
+def _otp_context(ctx: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """(env_doc, effective_secrets, otp_slot) — 失败时返回空 dict。"""
+    try:
+        from mino_nexus.services import project_store as ps
+        from mino_nexus.services.otp_resolve import resolve_effective_secrets
+
+        app_id = str(getattr(ctx, "app_id", "") or "").strip() if ctx is not None else ""
+        if not app_id:
+            return {}, {}, {}
+        app = ps.require_app(app_id)
+        project_id = str(app.get("project_id") or "").strip()
+        if not project_id:
+            return {}, {}, {}
+        env_doc = ps.project_env(project_id)
+        env_key = str(getattr(ctx, "env_profile", "") or "test") if ctx is not None else "test"
+        surface = str(getattr(ctx, "env_surface", "") or "").strip()
+        secrets = resolve_effective_secrets(
+            env_doc,
+            env_profile=env_key,
+            env_surface=surface,
+        )
+        otp = secrets.get("otp") if isinstance(secrets, dict) else {}
+        if not isinstance(otp, dict):
+            otp = {}
+        return env_doc, secrets, otp
+    except Exception:
+        return {}, {}, {}
+
+
 def _resolve_otp(ctx: Any) -> tuple[str, str]:
     acc = getattr(ctx, "picked_account", None) if ctx is not None else None
     if isinstance(acc, dict):
@@ -406,39 +435,88 @@ def _resolve_otp(ctx: Any) -> tuple[str, str]:
             val = str(acc.get(key) or "").strip()
             if val:
                 return val, "account"
-    try:
-        from mino_nexus.services import project_store as ps
-        from mino_nexus.services.project_env import env_secrets
+    env_doc, _secrets, otp = _otp_context(ctx)
+    if not otp:
+        return "", "missing"
+    fixed = str(otp.get("fixed") or "").strip()
+    mode = str(otp.get("mode") or "auto").strip().lower()
+    if mode == "hitl":
+        return "", "hitl"
+    if fixed and mode in ("fixed", "auto"):
+        return fixed, "env_fixed"
+    if mode in ("gmail", "auto"):
+        from mino_nexus.services.otp_resolve import gmail_inbox_address
 
-        app_id = str(getattr(ctx, "app_id", "") or "").strip() if ctx is not None else ""
-        if not app_id:
-            return "", "missing"
-        app = ps.require_app(app_id)
-        project_id = str(app.get("project_id") or "").strip()
-        if not project_id:
-            return "", "missing"
-        env_doc = ps.project_env(project_id)
-        env_key = str(getattr(ctx, "env_profile", "") or "test") if ctx is not None else "test"
-        secrets = env_secrets(env_doc, env_key)
-        otp = secrets.get("otp") if isinstance(secrets, dict) else {}
-        if not isinstance(otp, dict):
-            otp = {}
-        fixed = str(otp.get("fixed") or "").strip()
-        mode = str(otp.get("mode") or "auto").strip().lower()
-        if fixed and mode in ("fixed", "auto"):
-            return fixed, "env_fixed"
-    except Exception:
+        if gmail_inbox_address(env_doc):
+            return "", "gmail"
+    if mode == "fixed" and not fixed:
         return "", "missing"
     return "", "missing"
 
 
+def _lease_email_for_otp(ctx: Any) -> str:
+    acc = getattr(ctx, "picked_account", None) if ctx is not None else None
+    if isinstance(acc, dict):
+        for key in ("email", "login_email"):
+            val = str(acc.get(key) or "").strip()
+            if val:
+                return val
+    return ""
+
+
+def _fetch_gmail_otp(ctx: Any) -> str:
+    from mino_nexus.services import plugins_store
+    from mino_nexus.services.gmail_otp import GmailOtpError, fetch_otp_via_imap
+    from mino_nexus.services.otp_resolve import gmail_inbox_address
+
+    env_doc, _secrets, otp = _otp_context(ctx)
+    inbox = gmail_inbox_address(env_doc)
+    uid = str(getattr(ctx, "plugin_user_id", "") or "").strip()
+    app_password = plugins_store.get_gmail_app_password(uid)
+    if not inbox:
+        raise GmailOtpError("项目环境未配置 Gmail 收件箱地址")
+    if not app_password:
+        raise GmailOtpError("请在 Studio → 插件 → Gmail 收信 中配置应用专用密码")
+    since = float(getattr(ctx, "otp_sent_at", 0) or 0) or None
+    return fetch_otp_via_imap(
+        inbox_address=inbox,
+        app_password=app_password,
+        to_address=_lease_email_for_otp(ctx),
+        since_ts=since,
+        from_allowlist=list(otp.get("from_allowlist") or []),
+        subject_contains=str(otp.get("subject_contains") or ""),
+        poll_interval_ms=int(otp.get("poll_interval_ms") or 3000),
+        max_wait_ms=int(otp.get("max_wait_ms") or 90_000),
+    )
+
+
 def _get_otp(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
     code, source = _resolve_otp(ctx)
+    if not code and source == "gmail":
+        try:
+            code = _fetch_gmail_otp(ctx)
+            source = "gmail"
+        except Exception as exc:
+            from mino_nexus.services.gmail_otp import GmailOtpError
+
+            summary = str(exc) if isinstance(exc, GmailOtpError) else f"Gmail 取码失败：{exc}"
+            return _result(
+                event,
+                status=EventStatus.FAIL,
+                summary=summary,
+                error="gmail otp failed",
+                executor="internal",
+                elapsed_ms=int((time.time() - t0) * 1000),
+            )
     if not code:
+        if source == "hitl":
+            summary = "当前环境接码为人工（hitl），请 signal_ask_human 或填写账号 otp"
+        else:
+            summary = "未配置验证码：请在账号 otp、环境固定码、或 Gmail 收信（插件+收件箱）中配置"
         return _result(
             event,
             status=EventStatus.FAIL,
-            summary="未配置验证码：请在测试账号 otp 字段或项目环境 otp.fixed 填写，勿盲填固定码",
+            summary=summary,
             error="otp not configured",
             executor="internal",
             elapsed_ms=int((time.time() - t0) * 1000),
@@ -543,6 +621,62 @@ def _accept_legal_consent(
     )
 
 
+_WEB_SEND_LABELS = (
+    "发送验证码",
+    "获取验证码",
+    "发送",
+    "Send code",
+    "Send",
+    "Get code",
+    "Verify",
+)
+
+
+def _web_tap_send_code(
+    event: PlanEvent,
+    *,
+    ctx: Any,
+    router: Any,
+    t0: float,
+) -> EventResult:
+    if router is None:
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary="未连接 Web 执行节点，无法点发送",
+            error="no router",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
+    for lab in _WEB_SEND_LABELS:
+        tap = _dispatch_device(
+            router,
+            ctx=ctx,
+            seq=event.seq,
+            cap="tap_element",
+            params={"selector_text": lab, "text": lab},
+            label=f"Web 发码：点「{lab}」",
+        )
+        if _exec_ok(tap):
+            if ctx is not None:
+                ctx.otp_sent_at = time.time()
+            return _result(
+                event,
+                status=EventStatus.PASS,
+                summary=f"已点击 Web 发送控件「{lab}」",
+                executor="internal+playwright",
+                elapsed_ms=int((time.time() - t0) * 1000),
+            )
+    return _result(
+        event,
+        status=EventStatus.FAIL,
+        summary="Web 未找到发送验证码按钮（DOM/文案）。请 tap_element 点发送或检查页面。",
+        error="web send control not found",
+        executor="internal",
+        elapsed_ms=int((time.time() - t0) * 1000),
+    )
+
+
 def _request_sms_code(
     event: PlanEvent,
     *,
@@ -550,36 +684,65 @@ def _request_sms_code(
     router: Any,
     t0: float,
 ) -> EventResult:
+    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx, ui_channel_label
     from mino_nexus.loop.ui_consent import any_focused_input
+    from mino_nexus.services.otp_resolve import login_kind_from_secrets
+
     from mino_nexus.loop.ui_sms_request import (
-        find_phone_field,
+        credential_field_filled,
+        credential_field_for_login,
         find_send_code_button,
-        phone_field_filled,
         tap_params_for_send_button,
     )
 
     nodes = _hierarchy_nodes(ctx)
-    phone = find_phone_field(nodes)
-    if phone is None:
+    _env, secrets, _otp = _otp_context(ctx)
+    login_kind = login_kind_from_secrets(secrets)
+    channel = ui_channel_from_ctx(ctx)
+    ch_key = ui_channel_label(channel)
+    anchor = credential_field_for_login(nodes, login_kind=login_kind, channel=ch_key)
+    filled = credential_field_filled(nodes, login_kind=login_kind, channel=ch_key)
+    if channel == UiChannel.WEB and login_kind == "email" and not filled:
+        acc = dict(getattr(ctx, "picked_account", None) or {})
+        em = str(acc.get("email") or "").strip()
+        if "@" in em:
+            filled = True
+    if channel == UiChannel.WEB and filled and anchor is None:
+        return _web_tap_send_code(event, ctx=ctx, router=router, t0=t0)
+    if anchor is None:
+        if login_kind == "email":
+            msg = "未找到邮箱输入框。请先 input_text(field=email) 填入租号邮箱。"
+            err = "email field not found"
+        else:
+            msg = "未找到宽手机号输入框。请先 input_text 填入手机号，或 tap_element 聚焦输入框。"
+            err = "phone field not found"
         return _result(
             event,
             status=EventStatus.FAIL,
-            summary="未找到宽手机号输入框。请先 input_text 填入手机号，或 tap_element 聚焦输入框。",
-            error="phone field not found",
+            summary=msg,
+            error=err,
             executor="internal",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
-    if not phone_field_filled(nodes):
+    if not filled:
+        if login_kind == "email":
+            msg = "邮箱框尚无有效地址。请先 input_text(field=email) 填租号邮箱。"
+            err = "email not filled"
+        else:
+            msg = "手机号输入框尚无 11 位号码。请先 input_text(field=phone) 或粘贴已租账号手机号。"
+            err = "phone not filled"
         return _result(
             event,
             status=EventStatus.FAIL,
-            summary="手机号输入框尚无 11 位号码。请先 input_text(field=phone) 或粘贴已租账号手机号。",
-            error="phone not filled",
+            summary=msg,
+            error=err,
             executor="internal",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
-    btn = find_send_code_button(nodes, phone)
+    btn = find_send_code_button(nodes, anchor)
     if btn is None:
+        if channel == UiChannel.WEB:
+            return _web_tap_send_code(event, ctx=ctx, router=router, t0=t0)
         return _result(
             event,
             status=EventStatus.FAIL,
@@ -597,7 +760,7 @@ def _request_sms_code(
             executor="internal",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
-    if any_focused_input(nodes):
+    if channel != UiChannel.WEB and any_focused_input(nodes):
         back = _dispatch_device(
             router,
             ctx=ctx,
@@ -624,6 +787,8 @@ def _request_sms_code(
         label="点发送验证码控件",
     )
     if _exec_ok(tap):
+        if ctx is not None:
+            ctx.otp_sent_at = time.time()
         return _result(
             event,
             status=EventStatus.PASS,

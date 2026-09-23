@@ -14,8 +14,13 @@ from mino_nexus.loop.agent_stream import emit_testing_task
 from mino_nexus.loop.web_env import release_devices_for_run
 from mino_nexus.routers.deps import current_session
 from mino_nexus.services.ui_devices import ui_devices
+from mino_nexus.runtime.run_context import WEB_PLAYWRIGHT_PARALLEL_LANES
 
 router = APIRouter(prefix="/case-runner", tags=["CaseRunner"])
+
+
+def _plugin_user(sess: dict[str, Any]) -> str:
+    return str(sess.get("user_id") or "").strip()
 
 
 class ExploreRequest(BaseModel):
@@ -54,6 +59,7 @@ class RunRequest(BaseModel):
     provider_id: str = ""
     playwright_headless: bool = True
     env_profile: str = ""
+    env_surface: str = ""
 
 
 class PromoteBaselineRequest(BaseModel):
@@ -117,13 +123,26 @@ def list_devices(only_online: bool = Query(True), _sess: dict = Depends(current_
     if only_online:
         items = [d for d in items if d.get("status") == "online"]
     for row in items:
-        busy = run_store.busy_task_for_sn(str(row.get("sn") or ""))
-        row["busy_task_id"] = busy
+        sn = str(row.get("sn") or "")
+        plat = str(row.get("platform") or row.get("device_type") or row.get("type") or "")
+        from mino_nexus.runtime.run_context import is_web_slot
+
+        if is_web_slot(sn, plat):
+            ids = run_store.running_run_ids_for_sn(sn, limit=WEB_PLAYWRIGHT_PARALLEL_LANES + 1)
+            row["active_run_count"] = len(ids)
+            row["web_parallel_max"] = WEB_PLAYWRIGHT_PARALLEL_LANES
+            row["web_parallel_full"] = len(ids) >= WEB_PLAYWRIGHT_PARALLEL_LANES
+            row["busy_task_id"] = ""
+        else:
+            row["active_run_count"] = 0
+            row["web_parallel_max"] = 0
+            row["web_parallel_full"] = False
+            row["busy_task_id"] = run_store.busy_task_for_sn(sn)
     return ok({"count": len(items), "items": items})
 
 
 @router.post("/run")
-def run_cases(body: RunRequest, _sess: dict = Depends(current_session)):
+def run_cases(body: RunRequest, sess: dict = Depends(current_session)):
     if not str(body.app_id or "").strip():
         raise HTTPException(status_code=400, detail="缺少 app_id")
     try:
@@ -151,6 +170,8 @@ def run_cases(body: RunRequest, _sess: dict = Depends(current_session)):
             provider_id=str(body.provider_id or "").strip(),
             playwright_headless=bool(body.playwright_headless),
             env_profile=str(body.env_profile or "").strip(),
+            env_surface=str(body.env_surface or "").strip(),
+            plugin_user_id=_plugin_user(sess),
         )
         return ok(snapshot, msg="AI-led 回归任务已启动")
     except cr.DeviceBusy as exc:
@@ -158,12 +179,22 @@ def run_cases(body: RunRequest, _sess: dict = Depends(current_session)):
             status_code=409,
             detail={"message": "device busy", "busy_task_id": exc.busy_task_id, "sn": exc.sn},
         ) from exc
+    except cr.WebSlotFull as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "web parallel full",
+                "sn": exc.sn,
+                "active": exc.active,
+                "max": exc.limit,
+            },
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/explore")
-def run_explore(body: ExploreRequest, _sess: dict = Depends(current_session)):
+def run_explore(body: ExploreRequest, sess: dict = Depends(current_session)):
     if not str(body.app_id or "").strip():
         raise HTTPException(status_code=400, detail="缺少 app_id")
     try:
@@ -181,12 +212,23 @@ def run_explore(body: ExploreRequest, _sess: dict = Depends(current_session)):
             async_exec=bool(body.async_exec),
             platform=body.platform or "android",
             playwright_headless=bool(body.playwright_headless),
+            plugin_user_id=_plugin_user(sess),
         )
         return ok(snapshot, msg="应用探索已启动")
     except cr.DeviceBusy as exc:
         raise HTTPException(
             status_code=409,
             detail={"message": "device busy", "busy_task_id": exc.busy_task_id, "sn": exc.sn},
+        ) from exc
+    except cr.WebSlotFull as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "web parallel full",
+                "sn": exc.sn,
+                "active": exc.active,
+                "max": exc.limit,
+            },
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -390,15 +432,28 @@ def retry_failed_cases(task_id: str, body: Optional[RetryFailedRequest] = None, 
     body = body or RetryFailedRequest()
     sn = (body.sn or "").strip()
     if sn:
-        busy = run_store.busy_task_for_sn(sn)
-        if busy:
-            raise HTTPException(status_code=409, detail={"message": "device busy", "busy_task_id": busy, "sn": sn})
+        from mino_nexus.runtime.run_context import is_web_slot
+
+        if not is_web_slot(sn, ""):
+            busy = run_store.busy_task_for_sn(sn)
+            if busy:
+                raise HTTPException(status_code=409, detail={"message": "device busy", "busy_task_id": busy, "sn": sn})
     try:
         result = cr.retry_failed(task_id, sn=sn)
     except cr.DeviceBusy as exc:
         raise HTTPException(
             status_code=409,
             detail={"message": "device busy", "busy_task_id": exc.busy_task_id, "sn": exc.sn},
+        ) from exc
+    except cr.WebSlotFull as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "web parallel full",
+                "sn": exc.sn,
+                "active": exc.active,
+                "max": exc.limit,
+            },
         ) from exc
     if not result.get("ok"):
         raise HTTPException(status_code=int(result.get("code") or 400), detail=result.get("reason") or "retry failed")

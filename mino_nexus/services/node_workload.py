@@ -7,6 +7,7 @@ from typing import Any
 from mino_nexus.core import protocol as P
 from mino_nexus.services.device_store import list_devices as stored_devices
 from mino_nexus.services.node_registry import NodeSession, get_registry
+from mino_nexus.runtime.run_context import WEB_PLAYWRIGHT_PARALLEL_LANES, is_web_slot
 from mino_nexus.services.run_store import get, running_run_ids_for_sn
 
 
@@ -34,13 +35,32 @@ def build_node_workload(node: NodeSession) -> dict[str, Any]:
             "nexus_run_ids": run_ids,
             "nexus_runs": nexus_runs,
             "busy": bool(scout or run_ids),
+            **(
+                {
+                    "web_parallel_active": len(run_ids),
+                    "web_parallel_max": WEB_PLAYWRIGHT_PARALLEL_LANES,
+                    "web_parallel_full": len(run_ids) >= WEB_PLAYWRIGHT_PARALLEL_LANES,
+                }
+                if is_web_slot(sn, dev.platform or "web")
+                else {}
+            ),
         })
+    web_sn = next((d["sn"] for d in devices_out if is_web_slot(d["sn"], d.get("platform") or "web")), "")
+    web_active = 0
+    if web_sn:
+        web_active = len(running_run_ids_for_sn(web_sn, limit=WEB_PLAYWRIGHT_PARALLEL_LANES + 1))
     return {
         "node_id": node.node_id,
         "alive": node.alive,
         "busy": node.busy,
         "active_runs": list(node.active_runs or []),
         "scout_version": node.scout_version or "",
+        "web_playwright_parallel": {
+            "sn": web_sn,
+            "active": web_active,
+            "max": WEB_PLAYWRIGHT_PARALLEL_LANES,
+            "full": web_active >= WEB_PLAYWRIGHT_PARALLEL_LANES,
+        },
         "devices": devices_out,
     }
 

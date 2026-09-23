@@ -62,9 +62,7 @@ mino_nexus/
 本地校验（不进 CI）：
 
 ```bash
-python tests/test_prompts.py
 python scripts/verify_no_prompt_literals.py
-python scripts/e2e_jobs_smoke.py
 ```
 
 ## 6. `nav_assist` 槽（agent-decide v7）
@@ -120,4 +118,10 @@ v7 同时往 system 块插了一节「导航 assist」，讲**怎么读这段**�
 底部风格条、横向列表等局部滚动：`swipe_direction` 应带 **`from_x/from_y/to_x/to_y`（0–1000 千分比）**，不要只靠 `direction` 在屏中心滑；可见目标名优先 `tap_element`。
 
 升级入口：`upgrade_agent_decide_to_v16`；v15 全文存 `revisions`（见 [prompts/agent-decide-v15-snapshot.md](../prompts/agent-decide-v15-snapshot.md)）。启动 bootstrap 幂等。
+
+## 11. 前置只做三件事（v18）
+
+前置阶段不再 `check_run_env` / 切换测试环境。只保留：**筛选账号**、**筛选设备**、**环境清理**。设备登录态与账号登录态分写，避免「手机未登录」去卡号池 session。
+
+升级入口：`upgrade_agent_decide_to_v18`，启动 bootstrap 幂等。
 

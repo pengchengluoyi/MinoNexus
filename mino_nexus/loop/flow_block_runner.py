@@ -34,11 +34,13 @@ def _step_ready(
         return False
     if cap == "request_sms_code":
         from mino_nexus.loop.sms_auto import sms_send_geometry_ready
+        from mino_nexus.loop.ui_channel import ui_channel_from_ctx, ui_channel_label
 
         return sms_send_geometry_ready(
             accounts_brief=str(getattr(ctx, "accounts_brief", "") or ""),
             hierarchy_nodes=hierarchy_nodes,
             has_request_sms_code=True,
+            ui_channel=ui_channel_label(ui_channel_from_ctx(ctx)),
         )
     if cap == "accept_legal_consent":
         from mino_nexus.loop.ui_consent import find_consent_control

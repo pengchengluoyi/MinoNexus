@@ -247,12 +247,19 @@ def _guard_require_do_work(ctx: dict[str, Any]) -> Optional[str]:
                 if need_int:
                     return None
             else:
+                if need_int:
+                    ok_int_done, _ = step_intents_satisfied(
+                        instruction=instr,
+                        intents_done=getattr(step_cursor, "step_intents_done", None),
+                    )
+                    if ok_int_done:
+                        return None
                 ok_fam_done, _ = step_actions_satisfied(
                     instruction=instr,
                     families_done=getattr(step_cursor, "step_action_families", None),
                     family_counts=getattr(step_cursor, "step_family_counts", None),
                 )
-                if ok_fam_done or ops > 0:
+                if (ok_fam_done or ops > 0) and not need_int:
                     return (
                         "本步 expected 尚未在屏上确认（如半屏登录、进详情），"
                         "不能 signal_done。请完成业务目标，勿在 tap 次数达标后直接收工。"
@@ -691,12 +698,9 @@ def _guard_skip_repeat_check_run_env(ctx: dict[str, Any]) -> Optional[str]:
         return None
     if str(ctx.get("cap_id") or "") != "check_run_env":
         return None
-    brief = str(ctx.get("run_env_brief") or "").strip()
-    if not brief:
-        return None
     return (
-        f"已拒绝重复 check_run_env（本任务已确认：{brief[:80]}）。"
-        f"请直接 signal_done 结束前置；后续用例执行会沿用该环境。"
+        "前置不再切换测试环境；环境由批次 env_profile 确定。"
+        "请只做筛选账号、筛选设备、环境清理，或直接 signal_done。"
     )
 
 

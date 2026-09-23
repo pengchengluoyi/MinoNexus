@@ -277,6 +277,7 @@ def run_case(
     parent_session_id: str = "",
     fork_state: dict[str, Any] | None = None,
     run_env_brief: str = "",
+    next_case: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from mino_nexus.ai import dispatch_log as dispatch
 
@@ -316,6 +317,8 @@ def run_case(
         _doc = _rs.get(run_id)
         if _doc:
             ctx.env_profile = str(_doc.get("env_profile") or ctx.env_profile or "test")
+            ctx.env_surface = str(_doc.get("env_surface") or getattr(ctx, "env_surface", "") or "")
+            ctx.plugin_user_id = str(_doc.get("plugin_user_id") or getattr(ctx, "plugin_user_id", "") or "")
             # GuardGate stop 时 ask_human 还是 give_up 取决于它（设计稿 §11.5）
             run_type = str(_doc.get("run_type") or "manual").lower()
             if run_type == "explore":
@@ -445,7 +448,14 @@ def run_case(
         from mino_nexus.services.account_lease import release_ctx_lease
 
         release_ctx_lease(ctx)
-        cleanup_after_case(proxy, ctx, run_id=scout_run_id, case_seq=case_seq, case=case)
+        cleanup_after_case(
+            proxy,
+            ctx,
+            run_id=scout_run_id,
+            case_seq=case_seq,
+            case=case,
+            next_case=next_case,
+        )
         dispatch.reset(tok)
 
 
@@ -514,12 +524,15 @@ def _consume_login_chain(
         if item.get("ran_get_otp"):
             cursor.record_step_op("get_otp")
         if cap == "input_text" and item.get("ok"):
-            cursor.record_step_op("input_text", params={"field": "sms_code"})
+            fld = str((item.get("params") or {}).get("field") or "sms_code")
+            cursor.record_step_op("input_text", params={"field": fld})
+        if cap == "request_sms_code" and item.get("ok"):
+            cursor.step_intents_done.add("sms_send")
         if cap == "tap_element" and item.get("ok"):
             cursor.record_step_op("tap_element", params={"selector_text": "登录"})
         if item.get("ok") and fuseable_cap(cap):
-            params: dict[str, Any] = {}
-            if cap == "input_text":
+            params: dict[str, Any] = dict(item.get("params") or {})
+            if cap == "input_text" and not params.get("field"):
                 params = {"field": "sms_code"}
             elif cap == "tap_element":
                 params = {"selector_text": "登录"}
@@ -759,6 +772,22 @@ def _run_loop(
     from mino_nexus.loop.session_ensure import ensure_case_account
 
     ensure_case_account(ctx, case)
+    try:
+        from mino_nexus.services import project_store as _ps
+        from mino_nexus.services.otp_resolve import format_run_credential_hint
+
+        _app = _ps.require_app(str(app_id or ""))
+        _pid = str(_app.get("project_id") or "").strip()
+        if _pid:
+            _hint = format_run_credential_hint(
+                _ps.project_env(_pid),
+                env_profile=str(getattr(ctx, "env_profile", "") or "test"),
+                env_surface=str(getattr(ctx, "env_surface", "") or ""),
+            )
+            if _hint:
+                history.append(f"0. program → info: {_hint}")
+    except Exception:
+        pass
     task_env_brief = str(run_env_brief or getattr(ctx, "env_label", "") or "").strip()
     if task_env_brief:
         history.append(f"0. program → info: 本任务运行环境已确认：{task_env_brief}")
@@ -1644,10 +1673,13 @@ def _run_loop(
             )
             if otp_line:
                 prep_hints.append(otp_line)
+            from mino_nexus.loop.ui_channel import ui_channel_from_ctx, ui_channel_label
+
             sms_line = compile_sms_send_hint(
                 accounts_brief=str(getattr(ctx, "accounts_brief", "") or ""),
                 hierarchy_nodes=list(getattr(ctx, "nav_hierarchy_nodes", None) or []),
                 has_request_sms_code=any(str(c.get("id") or "") == "request_sms_code" for c in menu),
+                ui_channel=ui_channel_label(ui_channel_from_ctx(ctx)),
             )
             if sms_line:
                 prep_hints.append(sms_line)
@@ -1717,16 +1749,28 @@ def _run_loop(
                         retries=2,
                     )
                 else:
-                    chain = run_login_otp_submit_chain(
+                    from mino_nexus.loop.email_login_auto import run_email_login_preflight
+
+                    chain = run_email_login_preflight(
                         proxy,
                         ctx,
                         turn_seq=seq,
                         instruction=str(cur.instruction or ""),
                         intents_done=cursor.step_intents_done,
                         history_lines=hist_lines,
-                        hierarchy_nodes=nodes,
                         login_module_case=bool(login_module_case),
                     )
+                    if not chain:
+                        chain = run_login_otp_submit_chain(
+                            proxy,
+                            ctx,
+                            turn_seq=seq,
+                            instruction=str(cur.instruction or ""),
+                            intents_done=cursor.step_intents_done,
+                            history_lines=hist_lines,
+                            hierarchy_nodes=nodes,
+                            login_module_case=bool(login_module_case),
+                        )
                 if chain:
                     if len(chain) == 1 and str(chain[0].get("capability_id") or "") == "input_text":
                         if chain[0].get("ok") and _otp_code_already_entered(
@@ -1754,6 +1798,40 @@ def _run_loop(
                                 )
                             ),
                         )
+                        if any(
+                            str(x.get("capability_id") or "") == "request_sms_code"
+                            and x.get("ok")
+                            for x in chain
+                        ):
+                            cursor.login_post_sms_pending = True
+                            cursor.login_post_sms_stall = 0
+                            chain_post = run_post_sms_login_pipeline(
+                                proxy,
+                                ctx,
+                                turn_seq=seq,
+                                instruction=str(cur.instruction or ""),
+                                intents_done=cursor.step_intents_done,
+                                history_lines=list(history[-24:]),
+                                hierarchy_nodes=nodes,
+                                login_module_case=bool(login_module_case),
+                                retries=2,
+                            )
+                            if chain_post:
+                                lc, ls = _consume_login_chain(
+                                    chain_post,
+                                    seq=seq,
+                                    cursor=cursor,
+                                    rec=rec,
+                                    emit=emit,
+                                    thumb=thumb,
+                                    screen_fp=screen_fp_turn,
+                                    login_flow_step=bool(
+                                        instruction_allows_login_flow(
+                                            str(cur.instruction or ""),
+                                            login_module_case=bool(login_module_case),
+                                        )
+                                    ),
+                                )
                         if _pending_sms or getattr(cursor, "login_post_sms_pending", False):
                             if _otp_code_already_entered(
                                 list(history[-24:]), cursor.step_intents_done
@@ -2912,6 +2990,30 @@ def _run_loop(
                 params=params if isinstance(params, dict) else None,
                 count_nav_intent=count_nav,
             )
+            if (
+                isinstance(cursor, StepCursor)
+                and cursor.phase == "do"
+                and cursor.try_auto_finish_do_when_intents_met()
+            ):
+                rec(
+                    seq,
+                    capability_id="signal_done",
+                    status="skipped",
+                    summary="本步意图已达成，自动进入校验",
+                    thought="",
+                    thumb=thumb,
+                )
+                emit(
+                    "result",
+                    thought="",
+                    step=seq,
+                    capability_id="signal_done",
+                    status="skipped",
+                    summary="本步意图已达成，自动进入校验",
+                    thumb=thumb,
+                )
+                _log_turn_end(writer, cap="signal_done", status="skipped")
+                continue
         if status_val == "pass" and cap_id == "clear_app_cache":
             setattr(ctx, "prep_clear_done", True)
             if in_prep:
@@ -3114,6 +3216,90 @@ def _run_loop(
                         if _otp_code_already_entered(list(history[-24:]), cursor.step_intents_done):
                             cursor.login_post_sms_pending = False
                         _log_turn_end(writer, cap=lc or "login_chain", status=ls)
+                        continue
+            elif re.search(r"\bEmail\b|邮箱", _tap_sel, re.I):
+                from mino_nexus.loop.email_login_auto import run_email_login_preflight
+                from mino_nexus.loop.step_contract import instruction_allows_login_flow
+                from mino_nexus.loop.step_flow_scope import login_flow_allowed
+
+                _lf_em, _ = login_flow_allowed(
+                    cursor=cursor,
+                    phase="do",
+                    instruction=str(cur.instruction or ""),
+                    expected=str(cur.expected or ""),
+                )
+                if _lf_em and not getattr(cursor, "login_chain_broken", False):
+                    chain_em = run_email_login_preflight(
+                        proxy,
+                        ctx,
+                        turn_seq=seq,
+                        instruction=str(cur.instruction or ""),
+                        intents_done=cursor.step_intents_done,
+                        history_lines=list(history[-24:]),
+                        login_module_case=bool(login_module_case),
+                    )
+                    if chain_em:
+                        fail_msg = _login_chain_guard(chain_em, cursor=cursor)
+                        if fail_msg:
+                            return _leave(status="fail", summary=fail_msg)
+                        lc, ls = _consume_login_chain(
+                            chain_em,
+                            seq=seq,
+                            cursor=cursor,
+                            rec=rec,
+                            emit=emit,
+                            thumb=thumb,
+                            screen_fp=str(post_fp or screen_fp or ""),
+                            login_flow_step=instruction_allows_login_flow(
+                                str(cur.instruction or ""),
+                                login_module_case=bool(login_module_case),
+                            ),
+                        )
+                        for item in chain_em:
+                            if str(item.get("capability_id") or "") == "input_text" and item.get("ok"):
+                                cursor.record_step_op(
+                                    "input_text",
+                                    params={"field": "email"},
+                                )
+                            if str(item.get("capability_id") or "") == "request_sms_code" and item.get("ok"):
+                                cursor.step_intents_done.add("sms_send")
+                                cursor.login_post_sms_pending = True
+                                cursor.login_post_sms_stall = 0
+                        if any(
+                            str(x.get("capability_id") or "") == "request_sms_code"
+                            and x.get("ok")
+                            for x in chain_em
+                        ):
+                            from mino_nexus.loop.login_submit import run_post_sms_login_pipeline
+
+                            chain_post = run_post_sms_login_pipeline(
+                                proxy,
+                                ctx,
+                                turn_seq=seq,
+                                instruction=str(cur.instruction or ""),
+                                intents_done=cursor.step_intents_done,
+                                history_lines=list(history[-24:]),
+                                hierarchy_nodes=list(
+                                    getattr(ctx, "nav_hierarchy_nodes", None) or []
+                                ),
+                                login_module_case=bool(login_module_case),
+                                retries=2,
+                            )
+                            if chain_post:
+                                lc, ls = _consume_login_chain(
+                                    chain_post,
+                                    seq=seq,
+                                    cursor=cursor,
+                                    rec=rec,
+                                    emit=emit,
+                                    thumb=thumb,
+                                    screen_fp=str(post_fp or screen_fp or ""),
+                                    login_flow_step=instruction_allows_login_flow(
+                                        str(cur.instruction or ""),
+                                        login_module_case=bool(login_module_case),
+                                    ),
+                                )
+                        _log_turn_end(writer, cap=lc or "email_login", status=ls)
                         continue
 
         if cap_id == "tap_element" and getattr(result, "status", None) == EventStatus.PASS:

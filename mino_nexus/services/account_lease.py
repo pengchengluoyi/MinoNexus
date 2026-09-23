@@ -199,6 +199,21 @@ def _pick_row(
         holder_sn=holder_sn,
         observed_by_account=observed_by_account,
     )
+    from mino_nexus.services.otp_resolve import (
+        filter_accounts_for_login_kind,
+        login_kind_from_secrets,
+        resolve_effective_secrets,
+    )
+
+    secrets = resolve_effective_secrets(
+        env_doc,
+        env_profile=env_profile,
+        env_surface=surface,
+    )
+    ranked = filter_accounts_for_login_kind(
+        ranked,
+        kind=login_kind_from_secrets(secrets),
+    )
     rid = str(run_id or "").strip()
     for row in ranked:
         if bool(row.get("locked")):

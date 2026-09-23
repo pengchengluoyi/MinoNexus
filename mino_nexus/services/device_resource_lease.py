@@ -58,6 +58,9 @@ def acquire_device_lease(
     from mino_nexus.core.database import session_scope
 
     with session_scope() as db:
+        from mino_nexus.runtime.run_context import is_web_slot
+
+        web_slot = is_web_slot(s, platform)
         rows = (
             db.query(DeviceResourceLease)
             .filter(DeviceResourceLease.sn == s, DeviceResourceLease.package_id == p)
@@ -79,6 +82,8 @@ def acquire_device_lease(
                 row.case_id = str(case_id or "")[:64]
                 db.commit()
                 return True, ""
+            if web_slot:
+                continue
             if _expired(str(row.expires_at or "")):
                 continue
             if not _holder_run_still_live(holder):

@@ -15,8 +15,8 @@ ENTRIES: list[dict[str, str]] = [
     {"id": "plugins", "label": "插件配置", "group": "settings"},
 ]
 
-DEFAULT_ALLOWED = ("testing", "agent", "knowledge", "runtime", "scout", "keys", "dispatch")
-_NAV_VERSION = 2
+DEFAULT_ALLOWED = ("testing", "agent", "knowledge", "runtime", "scout", "keys", "dispatch", "plugins")
+_NAV_VERSION = 3
 
 
 def catalog() -> list[dict[str, str]]:
@@ -74,11 +74,15 @@ def get_allowed() -> list[str]:
         version = int(raw.get("v") or 0)
     except (TypeError, ValueError):
         version = 0
-    if version < _NAV_VERSION and "scout" in _known_ids() and "scout" not in allowed:
+    if version < 2 and "scout" in _known_ids() and "scout" not in allowed:
         if "runtime" in allowed:
             allowed.insert(allowed.index("runtime") + 1, "scout")
         else:
             allowed.append("scout")
+        version = 2
+        _persist(allowed, version)
+    if version < _NAV_VERSION and "plugins" in _known_ids() and "plugins" not in allowed:
+        allowed.append("plugins")
         _persist(allowed, _NAV_VERSION)
     return allowed
 

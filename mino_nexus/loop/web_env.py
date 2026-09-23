@@ -1,10 +1,15 @@
 """Web 槽环境清理：由 Nexus 决定何时关页面 / 关 Chromium，Scout 只执行 close_app。
 
+批内默认仍「每条用例可独立环境」；若**下一条/本条**前置要求已登录会话（logged_in + 非登录模块），
+则跨用例保留 Chromium/Cookie。guest / 登录模块 / 清缓存等仍强制关浏览器再起。
+
 不改 agent 决策与步骤执行逻辑。
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+
+WebBrowserPolicy = Literal["preserve", "reset"]
 
 from mino_nexus.core.log import SLog
 from mino_nexus.core.schemas import PlanEvent
@@ -56,6 +61,79 @@ def case_keep_browser(case: dict[str, Any] | None) -> bool:
     return False
 
 
+def web_case_browser_policy(case: dict[str, Any] | None) -> WebBrowserPolicy:
+    """本条用例开跑时是否应保留已有 Chromium（批内上一条留下的 Cookie/页面）。
+
+    preserve：前置要求已登录且非登录模块，且未要求清缓存/登出 prep。
+    reset：guest、登录模块、logout/relogin、清缓存、required_session=any 等。
+    """
+    if not isinstance(case, dict):
+        return "reset"
+    if case_keep_browser(case):
+        return "preserve"
+    pre = str(case.get("precondition") or "").strip()
+    rk = case.get("resource_key") if isinstance(case.get("resource_key"), dict) else None
+    scene_raw = case.get("case_scene") if isinstance(case.get("case_scene"), dict) else None
+    if scene_raw is None and isinstance(case.get("scene"), dict):
+        scene_raw = case.get("scene")
+    from mino_nexus.runtime.session_gate import ensure_case_scene, is_login_module_case
+
+    scene = ensure_case_scene(case, scene_raw)
+    from mino_nexus.services.resource_preflight import claim_requires_clear_cache
+
+    if claim_requires_clear_cache(
+        rk,
+        scene,
+        pre,
+    ):
+        return "reset"
+    prep = str(scene.get("session_prep") or "skip").strip().lower()
+    req = str(scene.get("required_session") or "any").strip().lower()
+    # CaseScene 已声明「已登录、不跑登录流」时优先保留浏览器（勿被前置里的「登录」字样误判为登录模块）。
+    if req == "logged_in" and prep == "skip":
+        return "preserve"
+    if prep in ("logout", "relogin"):
+        return "reset"
+    if req == "guest":
+        return "reset"
+    if is_login_module_case(case, scene):
+        return "reset"
+    from mino_nexus.loop.session_ensure import account_need_from_case
+
+    need = account_need_from_case(case, scene)
+    session_hint = str(need.get("session") or "").strip().lower()
+    if session_hint == "guest":
+        return "reset"
+    if session_hint == "logged_in":
+        return "preserve"
+    for item in scene.get("prep_items") or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind in ("check_not_logged_in", "clear_cache"):
+            return "reset"
+    return "reset"
+
+
+def should_shutdown_browser_before_case(case: dict[str, Any] | None) -> bool:
+    return web_case_browser_policy(case) == "reset"
+
+
+def should_shutdown_browser_after_case(
+    case: dict[str, Any] | None,
+    *,
+    next_case: dict[str, Any] | None = None,
+) -> bool:
+    """用例结束是否关 Chromium。下一条 preserve 时保留给后续已登录用例。"""
+    if not isinstance(case, dict):
+        return True
+    if case_keep_browser(case):
+        return False
+    if isinstance(next_case, dict) and web_case_browser_policy(next_case) == "preserve":
+        return False
+    return True
+
+
 def _dispatch_close(
     proxy: RouterProxy,
     *,
@@ -88,10 +166,11 @@ def reset_before_case(
     case_seq: int,
     case: dict[str, Any] | None = None,
 ) -> None:
-    """下一 case 默认要干净环境：先关 Chromium（除非本 case 声明 keep_browser）。"""
+    """Web 批内：guest/登录模块等关 Chromium；已登录前置则保留上条 Cookie。"""
     if not is_web_context(ctx):
         return
-    if case_keep_browser(case):
+    if not should_shutdown_browser_before_case(case):
+        SLog.i(TAG, f"case_seq={case_seq} preserve browser (logged_in prep)")
         return
     _dispatch_close(
         proxy,
@@ -109,17 +188,29 @@ def cleanup_after_case(
     run_id: str,
     case_seq: int,
     case: dict[str, Any] | None = None,
+    next_case: dict[str, Any] | None = None,
 ) -> None:
-    """Case 结束：默认关 Chromium；keep_browser 时只关 Context。"""
+    """Case 结束：下一条已登录则保留 Chromium；guest 或末条则关。"""
     if not is_web_context(ctx):
         return
-    keep = case_keep_browser(case)
+    if case_keep_browser(case):
+        _dispatch_close(
+            proxy,
+            run_id=run_id,
+            step_idx=frame_step(case_seq, 9),
+            shutdown_browser=False,
+            label="用例结束后关闭页面",
+        )
+        return
+    if not should_shutdown_browser_after_case(case, next_case=next_case):
+        SLog.i(TAG, f"case_seq={case_seq} keep Chromium for next logged_in case")
+        return
     _dispatch_close(
         proxy,
         run_id=run_id,
         step_idx=frame_step(case_seq, 9),
-        shutdown_browser=not keep,
-        label="用例结束后关闭页面" if keep else "用例结束后关闭 Chromium",
+        shutdown_browser=True,
+        label="用例结束后关闭 Chromium",
     )
 
 

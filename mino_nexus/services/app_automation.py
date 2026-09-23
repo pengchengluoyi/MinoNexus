@@ -9,6 +9,7 @@ from mino_nexus.services.project_env import (
     profile_keys,
     profile_snapshot,
     resolve_profile_name,
+    resolve_surface_id,
     target_id_from_snapshot,
 )
 
@@ -315,7 +316,13 @@ def cases_payload(app: dict) -> dict[str, Any]:
     }
 
 
-def package_for_app(app: dict, env_profile: str | None = None, platform: str = "android") -> str:
+def package_for_app(
+    app: dict,
+    env_profile: str | None = None,
+    platform: str = "android",
+    *,
+    surface: str = "",
+) -> str:
     from mino_nexus.services import project_store as ps
 
     plat = str(platform or "android").lower()
@@ -329,7 +336,21 @@ def package_for_app(app: dict, env_profile: str | None = None, platform: str = "
     name = resolve_profile_name(env_doc, profile)
     snap = profile_snapshot(env_doc, name)
     want = "web" if plat in ("web", "browser", "playwright") else ("ios" if plat in ("ios", "iphone", "ipad") else "android")
-    return target_id_from_snapshot(snap, want)
+    sid = str(surface or "").strip()
+    if sid:
+        tid = target_id_from_snapshot(snap, want, surface=sid)
+        if tid:
+            return tid
+    tid = target_id_from_snapshot(snap, want)
+    if tid:
+        return tid
+    if want == "web":
+        sid = resolve_surface_id(env_doc, platform="web", env_profile=name, surface=sid)
+        if sid:
+            return target_id_from_snapshot(snap, want, surface=sid)
+    elif sid:
+        return target_id_from_snapshot(snap, want, surface=sid)
+    return ""
 
 
 def get_playbook(app: dict) -> dict[str, Any]:

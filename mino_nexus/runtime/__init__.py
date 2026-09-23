@@ -17,6 +17,7 @@ from mino_nexus.runtime.run_context import (  # noqa: F401
     device_platform_kind,
     from_node,
     is_web_slot,
+    WEB_PLAYWRIGHT_PARALLEL_LANES,
     stamp_app_version,
 )
 from mino_nexus.runtime.menu import (  # noqa: F401

@@ -14,7 +14,8 @@ _POINTER_TEMPLATES: dict[str, str] = {
     "prep_header": "【执行纪律：先完成前置检查，禁止进入操作步骤，禁止校验预期。】",
     "prep_current": "【当前只做前置】{precondition}",
     "prep_tail": (
-        "每任务仅需一次 check_run_env（history 已有 env= 即满足）；"
+        "前置只做三件事：筛选账号（lease_account）、筛选设备、环境清理（clear_app_cache 等）。"
+        "禁止 check_run_env / 切换测试环境（环境由批次 env_profile 确定）。"
         "禁止重复 read_device_data（history 已有 sim=READY 即满足）。"
         "前置满足后立刻 signal_done。锁屏/黑屏用 recover_*，不要用 prep 工具唤醒。"
         "禁止进步骤、禁止验预期。"
@@ -561,6 +562,42 @@ class StepCursor:
                 if fam == "swipe":
                     self.step_intents_done.add("swipe_gesture")
         self.refresh_do_subphase()
+
+    def try_auto_finish_do_when_intents_met(self) -> bool:
+        """do 阶段业务意图已达成时立即进入 check（或无 expected 时下一步），不等模型 signal_done。"""
+        if self.phase != "do":
+            return False
+        self.refresh_do_subphase()
+        if self.do_subphase != "achievement":
+            return False
+        cur = self.current()
+        if not cur:
+            return False
+        from mino_nexus.loop.step_contract import step_actions_satisfied
+        from mino_nexus.loop.step_intent import instruction_required_intents, step_intents_satisfied
+
+        instr = str(cur.instruction or "")
+        need_int = instruction_required_intents(instr)
+        if need_int:
+            ok_int, _ = step_intents_satisfied(
+                instruction=instr,
+                intents_done=self.step_intents_done,
+            )
+            if not ok_int:
+                return False
+        else:
+            fam_ok, _ = step_actions_satisfied(
+                instruction=instr,
+                families_done=self.step_action_families,
+                family_counts=self.step_family_counts,
+            )
+            if not fam_ok:
+                return False
+        self.step_goal_met = True
+        self.require_do_work_streak = 0
+        self.correction_hint = ""
+        self.enter_check()
+        return True
 
     def refresh_do_subphase(self) -> None:
         if self.phase != "do":

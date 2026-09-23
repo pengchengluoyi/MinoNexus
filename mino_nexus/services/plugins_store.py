@@ -29,6 +29,17 @@ INTEGRATION_PLUGIN_CATEGORIES: list[dict[str, str]] = [
 
 INTEGRATION_PLUGIN_SPECS: list[dict[str, Any]] = [
     {
+        "id": "gmail_otp",
+        "name": "Gmail 收信",
+        "kind": "auth",
+        "categories": ["auth"],
+        "color": "#ea4335",
+        "summary": "项目环境 Gmail 收件箱的 IMAP 应用专用密码（每用户一份，读项目统一收件箱）。",
+        "capabilities": [
+            {"id": "connect", "label": "连接", "desc": "应用专用密码", "categories": ["auth"]},
+        ],
+    },
+    {
         "id": "feishu",
         "name": "飞书",
         "kind": "docs",
@@ -481,6 +492,8 @@ def _default_plugin_config(plugin_id: str) -> dict[str, Any]:
         }
     if plugin_id == "figma":
         return {"enabled": True, "capabilities": cap_on}
+    if plugin_id == "gmail_otp":
+        return {"enabled": True, "capabilities": cap_on, "app_password": ""}
     if plugin_id in IM_PLUGIN_IDS:
         return {"enabled": True, "capabilities": cap_on, "chat": {"enabled": False}}
     return {"enabled": True, "capabilities": cap_on}
@@ -680,6 +693,34 @@ def delete_robot_integration(robot_id: str, *, user_id: str = "") -> None:
     _save_robot_rows(user_id, nxt)
 
 
+def get_gmail_app_password(user_id: str = "") -> str:
+    raw = _raw_plugin_config("gmail_otp", user_id)
+    return str(raw.get("app_password") or "").strip()
+
+
+def _gmail_otp_settings(user_id: str = "") -> dict[str, Any]:
+    pwd = get_gmail_app_password(user_id)
+    return {
+        "configured": bool(pwd),
+        "has_app_password": bool(pwd),
+        "app_password_masked": ss._mask_secret(pwd),
+    }
+
+
+def _figma_settings(user_id: str = "") -> dict[str, Any]:
+    uid = str(user_id or "").strip()
+    if uid:
+        user = _load_user(uid)
+        fig = user.get("figma") if isinstance(user.get("figma"), dict) else {}
+        token = str((fig or {}).get("access_token") or "").strip()
+        return {
+            "configured": bool(token),
+            "default_file_url": str((fig or {}).get("default_file_url") or "").strip(),
+            "has_token": bool(token),
+        }
+    return ss.get_figma_settings()
+
+
 def _plugin_configured(plugin_id: str, cfg: dict[str, Any], user_id: str = "") -> bool:
     if plugin_id == "feishu":
         return any(b.get("platform") == "lark" and b.get("configured") for b in list_robot_integrations(user_id))
@@ -688,7 +729,9 @@ def _plugin_configured(plugin_id: str, cfg: dict[str, Any], user_id: str = "") -
     if plugin_id == "wechat":
         return False
     if plugin_id == "figma":
-        return bool(ss.get_figma_settings().get("configured"))
+        return bool(_figma_settings(user_id).get("configured"))
+    if plugin_id == "gmail_otp":
+        return bool(get_gmail_app_password(user_id))
     if plugin_id == "zentao":
         return bool(str(cfg.get("url") or "").strip() and str(cfg.get("token") or "").strip())
     return False
@@ -704,6 +747,10 @@ def _plugin_status(enabled: bool, configured: bool) -> str:
 
 def _plugin_public_config(plugin_id: str, cfg: dict[str, Any]) -> dict[str, Any]:
     public = dict(cfg)
+    if plugin_id == "gmail_otp":
+        pwd = str(public.pop("app_password", "") or "")
+        public["app_password_masked"] = ss._mask_secret(pwd)
+        public["has_app_password"] = bool(pwd)
     if plugin_id == "zentao":
         token = str(public.pop("token", "") or "")
         public.pop("password", None)
@@ -740,11 +787,11 @@ def _plugin_public_config(plugin_id: str, cfg: dict[str, Any]) -> dict[str, Any]
     return public
 
 
-def _plugin_app_bindings(plugin_id: str) -> list[dict[str, Any]]:
+def _plugin_app_bindings(plugin_id: str, user_id: str = "") -> list[dict[str, Any]]:
     from mino_nexus.services import project_store as ps
     from mino_nexus.services.app_automation import count_qa_process_cases_from_env
 
-    bots = {str(b.get("id")): b for b in list_robot_integrations() if b.get("platform") == "lark"}
+    bots = {str(b.get("id")): b for b in list_robot_integrations(user_id) if b.get("platform") == "lark"}
     rows: list[dict[str, Any]] = []
     for project in ps.list_projects():
         for app in project.get("apps") or []:
@@ -781,19 +828,22 @@ def _plugin_app_bindings(plugin_id: str) -> list[dict[str, Any]]:
     return rows
 
 
-def list_integration_plugins() -> dict[str, Any]:
-    robots = list_robot_integrations()
-    figma = ss.get_figma_settings()
+def list_integration_plugins(user_id: str = "") -> dict[str, Any]:
+    uid = str(user_id or "").strip()
+    robots = list_robot_integrations(uid)
+    figma = _figma_settings(uid)
     out = []
     for spec in INTEGRATION_PLUGIN_SPECS:
         pid = spec["id"]
-        cfg = _merged_plugin_config(pid)
-        configured = _plugin_configured(pid, cfg)
+        cfg = _merged_plugin_config(pid, uid)
+        configured = _plugin_configured(pid, cfg, uid)
         robot_n = 0
         platform = spec.get("robot_platform")
         if platform:
             robot_n = sum(1 for b in robots if b.get("platform") == platform and b.get("configured"))
         if pid == "figma" and figma.get("configured"):
+            robot_n = 1
+        if pid == "gmail_otp" and configured:
             robot_n = 1
         if pid == "zentao" and configured:
             robot_n = 1
@@ -813,12 +863,13 @@ def list_integration_plugins() -> dict[str, Any]:
     return {"categories": INTEGRATION_PLUGIN_CATEGORIES, "plugins": out}
 
 
-def get_integration_plugin(plugin_id: str) -> dict[str, Any]:
+def get_integration_plugin(plugin_id: str, user_id: str = "") -> dict[str, Any]:
+    uid = str(user_id or "").strip()
     spec = _plugin_spec(plugin_id)
     if not spec:
         raise ValueError(f"未知插件: {plugin_id}")
-    cfg = _merged_plugin_config(plugin_id)
-    configured = _plugin_configured(plugin_id, cfg)
+    cfg = _merged_plugin_config(plugin_id, uid)
+    configured = _plugin_configured(plugin_id, cfg, uid)
     data: dict[str, Any] = {
         "id": plugin_id,
         "name": spec["name"],
@@ -834,24 +885,37 @@ def get_integration_plugin(plugin_id: str) -> dict[str, Any]:
     }
     platform = spec.get("robot_platform")
     if platform:
-        data["robots"] = [b for b in list_robot_integrations() if b.get("platform") == platform]
+        data["robots"] = [b for b in list_robot_integrations(uid) if b.get("platform") == platform]
         data["robot_platform"] = platform
     if plugin_id == "figma":
-        data["figma"] = ss.get_figma_settings()
+        data["figma"] = _figma_settings(uid)
+    if plugin_id == "gmail_otp":
+        data["gmail_otp"] = _gmail_otp_settings(uid)
     if plugin_id in ("feishu", "figma"):
-        data["bindings"] = _plugin_app_bindings(plugin_id)
+        data["bindings"] = _plugin_app_bindings(plugin_id, uid)
     return data
 
 
-def save_integration_plugin(plugin_id: str, body: dict[str, Any]) -> dict[str, Any]:
+def save_integration_plugin(plugin_id: str, body: dict[str, Any], user_id: str = "") -> dict[str, Any]:
     spec = _plugin_spec(plugin_id)
     if not spec:
         raise ValueError(f"未知插件: {plugin_id}")
-    current = _merged_plugin_config(plugin_id)
+    uid = str(user_id or "").strip()
     incoming = body if isinstance(body, dict) else {}
 
     if "enabled" in incoming:
-        current["enabled"] = bool(incoming.get("enabled"))
+        save_plugin_policy(plugin_id, enabled=bool(incoming.get("enabled")))
+    if "visible" in incoming:
+        save_plugin_policy(plugin_id, visible=bool(incoming.get("visible")))
+
+    policy_only = set(incoming.keys()) <= {"enabled", "visible"}
+    if policy_only:
+        return get_integration_plugin(plugin_id, uid)
+
+    if not uid:
+        raise ValueError("需要登录用户才能保存插件凭证")
+
+    current = _deep_merge(_default_plugin_config(plugin_id), _raw_plugin_config(plugin_id, uid))
     if isinstance(incoming.get("capabilities"), dict):
         caps = current.setdefault("capabilities", {})
         for key, value in incoming["capabilities"].items():
@@ -896,25 +960,41 @@ def save_integration_plugin(plugin_id: str, body: dict[str, Any]) -> dict[str, A
                     "product_name": str(row.get("product_name") or "").strip(),
                 })
             current["bindings"] = rows
+    elif plugin_id == "gmail_otp":
+        if incoming.get("clear_app_password"):
+            current["app_password"] = ""
+        elif str(incoming.get("app_password") or "").strip():
+            current["app_password"] = str(incoming.get("app_password") or "").strip()
     elif plugin_id == "figma":
-        figma_kwargs: dict[str, Any] = {}
-        if "access_token" in incoming or incoming.get("clear_token"):
-            figma_kwargs["access_token"] = str(incoming.get("access_token") or "")
-            figma_kwargs["clear_token"] = bool(incoming.get("clear_token"))
+        root = _load_user(uid)
+        fig = root.setdefault("figma", {}) if isinstance(root.get("figma"), dict) else {}
+        if not isinstance(root.get("figma"), dict):
+            fig = {}
+            root["figma"] = fig
+        if incoming.get("clear_token"):
+            fig["access_token"] = ""
+        elif "access_token" in incoming and str(incoming.get("access_token") or "").strip():
+            fig["access_token"] = str(incoming.get("access_token") or "").strip()
         if "default_file_url" in incoming:
-            figma_kwargs["default_file_url"] = str(incoming.get("default_file_url") or "")
-        if figma_kwargs:
-            ss.save_figma_settings(**figma_kwargs)
+            fig["default_file_url"] = str(incoming.get("default_file_url") or "").strip()
+        _save_user(uid, root)
 
-    root = _settings_root()
     to_store = dict(current)
+    for drop in ("enabled", "visible"):
+        to_store.pop(drop, None)
     if plugin_id == "zentao" and not str(to_store.get("token") or "").strip():
-        prev = _raw_plugin_config(plugin_id)
+        prev = _raw_plugin_config(plugin_id, uid)
         if str(prev.get("token") or "").strip() and not incoming.get("clear_token"):
             to_store["token"] = prev["token"]
-    root.setdefault("integrations", {})[plugin_id] = to_store
-    ss._save(root)
-    return get_integration_plugin(plugin_id)
+    if plugin_id == "gmail_otp" and not str(to_store.get("app_password") or "").strip():
+        prev = _raw_plugin_config(plugin_id, uid)
+        if str(prev.get("app_password") or "").strip() and not incoming.get("clear_app_password"):
+            to_store["app_password"] = prev["app_password"]
+    if plugin_id != "figma":
+        root = _load_user(uid)
+        root.setdefault("integrations", {})[plugin_id] = to_store
+        _save_user(uid, root)
+    return get_integration_plugin(plugin_id, uid)
 
 
 def get_zentao_credentials() -> dict[str, str]:

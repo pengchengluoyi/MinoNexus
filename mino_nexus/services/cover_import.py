@@ -154,7 +154,7 @@ def parse_table_rows(
             "precondition_raw": pre,
             "steps_raw": steps,
             "expected_raw": expected,
-            "platform": _cell(row, cmap.get("platform")) or "双端",
+            "platform": _cell(row, cmap.get("platform")) or "",
             "aspect": _cell(row, cmap.get("aspect")) or "正向",
             "point_ids": points,
             "source": "import",

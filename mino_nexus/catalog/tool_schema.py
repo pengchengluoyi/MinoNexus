@@ -181,7 +181,7 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
     "check_run_env": {
         "type": "object",
         "properties": {},
-        "description": "确认本任务运行环境（env/platform/otp 通道），每任务仅需一次",
+        "description": "确认批次运行环境（env/platform/otp）。前置阶段不要调用，环境由 env_profile 确定",
     },
     "lease_account": {
         "type": "object",

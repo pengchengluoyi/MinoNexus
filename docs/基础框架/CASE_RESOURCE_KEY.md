@@ -17,18 +17,35 @@ Console 对照页：`GET /settings/case-resource-key`
 推荐格式（与飞书/用例库 `precondition` 一致）：
 
 ```text
-1. 登录态：未登录
-2. 账号与数据：已配置形象
+1. 设备登录态：未登录
+2. 账号与数据：形象-已配置形象
 3. 环境与权限：清除应用缓存
+```
+
+需要号池登录态时**另写一行**，不要和机态混用：
+
+```text
+1. 设备登录态：已登录
+2. 账号登录态：已登录
+3. 账号与数据：形象-已配置形象
 ```
 
 | 行类别 | 映射 Claim | 映射资源 |
 |--------|------------|----------|
-| 登录态 | `device_app.required_session` + 号池选号 `session`/`login_status` | 机态 + `pool_account_facets` |
-| 账号与数据 | `account.requirements` | `pool_account_facets`（含号池模板扩展字段） |
-| 环境与权限 | `device_app.prep` / `case_scene.prep_items` | Prep → `clear_app_cache` 等 |
+| **设备登录态**（旧写法「登录态」视为本行） | `device_app.required_session` | 机态 `device_app_sessions` |
+| **账号登录态** | `account.required_session` / 号池 `session` | `pool_account_facets.session`（**不**写 `login_flow`） |
+| **账号与数据** | `account.requirements` | 「字段名-状态」或直接写状态标签，例如 `形象-已配置形象` 或 `已配置形象` |
+| **环境与权限** | `device_app.prep` / `case_scene.prep_items` | Prep 环境清理 → `clear_app_cache` 等 |
 
-扩展类别见 Console「用例密钥」表（端、设备形态、号池模板 ID 等）。
+前置执行只保留三块：**筛选账号**、**筛选设备**、**环境清理**。不再做「切换测试环境 / check_run_env」（环境由批次 `env_profile` 确定）。
+
+扩展类别见 Console「用例密钥」表（层级列：前置 / 操作 / 预期 / 通用）。
+
+### 用例「端」与项目环境 channel.id
+
+- **不要**只写笼统的 `web` 当项目里有多个 Web 入口：用环境配置里的 **channel 唯一 id**（如 `web`、`web.cn`、`web.global`），与跑批 `env_surface` 一致。
+- **国内 / 国外**两套域名：在「环境配置」加两条 Web 端，设不同 **简称**（写入 `alias` / `label`），各自在 test/pre/prod profile 填对应 `base_url`；用例导入或编辑时「端」选对应 id。
+- 仅有一个 Web 端时：导入默认端 / 新建执行会自动选中该 channel，无需手写 `web`。
 
 机器副本（可选，由 Job 从编号行编译）：
 

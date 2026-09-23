@@ -24,25 +24,27 @@ Nexus `router_proxy` 按 **设备 platform / sn** 合成 `executor_order`：
 
 ## 3. Playwright Hub（并发预期）
 
-实现要点（MinoScout `playwright_hub.py`）：
+实现要点（MinoScout `playwright_hub.py` + `core.py`）：
 
-- Playwright **sync API 绑定线程**：Case  worker 线程内一个 Playwright 实例。
-- **每个 sn** 一个 Chromium Browser；`open_case` 对该 sn **单 Context / Page**（新开 case 会先 `close_case`）。
-- 每节点通常 **只有一个 Web sn**（`web{node_id}`）。
+- Playwright **sync API 绑定线程**：Hub 在 **4 条 Playwright 专用单线程 shard**（`PLAYWRIGHT_PARALLEL_LANES = 4`，不可通过环境变量改）里启动实例。
+- 每节点通常 **一个 Web sn**（`web{node_id}`）；同一 sn 上 **每个 run_id 独立 Context/Page**（会话键 `sn::run_id`），共享一条 Chromium Browser 实例（按 sn、按 PW worker 线程）。
+- `core` 按 **run_id 哈希** 固定到 4 条 shard，保证同 run 的步骤总在同一 Playwright 线程上执行。
+- `cancel_run` / 任务结束会 `release_run(run_id)`，只关该 run 的 Context，不误关其它并行 run。
 
 因此：
 
 | 问题 | 结论 |
 |------|------|
-| 同一节点多 Web 用例并行？ | **共享同一浏览器/页面模型**，不是多 Chromium 并行；多 run 会争用 |
-| 要提高 Web 并行度？ | 多 Scout 节点、或未来 Hub 多 context/多 browser + Nexus 派单改造 |
-| 资源上限？ | 代码无硬 cap；headed 1280×800 单实例常见 **数百 MB～1GB+**，依页面而定 |
+| 同一节点多 Web 任务并行？ | **支持**（多 run 多 Context；受 PW 线程池与内存限制） |
+| Nexus 设备占用？ | Web 槽 **最多 4 路** 并行：`WEB_PLAYWRIGHT_PARALLEL_LANES`；满员 409 `web parallel full`；真机仍独占 |
+| Studio 新建执行？ | Web 槽不因 `busy_task_id` 挡第二单；列表展示 `active_run_count` |
+| 资源上限？ | headed 1280×800 每 Browser/Context 常见 **数百 MB～1GB+**；并行 run 数宜保守 |
 | browser 层未装完？ | `heavy_deps` 后台拉取；probe 可能 unavailable，Web 用例会 decline/fail |
 
 ## 4. 与跑批策略的建议
 
-- **Web 回归**：默认按 **单节点单 Web 槽串行** 规划用例与设备占用。
-- **真机**：按 serial 并行，受节点数与 adb 带宽限制。
+- **Web 回归**：同一 Scout 节点可 **多任务并行**（不同 run_id）；账号/数据隔离仍按号池租约与用例设计。
+- **真机**：按 serial 并行，受节点数与 adb 带宽限制；**一机一单**。
 - **节点就绪**：除 `alive` 外，对 Web 任务应看 REGISTER 里 **playwright available** 与 `layers.txt` 是否含 browser 层。
 
 ## 5. 能力目录（Nexus）

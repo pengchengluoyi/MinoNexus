@@ -114,6 +114,8 @@ def run_cases(
     provider_id: str = "",
     playwright_headless: bool = True,
     env_profile: str = "",
+    env_surface: str = "",
+    plugin_user_id: str = "",
 ) -> dict[str, Any]:
     device_sns = _normalize_sns(sn, sns)
     cov = str(coverage or "").strip().lower()
@@ -142,7 +144,16 @@ def run_cases(
     if not cases:
         raise ValueError("没有可执行的用例草稿。请先在流程里生成用例，或指定 case_ids。")
 
+    platforms_by_sn: dict[str, str] = {}
     for dsn in device_sns:
+        platforms_by_sn[dsn] = _platform_of(dsn, platform)
+
+    for dsn in device_sns:
+        from mino_nexus.runtime.run_context import is_web_slot
+
+        if is_web_slot(dsn, platforms_by_sn.get(dsn, "")):
+            _ensure_web_parallel_capacity(dsn)
+            continue
         busy = run_store.busy_task_for_sn(dsn)
         if busy:
             raise DeviceBusy(dsn, busy)
@@ -173,7 +184,13 @@ def run_cases(
         requested=str(env_profile or "").strip(),
         automation_default=str(cfg.get("env_profile") or "").strip(),
     )
-    package = aas.package_for_app(app, env_profile=resolved_env, platform=plat_for_pkg)
+    env_surface_id = str(env_surface or "").strip()
+    package = aas.package_for_app(
+        app,
+        env_profile=resolved_env,
+        platform=plat_for_pkg,
+        surface=env_surface_id,
+    )
     playbook = aas.get_playbook(app)
     run_id = run_store.new_run_id()
     seeded = [
@@ -207,6 +224,8 @@ def run_cases(
         "platform": task_platform,
         "platforms_by_sn": platforms_by_sn,
         "env_profile": resolved_env,
+        "env_surface": env_surface_id,
+        "plugin_user_id": str(plugin_user_id or "").strip(),
         "package": package,
         "playbook": playbook if isinstance(playbook, dict) else {},
         "requirement_id": str(requirement_id or "").strip(),
@@ -524,6 +543,7 @@ def _run_case_list(
                 "app_id": app_id,
                 "resource_card": resource_card,
             })
+            next_case = cases[case_seq + 1] if case_seq + 1 < len(cases) else None
             result = run_case(
                 run_id=run_id,
                 case=case,
@@ -537,6 +557,7 @@ def _run_case_list(
                 case_seq=case_seq,
                 playwright_headless=bool(doc.get("playwright_headless", True)),
                 run_env_brief=env_brief,
+                next_case=next_case if isinstance(next_case, dict) else None,
             )
             if not _task_still_running(run_id):
                 break
@@ -657,6 +678,7 @@ def run_explore(
     async_exec: bool = True,
     platform: str = "android",
     playwright_headless: bool = True,
+    plugin_user_id: str = "",
 ) -> dict[str, Any]:
     """发起应用探索：LLM 自由操作，被动采集拓展 Screen Atlas。"""
     from mino_nexus.loop.explore_case import build_explore_case
@@ -665,6 +687,11 @@ def run_explore(
     if not device_sns:
         device_sns = _pick_online_sns()[:1]
     for dsn in device_sns:
+        from mino_nexus.runtime.run_context import is_web_slot
+
+        if is_web_slot(dsn, _platform_of(dsn, platform)):
+            _ensure_web_parallel_capacity(dsn)
+            continue
         busy = run_store.busy_task_for_sn(dsn)
         if busy:
             raise DeviceBusy(dsn, busy)
@@ -693,6 +720,7 @@ def run_explore(
         "coverage": "once",
         "platform": platform,
         "env_profile": cfg.get("env_profile") or "test",
+        "plugin_user_id": str(plugin_user_id or "").strip(),
         "package": package,
         "playbook": playbook if isinstance(playbook, dict) else {},
         "provider_id": (provider or {}).get("id") or gate.get("provider_id") or "",
@@ -772,8 +800,20 @@ def retry_failed(task_id: str, *, sn: str = "") -> dict[str, Any]:
         release_id=str(doc.get("release_id") or ""),
         provider_id=str(doc.get("provider_id") or ""),
         playwright_headless=bool(doc.get("playwright_headless", True)),
+        env_profile=str(doc.get("env_profile") or ""),
+        env_surface=str(doc.get("env_surface") or ""),
+        plugin_user_id=str(doc.get("plugin_user_id") or ""),
     )
     return {"ok": True, "code": 200, "case_ids": failed_ids, "data": snapshot}
+
+
+def _ensure_web_parallel_capacity(sn: str) -> None:
+    from mino_nexus.runtime.run_context import WEB_PLAYWRIGHT_PARALLEL_LANES
+
+    ids = run_store.running_run_ids_for_sn(sn, limit=WEB_PLAYWRIGHT_PARALLEL_LANES + 1)
+    active = len(ids)
+    if active >= WEB_PLAYWRIGHT_PARALLEL_LANES:
+        raise WebSlotFull(sn, active, WEB_PLAYWRIGHT_PARALLEL_LANES)
 
 
 class DeviceBusy(Exception):
@@ -781,3 +821,11 @@ class DeviceBusy(Exception):
         super().__init__(f"device busy: {sn}")
         self.sn = sn
         self.busy_task_id = busy_task_id
+
+
+class WebSlotFull(Exception):
+    def __init__(self, sn: str, active: int, limit: int):
+        super().__init__(f"web slot full: {sn}")
+        self.sn = sn
+        self.active = active
+        self.limit = limit

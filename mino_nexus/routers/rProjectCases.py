@@ -16,7 +16,7 @@ router = APIRouter(prefix="/project", tags=["Project Cases"])
 
 class ResourceKeyPreviewBody(BaseModel):
     precondition: str = ""
-    platform: str = "android"
+    platform: str = ""
     package_id: str = ""
     env: str = "test"
 
@@ -29,6 +29,7 @@ class CaseImportPreviewBody(BaseModel):
     header_row: int = 0
     skip_rows: list[int] = Field(default_factory=list)
     column_map: dict[str, int] = Field(default_factory=dict)
+    default_platform: str = ""
 
 
 class CaseImportCommitRow(BaseModel):
@@ -42,6 +43,7 @@ class CaseImportCommitBody(BaseModel):
     requirement_id: str
     preview_token: str = ""
     default_on_conflict: str = "skip"
+    default_platform: str = ""
     rows: list[CaseImportCommitRow] = Field(default_factory=list)
 
 
@@ -89,7 +91,7 @@ def preview_resource_key(project_id: str, body: ResourceKeyPreviewBody, _sess: d
     claim = compile_resource_key_from_precondition(
         body.precondition,
         env_doc=env_doc,
-        platform=str(body.platform or "android"),
+        platform=str(body.platform or "").strip(),
         package=pkg,
         env=str(body.env or "test"),
     )
@@ -126,6 +128,7 @@ def import_preview(project_id: str, body: CaseImportPreviewBody, _sess: dict = D
             header_row=body.header_row,
             skip_rows=body.skip_rows,
             column_map=body.column_map,
+            default_platform=body.default_platform,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -203,6 +206,7 @@ def import_commit(project_id: str, body: CaseImportCommitBody, _sess: dict = Dep
             preview_token=body.preview_token,
             rows=rows,
             default_on_conflict=default_action,
+            default_platform=str(body.default_platform or "").strip(),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -304,10 +304,26 @@ def compile_requirements_from_text(
     elif "老用户" in pre or ("已注册" in pre and "未注册" not in pre):
         req["all"].append(_clause("lifecycle", "eq", "registered"))
 
-    if "已登录" in pre and session != "logged_in":
-        req["prefer"].append(_clause("session", "eq", "logged_in"))
-    elif "未登录" in pre or "游客" in pre:
-        req["all"].append(_clause("session", "in", "logged_out,guest,unknown"))
+    from mino_nexus.services.account_requirement_compile import (
+        TITLE_ACCOUNT_LOGIN,
+        classify_precondition_title,
+    )
+
+    has_account_login_line = False
+    for line in re.split(r"[\n\r]+", pre):
+        chunk = re.sub(r"^\s*[\d]+[.)、]\s*", "", line.strip())
+        if "：" not in chunk and ":" not in chunk:
+            continue
+        sep = "：" if "：" in chunk else ":"
+        title, _val = chunk.split(sep, 1)
+        if classify_precondition_title(title.strip()) == TITLE_ACCOUNT_LOGIN:
+            has_account_login_line = True
+            break
+    if has_account_login_line:
+        if "已登录" in pre and session != "logged_in":
+            req["prefer"].append(_clause("session", "eq", "logged_in"))
+        elif "未登录" in pre or "游客" in pre:
+            req["all"].append(_clause("session", "in", "logged_out,guest,unknown"))
 
     from mino_nexus.services.account_requirement_compile import apply_profile_data_hints
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 
@@ -14,6 +15,7 @@ from mino_nexus.routers.deps import current_session
 router = APIRouter(prefix="/releases", tags=["Releases"])
 
 _FETCH_TIMEOUT = 15
+_DEFAULT_MANIFEST = "https://github.com/pengchengluoyi/MinoScout/releases/latest/download/manifest.json"
 
 
 def _guess_installer(filename: str, os_name: str) -> str:
@@ -94,6 +96,41 @@ def pick_item(manifest: dict, os_name: str, arch_name: str) -> dict | None:
     return None
 
 
+def _manifest_url() -> str:
+    return str(os.environ.get("MINO_SCOUT_MANIFEST_URL") or "").strip() or _DEFAULT_MANIFEST
+
+
+def _github_repo(manifest_url: str) -> str:
+    m = re.match(r"^https://github\.com/([^/]+/[^/]+)/", str(manifest_url or "").strip())
+    return m.group(1) if m else "pengchengluoyi/MinoScout"
+
+
+def _fetch_github_latest_version(repo: str) -> str:
+    url = f"https://api.github.com/repos/{repo}/releases/latest"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "MinoNexus-scout-meta",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError:
+        return ""
+    except urllib.error.URLError:
+        return ""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    tag = str(data.get("tag_name") or "").strip().lstrip("vV")
+    return tag
+
+
 def _fetch_manifest(url: str) -> dict:
     req = urllib.request.Request(
         url,
@@ -106,6 +143,8 @@ def _fetch_manifest(url: str) -> dict:
         with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT) as resp:
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise HTTPException(status_code=404, detail="Scout manifest 尚未发布（Release 可能仍在打包）") from exc
         raise HTTPException(status_code=502, detail=f"Scout manifest HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
         raise HTTPException(status_code=502, detail=f"Scout manifest unreachable: {exc.reason}") from exc
@@ -118,6 +157,52 @@ def _fetch_manifest(url: str) -> dict:
     return data
 
 
+@router.get("/scout/meta")
+def scout_meta(
+    os_query: str = Query("", alias="os", description="darwin|win32|linux"),
+    arch: str = Query("", description="arm64|x64"),
+    _sess: dict = Depends(current_session),
+):
+    """Release 已开但 manifest/安装包未齐时 packaging=true，供 Studio Web 端展示「正在打包」。"""
+    manifest_url = _manifest_url()
+    repo = _github_repo(manifest_url)
+    os_name = _norm_os(os_query) or "darwin"
+    arch_name = _norm_arch(arch) or ("arm64" if os_name == "darwin" else "x64")
+    manifest_ready = False
+    packaging = False
+    version = ""
+    detail = ""
+    try:
+        manifest = _fetch_manifest(manifest_url)
+        version = str(manifest.get("version") or "").strip().lstrip("vV")
+        row = pick_item(manifest, os_name, arch_name)
+        if row and row.get("url"):
+            manifest_ready = True
+            version = str(row.get("version") or version or "").strip().lstrip("vV")
+        else:
+            packaging = True
+            detail = "manifest 已存在但当前系统安装包尚未上传"
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            packaging = True
+            detail = str(exc.detail or "")
+        else:
+            raise
+    if not version:
+        version = _fetch_github_latest_version(repo)
+    if packaging and not version:
+        packaging = False
+    return ok(
+        {
+            "version": version,
+            "packaging": bool(packaging),
+            "manifest_ready": manifest_ready,
+            "detail": detail,
+            "manifest_url": manifest_url,
+        }
+    )
+
+
 @router.get("/scout/latest")
 def scout_latest(
     os_query: str = Query("", alias="os", description="darwin|win32|linux"),
@@ -125,7 +210,7 @@ def scout_latest(
     _sess: dict = Depends(current_session),
 ):
     """Thin proxy of MINO_SCOUT_MANIFEST_URL. No local blobs, no data-dir hosting."""
-    manifest_url = str(os.environ.get("MINO_SCOUT_MANIFEST_URL") or "").strip()
+    manifest_url = _manifest_url()
     if not manifest_url:
         raise HTTPException(
             status_code=404,

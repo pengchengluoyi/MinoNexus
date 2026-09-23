@@ -143,6 +143,8 @@ def cap_step_intent(cap_id: str, *, params: dict[str, Any] | None = None) -> str
         text = str((params or {}).get("text") or "").strip()
         if field in ("phone",):
             return "login_phone"
+        if field in ("email", "login_email"):
+            return "login_email"
         if field in ("sms_code", "验证码", "otp"):
             return "otp_fill"
         if field in ("password", "密码"):
@@ -189,6 +191,7 @@ _INTENT_LABELS: dict[str, str] = {
     "input_fill": "输入内容",
     "sms_send": "发送验证码",
     "login_phone": "填写手机号",
+    "login_email": "填写邮箱",
     "otp_fill": "填写验证码",
     "login_password": "填写密码",
 }
@@ -198,8 +201,13 @@ def _expand_intents_done(done: set[str]) -> set[str]:
     """组合意图：登录流程子项齐则视为 login_flow 达成。"""
     out = set(done)
     if "login_flow" not in out:
-        sub = {"login_phone", "sms_send", "otp_fill"}
-        if sub.issubset(out) or ({"sms_send", "otp_fill"}.issubset(out) and "login_phone" in out):
+        sub_phone = {"login_phone", "sms_send", "otp_fill"}
+        sub_email = {"login_email", "sms_send", "otp_fill"}
+        if sub_phone.issubset(out) or sub_email.issubset(out):
+            out.add("login_flow")
+        elif {"sms_send", "otp_fill"}.issubset(out) and (
+            "login_phone" in out or "login_email" in out
+        ):
             out.add("login_flow")
         elif "otp_fill" in out and "sms_send" in out:
             out.add("login_flow")

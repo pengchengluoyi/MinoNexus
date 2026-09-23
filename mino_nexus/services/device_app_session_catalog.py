@@ -81,13 +81,35 @@ def list_project_device_app_matrix(
     limit: int = 500,
     include_offline_devices: bool = True,
 ) -> dict[str, Any]:
-    """合并 DB 登记 + 项目包名 × 在线设备 占位行。"""
+    """合并 DB 登记 + 项目包名 × 在线设备 占位行（仅当前项目配置的包名）。"""
     pid = str(project_id or "").strip()
     pkgs = project_package_ids(pid, app_id=app_id) if pid else []
     p_filter = str(package_id or "").strip()
     if p_filter:
+        if pkgs and p_filter not in pkgs:
+            return {
+                "sessions": [],
+                "count": 0,
+                "project_packages": pkgs,
+                "devices": [],
+                "hint": "筛选包名不属于当前项目",
+            }
         pkgs = [p_filter]
     sn_filter = str(sn or "").strip()
+
+    if not pkgs:
+        devices = _device_sns(online_only=not include_offline_devices)
+        if not devices and include_offline_devices:
+            devices = _device_sns(online_only=False)
+        if sn_filter:
+            devices = [d for d in devices if d["sn"] == sn_filter]
+        return {
+            "sessions": [],
+            "count": 0,
+            "project_packages": [],
+            "devices": [d["sn"] for d in devices],
+            "hint": "请先在「配置 → 环境配置」添加应用并填写 Android/iOS 包名",
+        }
 
     db_rows = list_sessions(
         sn=sn_filter,
@@ -95,9 +117,13 @@ def list_project_device_app_matrix(
         package_ids=pkgs if pkgs and not p_filter else None,
         limit=limit,
     )
+    pkg_set = set(pkgs)
     by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for row in db_rows:
-        key = (str(row.get("sn") or ""), str(row.get("package_id") or ""))
+        pkg = str(row.get("package_id") or "")
+        if pkg not in pkg_set:
+            continue
+        key = (str(row.get("sn") or ""), pkg)
         if key[0] and key[1]:
             by_key[key] = {**row, "registered": True}
 
@@ -107,14 +133,9 @@ def list_project_device_app_matrix(
     if sn_filter:
         devices = [d for d in devices if d["sn"] == sn_filter]
 
-    pkg_list = pkgs or []
-    if not pkg_list and not by_key:
-        # 无 App 配置时仍展示已有 DB 行
-        for row in db_rows:
-            key = (str(row.get("sn") or ""), str(row.get("package_id") or ""))
-            by_key[key] = {**row, "registered": True}
-
     def _placeholder(sn_val: str, pkg: str, dev: dict[str, Any] | None) -> None:
+        if pkg not in pkg_set:
+            return
         key = (sn_val, pkg)
         if key in by_key:
             if dev:
@@ -140,20 +161,13 @@ def list_project_device_app_matrix(
             "device_online": (dev or {}).get("online") if dev else False,
         }
 
-    if devices and pkg_list:
+    if devices:
         for dev in devices:
-            for pkg in pkg_list:
+            for pkg in pkgs:
                 _placeholder(dev["sn"], pkg, dev)
-    elif pkg_list:
-        for pkg in pkg_list:
+    else:
+        for pkg in pkgs:
             _placeholder("", pkg, None)
-    elif devices:
-        for dev in devices:
-            for row in db_rows:
-                if str(row.get("sn") or "") == dev["sn"]:
-                    key = (dev["sn"], str(row.get("package_id") or ""))
-                    if key[1]:
-                        _placeholder(key[0], key[1], dev)
 
     out = list(by_key.values())
     out = [_enrich_session_row(r) for r in out]
@@ -165,4 +179,5 @@ def list_project_device_app_matrix(
         "count": len(out),
         "project_packages": pkgs,
         "devices": [d["sn"] for d in devices],
+        "hint": "",
     }

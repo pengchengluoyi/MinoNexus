@@ -115,6 +115,7 @@ mino_nexus/
 | 动导航图 / 守卫 / hierarchy | [docs/NAVIGATION_ATLAS.md](docs/基础框架/NAVIGATION_ATLAS.md)。配置在 `nav_fsm*` 表，**代码里不得硬编码被测 App 的文案或包名** |
 | 动三渠道统一检索 / context-pack | [docs/9月12日_AppIntel信息基座.md](docs/9月12日_AppIntel信息基座.md)（规划真源） |
 | 从上游搬代码 | [docs/MIGRATION.md](docs/基础框架/MIGRATION.md) |
+| 本地调试 / Agent 协作 | [docs/开发手册.md](docs/开发手册.md) — **禁止**调试时直接对 `mino.db` 增删改 |
 
 ---
 

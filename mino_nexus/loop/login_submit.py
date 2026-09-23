@@ -183,8 +183,12 @@ def try_auto_login_submit(
         return None
     done = set(intents_done or set())
     otp_ok = _otp_code_already_entered(history_lines, done)
-    phone_ok = "login_phone" in done or _history_has(history_lines, "input_text")
-    if not otp_ok or not phone_ok:
+    cred_ok = (
+        "login_phone" in done
+        or "login_email" in done
+        or _history_has(history_lines, "input_text")
+    )
+    if not otp_ok or not cred_ok:
         return None
     attempts = int(getattr(ctx, "login_auto_submit_attempts", 0) or 0)
     if attempts >= 2:

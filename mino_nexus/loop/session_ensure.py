@@ -11,12 +11,34 @@ from mino_nexus.core.log import SLog
 from mino_nexus.runtime.session_gate import (
     ensure_case_scene,
     required_session,
-    session_prep_intent,
 )
 from mino_nexus.services.account_pool_templates import infer_template_id_from_text
+from mino_nexus.services.account_requirement_compile import (
+    TITLE_ACCOUNT_LOGIN,
+    classify_precondition_title,
+)
 
 TAG = "SessionEnsure"
 _SESSION_RE = re.compile(r"session=(\w+)", re.I)
+_LINE_NUM = re.compile(r"^\s*\d+[.)、．]\s*")
+
+
+def _account_session_hint_from_pre(pre: str) -> str:
+    """只认「账号登录态」行；设备登录态不作为号池 session 提示。"""
+    for line in re.split(r"[\n\r]+", str(pre or "")):
+        chunk = _LINE_NUM.sub("", line.strip())
+        if not chunk or ("：" not in chunk and ":" not in chunk):
+            continue
+        sep = "：" if "：" in chunk else ":"
+        title, val = chunk.split(sep, 1)
+        if classify_precondition_title(title) != TITLE_ACCOUNT_LOGIN:
+            continue
+        v = val.strip()
+        if re.search(r"未登录|游客", v):
+            return "guest"
+        if re.search(r"已登录", v):
+            return "logged_in"
+    return ""
 
 
 def account_need_from_case(
@@ -24,8 +46,6 @@ def account_need_from_case(
     scene: dict[str, Any] | None,
 ) -> dict[str, Any]:
     row = ensure_case_scene(case or {}, scene if isinstance(scene, dict) else None)
-    req = required_session(scene=row)
-    prep = session_prep_intent(scene=row)
     pre = str(
         row.get("precondition")
         or (scene or {}).get("precondition")
@@ -33,11 +53,13 @@ def account_need_from_case(
         or (case or {}).get("precondition_raw")
         or ""
     ).strip()
-    session = ""
-    if req == "logged_in" or prep == "relogin":
-        session = "logged_in"
-    elif req == "guest" or prep == "logout":
-        session = "guest"
+    session = _account_session_hint_from_pre(pre)
+    rk = (case or {}).get("resource_key") if isinstance(case, dict) else None
+    if not session and isinstance(rk, dict):
+        acc = rk.get("account") if isinstance(rk.get("account"), dict) else {}
+        raw = str(acc.get("required_session") or "").strip().lower()
+        if raw in ("logged_in", "logged_out", "guest"):
+            session = "logged_in" if raw == "logged_in" else "guest"
     blob = pre
     profile = bool(re.search(r"资料|昵称|头像|profile", blob, re.I))
     address = bool(re.search(r"地址|收货|address", blob, re.I))

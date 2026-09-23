@@ -10,6 +10,8 @@ from mino_nexus.services.device_store import get_device, list_devices as stored_
 from mino_nexus.services.node_registry import NodeRegistry, NodeSession, get_registry
 from mino_nexus.services.node_store import list_nodes as stored_nodes
 from mino_nexus.services.node_store import list_studios as stored_studios
+from mino_nexus.runtime.run_context import WEB_PLAYWRIGHT_PARALLEL_LANES, is_web_slot
+from mino_nexus.services import run_store
 
 _ONLINE_CHANNEL = frozenset({"connected", "online", "available"})
 
@@ -178,6 +180,23 @@ def _offline_row(snap: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _web_parallel_snapshot(session: NodeSession) -> dict[str, Any]:
+    web_sn = ""
+    for sn, dev in (session.devices or {}).items():
+        if is_web_slot(str(sn), str(getattr(dev, "platform", "") or "web")):
+            web_sn = str(sn)
+            break
+    active = 0
+    if web_sn:
+        active = len(run_store.running_run_ids_for_sn(web_sn, limit=WEB_PLAYWRIGHT_PARALLEL_LANES + 1))
+    return {
+        "sn": web_sn,
+        "active": active,
+        "max": WEB_PLAYWRIGHT_PARALLEL_LANES,
+        "full": bool(web_sn) and active >= WEB_PLAYWRIGHT_PARALLEL_LANES,
+    }
+
+
 def ui_nodes(registry: Optional[NodeRegistry] = None) -> list[dict[str, Any]]:
     reg = registry or get_registry()
     live = {n.node_id: n for n in reg.nodes()}
@@ -201,6 +220,7 @@ def ui_nodes(registry: Optional[NodeRegistry] = None) -> list[dict[str, Any]]:
             "device_count": len(session.devices),
             "last_heartbeat": _iso(session.last_seen),
             "devices": devices,
+            "web_playwright_parallel": _web_parallel_snapshot(session),
         })
     return out
 

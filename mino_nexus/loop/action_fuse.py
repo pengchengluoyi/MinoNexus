@@ -130,7 +130,12 @@ def fuse_hint(
 
 
 def _fps_equal(a: str, b: str) -> bool:
-    return str(a or "").strip() == str(b or "").strip() and bool(str(a or "").strip())
+    aa = str(a or "").strip()
+    bb = str(b or "").strip()
+    if not aa and not bb:
+        # Web 等场景常无 hierarchy 指纹；双空仍视为同屏无进展。
+        return True
+    return aa == bb and bool(aa)
 
 
 def fp_neutral_cap(
@@ -158,6 +163,8 @@ def fp_neutral_cap(
         if _SMS_RE.search(f"{field}{text}"):
             return True
         if login_flow_step and field in ("phone",) and "login_phone" not in done:
+            return True
+        if login_flow_step and field in ("email", "login_email") and "login_email" not in done:
             return True
     if cid == "tap_element":
         sel = str((params or {}).get("selector_text") or (params or {}).get("text") or "")

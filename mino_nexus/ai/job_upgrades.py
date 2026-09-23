@@ -19,6 +19,7 @@ AGENT_DECIDE_V14_MARKER = "prompt_version >= 14 (low-conf nav: don't freeze on w
 AGENT_DECIDE_V15_MARKER = "prompt_version >= 15 (do_subphase + thought/action 对齐)"
 AGENT_DECIDE_V16_MARKER = "prompt_version >= 16 (swipe_direction from/to 千分比)"
 AGENT_DECIDE_V17_MARKER = "prompt_version >= 17 (allow_foreign_foreground_llm_image)"
+AGENT_DECIDE_V18_MARKER = "prompt_version >= 18 (prep: pick account/device/cleanup only)"
 DOC_CONTEXT_SLOT = "doc_context"
 ASSERT_VISION_V2_MARKER = "prompt_version >= 2（screen_layout 布局线框）"
 ASSERT_VISION_V3_MARKER = "prompt_version >= 3 (drop forced visual JSON)"
@@ -900,6 +901,66 @@ def upgrade_agent_decide_to_v17() -> int:
         **_blocks_snapshot(row),
     })
     merged["prompt_version"] = 17
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
+
+
+_prep_flow_v18_hint = """
+### 前置三件事（不要切换测试环境）
+
+前置阶段只做：**筛选账号**（lease_account）、**筛选设备**、**环境清理**（clear_app_cache 等）。
+禁止 `check_run_env` / 切换测试环境——批次 `env_profile` 已经确定环境。
+设备登录态（机态）与账号登录态（号池 session）不是同一把钥匙；不要用号池去核手机是否登录。
+"""
+
+
+def _patch_agent_decide_v18(text: str) -> str:
+    out = str(text or "")
+    if "前置三件事" not in out:
+        out = out.rstrip() + "\n\n" + _prep_flow_v18_hint.strip() + "\n"
+    if AGENT_DECIDE_V18_MARKER not in out:
+        out = out.rstrip() + f"\n\n<!-- {AGENT_DECIDE_V18_MARKER} -->\n"
+    return out
+
+
+def upgrade_agent_decide_to_v18() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 18:
+        return 0
+    if int(row.get("prompt_version") or 1) < 17:
+        upgrade_agent_decide_to_v17()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_agent_decide_v18(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 17),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v17 before prep pick account/device/cleanup only",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 18
     _set_revisions(merged, revisions)
     _validate_job(merged)
     _smoke_render(merged)

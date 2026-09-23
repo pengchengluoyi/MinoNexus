@@ -7,11 +7,71 @@ from typing import Any
 from mino_nexus.services.account_facet_schema import CORE_KEYS
 from mino_nexus.services.resource_pool import _clause, empty_requirements
 
+TITLE_DEVICE_LOGIN = "device_login"
+TITLE_ACCOUNT_LOGIN = "account_login"
+TITLE_ACCOUNT_DATA = "account_data"
+TITLE_ENV_PERM = "env_perm"
+TITLE_OTHER = "other"
+
+_DEVICE_LOGIN_TITLE_RE = re.compile(r"设备登录态|机态|device[_\s-]?session", re.I)
+_ACCOUNT_LOGIN_TITLE_RE = re.compile(r"账号登录态|账号登录|account[_\s-]?session", re.I)
+_LEGACY_LOGIN_TITLE_RE = re.compile(r"登录态|登录状态", re.I)
+_ACCOUNT_DATA_TITLE_RE = re.compile(r"账号与数据|账号数据", re.I)
+_ENV_PERM_TITLE_RE = re.compile(r"环境与权限", re.I)
+_DYNAMIC_FLOW_FACETS = frozenset({"login_flow", "register_flow", "audit_flow", "kyc_flow"})
+_FIELD_STATUS_SPLIT = re.compile(r"[,，;；、|/]+")
+_FIELD_STATUS_PAIR = re.compile(r"^(.+?)\s*[-–—=：:]\s*(.+)$")
+
+
+def classify_precondition_title(title: str) -> str:
+    t = str(title or "").strip()
+    if not t:
+        return TITLE_OTHER
+    if _ACCOUNT_LOGIN_TITLE_RE.search(t):
+        return TITLE_ACCOUNT_LOGIN
+    if _DEVICE_LOGIN_TITLE_RE.search(t):
+        return TITLE_DEVICE_LOGIN
+    if _LEGACY_LOGIN_TITLE_RE.search(t):
+        return TITLE_DEVICE_LOGIN
+    if _ACCOUNT_DATA_TITLE_RE.search(t):
+        return TITLE_ACCOUNT_DATA
+    if _ENV_PERM_TITLE_RE.search(t):
+        return TITLE_ENV_PERM
+    return TITLE_OTHER
+
+
+def _is_dynamic_flow_facet(key: str) -> bool:
+    k = str(key or "").strip()
+    if k in _DYNAMIC_FLOW_FACETS:
+        return True
+    return k.startswith("flow_")
+
+
+def _static_field_defs(field_defs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [d for d in field_defs or [] if not _is_dynamic_flow_facet(str(d.get("key") or ""))]
+
+
+def _session_field_def() -> dict[str, Any]:
+    from mino_nexus.services.account_pool_templates import ACCOUNT_CORE_FACET_FIELDS
+
+    for row in ACCOUNT_CORE_FACET_FIELDS:
+        if str(row.get("key") or "") == "session":
+            return dict(row)
+    return {
+        "key": "session",
+        "label": "登录",
+        "options": [
+            {"value": "unknown", "label": "未设置"},
+            {"value": "logged_out", "label": "未登录"},
+            {"value": "logged_in", "label": "已登录"},
+            {"value": "guest", "label": "游客"},
+        ],
+    }
+
 
 def _clause_for_field_option(defn: dict[str, Any], value: str, label: str = "") -> dict[str, str]:
     key = str(defn.get("key") or "").strip()
     val = str(value or "").strip().lower()
-    lab = str(label or "").strip()
     if key == "session" and val == "logged_out":
         return _clause("session", "in", "logged_out,guest,unknown")
     if key == "lifecycle" and val == "unregistered":
@@ -27,7 +87,6 @@ def _append_clause(req: dict[str, Any], bucket: str, clause: dict[str, str]) -> 
     for i, existing in enumerate(rows):
         if not isinstance(existing, dict) or str(existing.get("facet") or "") != facet:
             continue
-        # eq 优先于 in（前置里写清选项标签时）
         if clause.get("op") == "eq" and existing.get("op") == "in":
             rows[i] = clause
         req[bucket] = rows
@@ -63,7 +122,7 @@ def _non_overlapping_clauses(
     *,
     allowed_keys: set[str] | None = None,
 ) -> list[dict[str, str]]:
-    """最长标签优先、区间不重叠，避免「已配置」误伤「已配置形象」、多字段重复约束。"""
+    """最长标签优先、区间不重叠，避免「已配置」误伤「已配置形象」。"""
     text = str(blob or "").strip()
     if not text:
         return []
@@ -108,8 +167,8 @@ def _non_overlapping_clauses(
 
 
 def _clauses_from_value_fragment(value: str, field_defs: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """值片段（如「未配置形象」）按选项标签对齐到 facet eq/in。"""
-    return _non_overlapping_clauses(value, field_defs)
+    """值片段按选项标签对齐；默认只扫静态字段，避免 login_flow / 引导阶段抢标签。"""
+    return _non_overlapping_clauses(value, _static_field_defs(field_defs))
 
 
 def _dedupe_clauses_by_facet(clauses: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -124,6 +183,99 @@ def _dedupe_clauses_by_facet(clauses: list[dict[str, str]]) -> list[dict[str, st
     return out
 
 
+def _match_field_by_name(name: str, field_defs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    raw = str(name or "").strip()
+    if not raw:
+        return None
+    lowered = raw.lower()
+    exact_key: dict[str, Any] | None = None
+    exact_label: dict[str, Any] | None = None
+    partial: list[dict[str, Any]] = []
+    for defn in field_defs or []:
+        key = str(defn.get("key") or "").strip()
+        label = str(defn.get("label") or "").strip()
+        if key and key.lower() == lowered:
+            exact_key = defn
+            break
+        if label and label == raw:
+            exact_label = exact_label or defn
+        elif label and (label in raw or raw in label):
+            partial.append(defn)
+    if exact_key:
+        return exact_key
+    if exact_label:
+        return exact_label
+    if len(partial) == 1:
+        return partial[0]
+    if partial:
+        partial.sort(key=lambda d: -len(str(d.get("label") or "")))
+        return partial[0]
+    return None
+
+
+def _clause_for_named_status(defn: dict[str, Any], status: str) -> dict[str, str] | None:
+    st = str(status or "").strip()
+    if not st:
+        return None
+    st_l = st.lower()
+    for opt in defn.get("options") or []:
+        if not isinstance(opt, dict):
+            continue
+        lab = str(opt.get("label") or "").strip()
+        val = str(opt.get("value") or "").strip().lower()
+        if lab == st or val == st_l:
+            return _clause_for_field_option(defn, val, lab)
+    hits: list[tuple[int, str, str]] = []
+    for opt in defn.get("options") or []:
+        if not isinstance(opt, dict):
+            continue
+        lab = str(opt.get("label") or "").strip()
+        val = str(opt.get("value") or "").strip().lower()
+        if lab and (lab in st or st in lab):
+            hits.append((len(lab), val, lab))
+    if hits:
+        hits.sort(key=lambda x: -x[0])
+        _, val, lab = hits[0]
+        return _clause_for_field_option(defn, val, lab)
+    return None
+
+
+def parse_field_status_tokens(value: str) -> list[tuple[str, str]]:
+    """「形象-已配置形象, 地址-已填写」→ [(字段名, 状态), ...]。"""
+    out: list[tuple[str, str]] = []
+    for part in _FIELD_STATUS_SPLIT.split(str(value or "")):
+        chunk = part.strip()
+        if not chunk:
+            continue
+        m = _FIELD_STATUS_PAIR.match(chunk)
+        if m:
+            out.append((m.group(1).strip(), m.group(2).strip()))
+        else:
+            out.append(("", chunk))
+    return out
+
+
+def _clauses_for_account_data(value: str, field_defs: list[dict[str, Any]]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for name, status in parse_field_status_tokens(value):
+        if name:
+            defn = _match_field_by_name(name, field_defs)
+            if not defn:
+                continue
+            clause = _clause_for_named_status(defn, status)
+            if clause:
+                out.append(clause)
+            continue
+        out.extend(_clauses_from_value_fragment(status, field_defs))
+    return _dedupe_clauses_by_facet(out)
+
+
+def _clauses_for_account_login(value: str) -> list[dict[str, str]]:
+    defn = _session_field_def()
+    clause = _clause_for_named_status(defn, value)
+    return [clause] if clause else []
+
+
 def _clauses_for_title_value(
     title: str,
     value: str,
@@ -131,11 +283,15 @@ def _clauses_for_title_value(
 ) -> list[dict[str, str]]:
     t = str(title or "").strip()
     v = str(value or "").strip()
-    out: list[dict[str, str]] = []
     if not v:
-        return out
-    if re.search(r"登录", t) and re.search(r"未登录|游客", v):
-        out.append(_clause("session", "in", "logged_out,guest,unknown"))
+        return []
+    kind = classify_precondition_title(t)
+    if kind in (TITLE_DEVICE_LOGIN, TITLE_ENV_PERM):
+        return []
+    if kind == TITLE_ACCOUNT_LOGIN:
+        return _clauses_for_account_login(v)
+    if kind == TITLE_ACCOUNT_DATA:
+        return _clauses_for_account_data(v, field_defs)
 
     scoped_keys: set[str] = set()
     for defn in field_defs:
@@ -145,27 +301,22 @@ def _clauses_for_title_value(
             continue
         if label in t:
             scoped_keys.add(key)
-
     if scoped_keys:
         scoped_defs = [d for d in field_defs if str(d.get("key") or "") in scoped_keys]
         scoped = _non_overlapping_clauses(v, scoped_defs)
-        out.extend(scoped)
-        if not scoped:
-            out.extend(_clauses_from_value_fragment(v, field_defs))
-    else:
-        out.extend(_clauses_from_value_fragment(v, field_defs))
-
-    return _dedupe_clauses_by_facet(out)
+        if scoped:
+            return _dedupe_clauses_by_facet(scoped)
+        return _dedupe_clauses_by_facet(_clauses_from_value_fragment(v, field_defs))
+    return _dedupe_clauses_by_facet(_clauses_from_value_fragment(v, field_defs))
 
 
 def _clauses_from_full_text(pre: str, field_defs: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """全文扫描：选项标签出现在前置里 → 偏好约束（不与 all 重复时由 _append_clause 合并）。"""
-    return _non_overlapping_clauses(pre, field_defs)
+    """全文扫描只作 prefer，且不扫动态流转字段。"""
+    return _non_overlapping_clauses(pre, _static_field_defs(field_defs))
 
 
 _PROFILE_NONE_RE = re.compile(r"未配置形象|形象未配置|无形象", re.I)
 _PROFILE_FILLED_RE = re.compile(r"已配置形象|形象已配置", re.I)
-# Console 号池模板里「形象」常映射到自定义 facet（如 field_7065t5），与核心 profile_data 不同步
 PROFILE_SHAPE_FACETS = frozenset({"field_7065t5"})
 _PROFILE_SHAPE_FACETS = PROFILE_SHAPE_FACETS
 
@@ -213,10 +364,47 @@ def apply_profile_data_hints(pre: str, req: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def sanitize_account_requirements(req: dict[str, Any], precondition: str) -> dict[str, Any]:
+    """设备登录态不得留下 login_flow；未点名的动态流转字段退出硬约束。"""
+    out = dict(req or empty_requirements())
+    pre = str(precondition or "")
+    has_account_login = False
+    named_keys: set[str] = set()
+    for line in re.split(r"[\n\r]+", pre):
+        chunk = re.sub(r"^\s*[\d]+[.)、]\s*", "", line.strip())
+        if "：" not in chunk and ":" not in chunk:
+            continue
+        sep = "：" if "：" in chunk else ":"
+        title, val = chunk.split(sep, 1)
+        kind = classify_precondition_title(title.strip())
+        if kind == TITLE_ACCOUNT_LOGIN:
+            has_account_login = True
+        if kind == TITLE_ACCOUNT_DATA:
+            for name, _status in parse_field_status_tokens(val.strip()):
+                if name:
+                    named_keys.add(name.strip().lower())
+    if not has_account_login:
+        _strip_facet_clauses(out, "login_flow")
+    for bucket in ("all", "prefer"):
+        kept: list[dict[str, str]] = []
+        for clause in out.get(bucket) or []:
+            if not isinstance(clause, dict):
+                continue
+            facet = str(clause.get("facet") or "").strip()
+            if _is_dynamic_flow_facet(facet) and facet != "login_flow":
+                if facet.lower() not in named_keys and facet.replace("flow_", "") not in named_keys:
+                    continue
+            kept.append(clause)
+        out[bucket] = kept
+    return out
+
+
 def augment_requirements_from_precondition(
     req: dict[str, Any],
     precondition: str,
     env_doc: dict | None,
+    *,
+    field_defs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     from mino_nexus.services.account_pool_templates import merged_pool_field_defs
 
@@ -224,7 +412,7 @@ def augment_requirements_from_precondition(
     if not pre:
         return dict(req or {})
     out = dict(req or empty_requirements())
-    defs = merged_pool_field_defs(env_doc)
+    defs = list(field_defs) if field_defs is not None else merged_pool_field_defs(env_doc)
 
     for line in re.split(r"[\n\r]+", pre):
         chunk = re.sub(r"^\s*[\d]+[.)、]\s*", "", line.strip())
@@ -239,7 +427,6 @@ def augment_requirements_from_precondition(
             for clause in _clauses_from_value_fragment(chunk, defs):
                 _append_clause(out, "all", clause)
 
-    # 单行多段（用户试筛常见）
     for part in re.split(r"\s*\d+[.)、]\s*", pre):
         part = part.strip()
         if "：" in part or ":" in part:
@@ -252,4 +439,4 @@ def augment_requirements_from_precondition(
         _append_clause(out, "prefer", clause)
 
     out = apply_profile_data_hints(pre, out)
-    return out
+    return sanitize_account_requirements(out, pre)

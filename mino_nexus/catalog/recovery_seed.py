@@ -453,8 +453,7 @@ def upgrade_recovery_rules() -> int:
 
 
 CHECK_RUN_ENV_DESCRIPTION = (
-    "确认本任务运行环境（env/platform/otp 通道），摘要形如 env=test; platform=android; otp_via=get_otp。"
-    "每任务仅需一次；history 已有 env= 则 signal_done。"
+    "确认批次 env/platform/otp；前置不要调用，环境由 env_profile 确定。"
 )
 
 

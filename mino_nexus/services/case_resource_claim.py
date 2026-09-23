@@ -5,12 +5,18 @@ import copy
 import re
 from typing import Any
 
-from mino_nexus.services.account_requirement_compile import augment_requirements_from_precondition
+from mino_nexus.services.account_requirement_compile import (
+    TITLE_ACCOUNT_LOGIN,
+    TITLE_DEVICE_LOGIN,
+    TITLE_ENV_PERM,
+    TITLE_OTHER,
+    augment_requirements_from_precondition,
+    classify_precondition_title,
+)
 from mino_nexus.services.case_resource_key_catalog import CATALOG_VERSION
 from mino_nexus.services.resource_pool import empty_requirements
 
 _CLEAR_CACHE_RE = re.compile(r"清除.{0,6}缓存|清缓存|clear.{0,8}cache", re.I)
-_LOGIN_STATE_RE = re.compile(r"登录态|登录状态|session", re.I)
 _LINE_NUM = re.compile(r"^\s*\d+[.)、．]\s*")
 
 
@@ -57,11 +63,20 @@ def _required_session_from_value(val: str) -> str:
     return "any"
 
 
+def _account_session_from_value(val: str) -> str:
+    v = str(val or "").strip()
+    if re.search(r"未登录|游客", v):
+        return "logged_out"
+    if re.search(r"已登录", v):
+        return "logged_in"
+    return "any"
+
+
 def compile_resource_key_from_precondition(
     precondition: str,
     *,
     env_doc: dict | None = None,
-    platform: str = "android",
+    platform: str = "",
     package: str = "",
     env: str = "test",
 ) -> dict[str, Any]:
@@ -73,27 +88,40 @@ def compile_resource_key_from_precondition(
         req = augment_requirements_from_precondition(req, pre, env_doc)
 
     required_session = "any"
+    account_required_session = "any"
     prep_items: list[dict[str, Any]] = []
     for title, val in _parse_precondition_lines(pre):
         blob = f"{title} {val}"
-        if _LOGIN_STATE_RE.search(title) or (not title and re.search(r"未登录|已登录|游客", val)):
-            rs = _required_session_from_value(val if _LOGIN_STATE_RE.search(title) else blob)
+        kind = classify_precondition_title(title) if title else TITLE_OTHER
+        if kind == TITLE_DEVICE_LOGIN:
+            rs = _required_session_from_value(val)
             if rs != "any":
                 required_session = rs
-        if _CLEAR_CACHE_RE.search(blob):
-            prep_items.append(
-                {
-                    "kind": "clear_cache",
-                    "phase": "before_launch",
-                    "text": val or "清除应用缓存",
-                }
-            )
+        elif kind == TITLE_ACCOUNT_LOGIN:
+            ars = _account_session_from_value(val)
+            if ars != "any":
+                account_required_session = ars
+        elif not title and re.search(r"未登录|已登录|游客", val):
+            rs = _required_session_from_value(val)
+            if rs != "any" and required_session == "any":
+                required_session = rs
+        if kind == TITLE_ENV_PERM or _CLEAR_CACHE_RE.search(blob):
+            if _CLEAR_CACHE_RE.search(blob):
+                prep_items.append(
+                    {
+                        "kind": "clear_cache",
+                        "phase": "before_launch",
+                        "text": val or "清除应用缓存",
+                    }
+                )
 
-    plat = str(platform or "android").strip().lower()
+    plat = str(platform or "").strip().lower()
     if re.search(r"\bios\b|iphone|苹果", pre, re.I):
         plat = "ios"
     elif re.search(r"\bweb\b|浏览器|chromium", pre, re.I):
         plat = "web"
+    elif re.search(r"安卓|android", pre, re.I):
+        plat = plat or "android"
 
     device_app_session = "logged_out"
     if required_session == "guest":
@@ -123,6 +151,7 @@ def compile_resource_key_from_precondition(
         },
         "account": {
             "env": str(env or "test").strip().lower(),
+            "required_session": account_required_session,
             "requirements": req,
         },
         "case_scene": {
@@ -149,12 +178,12 @@ def ensure_resource_key_on_case(
     if not isinstance(case, dict):
         return {}
     existing = _case_resource_key(case)
-    if existing:
+    if existing and int(existing.get("version") or 1) >= CATALOG_VERSION:
         return existing
     pre = str(case.get("precondition") or case.get("precondition_raw") or "").strip()
     if not pre:
         return {}
-    plat = str(case.get("platform") or "android").strip().lower()
+    plat = str(case.get("platform") or "").strip().lower()
     key = compile_resource_key_from_precondition(
         pre,
         env_doc=env_doc,
@@ -190,8 +219,11 @@ def apply_claim_to_merged_scene(
     if not out.get("prep_items") and scene_patch.get("prep_items"):
         out["prep_items"] = copy.deepcopy(scene_patch["prep_items"])
     lr = out.get("lease_requirements")
-    if not isinstance(lr, dict) or not lr.get("all"):
-        patch_lr = scene_patch.get("lease_requirements")
+    patch_lr = scene_patch.get("lease_requirements")
+    key_ver = int(key.get("version") or 1)
+    if key_ver >= 2 and isinstance(patch_lr, dict) and (patch_lr.get("all") or patch_lr.get("prefer")):
+        out["lease_requirements"] = copy.deepcopy(patch_lr)
+    elif not isinstance(lr, dict) or not lr.get("all"):
         if isinstance(patch_lr, dict) and patch_lr.get("all"):
             out["lease_requirements"] = copy.deepcopy(patch_lr)
     acc = key.get("account") if isinstance(key.get("account"), dict) else {}
