@@ -15,6 +15,7 @@ import asyncio
 import json
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -25,7 +26,7 @@ from mino_nexus.services.node_registry import get_registry
 
 TAG = "NodeWS"
 
-NEXUS_VERSION = "0.1.20"
+NEXUS_VERSION = Path(__file__).resolve().parents[1].joinpath("VERSION").read_text(encoding="utf-8").strip()
 HEARTBEAT_INTERVAL_SEC = 15
 
 # 协议 §1
