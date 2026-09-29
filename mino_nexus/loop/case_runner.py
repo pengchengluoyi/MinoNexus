@@ -483,6 +483,7 @@ def _run_case_list(
                 target_package=str(package or ""),
                 case=case if isinstance(case, dict) else {},
                 scene=scene,
+                plugin_user_id=str(doc.get("plugin_user_id") or ""),
             )
             if not ok and lease_err:
                 reason = f"账号租约：{lease_err}"
@@ -678,6 +679,8 @@ def run_explore(
     async_exec: bool = True,
     platform: str = "android",
     playwright_headless: bool = True,
+    env_profile: str = "",
+    env_surface: str = "",
     plugin_user_id: str = "",
 ) -> dict[str, Any]:
     """发起应用探索：LLM 自由操作，被动采集拓展 Screen Atlas。"""
@@ -702,7 +705,15 @@ def run_explore(
         max_idle_steps=max_idle_steps,
     )
     cfg = aas.get_automation_config(app)
-    package = aas.package_for_app(app, platform=platform if platform in ("android", "ios", "web") else "android")
+    plat_for_pkg = platform if platform in ("android", "ios", "web") else "android"
+    resolved_env = str(env_profile or cfg.get("env_profile") or "test").strip()
+    env_surface_id = str(env_surface or "").strip()
+    package = aas.package_for_app(
+        app,
+        env_profile=resolved_env,
+        platform=plat_for_pkg,
+        surface=env_surface_id,
+    )
     playbook = aas.get_playbook(app)
     run_id = run_store.new_run_id()
     seeded = run_store.seed_case(run_id, explore_case, 0, sn=device_sns[0] if device_sns else "", coverage="once")
@@ -719,7 +730,8 @@ def run_explore(
         "sns": device_sns,
         "coverage": "once",
         "platform": platform,
-        "env_profile": cfg.get("env_profile") or "test",
+        "env_profile": resolved_env,
+        "env_surface": env_surface_id,
         "plugin_user_id": str(plugin_user_id or "").strip(),
         "package": package,
         "playbook": playbook if isinstance(playbook, dict) else {},

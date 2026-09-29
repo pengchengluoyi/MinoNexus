@@ -154,6 +154,7 @@ def upgrade_run_case_sop_guards() -> int:
                     changed = True
             if kinds != list(phase.get("tool_kinds") or []):
                 phase["tool_kinds"] = kinds
+                changed = True
         if changed:
             sop["phases"] = phases
             row.sop_json = sop
@@ -162,6 +163,68 @@ def upgrade_run_case_sop_guards() -> int:
             flag_modified(row, "sop_json")
             updated = 1
     return updated
+
+
+RUN_CASE_SOP_VISION_MARKER = "run_case_sop_vision_v1"
+
+
+def upgrade_run_case_sop_vision_v1() -> int:
+    """将仍为 legacy（全 phase agent-decide + signal_done）的 run-case SOP 对齐 builtin 看图编排。"""
+    import copy
+
+    from mino_nexus.ai.skill_defs import DEFAULT_SOP
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.skill import Skill
+
+    want_by_phase = {
+        str(p.get("id") or "").strip().lower(): p
+        for p in (DEFAULT_SOP.get("phases") or [])
+        if str(p.get("id") or "").strip()
+    }
+    with session_scope() as db:
+        row = db.query(Skill).filter(Skill.id == "run-case").first()
+        if not row:
+            return 0
+        sop = copy.deepcopy(dict(row.sop_json or {}))
+        if sop.get(RUN_CASE_SOP_VISION_MARKER):
+            return 0
+        phases = list(sop.get("phases") or [])
+        if not phases:
+            return 0
+        legacy = True
+        for phase in phases:
+            if not isinstance(phase, dict):
+                continue
+            job = str(phase.get("job") or "agent-decide").strip()
+            adv = str(phase.get("advance_on") or "signal_done").strip()
+            if job != "agent-decide" or adv != "signal_done":
+                legacy = False
+                break
+        if not legacy:
+            return 0
+        changed = False
+        for phase in phases:
+            pid = str(phase.get("id") or "").strip().lower()
+            spec = want_by_phase.get(pid)
+            if not spec:
+                continue
+            for key in ("job", "exec_job", "advance_on"):
+                want = spec.get(key)
+                if want is None:
+                    continue
+                if str(phase.get(key) or "") != str(want):
+                    phase[key] = want
+                    changed = True
+        if not changed:
+            return 0
+        sop["phases"] = phases
+        sop[RUN_CASE_SOP_VISION_MARKER] = True
+        row.sop_json = sop
+        from sqlalchemy.orm.attributes import flag_modified
+
+        flag_modified(row, "sop_json")
+        return 1
+    return 0
 
 
 def _to_row(spec: dict[str, Any], *, builtin: bool | None = None):

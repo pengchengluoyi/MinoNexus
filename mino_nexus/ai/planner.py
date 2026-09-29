@@ -11,6 +11,7 @@
 这是 Step 3 的 PUBLIC 入口；上层 orchestrator（Step 4+ 才实现）来调它。
 """
 from __future__ import annotations
+import json
 import re
 import time
 from typing import Any, Optional
@@ -21,6 +22,8 @@ from mino_nexus.ai.job_slots import (
     assemble_agent_decide_slots,
     assemble_assert_vision_slots,
     assemble_inspect_session_slots,
+    assemble_vision_plan_slots,
+    assemble_vision_exec_slots,
 )
 from mino_nexus.ai.prompt_render import JobRenderError, render
 from mino_nexus.ai.coords import lift_selector_target, prepare_xy_params_for_execute
@@ -32,6 +35,7 @@ from mino_nexus.ai.schemas import (
     AssertResult,
     AgentDecision,
     AgentAction,
+    VisionPlanDecision,
     BaselineContext,
     CaseGoal,
     CaseCheckpoint,
@@ -511,6 +515,13 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
     allow_ff: Optional[bool] = None
     if "allow_foreign_foreground_llm_image" in raw:
         allow_ff = _parse_allow_foreign_raw(raw.get("allow_foreign_foreground_llm_image"))
+    ms_rows: list[dict[str, Any]] = []
+    raw_ms = raw.get("milestones")
+    if isinstance(raw_ms, list):
+        for item in raw_ms:
+            if isinstance(item, dict) and (item.get("id") or item.get("title")):
+                ms_rows.append(dict(item))
+    step_outcome = str(raw.get("step_outcome") or "").strip().lower()
     return AgentDecision(
         thought=str(raw.get("thought") or "").strip(),
         action=action,
@@ -525,9 +536,256 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
         screen_layout=screen_layout,
         vlm_hierarchy=vlm_hierarchy,
         allow_foreign_foreground_llm_image=allow_ff,
+        milestones=ms_rows,
+        step_outcome=step_outcome,
         raw_llm=raw,
         parse_warnings=warnings,
     )
+def _parse_vision_plan(raw: dict[str, Any]) -> VisionPlanDecision:
+    warnings: list[str] = []
+    ms = raw.get("milestones")
+    ms_rows: list[dict[str, Any]] = []
+    if isinstance(ms, list):
+        for row in ms:
+            if isinstance(row, dict):
+                ms_rows.append(dict(row))
+    elif ms:
+        warnings.append("milestones not a list")
+    digest = raw.get("plan_digest")
+    if not isinstance(digest, dict):
+        digest = {}
+    fv = raw.get("failure_verdict")
+    if not isinstance(fv, dict):
+        fv = {}
+    fbo = raw.get("flow_block_ops")
+    hooks = raw.get("hook_calls")
+    cps = raw.get("checkpoints_plan")
+    append_rows: list[dict[str, Any]] = []
+    raw_append = raw.get("milestones_append")
+    if isinstance(raw_append, list):
+        append_rows = [dict(x) for x in raw_append if isinstance(x, dict)]
+    src_complete = raw.get("step_requirements_complete")
+    step_complete = (
+        src_complete is True
+        or str(src_complete or "").strip().lower() in ("true", "1", "yes")
+    )
+    exit_raw = raw.get("exit_allowed")
+    exit_allowed = (
+        exit_raw is True
+        or str(exit_raw or "").strip().lower() in ("true", "1", "yes")
+        or step_complete
+    )
+    return VisionPlanDecision(
+        thought=str(raw.get("thought") or "")[:2000],
+        milestones=ms_rows,
+        milestones_append=append_rows,
+        flow_block_ops=[dict(x) for x in fbo if isinstance(x, dict)] if isinstance(fbo, list) else [],
+        hook_calls=[dict(x) for x in hooks if isinstance(x, dict)] if isinstance(hooks, list) else [],
+        checkpoints_plan=[dict(x) for x in cps if isinstance(x, dict)] if isinstance(cps, list) else [],
+        plan_digest=dict(digest),
+        failure_verdict=dict(fv),
+        step_requirements_complete=step_complete,
+        exit_allowed=exit_allowed,
+        raw_llm=raw,
+        parse_warnings=warnings,
+    )
+
+
+def vision_plan_turn(
+    *,
+    run_context: Any,
+    cursor: Any = None,
+    width: int,
+    height: int,
+    image_base64: str,
+    image_mime: str = "image/png",
+    hierarchy_text: str = "",
+    success_criteria: str | dict[str, Any] | None = None,
+    knowledge_hint: str = "",
+    knowledge_body: str = "",
+    nav_assist: str = "",
+    doc_context: str = "",
+    provider_id: Optional[str] = None,
+    timeout_sec: int = 90,
+    review_program_fail: str = "",
+    **_: Any,
+) -> VisionPlanDecision:
+    """看图规划单回合。P6-P0：与 agent-decide 并行，不改变执行路径。"""
+    provider, gate = resolve_regression_provider(provider_id)
+    if provider is None:
+        return VisionPlanDecision(
+            thought=f"未启用 AI 视觉：{gate.get('reason')}",
+            parse_warnings=["provider unavailable"],
+        )
+    image_base64, image_mime = _llm_image(image_base64, image_mime)
+    slots = assemble_vision_plan_slots(
+        success_criteria=success_criteria,
+        knowledge_hint=knowledge_hint,
+        knowledge_body=knowledge_body,
+        nav_assist=nav_assist,
+        doc_context=doc_context,
+        hierarchy_text=hierarchy_text,
+        review_program_fail=review_program_fail,
+        image_base64=image_base64,
+        image_mime=image_mime,
+    )
+    try:
+        messages, job_meta = render("agent-vision-plan", slots)
+    except JobRenderError as e:
+        return VisionPlanDecision(thought=str(e), parse_warnings=["job render failed"])
+    call = job_meta.get("call") or {}
+    raw, meta = _chat(
+        job="agent-vision-plan",
+        provider=provider,
+        messages=messages,
+        job_meta=job_meta,
+        temperature=float(call.get("temperature", 0.1)),
+        max_tokens=int(call.get("max_tokens", 2048)),
+        timeout_sec=int(call.get("timeout_sec", timeout_sec)),
+        json_mode=bool(call.get("json_mode", True)),
+    )
+    if raw is None:
+        err = str(meta.get("error") or "").strip() or "LLM 返回空/解析失败"
+        SLog.w(TAG, f"vision_plan_turn LLM failed err={err!r}")
+        return VisionPlanDecision(
+            thought=err[:200],
+            raw_llm={"llm_output": None, "meta": meta},
+            parse_warnings=["llm failed"],
+        )
+    plan = _parse_vision_plan(raw)
+    plan.raw_llm = {"llm_output": raw, "meta": meta}
+    return plan
+
+
+def _strip_exec_planning_fields(decision: AgentDecision) -> AgentDecision:
+    """执行 Job 不把里程碑写进 decision 字段；signal_* 仍保留 action 供循环 FSM 处理。"""
+    was_done = str(decision.status or "") == "done"
+    decision.milestones = []
+    decision.step_outcome = ""
+    if was_done and decision.action is None:
+        decision.action = AgentAction(capability_id="signal_done", params={})
+    decision.status = "continue"
+    raw = decision.raw_llm if isinstance(decision.raw_llm, dict) else {}
+    decision.raw_llm = {**raw, "vision_exec": True}
+    return decision
+
+
+def vision_exec_turn(
+    *,
+    run_context: Any,
+    cursor: Any = None,
+    success_criteria: str | dict[str, Any] | None = None,
+    width: int,
+    height: int,
+    image_base64: str,
+    image_mime: str = "image/png",
+    hierarchy_text: str = "",
+    knowledge_hint: str = "",
+    knowledge_body: str = "",
+    session_block: str = "",
+    nav_assist: str = "",
+    doc_context: str = "",
+    provider_id: Optional[str] = None,
+    timeout_sec: int = 90,
+    menu_ids: Optional[set[str]] = None,
+    phase: str = "do",
+    tool_kinds: Optional[list[str]] = None,
+) -> AgentDecision:
+    """看图执行单步：只出 capability，规划由 agent-vision-plan 负责。"""
+    focused = {str(x) for x in (menu_ids or set())}
+    extra = ["fsm_navigate"] if "fsm_navigate" in focused or getattr(run_context, "allow_model_recovery", False) else None
+    menu = available_menu_brief(
+        run_context,
+        kind="agent",
+        phase=phase,
+        platform=str(getattr(run_context, "platform", "") or ""),
+        tool_kinds=tool_kinds,
+        extra_ids=extra,
+    )
+    if not menu:
+        return AgentDecision(
+            status="give_up",
+            thought="capability_menu 为空（连通性丢失）",
+            parse_warnings=["empty menu"],
+        )
+    if menu_ids:
+        allow = {str(x) for x in menu_ids}
+        menu = [c for c in menu if str(c.get("id") or "") in allow]
+        if not menu:
+            focused = "、".join(sorted(allow))
+            return AgentDecision(
+                status="continue",
+                thought=f"未注册能力已跳过：{focused}",
+                parse_warnings=["focused cap missing from menu"],
+            )
+    from mino_nexus.catalog.tool_schema import tools_chat_payload, tools_for_menu
+
+    image_base64, image_mime = _llm_image(image_base64, image_mime)
+    tool_payload = tools_chat_payload(
+        tools_for_menu(menu, slim_envelope=True, include_control_tools=False)
+    )
+    provider, gate = resolve_regression_provider(provider_id)
+    if provider is None:
+        return AgentDecision(
+            status="ask_human",
+            thought=f"未启用 AI 视觉：{gate.get('reason')}",
+            parse_warnings=["provider unavailable"],
+        )
+    slots = assemble_vision_exec_slots(
+        menu=menu,
+        success_criteria=success_criteria,
+        knowledge_hint=knowledge_hint,
+        knowledge_body=knowledge_body,
+        nav_assist=nav_assist,
+        doc_context=doc_context,
+        hierarchy_text=hierarchy_text,
+        image_base64=image_base64,
+        image_mime=image_mime,
+    )
+    try:
+        messages, job_meta = render("agent-vision-exec", slots)
+    except JobRenderError as e:
+        return AgentDecision(status="ask_human", thought=str(e), parse_warnings=["job render failed"])
+    call = job_meta.get("call") or {}
+    llm_input_debug = {
+        "success_criteria": slots.get("success_criteria") or success_criteria,
+        "capability_menu": menu,
+        "tools": list(tool_payload.get("tools") or []),
+        "image": {"width": width, "height": height, "mime": image_mime},
+    }
+    raw, meta = _chat(
+        job="agent-vision-exec",
+        provider=provider,
+        messages=messages,
+        job_meta=job_meta,
+        temperature=float(call.get("temperature", 0.1)),
+        max_tokens=int(call.get("max_tokens", 2048)),
+        timeout_sec=int(call.get("timeout_sec", timeout_sec)),
+        json_mode=bool(call.get("json_mode", False)),
+        extra_payload=tool_payload or None,
+        allow_tools_downgrade=False,
+        require_tool_calls=bool(call.get("require_tool_calls", True)),
+    )
+    if raw is None:
+        err = str(meta.get("error") or "").strip() or "LLM 返回空/解析失败"
+        SLog.w(TAG, f"vision_exec_turn LLM failed err={err!r}")
+        return AgentDecision(
+            status="give_up",
+            thought=err[:200],
+            raw_llm={"llm_input": llm_input_debug, "llm_output": None, "meta": meta, "vision_exec": True},
+            parse_warnings=["llm failed"],
+        )
+    decision = _parse_agent_decision(raw, width, height)
+    allow_ids = {str(c.get("id") or "") for c in menu}
+    allow_ids.add("human_input_text")
+    if decision.action and str(decision.action.capability_id or "") not in allow_ids:
+        cid = decision.action.capability_id
+        decision.parse_warnings.append(f"capability_id={cid!r} 不在菜单，已丢弃")
+        decision.action = None
+    decision.raw_llm = {"llm_input": llm_input_debug, "llm_output": raw, "meta": meta, "vision_exec": True}
+    return _strip_exec_planning_fields(decision)
+
+
 def decide_next_action(
     *,
     goal: str,
@@ -539,7 +797,7 @@ def decide_next_action(
     image_base64: str,
     image_mime: str = "image/png",
     hierarchy_text: str = "",
-    success_criteria: str = "",
+    success_criteria: str | dict[str, Any] | None = None,
     memory_block: str = "",
     knowledge_hint: str = "",
     knowledge_body: str = "",
@@ -577,11 +835,14 @@ def decide_next_action(
     if provider is None:
         return AgentDecision(status="ask_human", thought=f"未启用 AI 视觉：{gate.get('reason')}",
                              parse_warnings=["provider unavailable"])
+    from mino_nexus.loop.llm_step_context import build_accounts_json, build_session_json
+
     accounts_brief = str(getattr(run_context, "accounts_brief", "") or "").strip()
+    session_json = build_session_json(run_context, session_block)
+    accounts_json = build_accounts_json(run_context)
     slots = assemble_agent_decide_slots(
         goal=goal,
         checkpoints_block=checkpoints_block,
-        device_brief=run_context.to_prompt_brief(),
         menu=menu,
         history_block=history_block,
         width=width,
@@ -595,12 +856,14 @@ def decide_next_action(
         memory_block=memory_block,
         knowledge_hint=knowledge_hint,
         knowledge_body=knowledge_body,
-        session_block=session_block,
+        session_json=session_json,
         nav_assist=nav_assist,
         doc_context=doc_context,
-        accounts_brief=accounts_brief,
+        accounts_json=accounts_json,
         phase=phase,
         case_scene=getattr(run_context, "case_scene", None) or {},
+        session_block=session_block,
+        accounts_brief=accounts_brief,
     )
     try:
         messages, job_meta = render("agent-decide", slots)
@@ -620,8 +883,8 @@ def decide_next_action(
         "knowledge_hint": knowledge_hint,
         "knowledge_body": knowledge_body,
         "doc_context": doc_context,
-        "session_block": session_block,
-        "accounts_brief": accounts_brief,
+        "session_json": session_json,
+        "accounts_json": accounts_json,
         "memory_block": memory_block,
         "success_criteria": success_criteria,
         "device_brief": run_context.to_prompt_brief(),

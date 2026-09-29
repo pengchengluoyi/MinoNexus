@@ -86,6 +86,8 @@ def default_project_env() -> dict:
         "profiles": profiles,
         "gmail_inbox": _norm_gmail_inbox({}),
         "channel_secrets": {},
+        "channel_gmail_alias": {},
+        "channel_phone_seq": {},
     }
 
 
@@ -282,6 +284,22 @@ def _norm_gmail_inbox(raw: Any) -> dict:
     return {"address": s[:120]}
 
 
+def _norm_channel_gmail_alias_doc(
+    raw: Any, channels: List[dict], env_keys: set[str]
+) -> dict[str, dict[str, dict[str, str]]]:
+    from mino_nexus.services.gmail_alias_lease import normalize_channel_gmail_alias
+
+    return normalize_channel_gmail_alias(raw, channels, env_keys)
+
+
+def _norm_channel_phone_seq_doc(
+    raw: Any, channels: List[dict], env_keys: set[str]
+) -> dict[str, dict[str, dict[str, str]]]:
+    from mino_nexus.services.phone_pool_lease import normalize_channel_phone_seq
+
+    return normalize_channel_phone_seq(raw, channels, env_keys)
+
+
 def _norm_channel_secrets(raw: Any, channels: List[dict], env_keys: set[str]) -> dict:
     src = raw if isinstance(raw, dict) else {}
     ch_ids = {str(c.get("id") or "") for c in channels if c.get("id")}
@@ -420,8 +438,14 @@ def normalize_project_env(raw: Any) -> dict:
         "channels": channels,
         "pipeline": pipeline,
         "profiles": profiles,
-        "gmail_inbox": _norm_gmail_inbox(raw.get("gmail_inbox")),
+        "gmail_inbox": _norm_gmail_inbox({}),
         "channel_secrets": _norm_channel_secrets(raw.get("channel_secrets"), channels, env_keys),
+        "channel_gmail_alias": _norm_channel_gmail_alias_doc(
+            raw.get("channel_gmail_alias"), channels, env_keys
+        ),
+        "channel_phone_seq": _norm_channel_phone_seq_doc(
+            raw.get("channel_phone_seq"), channels, env_keys
+        ),
         "account_facet_extensions": normalize_extensions(raw.get("account_facet_extensions")),
         "account_template_ids": _norm_template_ids(raw.get("account_template_ids")),
         "account_pool_local": raw.get("account_pool_local")

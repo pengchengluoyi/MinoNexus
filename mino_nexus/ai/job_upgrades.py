@@ -20,6 +20,7 @@ AGENT_DECIDE_V15_MARKER = "prompt_version >= 15 (do_subphase + thought/action �
 AGENT_DECIDE_V16_MARKER = "prompt_version >= 16 (swipe_direction from/to 千分比)"
 AGENT_DECIDE_V17_MARKER = "prompt_version >= 17 (allow_foreign_foreground_llm_image)"
 AGENT_DECIDE_V18_MARKER = "prompt_version >= 18 (prep: pick account/device/cleanup only)"
+AGENT_DECIDE_V19_MARKER = "agent-decide prompt v19 (scoped step + session_json)"
 DOC_CONTEXT_SLOT = "doc_context"
 ASSERT_VISION_V2_MARKER = "prompt_version >= 2（screen_layout 布局线框）"
 ASSERT_VISION_V3_MARKER = "prompt_version >= 3 (drop forced visual JSON)"
@@ -968,6 +969,301 @@ def upgrade_agent_decide_to_v18() -> int:
     return 1
 
 
+_PREP_V19_HINT = """
+### 本步上下文（v19）
+
+- 只看 `checkpoints_block` / `success_criteria`（JSON，含 `milestones`）/ `history_block`（**本步本阶段**操作）。
+- `session_json`、`accounts_json` 为结构化登录态与租号信息；勿再依赖 device 摘要。
+- 能力以 function tools 为准；`menu_json` / `device_brief_json` 若出现可忽略。
+"""
+
+
+def _patch_agent_decide_v19(text: str) -> str:
+    out = str(text or "")
+    out = re.sub(r"\n*<!--\s*prompt_version[^>]*-->\s*", "\n", out, flags=re.IGNORECASE)
+    out = re.sub(
+        r"====\s*device[^\n]*\n[\s\S]*?====\s*session",
+        "==== session",
+        out,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    out = out.replace("{{device_brief_json}}", "")
+    out = out.replace("{{accounts_brief}}", "{{accounts_json}}")
+    if "{{session_json}}" not in out and "{{session_block}}" in out:
+        out = out.replace("{{session_block}}", "{{session_json}}")
+    if AGENT_DECIDE_V19_MARKER not in out:
+        out = out.rstrip() + "\n\n" + _PREP_V19_HINT.strip() + f"\n\n({AGENT_DECIDE_V19_MARKER})\n"
+    return out
+
+
+def upgrade_agent_decide_to_v19() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 19:
+        return 0
+    if int(row.get("prompt_version") or 1) < 18:
+        upgrade_agent_decide_to_v18()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    if not blocks:
+        return 0
+    main = dict(blocks[0])
+    main["text"] = _patch_agent_decide_v19(str(main.get("text") or ""))
+    blocks[0] = main
+    merged["system_blocks"] = blocks
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 18),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v18 before scoped step context / session_json",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 19
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
+
+
+def _rebind_agent_decide_user_blocks(user_blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rebind = {
+        "session_block": ("session_json", "==== 会话状态 JSON（session_json）===="),
+        "accounts_brief": ("accounts_json", "==== 租号/账号 JSON（accounts_json）===="),
+    }
+    disable = {"device_brief_json", "menu_json"}
+    out: list[dict[str, Any]] = []
+    for block in user_blocks or []:
+        if not isinstance(block, dict):
+            continue
+        b = dict(block)
+        slot = str(b.get("slot") or "").strip()
+        if slot in rebind:
+            new_slot, heading = rebind[slot]
+            b["slot"] = new_slot
+            b["heading"] = heading
+        if slot in disable:
+            b["enabled"] = False
+            b.pop("slot", None)
+        out.append(b)
+    return out
+
+
+def _rebind_agent_decide_slot_specs(slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rename = {"session_block": "session_json", "accounts_brief": "accounts_json"}
+    drop = {"device_brief_json", "menu_json"}
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for spec in slots or []:
+        if not isinstance(spec, dict):
+            continue
+        name = str(spec.get("name") or "").strip()
+        if not name or name in drop:
+            continue
+        name = rename.get(name, name)
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append({**spec, "name": name})
+    for required in ("session_json", "accounts_json"):
+        if required not in seen:
+            out.append({"name": required, "kind": "text", "required": False})
+            seen.add(required)
+    return out
+
+
+def upgrade_agent_decide_to_v20() -> int:
+    """v19 只改了 system 文案；v20 绑定 user_blocks 槽到 session_json / accounts_json。"""
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 20:
+        return 0
+    if int(row.get("prompt_version") or 1) < 19:
+        upgrade_agent_decide_to_v19()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    merged["user_blocks"] = _rebind_agent_decide_user_blocks(list(merged.get("user_blocks") or []))
+    merged["slots"] = _rebind_agent_decide_slot_specs(list(merged.get("slots") or []))
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 19),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v19 before user_blocks slot rebind (session_json)",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 20
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
+
+
+AGENT_DECIDE_V21_MARKER = "agent-decide prompt v21 (milestones + milestone_updates)"
+
+_PREP_V21_HINT = """
+### 子里程碑（v21）
+
+- `success_criteria` JSON 中 `milestones[]` 为**本步本 phase**进度真源。
+- **首轮**本步尚无里程碑时，在 JSON 输出中增加 `milestones` 数组（3–8 条，含 `id`/`title`/`kind`/`status`）。
+- 每回合用 `milestone_updates`: `[{ "id", "status": "pass|pending|failed|skipped", "evidence" }]` 更新状态；可选 `step_outcome`。
+- check 阶段：以里程碑全部 pass（或 optional 为 skipped）为准，再 `signal_done`；勿依赖 assert_visual。
+"""
+
+
+def _patch_agent_decide_v21_system(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = copy.deepcopy(blocks)
+    for spec in out:
+        if str(spec.get("name") or "") != "system":
+            continue
+        body = str(spec.get("body") or "")
+        if AGENT_DECIDE_V21_MARKER in body:
+            return out
+        spec["body"] = body.rstrip() + "\n\n" + _PREP_V21_HINT.strip() + f"\n\n({AGENT_DECIDE_V21_MARKER})\n"
+        break
+    return out
+
+
+def upgrade_agent_decide_to_v21() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 21:
+        return 0
+    if int(row.get("prompt_version") or 1) < 20:
+        upgrade_agent_decide_to_v20()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    merged["system_blocks"] = _patch_agent_decide_v21_system(list(merged.get("system_blocks") or []))
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 20),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v20 before milestones output hint",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 21
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
+
+
+AGENT_DECIDE_V22_MARKER = "agent-decide prompt v22 (function tools; drop tool markdown table)"
+
+_TOOL_MARKDOWN_TABLE_RE = re.compile(
+    r"\n\| 工具 \| 参数 \|\n\|[-:]+\|[-:]+\|\n(?:\|[^\n]+\|\n)+",
+    re.MULTILINE,
+)
+
+_PREP_V22_HINT = """
+### 能力调用（v22）
+
+- 正文不再维护「工具 | 参数」Markdown 表；**只**调用本轮下发的 function tools（参数以 schema 为准）。
+- **首轮**本步尚无子里程碑时，必须在 JSON 中输出 `milestones`（3–8 条，`id`/`title`/`kind`/`status`）；登录步系统可能将 FSM 逻辑块插入列表顶部，仍用 `milestone_updates` + 工具执行推进。
+"""
+
+
+def _strip_agent_decide_tool_markdown_table(text: str) -> str:
+    out = str(text or "")
+    if _TOOL_MARKDOWN_TABLE_RE.search(out):
+        out = _TOOL_MARKDOWN_TABLE_RE.sub(
+            "\n\n设备能力以本轮 **function tools** 为准；勿调用未下发的工具。\n",
+            out,
+            count=1,
+        )
+    return out
+
+
+def _patch_agent_decide_v22_system(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = copy.deepcopy(blocks)
+    for spec in out:
+        name = str(spec.get("name") or "")
+        if name not in ("system", ""):
+            continue
+        body_key = "body" if "body" in spec else "text"
+        body = str(spec.get(body_key) or "")
+        if AGENT_DECIDE_V22_MARKER in body:
+            return out
+        body = _strip_agent_decide_tool_markdown_table(body)
+        if AGENT_DECIDE_V22_MARKER not in body:
+            body = body.rstrip() + "\n\n" + _PREP_V22_HINT.strip() + f"\n\n({AGENT_DECIDE_V22_MARKER})\n"
+        spec[body_key] = body
+        break
+    return out
+
+
+def upgrade_agent_decide_to_v22() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    if int(row.get("prompt_version") or 1) >= 22:
+        return 0
+    if int(row.get("prompt_version") or 1) < 21:
+        upgrade_agent_decide_to_v21()
+        row = get_job("agent-decide") or row
+
+    merged = copy.deepcopy(row)
+    merged["system_blocks"] = _patch_agent_decide_v22_system(list(merged.get("system_blocks") or []))
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 21),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v21 before strip tool markdown table",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 22
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
+
+
 def upgrade_agent_decide_to_v16() -> int:
     from mino_nexus.services.job_store import (
         _blocks_snapshot,
@@ -1443,6 +1739,74 @@ def ensure_nav_widget_state_job() -> int:
     return 1
 
 
+AGENT_VISION_EXEC_V1_MARKER = "agent-vision-exec v1 (executor only; no milestones)"
+
+
+def ensure_agent_vision_exec_job() -> int:
+    """P6-P1：从 agent-decide 克隆看图执行 Job（瘦上下文 + 禁里程碑输出）。"""
+    import copy
+
+    from mino_nexus.services.job_store import _to_row, _validate_job, get_job
+
+    jid = "agent-vision-exec"
+    if get_job(jid):
+        return 0
+    src = get_job("agent-decide")
+    if not src:
+        return 0
+    spec = copy.deepcopy(src)
+    spec["id"] = jid
+    spec["label"] = "看图执行"
+    spec["summary"] = "按 plan_digest 输出单步 capability；里程碑由 agent-vision-plan 维护"
+    spec["prompt_version"] = 1
+    spec["builtin"] = True
+    spec["enabled"] = True
+    slot_names = {str(s.get("name") or "") for s in (spec.get("slots") or [])}
+    for name in ("plan_digest", "active_milestone", "phase"):
+        if name not in slot_names:
+            spec["slots"] = list(spec.get("slots") or []) + [{"name": name, "kind": "text"}]
+    spec["user_blocks"] = [
+        {"id": "plan", "slot": "plan_digest", "heading": "==== plan_digest ===="},
+        {"id": "am", "slot": "active_milestone", "heading": "==== active_milestone ===="},
+        {"id": "goal", "slot": "goal", "heading": "==== goal ===="},
+        {"id": "hist", "slot": "history_block", "heading": "==== history ===="},
+        {"id": "sess", "slot": "session_json", "heading": "==== session ===="},
+        {"id": "acc", "slot": "accounts_json", "heading": "==== accounts ===="},
+        {"id": "nav", "slot": "nav_assist", "heading": "==== nav ====", "skip_if_empty": True},
+        {"id": "know", "slot": "knowledge_body", "heading": "==== knowledge ====", "skip_if_empty": True},
+        {"id": "doc", "slot": "doc_context", "heading": "==== doc ====", "skip_if_empty": True},
+        {"id": "hier", "slot": "hierarchy_text", "heading": "==== hierarchy ====", "skip_if_empty": True},
+        {"id": "img", "kind": "image", "slot": "image_base64", "mime_slot": "image_mime"},
+    ]
+    blocks = copy.deepcopy(list(spec.get("system_blocks") or []))
+    addon = (
+        "\n\n### 看图执行（agent-vision-exec）\n"
+        "你是**执行器**：根据 plan_digest、active_milestone 与截图，调用 function tools 完成**一步**设备操作。\n"
+        "禁止在 JSON 中输出 milestones、milestone_updates、step_outcome；"
+        "禁止 signal_done / signal_give_up 作为收工（程序按里程碑聚合流转）。\n"
+        f"({AGENT_VISION_EXEC_V1_MARKER})\n"
+    )
+    for sb in blocks:
+        key = "body" if "body" in sb else "text"
+        body = str(sb.get(key) or "")
+        if AGENT_VISION_EXEC_V1_MARKER not in body:
+            sb[key] = body.rstrip() + addon
+        break
+    else:
+        blocks.append({"id": "main", "text": addon.strip()})
+    spec["system_blocks"] = blocks
+    _validate_job(spec)
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+
+    with session_scope() as db:
+        if db.query(LlmJob).filter(LlmJob.id == jid).first():
+            return 0
+        db.add(_to_row(spec))
+        db.flush()
+    return 1
+
+
 def ensure_account_facet_commit_job() -> int:
     """用例结束：根据执行轨迹推断号池 facet 写回（pass/fail/超时均调用）。"""
     from mino_nexus.services.job_store import get_job, _to_row
@@ -1558,3 +1922,1169 @@ def ensure_nav_atlas_morph_job() -> int:
         db.add(_to_row(spec))
         db.flush()
     return 1
+
+
+def ensure_agent_vision_plan_job() -> int:
+    """P6-P0：看图规划 Job（不下发设备 cap）。执行仍走 agent-decide。"""
+    from mino_nexus.services.job_store import get_job, _to_row
+
+    jid = "agent-vision-plan"
+    if get_job(jid):
+        return 0
+    spec = {
+        "id": jid,
+        "label": "看图规划",
+        "summary": "本回合里程碑与逻辑块编排；不输出 tap/input",
+        "engine": "json_chat",
+        "role_id": "test-engineer",
+        "enabled": True,
+        "builtin": True,
+        "prompt_version": 1,
+        "output_schema": "json",
+        "slots": [
+            {"name": "phase", "kind": "text"},
+            {"name": "phase_step_text", "kind": "text"},
+            {"name": "checkpoints_block", "kind": "text"},
+            {"name": "history_block", "kind": "text"},
+            {"name": "success_criteria", "kind": "text"},
+            {"name": "target_app", "kind": "text"},
+            {"name": "session_json", "kind": "text"},
+            {"name": "accounts_json", "kind": "text"},
+            {"name": "screen_size_block", "kind": "text"},
+            {"name": "hierarchy_text", "kind": "text"},
+            {"name": "nav_assist", "kind": "text"},
+            {"name": "knowledge_hint", "kind": "text"},
+            {"name": "knowledge_body", "kind": "text"},
+            {"name": "doc_context", "kind": "text"},
+            {"name": "review_program_fail", "kind": "text"},
+            {"name": "image_base64", "kind": "image"},
+            {"name": "image_mime", "kind": "text"},
+        ],
+        "system_blocks": [
+            {
+                "id": "main",
+                "text": (
+                    "你是测试执行**规划器**（agent-vision-plan）。根据截图与上下文，规划本回合要做的子里程碑、"
+                    "逻辑块步骤与 skip，**不要**输出任何设备 capability（tap/input/swipe 等）。\n\n"
+                    "阶段 phase={{phase}}\n"
+                    "本阶段步骤文案：\n{{phase_step_text}}\n\n"
+                    "铁律：\n"
+                    "- prep/do：可输出 milestones、flow_block_ops、hook_calls、plan_digest\n"
+                    "- check：只输出 checkpoints_plan 与对应 milestones（kind=checkpoint）\n"
+                    "- 若 review_program_fail 非空：输出 failure_verdict.blocking 与 reason（复核程序标 failed）\n"
+                    "- 不要 signal_done / milestone_updates 字段（程序写回状态）\n\n"
+                    "只输出 JSON：\n"
+                    '{"thought":"","milestones":[],"flow_block_ops":[],"hook_calls":[],'
+                    '"checkpoints_plan":[],"plan_digest":{},"failure_verdict":{}}'
+                ),
+            }
+        ],
+        "user_blocks": [
+            {"id": "ctx", "slot": "checkpoints_block", "heading": "==== checkpoints ===="},
+            {"id": "hist", "slot": "history_block", "heading": "==== history ===="},
+            {"id": "sc", "slot": "success_criteria", "heading": "==== success_criteria ===="},
+            {"id": "sess", "slot": "session_json", "heading": "==== session ===="},
+            {"id": "acc", "slot": "accounts_json", "heading": "==== accounts ===="},
+            {"id": "nav", "slot": "nav_assist", "heading": "==== nav ====", "skip_if_empty": True},
+            {"id": "know", "slot": "knowledge_body", "heading": "==== knowledge ====", "skip_if_empty": True},
+            {"id": "doc", "slot": "doc_context", "heading": "==== doc ====", "skip_if_empty": True},
+            {"id": "rev", "slot": "review_program_fail", "heading": "==== program_fail_review ====", "skip_if_empty": True},
+            {"id": "img", "kind": "image", "slot": "image_base64", "mime_slot": "image_mime"},
+        ],
+        "call": {"temperature": 0.15, "max_tokens": 2400, "timeout_sec": 90, "json_mode": True},
+        "flags": ["case_execution_use"],
+    }
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+
+    with session_scope() as db:
+        if db.query(LlmJob).filter(LlmJob.id == jid).first():
+            return 0
+        db.add(_to_row(spec))
+        db.flush()
+    return 1
+
+
+AGENT_VISION_ASSERT_V1_MARKER = "agent-vision-assert v1 (batch checkpoints; check phase)"
+AGENT_VISION_ASSERT_LANG_V2_MARKER = (
+    "agent-vision-assert v2 (expected wording is not a UI language requirement)"
+)
+_ASSERT_LANG_HINT = """
+### 文案语言
+
+预期里出现的中文或英文只是作者的写法，不是要求界面必须使用同一种文字。
+按含义、布局、是否出现来判断。含义成立就通过，不要因为界面文字和预期文字不是同一种语言而判失败。
+语言是否一致留到以后单独的语言字段，这一步不要做语言检验。
+"""
+AGENT_VISION_PLAN_PREP_V2_MARKER = "agent-vision-plan v2 (prep program plan; no free milestones)"
+_PREP_PROGRAM_PLAN_HINT = """
+### 前置 prep（v2）
+
+- `prep_program_plan` 与 `success_criteria.milestones` 已由 **程序从用例密钥 Claim 种子**，顺序固定：筛选账号 → 筛选设备 → 环境清理（按需）→ 打开应用。
+- **禁止**输出或改写 `milestones[]`；只允许 `plan_digest`（当前屏观察、风险、下一 hook 参数提示）、`hook_calls`、`flow_block_ops`。
+- 登录 UI 步骤不属于 prep 里程碑；勿用 Google/邮箱登录链凑前置。
+- 收工由程序按子里程碑聚合，勿 `signal_done`。
+"""
+
+AGENT_DECIDE_V23_MARKER = "agent-decide v23 (vision-plan owns milestones when enabled)"
+
+_AGENT_DECIDE_V23_HINT = """
+### 里程碑与收工（v23）
+
+当运行环境启用 **agent-vision-plan**（看图规划）时：本 Job **不得**输出 `milestones`、`milestone_updates`、`step_outcome`；不要用 `status=done` / signal_done 收工，程序按子里程碑聚合流转阶段。
+里程碑状态一律由程序根据工具结果写回，禁止 `milestone_updates`。
+"""
+
+
+def ensure_agent_vision_assert_job() -> int:
+    """P6-P3：从 assert-vision 克隆批量校验 Job（check 阶段）。"""
+    import copy
+
+    from mino_nexus.services.job_store import _to_row, _validate_job, get_job
+
+    jid = "agent-vision-assert"
+    if get_job(jid):
+        return 0
+    src = get_job("assert-vision")
+    if not src:
+        return 0
+    spec = copy.deepcopy(src)
+    spec["id"] = jid
+    spec["label"] = "看图校验"
+    spec["summary"] = "check 阶段按里程碑校验点批量断言；失败不翻案"
+    spec["prompt_version"] = 1
+    spec["builtin"] = True
+    spec["enabled"] = True
+    blocks = copy.deepcopy(list(spec.get("system_blocks") or []))
+    addon = (
+        "\n\n### 看图校验（agent-vision-assert）\n"
+        "一次调用评估上下文中的**全部校验点 JSON**；输出 passed / confidence / evidence / reasoning。\n"
+        "校验失败时程序直接判用例失败，**不接受**翻案为 pending。\n"
+        f"({AGENT_VISION_ASSERT_V1_MARKER})\n"
+        f"{_ASSERT_LANG_HINT.strip()}\n"
+        f"({AGENT_VISION_ASSERT_LANG_V2_MARKER})\n"
+    )
+    for sb in blocks:
+        key = "body" if "body" in sb else "text"
+        body = str(sb.get(key) or "")
+        if AGENT_VISION_ASSERT_V1_MARKER not in body:
+            sb[key] = body.rstrip() + addon
+        break
+    else:
+        blocks.append({"id": "main", "text": addon.strip()})
+    spec["system_blocks"] = blocks
+    _validate_job(spec)
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+
+    with session_scope() as db:
+        if db.query(LlmJob).filter(LlmJob.id == jid).first():
+            return 0
+        db.add(_to_row(spec))
+        db.flush()
+    return 1
+
+
+def upgrade_vision_assert_language_neutral() -> int:
+    """预期文案的语言不是界面语种要求。已有 agent-vision-assert / assert-vision 补上这一段。"""
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    changed = 0
+    for jid in ("agent-vision-assert", "assert-vision"):
+        row = get_job(jid)
+        if not row:
+            continue
+        blocks = list(row.get("system_blocks") or [])
+        if any(
+            AGENT_VISION_ASSERT_LANG_V2_MARKER in str(spec.get("body") or spec.get("text") or "")
+            for spec in blocks
+            if isinstance(spec, dict)
+        ):
+            continue
+        merged = copy.deepcopy(row)
+        out_blocks = list(merged.get("system_blocks") or [])
+        addon = (
+            f"\n\n{_ASSERT_LANG_HINT.strip()}\n"
+            f"({AGENT_VISION_ASSERT_LANG_V2_MARKER})\n"
+        )
+        patched = False
+        for spec in out_blocks:
+            if not isinstance(spec, dict):
+                continue
+            key = "body" if "body" in spec else "text"
+            spec[key] = str(spec.get(key) or "").rstrip() + addon
+            patched = True
+            break
+        if not patched:
+            out_blocks.append({"id": "main", "text": addon.strip()})
+        merged["system_blocks"] = out_blocks
+        revisions = _revision_list(row)
+        revisions.append({
+            "version": int(row.get("prompt_version") or 1),
+            "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "note": "before language-neutral vision assert",
+            **_blocks_snapshot(row),
+        })
+        merged["prompt_version"] = int(row.get("prompt_version") or 1) + 1
+        _set_revisions(merged, revisions)
+        _validate_job(merged)
+        _smoke_render(merged)
+        _commit_job_upgrade(merged, jid)
+        changed += 1
+    return changed
+
+
+def upgrade_agent_vision_plan_to_v2() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-plan"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 6:
+        return 0
+    blocks = list(row.get("system_blocks") or [])
+    for spec in blocks:
+        key = "body" if "body" in spec else "text"
+        if AGENT_VISION_PLAN_PREP_V2_MARKER in str(spec.get(key) or ""):
+            return 0
+    merged = copy.deepcopy(row)
+    slots = list(merged.get("slots") or [])
+    slot_names = {str(s.get("name") or "") for s in slots if isinstance(s, dict)}
+    for name in ("prep_program_plan", "resource_claim_json"):
+        if name not in slot_names:
+            slots.append({"name": name, "kind": "text"})
+    merged["slots"] = slots
+    blocks = list(merged.get("system_blocks") or [])
+    for spec in blocks:
+        if str(spec.get("id") or "") != "main":
+            continue
+        body_key = "body" if "body" in spec else "text"
+        body = str(spec.get(body_key) or "")
+        if AGENT_VISION_PLAN_PREP_V2_MARKER not in body:
+            body = body.rstrip() + "\n\n" + _PREP_PROGRAM_PLAN_HINT.strip() + f"\n\n({AGENT_VISION_PLAN_PREP_V2_MARKER})\n"
+        spec[body_key] = body
+        break
+    user_blocks = list(merged.get("user_blocks") or [])
+    ub_ids = {str(u.get("id") or "") for u in user_blocks if isinstance(u, dict)}
+    if "prep_plan" not in ub_ids:
+        user_blocks.insert(
+            3,
+            {
+                "id": "prep_plan",
+                "slot": "prep_program_plan",
+                "heading": "==== prep_program_plan（只读） ====",
+                "skip_if_empty": True,
+            },
+        )
+    if "claim" not in ub_ids:
+        user_blocks.insert(
+            4,
+            {
+                "id": "claim",
+                "slot": "resource_claim_json",
+                "heading": "==== resource_claim（只读） ====",
+                "skip_if_empty": True,
+            },
+        )
+    merged["user_blocks"] = user_blocks
+    merged["system_blocks"] = blocks
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "before program upgrade to v2 prep program plan slots",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = max(int(row.get("prompt_version") or 1), 2)
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+AGENT_VISION_PLAN_DO_CHECK_V3_MARKER = "agent-vision-plan v3 (do/check program plan; check isolated from do digest)"
+_DO_CHECK_PROGRAM_HINT = """
+### do / check（v3）
+
+- **do**：`do_program_plan` 与子里程碑已由程序从 **操作层密钥** 种子；禁止改写 `milestones[]` 顺序与 id，只输出 `plan_digest`、`flow_block_ops`、`hook_calls`。
+- **check**：只读 `check_program_plan` 与 **expected** 校验点；只输出 `checkpoints_plan`（对齐已有 checkpoint id）与 `plan_digest`（观察摘要）。**禁止**引用 do 阶段 `plan_digest` 或操作里程碑。
+- 一行操作可对应多步：以 `do_program_plan.steps` 为准，勿合并为单步。
+- 无密钥匹配的行已在 `key_compile/fallback` 标红；勿用自由 milestones 替代 catalog 骨架。
+"""
+
+
+def upgrade_agent_vision_plan_to_v3() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-plan"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 6:
+        return 0
+    blocks = list(row.get("system_blocks") or [])
+    for spec in blocks:
+        key = "body" if "body" in spec else "text"
+        if AGENT_VISION_PLAN_DO_CHECK_V3_MARKER in str(spec.get(key) or ""):
+            return 0
+    merged = copy.deepcopy(row)
+    slots = list(merged.get("slots") or [])
+    slot_names = {str(s.get("name") or "") for s in slots if isinstance(s, dict)}
+    for name in ("do_program_plan", "check_program_plan"):
+        if name not in slot_names:
+            slots.append({"name": name, "kind": "text"})
+    merged["slots"] = slots
+    blocks = list(merged.get("system_blocks") or [])
+    for spec in blocks:
+        if str(spec.get("id") or "") != "main":
+            continue
+        body_key = "body" if "body" in spec else "text"
+        body = str(spec.get(body_key) or "")
+        if AGENT_VISION_PLAN_DO_CHECK_V3_MARKER not in body:
+            body = body.rstrip() + "\n\n" + _DO_CHECK_PROGRAM_HINT.strip() + f"\n\n({AGENT_VISION_PLAN_DO_CHECK_V3_MARKER})\n"
+        spec[body_key] = body
+        break
+    user_blocks = list(merged.get("user_blocks") or [])
+    ub_ids = {str(u.get("id") or "") for u in user_blocks if isinstance(u, dict)}
+    if "do_plan" not in ub_ids:
+        user_blocks.append(
+            {
+                "id": "do_plan",
+                "slot": "do_program_plan",
+                "heading": "==== do_program_plan（只读） ====",
+                "skip_if_empty": True,
+            },
+        )
+    if "check_plan" not in ub_ids:
+        user_blocks.append(
+            {
+                "id": "check_plan",
+                "slot": "check_program_plan",
+                "heading": "==== check_program_plan（只读） ====",
+                "skip_if_empty": True,
+            },
+        )
+    merged["user_blocks"] = user_blocks
+    merged["system_blocks"] = blocks
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "before program upgrade to v3 do/check program plan",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = max(int(row.get("prompt_version") or 1), 3)
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+AGENT_VISION_PLAN_V4_MARKER = "agent-vision-plan v4 (success_criteria only; task+case context)"
+AGENT_VISION_EXEC_V2_MARKER = "agent-vision-exec v2 (standalone executor; no decide appendix)"
+
+_VISION_PLAN_V4_SYSTEM = """\
+你是测试执行**规划器**（agent-vision-plan）。根据截图与 JSON 上下文，为本回合写观察摘要与可执行提示。
+
+阶段 phase={{phase}}
+
+铁律：
+- **进度真源**只有 `success_criteria`（含程序种子的 milestones）与各 phase 的 `*_program_plan`；不要依赖 history/checkpoints。
+- **禁止**输出 `milestones[]`、`milestone_updates`、`step_outcome`；里程碑 pass/fail 由程序根据工具结果写回。
+- prep/do：可输出 `plan_digest`、`hook_calls`、`flow_block_ops`（参数提示，不是设备 tap）。
+- check：只输出 `checkpoints_plan` 与 `plan_digest`；不得引用 do 阶段 plan_digest。
+- 若 `review_program_fail` 非空：输出 `failure_verdict`。
+- 设备渠道、租号结果由 Nexus 处理，不要在规划里编排 pick_device / 账号明细。
+
+只输出 JSON：
+{"thought":"","flow_block_ops":[],"hook_calls":[],"checkpoints_plan":[],"plan_digest":{},"failure_verdict":{}}
+"""
+
+_VISION_PLAN_V4_USER_BLOCKS = [
+    {"id": "task", "slot": "task_context_json", "heading": "==== task_context ===="},
+    {"id": "case", "slot": "case_execution_context_json", "heading": "==== case_execution ===="},
+    {"id": "phase_txt", "slot": "phase_step_text", "heading": "==== phase_step_text ===="},
+    {"id": "sc", "slot": "success_criteria", "heading": "==== success_criteria ===="},
+    {
+        "id": "prep_plan",
+        "slot": "prep_program_plan",
+        "heading": "==== prep_program_plan（只读） ====",
+        "skip_if_empty": True,
+    },
+    {
+        "id": "do_plan",
+        "slot": "do_program_plan",
+        "heading": "==== do_program_plan（只读） ====",
+        "skip_if_empty": True,
+    },
+    {
+        "id": "check_plan",
+        "slot": "check_program_plan",
+        "heading": "==== check_program_plan（只读） ====",
+        "skip_if_empty": True,
+    },
+    {"id": "sess", "slot": "session_json", "heading": "==== session（登录态摘要） ===="},
+    {"id": "nav", "slot": "nav_assist", "heading": "==== nav ====", "skip_if_empty": True},
+    {"id": "know", "slot": "knowledge_body", "heading": "==== knowledge ====", "skip_if_empty": True},
+    {"id": "doc", "slot": "doc_context", "heading": "==== doc ====", "skip_if_empty": True},
+    {
+        "id": "rev",
+        "slot": "review_program_fail",
+        "heading": "==== program_fail_review ====",
+        "skip_if_empty": True,
+    },
+    {"id": "img", "kind": "image", "slot": "image_base64", "mime_slot": "image_mime"},
+]
+
+_VISION_EXEC_V2_SYSTEM = """\
+你是测试**看图执行器**（agent-vision-exec）。根据 plan_digest、active_milestone、success_criteria 与截图，**调用一个** function tool 完成当前 pending 里程碑对应的一步操作。
+
+铁律：
+- 只输出 tool call，不要正文 JSON。
+- 工具参数里只需简短 `thought`；**不要** milestone_updates / step_outcome / remember 长列表。
+- **禁止** signal_done、signal_give_up、signal_ask_human、signal_skip（阶段收工由程序聚合里程碑）。
+- 需要账号/OTP/手机号时调用 lease_account、get_otp 等能力；账号句柄已在运行上下文，不要向用户复述明文。
+- 前置 read_device_data 等边界以 catalog 能力说明为准。
+
+每回合最多一步设备操作，然后交给程序写回里程碑。
+"""
+
+_VISION_EXEC_V2_USER_BLOCKS = [
+    {"id": "task", "slot": "task_context_json", "heading": "==== task_context ===="},
+    {"id": "case", "slot": "case_execution_context_json", "heading": "==== case_execution ===="},
+    {"id": "plan", "slot": "plan_digest", "heading": "==== plan_digest ===="},
+    {"id": "am", "slot": "active_milestone", "heading": "==== active_milestone ===="},
+    {"id": "sc", "slot": "success_criteria", "heading": "==== success_criteria ===="},
+    {"id": "goal", "slot": "goal", "heading": "==== goal ===="},
+    {"id": "sess", "slot": "session_json", "heading": "==== session ===="},
+    {"id": "nav", "slot": "nav_assist", "heading": "==== nav ====", "skip_if_empty": True},
+    {"id": "know", "slot": "knowledge_body", "heading": "==== knowledge ====", "skip_if_empty": True},
+    {"id": "doc", "slot": "doc_context", "heading": "==== doc ====", "skip_if_empty": True},
+    {"id": "hier", "slot": "hierarchy_text", "heading": "==== hierarchy ====", "skip_if_empty": True},
+    {"id": "img", "kind": "image", "slot": "image_base64", "mime_slot": "image_mime"},
+]
+
+
+def upgrade_agent_vision_plan_to_v4() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-plan"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 6:
+        return 0
+    for spec in row.get("system_blocks") or []:
+        key = "body" if "body" in spec else "text"
+        if AGENT_VISION_PLAN_V4_MARKER in str(spec.get(key) or ""):
+            return 0
+    merged = copy.deepcopy(row)
+    slot_names = {
+        "phase",
+        "phase_step_text",
+        "success_criteria",
+        "target_app",
+        "session_json",
+        "screen_size_block",
+        "hierarchy_text",
+        "nav_assist",
+        "knowledge_hint",
+        "knowledge_body",
+        "doc_context",
+        "review_program_fail",
+        "prep_program_plan",
+        "do_program_plan",
+        "check_program_plan",
+        "task_context_json",
+        "case_execution_context_json",
+        "image_base64",
+        "image_mime",
+    }
+    merged["slots"] = [{"name": n, "kind": "text" if n != "image_base64" else "image"} for n in sorted(slot_names)]
+    merged["slots"] = [
+        {"name": "image_base64", "kind": "image"},
+        {"name": "image_mime", "kind": "text"},
+    ] + [{"name": n, "kind": "text"} for n in sorted(slot_names - {"image_base64", "image_mime"})]
+    merged["system_blocks"] = [
+        {
+            "id": "main",
+            "text": _VISION_PLAN_V4_SYSTEM.strip() + f"\n\n({AGENT_VISION_PLAN_V4_MARKER})\n",
+        }
+    ]
+    merged["user_blocks"] = list(_VISION_PLAN_V4_USER_BLOCKS)
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "before v4 success_criteria-only context",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = max(int(row.get("prompt_version") or 1), 4)
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_agent_vision_exec_to_v2() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-exec"
+    row = get_job(jid)
+    if not row:
+        return 0
+    for spec in row.get("system_blocks") or []:
+        key = "body" if "body" in spec else "text"
+        if AGENT_VISION_EXEC_V2_MARKER in str(spec.get(key) or ""):
+            return 0
+    merged = copy.deepcopy(row)
+    exec_slots = {
+        "goal",
+        "plan_digest",
+        "active_milestone",
+        "success_criteria",
+        "target_app",
+        "phase",
+        "session_json",
+        "task_context_json",
+        "case_execution_context_json",
+        "screen_size_block",
+        "knowledge_hint",
+        "knowledge_body",
+        "hierarchy_text",
+        "nav_assist",
+        "doc_context",
+        "menu_json",
+        "image_base64",
+        "image_mime",
+    }
+    merged["slots"] = [
+        {"name": "image_base64", "kind": "image"},
+        {"name": "image_mime", "kind": "text"},
+    ] + [{"name": n, "kind": "text"} for n in sorted(exec_slots - {"image_base64", "image_mime"})]
+    merged["system_blocks"] = [
+        {
+            "id": "main",
+            "text": _VISION_EXEC_V2_SYSTEM.strip() + f"\n\n({AGENT_VISION_EXEC_V2_MARKER})\n",
+        }
+    ]
+    merged["user_blocks"] = list(_VISION_EXEC_V2_USER_BLOCKS)
+    merged["summary"] = "按 plan_digest + success_criteria 单步执行 capability（无 milestone_updates）"
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "before v2 standalone executor prompt",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = max(int(row.get("prompt_version") or 1), 2)
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+_VISION_PLAN_V5_SYSTEM = """\
+你是测试执行规划器。输入为 success_criteria（含 milestones 列表：id、title、kind、status、hook_cap 等）和当前截图；可选知识、导航、文档辅助。
+
+你的职责：根据画面判断本阶段还需哪些动作，维护 milestones 列表。执行器会按列表顺序调用设备能力，不由你直接点击。
+
+输出 JSON：
+{"thought":"简短观察与理由","milestones_append":[{"id":"新id","title":"动作描述","kind":"hook|visual_action|checkpoint","hook_cap":"能力名如 launch_app","optional":false}],"step_requirements_complete":false,"failure_verdict":{}}
+
+规则：
+- 不得删除或重排已有 id；不要输出 milestone_updates（状态由程序写回）。
+- 列表不足以完成本阶段时，用 milestones_append 在末尾追加。
+- 不要输出 hook_calls、flow_block_ops、plan_digest、history、账号或设备派单信息。
+- 若附 program_fail_review，可填 failure_verdict.blocking 与 reason。
+"""
+
+_VISION_PLAN_V5_USER_BLOCKS = [
+    {"id": "sc", "slot": "success_criteria", "heading": "success_criteria"},
+    {"id": "know", "slot": "knowledge_body", "heading": "knowledge", "skip_if_empty": True},
+    {"id": "nav", "slot": "nav_assist", "heading": "nav", "skip_if_empty": True},
+    {"id": "doc", "slot": "doc_context", "heading": "doc", "skip_if_empty": True},
+    {"id": "hier", "slot": "hierarchy_text", "heading": "hierarchy", "skip_if_empty": True},
+    {
+        "id": "rev",
+        "slot": "review_program_fail",
+        "heading": "program_fail_review",
+        "skip_if_empty": True,
+    },
+    {"id": "img", "kind": "image", "slot": "image_base64", "mime_slot": "image_mime"},
+]
+
+_VISION_EXEC_V3_SYSTEM = """\
+你是测试执行器。输入为 success_criteria（milestones 含每条 status：pending、in_progress、pass、failed、skipped）和截图。
+
+对列表中第一条 status 为 pending 或 in_progress 的里程碑，调用一个 function tool 完成对应一步。pass 或 failed 的不要重复执行。
+
+账号、OTP、设备参数由系统自动注入；需要时调用 lease_account、get_otp 等能力，不要向用户复述账号明文。
+
+只输出 tool call，不要 JSON 正文。不要 signal_done。
+"""
+
+_VISION_EXEC_V3_USER_BLOCKS = [
+    {"id": "sc", "slot": "success_criteria", "heading": "success_criteria"},
+    {"id": "nav", "slot": "nav_assist", "heading": "nav", "skip_if_empty": True},
+    {"id": "know", "slot": "knowledge_body", "heading": "knowledge", "skip_if_empty": True},
+    {"id": "doc", "slot": "doc_context", "heading": "doc", "skip_if_empty": True},
+    {"id": "hier", "slot": "hierarchy_text", "heading": "hierarchy", "skip_if_empty": True},
+    {"id": "img", "kind": "image", "slot": "image_base64", "mime_slot": "image_mime"},
+]
+
+
+_VISION_PLAN_V6_SYSTEM = """\
+你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。
+
+职责：只追加里程碑、判断本步是否已满足要求。每条里程碑的 pass/failed/skipped 由程序根据工具执行结果写回，你不要改已有条的 status。
+
+输出 JSON：
+{"thought":"…","milestones_append":[{"id":"…","title":"…","kind":"hook|visual_action|checkpoint","hook_cap":"…","optional":false}],"exit_allowed":false,"failure_verdict":{}}
+
+规则：
+- 不得删除或重排已有 id；不要输出 milestone_updates。
+- 列表不足以完成本 phase/本步时，用 milestones_append 在末尾追加；追加时 thought 须写清：虽然用例表面只需 …，但是不做 … 就无法完成 …。
+- exit_allowed 是准出，默认 false。每一轮都判断要不要改它：若执行完当前列表的剩余步骤就能离开本 phase/本步，设为 true，且不要再 append。false 表示本轮不改准出。
+- 程序只在最后一条里程碑终态之后才读 exit_allowed。列表中途即便为 true，剩余步骤仍会执行，不会提前跳步。
+- hook_cap 只能从 success_criteria.allowed_capability_ids 里选。页面是否加载完用 wait_screen_ready。不要发明目录里没有的能力名。
+- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。
+"""
+
+_VISION_EXEC_V4_SYSTEM = """\
+你是测试执行器。输入 success_criteria（含 active_focus_milestone_id 与每条 status）和截图。
+
+只处理 status 为 in_progress 的那一条里程碑（与 active_focus_milestone_id 一致）；对其调用一个 function tool。pass/failed/skipped 的不得重复执行；pending 的由程序切换为 in_progress 后再由你执行。
+
+账号、OTP 由系统注入；需要时调用 lease_account、get_otp。只输出 tool call，不要 signal_done。
+"""
+
+
+def upgrade_agent_vision_plan_to_v7() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-plan"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 7:
+        return 0
+    merged = copy.deepcopy(row)
+    merged["slots"] = list(row.get("slots") or merged.get("slots") or [])
+    merged["system_blocks"] = [{"id": "main", "text": _VISION_PLAN_V6_SYSTEM.strip()}]
+    merged["user_blocks"] = list(_VISION_PLAN_V5_USER_BLOCKS)
+    merged["summary"] = "仅 milestones_append；状态由程序写回"
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v7 no milestone_updates on plan",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 7
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_agent_vision_plan_to_v8() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-plan"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 8:
+        return 0
+    merged = copy.deepcopy(row)
+    merged["slots"] = list(row.get("slots") or merged.get("slots") or [])
+    merged["system_blocks"] = [{"id": "main", "text": _VISION_PLAN_V6_SYSTEM.strip()}]
+    merged["user_blocks"] = list(_VISION_PLAN_V5_USER_BLOCKS)
+    merged["summary"] = "准出 exit_allowed；状态由程序写回"
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v8 exit_allowed latch",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 8
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_agent_vision_plan_to_v9() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-plan"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 9:
+        return 0
+    merged = copy.deepcopy(row)
+    merged["slots"] = list(row.get("slots") or merged.get("slots") or [])
+    merged["system_blocks"] = [{"id": "main", "text": _VISION_PLAN_V6_SYSTEM.strip()}]
+    merged["user_blocks"] = list(_VISION_PLAN_V5_USER_BLOCKS)
+    merged["summary"] = "hook_cap 必须来自本阶段菜单"
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v9 hook_cap must be registered",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 9
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+_VISION_PLAN_V11_SYSTEM = """\
+你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。
+
+职责：只追加本阶段正文里还没有的里程碑，并判断能否离开本阶段。每条里程碑的 pass/failed/skipped 由程序根据工具结果写回，你不要改已有条的 status。
+
+输出 JSON：
+{"thought":"…","milestones_append":[{"id":"…","title":"…","kind":"hook|visual_action|checkpoint","hook_cap":"…","optional":false}],"exit_allowed":false,"failure_verdict":{}}
+
+规则：
+- 不得删除或重排已有 id；不要输出 milestone_updates。
+- 已有里程碑已经覆盖本阶段要求时，milestones_append 必须为空。全部非 optional 条目已是 pass、failed 或 skipped 时，exit_allowed 设为 true，不要再追加。
+- 只有本阶段正文写了、列表里还没有对应条目时才追加。不要因为画面上有分类、卡片或按钮，就追加进入后续测试阶段的点击。前置阶段不要追加操作步骤或校验步骤的点击。
+- 逻辑块里的点击已经在里程碑列表里，由程序按条执行。不要在这些条目之外再追加一次点击。
+- exit_allowed 默认 false。执行完当前列表的剩余步骤就能离开本阶段时设为 true，且不要再 append。false 表示本轮不改准出。
+- 程序只在最后一条里程碑终态之后才读 exit_allowed。列表中途即便为 true，剩余步骤仍会执行，不会提前跳步。
+- hook_cap 只能从 success_criteria.allowed_capability_ids 里选。页面是否加载完用 wait_screen_ready。不要发明目录里没有的能力名。
+- thought 只说明本阶段还缺什么，或为什么可以离开。不要写「虽然用例表面只需…但是不做…就无法完成…」，不要用这个句式编造额外步骤。
+- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。
+"""
+
+
+def upgrade_agent_vision_plan_to_v11() -> int:
+    """去掉强迫模型用「虽然…但是…」编造额外点击的句子。"""
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-plan"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 11:
+        return 0
+    merged = copy.deepcopy(row)
+    merged["slots"] = list(row.get("slots") or merged.get("slots") or [])
+    merged["system_blocks"] = [{"id": "main", "text": _VISION_PLAN_V11_SYSTEM.strip()}]
+    merged["user_blocks"] = list(_VISION_PLAN_V5_USER_BLOCKS)
+    merged["summary"] = "列表已覆盖时准出，不编造后续点击"
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v11 do not invent clicks after program list is done",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 11
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_agent_vision_plan_to_v10() -> int:
+    """把准出提示写回。v4 升级曾在版本号已经是 9 时把正文盖回旧模板。"""
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-plan"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 10:
+        return 0
+    merged = copy.deepcopy(row)
+    merged["slots"] = list(row.get("slots") or merged.get("slots") or [])
+    merged["system_blocks"] = [{"id": "main", "text": _VISION_PLAN_V6_SYSTEM.strip()}]
+    merged["user_blocks"] = list(_VISION_PLAN_V5_USER_BLOCKS)
+    merged["summary"] = "准出 exit_allowed；hook_cap 必须来自本阶段菜单"
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v10 restore exit_allowed after v4 clobber",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 10
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_agent_vision_plan_to_v6() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-plan"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 6:
+        return 0
+    merged = copy.deepcopy(row)
+    merged["slots"] = list(row.get("slots") or merged.get("slots") or [])
+    merged["system_blocks"] = [{"id": "main", "text": _VISION_PLAN_V6_SYSTEM.strip()}]
+    merged["user_blocks"] = list(_VISION_PLAN_V5_USER_BLOCKS)
+    merged["summary"] = "里程碑状态机：追加/更新/step_requirements_complete"
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v6 plan-exec FSM",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 6
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_agent_vision_exec_to_v4() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-exec"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 4:
+        return 0
+    merged = copy.deepcopy(row)
+    merged["slots"] = list(row.get("slots") or merged.get("slots") or [])
+    merged["system_blocks"] = [{"id": "main", "text": _VISION_EXEC_V4_SYSTEM.strip()}]
+    merged["user_blocks"] = list(_VISION_EXEC_V3_USER_BLOCKS)
+    merged["summary"] = "仅执行 in_progress 里程碑（active_focus）"
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v4 in_progress focus",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 4
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_agent_vision_plan_to_v5() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-plan"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 5:
+        return 0
+    merged = copy.deepcopy(row)
+    merged["slots"] = [
+        {"name": "success_criteria", "kind": "text"},
+        {"name": "knowledge_hint", "kind": "text"},
+        {"name": "knowledge_body", "kind": "text"},
+        {"name": "nav_assist", "kind": "text"},
+        {"name": "doc_context", "kind": "text"},
+        {"name": "hierarchy_text", "kind": "text"},
+        {"name": "review_program_fail", "kind": "text"},
+        {"name": "image_base64", "kind": "image"},
+        {"name": "image_mime", "kind": "text"},
+    ]
+    merged["system_blocks"] = [{"id": "main", "text": _VISION_PLAN_V5_SYSTEM.strip()}]
+    merged["user_blocks"] = list(_VISION_PLAN_V5_USER_BLOCKS)
+    merged["summary"] = "维护 success_criteria.milestones；不注入运行上下文"
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v5 milestones-only LLM injection",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 5
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_agent_vision_exec_to_v3() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-exec"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 3:
+        return 0
+    merged = copy.deepcopy(row)
+    merged["slots"] = [
+        {"name": "success_criteria", "kind": "text"},
+        {"name": "knowledge_hint", "kind": "text"},
+        {"name": "knowledge_body", "kind": "text"},
+        {"name": "nav_assist", "kind": "text"},
+        {"name": "doc_context", "kind": "text"},
+        {"name": "hierarchy_text", "kind": "text"},
+        {"name": "menu_json", "kind": "text"},
+        {"name": "image_base64", "kind": "image"},
+        {"name": "image_mime", "kind": "text"},
+    ]
+    merged["system_blocks"] = [{"id": "main", "text": _VISION_EXEC_V3_SYSTEM.strip()}]
+    merged["user_blocks"] = list(_VISION_EXEC_V3_USER_BLOCKS)
+    merged["summary"] = "按 success_criteria.milestones 单步执行 capability"
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v3 milestones-only LLM injection",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 3
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_agent_decide_to_v23() -> int:
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    blocks = list(row.get("system_blocks") or [])
+    for spec in blocks:
+        key = "body" if "body" in spec else "text"
+        if AGENT_DECIDE_V23_MARKER in str(spec.get(key) or ""):
+            return 0
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    for spec in blocks:
+        name = str(spec.get("name") or "")
+        if name not in ("system", ""):
+            continue
+        body_key = "body" if "body" in spec else "text"
+        body = str(spec.get(body_key) or "")
+        if AGENT_DECIDE_V23_MARKER not in body:
+            body = body.rstrip() + "\n\n" + _AGENT_DECIDE_V23_HINT.strip() + f"\n\n({AGENT_DECIDE_V23_MARKER})\n"
+        spec[body_key] = body
+        break
+    merged["system_blocks"] = blocks
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "before program upgrade to v23 vision-plan milestone split",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = max(int(row.get("prompt_version") or 1), 23)
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
+
+
+AGENT_DECIDE_V24_MARKER = "agent-decide v24 (no milestone_updates; program writes status)"
+
+_AGENT_DECIDE_V24_HINT = """
+### 里程碑状态
+- **禁止**在 JSON 或 tool 参数中输出 `milestone_updates`。
+- `success_criteria.milestones` 的 pass/failed/skipped 仅由服务端根据工具执行结果写回。
+"""
+
+
+def upgrade_agent_decide_to_v24() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    row = get_job("agent-decide")
+    if not row:
+        return 0
+    blocks = list(row.get("system_blocks") or [])
+    for spec in blocks:
+        key = "body" if "body" in spec else "text"
+        if AGENT_DECIDE_V24_MARKER in str(spec.get(key) or ""):
+            return 0
+    merged = copy.deepcopy(row)
+    blocks = list(merged.get("system_blocks") or [])
+    for spec in blocks:
+        name = str(spec.get("name") or "")
+        if name not in ("system", ""):
+            continue
+        body_key = "body" if "body" in spec else "text"
+        body = str(spec.get(body_key) or "")
+        if AGENT_DECIDE_V24_MARKER not in body:
+            body = body.rstrip() + "\n\n" + _AGENT_DECIDE_V24_HINT.strip() + f"\n\n({AGENT_DECIDE_V24_MARKER})\n"
+        spec[body_key] = body
+        break
+    merged["system_blocks"] = blocks
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v24 remove milestone_updates",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = max(int(row.get("prompt_version") or 1), 24)
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, "agent-decide")
+    return 1
+

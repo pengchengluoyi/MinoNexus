@@ -42,6 +42,8 @@ _THUMB_CAP = 65536
 def _clip_value(val: Any, cap: int = _PAYLOAD_CAP) -> Any:
     if val is None or isinstance(val, (bool, int, float)):
         return val
+    if isinstance(val, dict) and str(val.get("schema") or "") == "mino.success_criteria.v1":
+        cap = max(int(cap), 16_000)
     if isinstance(val, str):
         s = val.strip()
         if len(s) <= cap:
@@ -275,6 +277,7 @@ def append_llm_response(dispatch_row: dict[str, Any]) -> int:
             "output_len": len(output),
             "error": str(dispatch_row.get("error") or "")[:400],
             "tool_name": str(dispatch_row.get("tool_name") or ""),
+            "prompt_version": int(dispatch_row.get("prompt_version") or 0) or None,
         },
     )
 
@@ -303,13 +306,19 @@ def append_llm_request(*, job_id: str, messages: list | None) -> int:
     writer = active_writer()
     if writer is None:
         return 0
-    return writer.append(
-        "llm/request",
-        {
-            "job_id": job_id,
-            "messages": summarize_messages(messages),
-        },
-    )
+    payload: dict[str, Any] = {
+        "job_id": job_id,
+        "messages": summarize_messages(messages),
+    }
+    if job_id == "agent-decide":
+        try:
+            from mino_nexus.services.job_store import get_job
+
+            row = get_job("agent-decide") or {}
+            payload["prompt_version"] = int(row.get("prompt_version") or 0) or None
+        except Exception:
+            pass
+    return writer.append("llm/request", payload)
 
 
 def read_events(session_id: str, *, from_seq: int = 0, limit: int = 500) -> list[dict[str, Any]]:

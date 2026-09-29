@@ -146,6 +146,8 @@ def ensure_case_account(ctx: Any, case: dict[str, Any] | None = None) -> tuple[d
         if score < 0:
             SLog.w(TAG, f"auto-lease weak match score={score} reason={reason}")
         SLog.i(TAG, f"auto-leased {row.get('id') or row.get('phone') or '?'}")
+        if ctx is not None:
+            setattr(ctx, "prep_lease_account_done", True)
         return row, ""
     SLog.w(TAG, f"auto-lease skipped: {err}")
     return None, err or ""

@@ -393,6 +393,23 @@ def renew_run_lease(ctx: Any) -> bool:
 
 
 def apply_lease_to_ctx(ctx: Any, row: dict[str, Any], *, project_id: str) -> None:
+    from mino_nexus.services.gmail_alias_lease import enrich_gmail_alias_account_row
+
+    src = row if isinstance(row, dict) else {}
+    row = enrich_gmail_alias_account_row(src, ctx)
+    if (
+        project_id
+        and str(row.get("email") or "").strip() != str(src.get("email") or "").strip()
+        and "gmail_alias auto" in str(row.get("note") or "")
+    ):
+        try:
+            from mino_nexus.services import project_store as ps
+            from mino_nexus.services.project_env import normalize_project_env, save_one_test_account
+
+            doc = normalize_project_env(ps.project_env(project_id))
+            save_one_test_account(doc, row, project_id=project_id, account_id=str(row.get("id") or ""))
+        except Exception:
+            pass
     ident = account_ident(row)
     facets = account_facets(row)
     lease_meta = {
@@ -564,6 +581,75 @@ def lease_for_context(
     if isinstance(observed_by_account, dict) and observed_by_account:
         obs_for_row = next(iter(observed_by_account.values()), None)
 
+    from mino_nexus.services.gmail_alias_lease import (
+        ensure_ctx_env_surface,
+        gmail_alias_lease_enabled,
+        provision_gmail_alias_account,
+        should_provision_gmail_alias,
+        try_provision_after_lease_miss as try_provision_gmail_after_miss,
+    )
+    from mino_nexus.services.phone_pool_lease import (
+        phone_pool_lease_enabled,
+        provision_phone_seq_account,
+        should_provision_phone_seq,
+        try_provision_after_lease_miss as try_provision_phone_after_miss,
+    )
+
+    ensure_ctx_env_surface(ctx, env_doc)
+    env_profile = str(getattr(ctx, "env_profile", "") or "").strip()
+    platform = str(getattr(ctx, "platform", "") or "android")
+    target_id = str(getattr(ctx, "target_package", "") or "")
+    holder_sn = str(getattr(ctx, "sn", "") or "").strip()
+
+    if should_provision_gmail_alias(requirements, prompt=prompt, env_doc=env_doc, ctx=ctx):
+        alias_row = provision_gmail_alias_account(
+            ctx,
+            project_id=project_id,
+            env_doc=env_doc,
+            requirements=requirements,
+            run_id=run_id,
+        )
+        if alias_row:
+            account_id = str(alias_row.get("id") or "")
+            if account_id and run_id and _mark_leased(
+                project_id,
+                account_id,
+                run_id,
+                case_id=str(getattr(ctx, "case_id", "") or "")[:64],
+                sn=holder_sn,
+                env=env_profile,
+            ):
+                apply_lease_to_ctx(ctx, alias_row, project_id=project_id)
+                SLog.i(
+                    TAG,
+                    f"leased gmail alias (fresh) {account_ident(alias_row)} run={run_id[:12]}",
+                )
+                return alias_row, ""
+    if should_provision_phone_seq(requirements, prompt=prompt, env_doc=env_doc, ctx=ctx):
+        phone_row = provision_phone_seq_account(
+            ctx,
+            project_id=project_id,
+            env_doc=env_doc,
+            requirements=requirements,
+            run_id=run_id,
+        )
+        if phone_row:
+            account_id = str(phone_row.get("id") or "")
+            if account_id and run_id and _mark_leased(
+                project_id,
+                account_id,
+                run_id,
+                case_id=str(getattr(ctx, "case_id", "") or "")[:64],
+                sn=holder_sn,
+                env=env_profile,
+            ):
+                apply_lease_to_ctx(ctx, phone_row, project_id=project_id)
+                SLog.i(
+                    TAG,
+                    f"leased phone seq (fresh) {account_ident(phone_row)} run={run_id[:12]}",
+                )
+                return phone_row, ""
+
     restored, _rerr = restore_lease_for_run(ctx, run_id)
     if restored and ident_hints and not account_row_matches_hints(restored, ident_hints):
         SLog.i(
@@ -584,35 +670,45 @@ def lease_for_context(
         restored = None
     if restored:
         aid = str(restored.get("id") or "")
-        obs = observed_by_account.get(aid) if isinstance(observed_by_account, dict) and aid else obs_for_row
-        if row_satisfies_requirements(restored, requirements, env_doc, observed=obs):
-            if ident_hints and not account_row_matches_hints(restored, ident_hints):
+        if should_provision_gmail_alias(
+            requirements, prompt=prompt, env_doc=env_doc, ctx=ctx
+        ) and "gmail_alias auto" not in str(restored.get("note") or ""):
+            _clear_leased(project_id, aid, run_id)
+            release_ctx_lease(ctx)
+            restored = None
+        elif should_provision_phone_seq(
+            requirements, prompt=prompt, env_doc=env_doc, ctx=ctx
+        ) and "phone_seq auto" not in str(restored.get("note") or ""):
+            _clear_leased(project_id, aid, run_id)
+            release_ctx_lease(ctx)
+            restored = None
+        else:
+            obs = observed_by_account.get(aid) if isinstance(observed_by_account, dict) and aid else obs_for_row
+            if row_satisfies_requirements(restored, requirements, env_doc, observed=obs):
+                if ident_hints and not account_row_matches_hints(restored, ident_hints):
+                    SLog.i(
+                        TAG,
+                        f"restored account fails ident hints account={account_ident(restored)}",
+                    )
+                    _clear_leased(project_id, aid, run_id)
+                    release_ctx_lease(ctx)
+                elif not _row_matches_ctx_login_kind(restored, ctx, env_doc, prompt=prompt):
+                    _clear_leased(project_id, aid, run_id)
+                    release_ctx_lease(ctx)
+                else:
+                    return restored, ""
+            else:
                 SLog.i(
                     TAG,
-                    f"restored account fails ident hints account={account_ident(restored)}",
+                    f"run lease mismatch run={run_id[:12]} account={account_ident(restored)}; re-pick for case",
                 )
-                _clear_leased(project_id, aid, run_id)
                 release_ctx_lease(ctx)
-            elif not _row_matches_ctx_login_kind(restored, ctx, env_doc, prompt=prompt):
-                _clear_leased(project_id, aid, run_id)
-                release_ctx_lease(ctx)
-            else:
-                return restored, ""
-        else:
-            SLog.i(
-                TAG,
-                f"run lease mismatch run={run_id[:12]} account={account_ident(restored)}; re-pick for case",
-            )
-            release_ctx_lease(ctx)
 
     accounts = list_test_accounts(env_doc, project_id=project_id)
-    if not accounts:
+    if not accounts and not gmail_alias_lease_enabled(env_doc, ctx) and not phone_pool_lease_enabled(
+        env_doc, ctx
+    ):
         return None, "号池为空，请先在项目里添加测试账号"
-
-    env_profile = str(getattr(ctx, "env_profile", "") or "").strip()
-    platform = str(getattr(ctx, "platform", "") or "android")
-    target_id = str(getattr(ctx, "target_package", "") or "")
-    holder_sn = str(getattr(ctx, "sn", "") or "").strip()
 
     wait_budget = wait_ms if wait_ms is not None else _acquire_wait_ms()
     deadline = time.monotonic() + (wait_budget / 1000.0) if wait_budget > 0 else time.monotonic()
@@ -654,6 +750,37 @@ def lease_for_context(
         sleep_wait(int((deadline - time.monotonic()) * 1000))
 
     if not row:
+        alias_row = try_provision_gmail_after_miss(
+            ctx,
+            project_id=project_id,
+            env_doc=env_doc,
+            requirements=requirements,
+            run_id=run_id,
+        )
+        if not alias_row:
+            alias_row = try_provision_phone_after_miss(
+                ctx,
+                project_id=project_id,
+                env_doc=env_doc,
+                requirements=requirements,
+                run_id=run_id,
+            )
+        if alias_row:
+            account_id = str(alias_row.get("id") or "")
+            if account_id and run_id and _mark_leased(
+                project_id,
+                account_id,
+                run_id,
+                case_id=str(getattr(ctx, "case_id", "") or "")[:64],
+                sn=holder_sn,
+                env=env_profile,
+            ):
+                apply_lease_to_ctx(ctx, alias_row, project_id=project_id)
+                SLog.i(
+                    TAG,
+                    f"leased gmail alias after miss {account_ident(alias_row)} run={run_id[:12]}",
+                )
+                return alias_row, ""
         hint = _lease_unavailable_hint(
             env_doc,
             project_id=project_id,
@@ -692,6 +819,7 @@ def ensure_case_account_lease(
     target_package: str = "",
     case: dict[str, Any] | None = None,
     scene: dict[str, Any] | None = None,
+    plugin_user_id: str = "",
 ) -> tuple[bool, str]:
     """按当前用例前置租号；与同 run 已有租约冲突时释放并重新选号。"""
     from mino_nexus.loop.session_ensure import account_need_from_case
@@ -724,6 +852,8 @@ def ensure_case_account_lease(
     rid = str(run_id or "").strip()
     cid = str((case or {}).get("case_id") or "")[:24]
     device_sn = str((case or {}).get("sn") or "").strip()
+    from mino_nexus.services.gmail_alias_lease import ensure_ctx_env_surface
+
     ctx = SimpleNamespace(
         run_id=rid,
         case_id=cid,
@@ -732,7 +862,10 @@ def ensure_case_account_lease(
         env_profile=str(env_profile or "test").strip(),
         platform=str(platform or "android").strip(),
         target_package=str(target_package or "").strip(),
+        plugin_user_id=str(plugin_user_id or "").strip(),
     )
+    if env_doc:
+        ensure_ctx_env_surface(ctx, env_doc)
     prompt = str(need.get("prompt") or "").strip()
     row, err = lease_for_context(
         ctx,

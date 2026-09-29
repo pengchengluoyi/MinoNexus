@@ -12,13 +12,11 @@ from mino_nexus.loop.ui_consent import (
     _center,
     _label_text,
     _same_row,
-    _screen_wh,
     _size,
 )
 
 _PHONE_DIGITS_RE = re.compile(r"^1\d{10}$")
 _EMAIL_AT_RE = re.compile(r"@")
-_MIN_FIELD_WIDTH_RATIO = 0.22
 _DOM_INPUT_RE = re.compile(
     r"^(input|textarea|select)\b|htmlinput|htmltextarea|contenteditable|type:email|type:text|type=tel",
     re.I,
@@ -45,18 +43,16 @@ def find_dom_phone_field(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]
     pool = [n for n in (nodes or []) if isinstance(n, dict)]
     if not pool:
         return None
-    sw, sh = _screen_wh(pool)
-    min_w = int(sw * _MIN_FIELD_WIDTH_RATIO) if sw > 0 else 160
     ranked: list[tuple[int, dict[str, Any]]] = []
     for node in pool:
         if not _is_dom_text_input(node):
             continue
         b = _bounds(node)
         w, h = _size(b)
-        if w < min_w or h <= 0:
+        if w <= 0 or h <= 0:
             continue
         raw = _label_text(node).replace(" ", "").replace("-", "")
-        score = min(40, w // max(1, min_w // 4))
+        score = min(40, w // 20)
         if _PHONE_DIGITS_RE.match(raw):
             score += 90
         if "tel" in str(node.get("class") or "").lower():
@@ -76,18 +72,16 @@ def find_dom_email_field(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]
     pool = [n for n in (nodes or []) if isinstance(n, dict)]
     if not pool:
         return None
-    sw, sh = _screen_wh(pool)
-    min_w = int(sw * _MIN_FIELD_WIDTH_RATIO) if sw > 0 else 160
     ranked: list[tuple[int, dict[str, Any]]] = []
     for node in pool:
         if not _is_dom_text_input(node):
             continue
         b = _bounds(node)
         w, h = _size(b)
-        if w < min_w or h <= 0:
+        if w <= 0 or h <= 0:
             continue
         label = _label_text(node)
-        score = min(40, w // max(1, min_w // 4))
+        score = min(40, w // 20)
         if _EMAIL_AT_RE.search(label):
             score += 100
         if _node_input_type_email(node):
@@ -138,8 +132,6 @@ def find_dom_otp_field(
     if not pool:
         return None
     email = email_field if email_field is not None else find_dom_email_field(pool)
-    sw, sh = _screen_wh(pool)
-    min_w = int(sw * _MIN_FIELD_WIDTH_RATIO) if sw > 0 else 160
     ranked: list[tuple[int, dict[str, Any]]] = []
     for node in pool:
         if not _is_dom_text_input(node):
@@ -148,14 +140,16 @@ def find_dom_otp_field(
             continue
         b = _bounds(node)
         w, h = _size(b)
-        if w < min_w or h <= 0:
+        if h <= 0 or w <= 0:
             continue
         label = _label_text(node)
         if _EMAIL_AT_RE.search(label):
             continue
         cls = str(node.get("class") or "").lower()
         blob = f"{cls} {label}".lower()
-        score = min(30, w // max(1, min_w // 4))
+        score = min(30, w // 20)
+        if re.search(r"6[\s-]*digit|digit[\s-]*code", blob, re.I):
+            score += 130
         if "one-time" in cls or "otp" in blob or _OTP_HINT_RE.search(label):
             score += 90
         if str(node.get("type") or "").lower() in ("tel", "number", "text"):
@@ -194,15 +188,13 @@ def find_dom_text_input_below(
         return None
     below: list[tuple[int, dict[str, Any]]] = []
     acy = _center(_bounds(anchor))[1] if anchor is not None else -1
-    sw, sh = _screen_wh(pool)
-    min_w = int(sw * _MIN_FIELD_WIDTH_RATIO) if sw > 0 else 160
     for node in pool:
         if not _is_dom_text_input(node):
             continue
         if anchor is not None and node is anchor:
             continue
         b = _bounds(node)
-        if _size(b)[0] < min_w:
+        if _size(b)[0] <= 0:
             continue
         _, ncy = _center(b)
         if anchor is not None and ncy <= acy + 6:

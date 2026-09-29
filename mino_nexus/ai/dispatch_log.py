@@ -466,12 +466,13 @@ def new_pipeline_id() -> str:
 def list_calls(
     *,
     limit: int = 80,
+    offset: int = 0,
     kind: str = "",
     role: str = "",
     trigger: str = "",
     app_id: str = "",
     pipeline_id: str = "",
-) -> list[dict]:
+) -> tuple[list[dict], int]:
     from mino_nexus.core.database import SessionLocal, ensure_db
     from mino_nexus.models.dispatch import DispatchCall
 
@@ -489,14 +490,22 @@ def list_calls(
             q = q.filter(DispatchCall.app_id == app_id)
         if pipeline_id:
             q = q.filter(DispatchCall.pipeline_id == pipeline_id)
-        cap = max(1, min(int(limit or 80), 300))
+        ceiling = 2000 if pipeline_id else 300
+        cap = max(1, min(int(limit or 80), ceiling))
+        off = max(0, int(offset or 0))
+        total = q.count()
         rows = []
-        for item in q.order_by(DispatchCall.at.desc(), DispatchCall.id.desc()).limit(cap).all():
+        page = (
+            q.order_by(DispatchCall.at.asc(), DispatchCall.id.asc())
+            if pipeline_id
+            else q.order_by(DispatchCall.at.desc(), DispatchCall.id.desc())
+        )
+        for item in page.offset(off).limit(cap).all():
             payload = dict(item.payload_json or {})
             payload.setdefault("id", item.id)
             payload.setdefault("at", item.at)
             rows.append(decorate_row(payload))
-        return rows
+        return rows, total
     finally:
         db.close()
 

@@ -79,12 +79,20 @@ HITL 问人界面、排期 cron、基线库、从设计稿/定位抽登录图标
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/project/{project_id}/cases` | 项目用例列表 |
+| GET | `/project/{project_id}/cases` | 项目用例列表（含 `step_keys_summary`） |
+| GET | `/project/{project_id}/cases/{case_id}` | 单条用例 + `step_keys_summary` / warnings 预览 |
 | GET | `/project/{project_id}/requirements` | 导入可选需求（项目内各 App 聚合） |
 | POST | `/project/{project_id}/cases/import/preview` | 解析表格；body 含 `table`、`header_row`、`skip_rows`、`column_map` |
-| POST | `/project/{project_id}/cases/import/commit` | 写入；body 含 `preview_token`、各行 `on_conflict` |
+| POST | `/project/{project_id}/cases/import/commit` | 写入；body 含 `preview_token`、各行 `on_conflict`；`block_on_step_key_issues` 省略时用 `GET /settings/case-import` 默认 |
 | DELETE | `/project/{project_id}/cases/{case_id}` | 删除单条用例 |
 | POST | `/project/{project_id}/cases/delete` | 批量删除；body `{ case_ids: [] }` |
+| POST | `/project/{project_id}/cases/{case_id}/resource-key/compile` | 从前置编译 `resource_key` |
+| POST | `/project/{project_id}/cases/{case_id}/step-keys/compile` | 编译操作/预期 → `meta.step_program_keys` + `key_compile_warnings` |
+| POST | `/project/{project_id}/cases/step-keys/validate` | 校验用例文案密钥（未知块/屏、fallback） |
+| GET | `/settings/case-resource-key` | 词汇表；含 `console.entries_by_layer`（operation/expected 分组） |
+| GET | `/settings/case-resource-key/registry` | 聚合 catalog + 逻辑块 + Nav 屏 `key_ref`（`?app_id=`） |
+| GET / PUT | `/settings/case-import` | 导入策略：`block_on_step_key_issues_default` |
+| GET/PUT | `/nav-fsm/{app_id}/screen-key-refs` | Nav 屏幕 `meta.key_ref` |
 
 ## 设备输入法（Android）
 
@@ -188,12 +196,13 @@ pip install -e .    # 或 uv sync
 
 ## 通用逻辑块（FlowBlocks）
 
-表 `nav_flow_block_catalog`（`app_id=__global__` 为通用库）；应用覆盖写在 NavFSM **draft** 的 `meta.flow_block_overrides`。Studio「导航 → 逻辑块」页编辑覆盖。
+表 `nav_flow_block_catalog`（`app_id=__global__` 为通用库）；应用覆盖写在 NavFSM **draft** 的 `meta.flow_block_overrides`。**Console**「能力 → FSM 逻辑块」编辑全局库与应用覆盖。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/flow-blocks/catalog` | 通用逻辑块列表 |
+| `GET` | `/flow-blocks/catalog` | 通用逻辑块列表（`?channel=web` 可筛） |
 | `GET` | `/flow-blocks/catalog/{block_id}` | 单块（含 `steps_json`） |
+| `PUT` | `/flow-blocks/catalog/{block_id}` | 创建/更新全局块（需 packs 写权限） |
 | `GET` | `/flow-blocks/apps/{app_id}/overrides` | 读应用覆盖 |
 | `PUT` | `/flow-blocks/apps/{app_id}/overrides` | 写应用覆盖（落 draft） |
 

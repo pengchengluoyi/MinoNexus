@@ -465,6 +465,7 @@ class StepCursor:
         self.swipe_stuck_fp: str = ""
         self.swipe_stuck_dir: str = ""
         self.swipe_stuck_count: int = 0
+        self.success_criteria_state: dict[str, Any] = {}
         if self.phase != "prep":
             self._sync()
 
@@ -508,6 +509,9 @@ class StepCursor:
         self.progress_gate.reset_milestone("do", 1 if self.nodes else 0)
         self._sync()
         self.step_start_fp = ""
+        from mino_nexus.loop.milestones import empty_success_criteria, write_state
+
+        write_state(self, empty_success_criteria(self))
 
     def refresh_step_start_fp(self, fp: str) -> None:
         if self.phase == "do":
@@ -613,11 +617,31 @@ class StepCursor:
                 return False
         if not self._login_completion_allows_do_finish(instr):
             return False
+        from mino_nexus.loop.milestones import _TERMINAL, login_flow_under_milestones, read_state
+
+        if login_flow_under_milestones(self):
+            for row in read_state(self).get("milestones") or []:
+                if not isinstance(row, dict) or row.get("optional"):
+                    continue
+                if str(row.get("status") or "pending") not in _TERMINAL:
+                    return False
+        expected = str(cur.expected or "").strip()
+        if expected and int(self.step_effect_hit_streak or 0) <= 0:
+            from mino_nexus.loop.vision_plan import _case_from_ctx, _do_plan_locks_append
+
+            case = _case_from_ctx(self._finish_ctx or getattr(self, "run_context", None))
+            if not _do_plan_locks_append(self, case):
+                return False
         self.step_goal_met = True
         self.require_do_work_streak = 0
         self.correction_hint = ""
         self.enter_check()
         return True
+
+    def try_auto_finish_do_when_milestones_met(self, ctx: Any, *, writer: Any = None) -> bool:
+        from mino_nexus.loop.milestones import try_finish_do_if_milestones_complete
+
+        return try_finish_do_if_milestones_complete(self, ctx, writer=writer)
 
     def refresh_do_subphase(self) -> None:
         if self.phase != "do":
@@ -740,7 +764,9 @@ class StepCursor:
 
     def advance(self) -> bool:
         self.index += 1
+        self.success_criteria_state = {}
         self.step_checked = False
+        self.check_oracle_status = ""
         self.step_ops = 0
         self.step_action_families = set()
         self.step_family_counts = {}
@@ -779,8 +805,19 @@ class StepCursor:
             return
         self.phase = "check"
         self.step_checked = False
+        self.check_oracle_status = ""
         self.check_session_refresh = True
         self.progress_gate.reset_milestone("check", cur.n if cur else 0)
+        from mino_nexus.loop.vision_plan import reset_plan_context_for_check
+
+        reset_plan_context_for_check(self)
+        from mino_nexus.loop.milestones import on_enter_check_phase
+
+        on_enter_check_phase(
+            self,
+            expected=str(cur.expected or ""),
+            instruction=str(cur.instruction or ""),
+        )
 
     def mark_checked(self) -> None:
         self.step_checked = True
@@ -811,14 +848,25 @@ class StepCursor:
         self.tap_epoch += 1
         self.last_tap = None
 
+    def prompt_block_full(self) -> str:
+        """排查用：含已完成/未到步骤的完整指针（不注入 LLM）。"""
+        return self._prompt_block_impl(scoped=False)
+
     def prompt_block(self) -> str:
+        """注入 LLM：仅当前 phase / 当前用例步（P0）。"""
+        return self._prompt_block_impl(scoped=True)
+
+    def _prompt_block_impl(self, *, scoped: bool) -> str:
         if self.phase == "prep":
             lines = [
                 _pt("prep_header"),
                 f"[>] 前置（进行中）：{self.precondition}",
             ]
-            for node in self.nodes:
-                lines.append(_pt("step_future", n=node.n, instruction=node.instruction or "（无操作）"))
+            if not scoped:
+                for node in self.nodes:
+                    lines.append(
+                        _pt("step_future", n=node.n, instruction=node.instruction or "（无操作）")
+                    )
             lines.append(_pt("prep_current", precondition=self.precondition))
             if self.otp_prep_hint:
                 lines.append(self.otp_prep_hint)
@@ -829,51 +877,58 @@ class StepCursor:
             return "\n".join(lines)
 
         lines = [_pt("do_header")]
-        if self.precondition:
+        if self.precondition and not scoped:
             lines.append(f"[x] 前置（已完成）：{self.precondition}")
         total = len(self.nodes)
         cur_idx = self.index
-        if total > 0:
+        cur = self.current()
+        if scoped and cur:
+            lines.append(_pt("step_unlock_hint", cur=cur.n, total=total))
+        elif not scoped and total > 0:
             cur_n = self.nodes[cur_idx].n if 0 <= cur_idx < total else total
             lines.append(_pt("step_unlock_hint", cur=cur_n, total=total))
-        for i, node in enumerate(self.nodes):
-            if i > cur_idx:
-                continue
-            if i < cur_idx:
-                bit = _pt("step_done", n=node.n, instruction=node.instruction or "（无操作）")
-                exp_done = str(node.expected or "").strip()
-                if exp_done:
-                    bit += f" ｜ 预期：{exp_done}"
-                elif not self.all_uncheckable():
-                    bit += " ｜ 本步无预期（已完成）"
-                lines.append(bit)
-                continue
-            if self.phase == "do":
-                self.refresh_do_subphase()
-                if self.do_subphase == "achievement":
-                    ach_line = (
-                        _do_phase_achievement_brief(node.instruction, node.expected)
-                        if _expected_defers_to_check(node.expected)
-                        else _achievement_label(node.expected)
+        if scoped and cur is None:
+            lines.append(_pt("all_done"))
+            return "\n".join(lines)
+        if not scoped:
+            for i, node in enumerate(self.nodes):
+                if i > cur_idx:
+                    continue
+                if i < cur_idx:
+                    bit = _pt("step_done", n=node.n, instruction=node.instruction or "（无操作）")
+                    exp_done = str(node.expected or "").strip()
+                    if exp_done:
+                        bit += f" ｜ 预期：{exp_done}"
+                    elif not self.all_uncheckable():
+                        bit += " ｜ 本步无预期（已完成）"
+                    lines.append(bit)
+                    continue
+                if self.phase == "do":
+                    self.refresh_do_subphase()
+                    if self.do_subphase == "achievement":
+                        ach_line = (
+                            _do_phase_achievement_brief(node.instruction, node.expected)
+                            if _expected_defers_to_check(node.expected)
+                            else _achievement_label(node.expected)
+                        )
+                    else:
+                        ach_line = _pt("step_achievement_pending")
+                    bit = _pt(
+                        "step_active_do",
+                        n=node.n,
+                        instruction=node.instruction or "（无操作）",
+                        achievement=ach_line,
                     )
                 else:
-                    ach_line = _pt("step_achievement_pending")
-                bit = _pt(
-                    "step_active_do",
-                    n=node.n,
-                    instruction=node.instruction or "（无操作）",
-                    achievement=ach_line,
-                )
-            else:
-                bit = _pt(
-                    "step_active_check",
-                    n=node.n,
-                    instruction=node.instruction or "（无操作）",
-                    expected=node.expected,
-                )
-            if not node.expected:
-                bit += " ｜ 本步无预期（做完即过）" if not self.all_uncheckable() else " ｜ 本步无预期（无法校验）"
-            lines.append(bit)
+                    bit = _pt(
+                        "step_active_check",
+                        n=node.n,
+                        instruction=node.instruction or "（无操作）",
+                        expected=node.expected,
+                    )
+                if not node.expected:
+                    bit += " ｜ 本步无预期（做完即过）" if not self.all_uncheckable() else " ｜ 本步无预期（无法校验）"
+                lines.append(bit)
         cur = self.current()
         if not cur:
             lines.append(_pt("all_done"))
@@ -939,6 +994,13 @@ class StepCursor:
                 lab = swipe_direction_label(swipe_want)
                 if lab:
                     lines.append(f"【滑动方向】用例要求 {lab}（勿与步骤原文相反）")
+            from mino_nexus.loop.milestones import milestone_v1_enabled, milestones_brief_lines, read_state
+
+            if milestone_v1_enabled():
+                ms_lines = milestones_brief_lines(read_state(self), limit=8)
+                if ms_lines:
+                    lines.append("【子里程碑】")
+                    lines.extend(ms_lines)
             tail_key = "do_tail_login_module" if self.login_module_prompt else "do_tail"
             lines.append(_pt(tail_key))
         else:
@@ -949,6 +1011,13 @@ class StepCursor:
             brief = format_check_plan_brief(plan)
             if brief:
                 lines.append(brief)
+            from mino_nexus.loop.milestones import milestone_v1_enabled, milestones_brief_lines, read_state
+
+            if milestone_v1_enabled():
+                ms_lines = milestones_brief_lines(read_state(self))
+                if ms_lines:
+                    lines.append("【子里程碑】")
+                    lines.extend(ms_lines)
             lines.append(_pt("check_tail"))
         return "\n".join(lines)
 
@@ -962,6 +1031,11 @@ class StepCursor:
             return f"校验步骤 {cur.n} 的预期：{cur.expected}"
         return (cur.instruction or "").strip() or "完成本步操作"
 
+    def decide_success_criteria_for_llm(self) -> str:
+        from mino_nexus.loop.llm_step_context import success_criteria_json_text
+
+        return success_criteria_json_text(self)
+
     def decide_success(self) -> str:
         if self.phase == "prep":
             return (
@@ -972,6 +1046,14 @@ class StepCursor:
         if not cur:
             return "全部步骤已完成"
         if self.phase == "check":
+            from mino_nexus.loop.milestones import milestone_v1_enabled
+
+            if milestone_v1_enabled():
+                return (
+                    f"步骤 {cur.n} 的预期成立：{cur.expected}。"
+                    "校验 success_criteria.milestones：状态由程序根据工具结果写回；"
+                    "全部必填项通过后 signal_done。不要操作设备除非校验需要。"
+                )
             return (
                 f"步骤 {cur.n} 的预期成立：{cur.expected}。"
                 "用 assert_visual 判断当前屏。不要操作设备。"

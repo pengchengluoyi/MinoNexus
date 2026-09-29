@@ -45,6 +45,7 @@ class AIProviderSaveBody(BaseModel):
     set_default: bool = False
     plan_compress_ratio: float = 3.0
     web_compress_ratio: float = 2.0
+    android_compress_ratio: float = 1.0
     case_execution_use: bool = False
 
 
@@ -366,6 +367,7 @@ def test_figma(body: FigmaSettingsBody, _sess: dict = Depends(current_session)):
 @router.get("/dispatch")
 def list_dispatch_calls(
     limit: int = 80,
+    offset: int = 0,
     kind: str = "",
     role: str = "",
     trigger: str = "",
@@ -375,8 +377,16 @@ def list_dispatch_calls(
 ):
     from mino_nexus.ai.dispatch_log import list_calls
 
-    rows = list_calls(limit=limit, kind=kind, role=role, trigger=trigger, app_id=app_id, pipeline_id=pipeline_id)
-    return ok({"calls": rows, "total": len(rows)})
+    rows, total = list_calls(
+        limit=limit,
+        offset=offset,
+        kind=kind,
+        role=role,
+        trigger=trigger,
+        app_id=app_id,
+        pipeline_id=pipeline_id,
+    )
+    return ok({"calls": rows, "total": total, "offset": max(0, int(offset or 0)), "limit": limit})
 
 
 @router.get("/dispatch/{call_id}")
@@ -515,33 +525,43 @@ def sync_feishu_listener(_sess: dict = Depends(current_session)):
 
 @router.post("/plugins/wechat/login")
 def start_wechat_login(_sess: dict = Depends(current_session)):
-    raise HTTPException(status_code=400, detail=ps.WECHAT_NOT_PORTED)
+    from mino_nexus.services.wechat_ilink import start_qr_login
+
+    try:
+        return ok(start_qr_login())
+    except Exception as e:
+        http_error(e)
 
 
 @router.get("/plugins/wechat/login")
 def get_wechat_login(_sess: dict = Depends(current_session)):
-    return ok({
-        "logged_in": False,
-        "status": "idle",
-        "qrcode_img": "",
-        "need_verify": False,
-        "error": ps.WECHAT_NOT_PORTED,
-    })
+    from mino_nexus.services.wechat_ilink import login_status
+
+    return ok(login_status())
 
 
 @router.post("/plugins/wechat/login/verify")
-def verify_wechat_login(_body: WechatVerifyBody, _sess: dict = Depends(current_session)):
-    raise HTTPException(status_code=400, detail=ps.WECHAT_NOT_PORTED)
+def verify_wechat_login(body: WechatVerifyBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.wechat_ilink import verify_qr_login
+
+    try:
+        return ok(verify_qr_login(body.verify_code))
+    except Exception as e:
+        http_error(e)
 
 
 @router.post("/plugins/wechat/logout")
 def logout_wechat_plugin(_sess: dict = Depends(current_session)):
-    raise HTTPException(status_code=400, detail=ps.WECHAT_NOT_PORTED)
+    from mino_nexus.services.wechat_ilink import logout_wechat
+
+    return ok(logout_wechat())
 
 
 @router.post("/plugins/wechat/listener/sync")
 def sync_wechat_listener_api(_sess: dict = Depends(current_session)):
-    raise HTTPException(status_code=400, detail=ps.WECHAT_NOT_PORTED)
+    from mino_nexus.services.wechat_ilink import sync_wechat_listener
+
+    return ok(sync_wechat_listener())
 
 
 @router.post("/plugins/zentao/test")
@@ -851,9 +871,37 @@ class AccountPoolExtensionFieldsBody(BaseModel):
 
 @router.get("/case-resource-key")
 def get_case_resource_key_catalog(_sess: dict = Depends(current_session)):
+    from mino_nexus.services.case_key_registry import catalog_entries_by_layer
     from mino_nexus.services.case_resource_key_catalog import catalog_payload
 
-    return ok(catalog_payload())
+    payload = catalog_payload()
+    payload["console"] = catalog_entries_by_layer()
+    return ok(payload)
+
+
+class CaseImportSettingsBody(BaseModel):
+    block_on_step_key_issues_default: bool | None = None
+
+
+@router.get("/case-import")
+def get_case_import_settings_route(_sess: dict = Depends(current_session)):
+    from mino_nexus.services.settings_store import get_case_import_settings
+
+    return ok(get_case_import_settings())
+
+
+@router.put("/case-import")
+def put_case_import_settings_route(body: CaseImportSettingsBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.settings_store import save_case_import_settings
+
+    return ok(save_case_import_settings(body.model_dump(exclude_unset=True)))
+
+
+@router.get("/case-resource-key/registry")
+def get_case_resource_key_registry(app_id: str = "", _sess: dict = Depends(current_session)):
+    from mino_nexus.services.case_key_registry import registry_payload
+
+    return ok(registry_payload(app_id=str(app_id or "").strip()))
 
 
 class ResourceTransitionRulePatchBody(BaseModel):

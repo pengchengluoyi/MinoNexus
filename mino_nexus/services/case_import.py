@@ -278,6 +278,20 @@ def preview_import(
             flags.append("empty_expected")
         if conflict and not cid:
             flags.append("likely_duplicate")
+        step_key_validation: dict[str, Any] = {}
+        try:
+            from mino_nexus.services.case_key_registry import import_row_key_summary
+
+            app_id = ""
+            for app in ps.list_apps(pid):
+                if str(app.get("id") or ""):
+                    app_id = str(app.get("id") or "")
+                    break
+            step_key_validation = import_row_key_summary(row, app_id=app_id)
+            if step_key_validation.get("issues"):
+                flags.append("step_key_issues")
+        except Exception:
+            step_key_validation = {}
         preview_rows.append({
             "row_index": raw.get("row_index", i),
             "case_id": cid,
@@ -289,6 +303,7 @@ def preview_import(
             "resource_claim_summary": claim_summary,
             "steps_preview": "\n".join(steps)[:240],
             "expected_preview": "\n".join(expected)[:240],
+            "step_key_validation": step_key_validation,
             "flags": flags,
             "selected_by_default": "likely_header" not in flags,
             "conflict": conflict,
@@ -303,6 +318,8 @@ def preview_import(
         "rows": copy.deepcopy(preview_rows),
         "meta": meta,
     }
+    from mino_nexus.services.settings_store import get_case_import_settings
+
     return {
         "preview_token": token,
         "project_id": pid,
@@ -311,6 +328,7 @@ def preview_import(
         "parsed": len(preview_rows),
         "conflicts": conflicts,
         "rows": preview_rows,
+        "import_defaults": get_case_import_settings(),
         **meta,
     }
 
@@ -327,6 +345,7 @@ def commit_import(
     rows: list[dict[str, Any]] | None = None,
     default_on_conflict: ConflictAction = "skip",
     default_platform: str = "",
+    block_on_step_key_issues: bool = False,
 ) -> dict[str, Any]:
     pid = str(project_id or "").strip()
     rid = str(requirement_id or "").strip()
@@ -369,7 +388,13 @@ def commit_import(
         env_doc = ps.project_env(pid)
     except KeyError:
         env_doc = {}
+    app_id = ""
+    for app in ps.list_apps(pid):
+        if str(app.get("id") or ""):
+            app_id = str(app.get("id") or "")
+            break
     created = updated = skipped = 0
+    blocked = 0
     results: list[dict[str, Any]] = []
     for item in work_rows:
         if not isinstance(item, dict):
@@ -386,6 +411,19 @@ def commit_import(
             payload["platform"] = fill_plat
         idx = int(payload.get("index") or item.get("row_index") or 0)
         row = _norm_import_row(payload, idx, "", env_doc)
+        if block_on_step_key_issues:
+            from mino_nexus.services.case_key_registry import import_row_key_summary
+
+            summary = import_row_key_summary(row, app_id=app_id)
+            if summary.get("issues"):
+                blocked += 1
+                results.append({
+                    "row_index": item.get("row_index"),
+                    "status": "blocked",
+                    "reason": "step_key_issues",
+                    "step_key_validation": summary,
+                })
+                continue
         if not str(row.get("platform") or "").strip():
             skipped += 1
             results.append({
@@ -418,6 +456,7 @@ def commit_import(
         "created": created,
         "updated": updated,
         "skipped": skipped,
+        "blocked": blocked,
         "total": total,
         "results": results,
         "action": "imported_cases",
@@ -430,9 +469,17 @@ def cases_payload(project_id: str) -> dict[str, Any]:
     cases = list_cases(pid)
     req_titles = {str(r.get("id") or ""): str(r.get("title") or "") for r in list_project_requirements(pid)}
     rows: list[dict[str, Any]] = []
+    from mino_nexus.services.case_key_registry import step_keys_summary_for_case
+
     for raw in cases:
         title = req_titles.get(str(raw.get("requirement_id") or ""), "需求")
-        rows.append({**raw, "requirement_title": title})
+        rows.append(
+            {
+                **raw,
+                "requirement_title": title,
+                "step_keys_summary": step_keys_summary_for_case(raw),
+            }
+        )
     return {
         "cases": rows,
         "total": len(rows),

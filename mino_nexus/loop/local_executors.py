@@ -213,75 +213,38 @@ def dispatch_local(
             vlm_meta=vlm_meta,
         )
     if cap == "relogin":
-        from mino_nexus.ai.planner import inspect_session
-        from mino_nexus.runtime.session_gate import (
-            format_required_session_brief,
-            required_session as required_session_enum,
-        )
+        from mino_nexus.loop.login_state_probe import observe_login_state, remember_session
+        from mino_nexus.runtime.session_gate import required_session as required_session_enum
 
-        image = ""
-        mime = "image/png"
-        if shot is not None and getattr(shot, "has_image", lambda: False)():
-            image = shot.image_base64
-            mime = getattr(shot, "image_mime", None) or "image/png"
         scene = getattr(ctx, "case_scene", None) if ctx is not None else None
         req = required_session_enum(scene=scene)
-        row = inspect_session(
-            required_session=format_required_session_brief(scene),
-            accounts_brief=str(getattr(ctx, "accounts_brief", "") or "") if ctx else "",
-            image_base64=image,
-            image_mime=mime,
-            screen_w=int(getattr(shot, "width", 0) or 0) if shot else 0,
-            screen_h=int(getattr(shot, "height", 0) or 0) if shot else 0,
-        )
-        session = str(row.get("session") or "unknown").strip().lower()
-        reason = str(row.get("reason") or "").strip()
-        if not row.get("ok"):
-            summary = reason or "会话观察失败"
-            return _result(
-                event,
-                status=EventStatus.FAIL,
-                summary=summary,
-                error=summary,
-                executor="vlm",
-                elapsed_ms=int((time.time() - t0) * 1000),
-            )
-        if req == "logged_in":
-            if session == "logged_in":
-                summary = reason or "session=logged_in"
-                status = EventStatus.PASS
-            else:
-                summary = f"观察完成，登录未完成（session={session}）"
-                if reason:
-                    summary = f"{summary}；{reason}"
-                status = EventStatus.FAIL
-        elif req == "guest":
-            if session == "logged_in":
-                from mino_nexus.loop.session_ensure import try_logout_via_nav
+        session, reason = observe_login_state(ctx, router, shot)
+        summary = reason or f"session={session}"
+        if req == "guest" and session == "logged_in":
+            from mino_nexus.loop.session_ensure import try_logout_via_nav
 
-                ok, logout_msg = try_logout_via_nav(ctx, router, seq=event.seq)
-                if ok:
-                    summary = f"已执行 logout 边（原 session={session}）；{logout_msg}"
-                    status = EventStatus.PASS
-                else:
-                    summary = (
-                        f"观察完成，当前仍已登录（session={session}）。{logout_msg}"
-                    )
-                    if reason:
-                        summary = f"{summary}；{reason}"
-                    status = EventStatus.FAIL
+            ok, logout_msg = try_logout_via_nav(ctx, router, seq=event.seq)
+            if ok:
+                remember_session(ctx, "logged_out", "logout")
+                summary = f"已登出（原 session=logged_in）；{logout_msg}"
             else:
-                summary = reason or f"会话观察：{session}"
-                status = EventStatus.PASS
+                summary = f"资源与要求不一致：仍为已登录。{logout_msg}"
+        elif req == "logged_in" and session not in ("logged_in", "unknown"):
+            summary = f"当前 session={session}，与要求的已登录不一致；已写入上下文，后续步骤继续登录。{reason}"
+        elif session == "unknown":
+            summary = reason or "登录态未知，已跳过界面猜测"
+        src = str(getattr(ctx, "device_session_source", "") or "")
+        if src == "tool_api":
+            executor = "playwright"
+        elif src == "screen":
+            executor = "vlm"
         else:
-            summary = reason or f"会话观察：{session}"
-            status = EventStatus.PASS
+            executor = "internal"
         return _result(
             event,
-            status=status,
-            summary=summary,
-            error="" if status == EventStatus.PASS else summary,
-            executor="vlm",
+            status=EventStatus.PASS,
+            summary=summary[:500],
+            executor=executor,
             elapsed_ms=int((time.time() - t0) * 1000),
         )
     if cap == "check_run_env":
@@ -384,6 +347,8 @@ def _dispatch_device(
     from mino_nexus.loop.device_execute_params import prepare_device_execute_params
 
     merged = prepare_device_execute_params(cap, dict(params or {}), ctx)
+    if ctx is not None:
+        setattr(ctx, "last_device_execute_params", dict(merged))
     event = PlanEvent(
         seq=seq,
         capability_id=cap,
@@ -517,6 +482,12 @@ def _get_otp(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
             from mino_nexus.services.gmail_otp import GmailOtpError
 
             summary = str(exc) if isinstance(exc, GmailOtpError) else f"Gmail 取码失败：{exc}"
+            if ctx is not None:
+                setattr(
+                    ctx,
+                    "otp_fetch_fail_streak",
+                    int(getattr(ctx, "otp_fetch_fail_streak", 0) or 0) + 1,
+                )
             return _result(
                 event,
                 status=EventStatus.FAIL,
@@ -542,6 +513,7 @@ def _get_otp(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
         acc = dict(getattr(ctx, "picked_account", None) or {})
         acc["otp"] = code
         ctx.picked_account = acc
+        setattr(ctx, "otp_fetch_fail_streak", 0)
     return _result(
         event,
         status=EventStatus.PASS,
@@ -1333,7 +1305,7 @@ def _check_run_env(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
         cap.id == "get_otp"
         for cap in catalog_reg.filter_capabilities(
             flags or {"internal": True},
-            kinds=["prep", "generic", "recovery"],
+            kinds=["generic", "recovery"],
             platform=platform,
         )
     )

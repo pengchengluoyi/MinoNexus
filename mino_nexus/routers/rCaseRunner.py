@@ -35,6 +35,8 @@ class ExploreRequest(BaseModel):
     max_steps: int = 80
     max_idle_steps: int = 15
     playwright_headless: bool = True
+    env_profile: str = ""
+    env_surface: str = ""
 
 
 class RunRequest(BaseModel):
@@ -212,6 +214,8 @@ def run_explore(body: ExploreRequest, sess: dict = Depends(current_session)):
             async_exec=bool(body.async_exec),
             platform=body.platform or "android",
             playwright_headless=bool(body.playwright_headless),
+            env_profile=str(body.env_profile or "").strip(),
+            env_surface=str(body.env_surface or "").strip(),
             plugin_user_id=_plugin_user(sess),
         )
         return ok(snapshot, msg="应用探索已启动")

@@ -68,6 +68,41 @@ def prepare_xy_params_for_execute(params: dict[str, Any], width: int, height: in
     return params
 
 
+def milli_to_viewport_px(x: Any, y: Any, width: int, height: int) -> Optional[tuple[int, int]]:
+    """与 Scout `to_viewport_xy` 同一规则。
+
+    两边都在 0–1000 且视口宽 > 1000 时，按千分比换成像素；否则视为已经是像素。
+    设备回执里的坐标是换算后的像素，不要再套一次本函数。
+    """
+    xv, yv = _as_float(x), _as_float(y)
+    if xv is None or yv is None or width <= 0 or height <= 0:
+        return None
+    xi, yi = int(round(xv)), int(round(yv))
+    if 0 <= xi <= int(_MILLI) and 0 <= yi <= int(_MILLI) and width > int(_MILLI):
+        xi = int(round(xi / _MILLI * width))
+        yi = int(round(yi / _MILLI * height))
+    return max(0, min(width - 1, xi)), max(0, min(height - 1, yi))
+
+
+def landing_matches_sent(
+    sent_x: Any,
+    sent_y: Any,
+    pixel_x: Any,
+    pixel_y: Any,
+    *,
+    width: int,
+    height: int,
+    tol_px: int = 28,
+) -> bool:
+    """派单千分比换成视口像素后，和设备回执像素比。回执不再换算。"""
+    sent = milli_to_viewport_px(sent_x, sent_y, width, height)
+    rx, ry = _as_float(pixel_x), _as_float(pixel_y)
+    if sent is None or rx is None or ry is None:
+        return False
+    tol = max(0, int(tol_px))
+    return abs(sent[0] - int(round(rx))) <= tol and abs(sent[1] - int(round(ry))) <= tol
+
+
 def apply_xy_params(params: dict[str, Any], width: int, height: int) -> dict[str, Any]:
     """千分比 → 截图像素。仅用于 Nexus 本地消费；**不要**在 EXECUTE 出站前调用。"""
     if not isinstance(params, dict):

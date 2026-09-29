@@ -47,6 +47,8 @@ class ProjectEnvUpdate(BaseModel):
     pipeline: Optional[list] = None
     gmail_inbox: Optional[dict[str, Any]] = None
     channel_secrets: Optional[dict[str, Any]] = None
+    channel_gmail_alias: Optional[dict[str, Any]] = None
+    channel_phone_seq: Optional[dict[str, Any]] = None
 
 
 class TestAccountSaveBody(BaseModel):
@@ -388,15 +390,39 @@ def update_project_env(project_id: str, item: ProjectEnvUpdate, _sess: dict = De
         "channels": item.channels,
         "pipeline": item.pipeline,
     }
-    if item.gmail_inbox is not None:
-        body["gmail_inbox"] = item.gmail_inbox
-    elif prev.get("gmail_inbox"):
-        body["gmail_inbox"] = prev.get("gmail_inbox")
     if item.channel_secrets is not None:
         body["channel_secrets"] = item.channel_secrets
     elif prev.get("channel_secrets"):
         body["channel_secrets"] = prev.get("channel_secrets")
+    if item.channel_gmail_alias is not None:
+        body["channel_gmail_alias"] = item.channel_gmail_alias
+    elif prev.get("channel_gmail_alias"):
+        body["channel_gmail_alias"] = prev.get("channel_gmail_alias")
+    if item.channel_phone_seq is not None:
+        body["channel_phone_seq"] = item.channel_phone_seq
+    elif prev.get("channel_phone_seq"):
+        body["channel_phone_seq"] = prev.get("channel_phone_seq")
     doc = normalize_project_env(body)
+    env_keys = {e["key"] for e in doc.get("environments") or []}
+    prev_norm = normalize_project_env(prev) if isinstance(prev, dict) else {}
+    if item.channel_gmail_alias is not None:
+        from mino_nexus.services.gmail_alias_lease import normalize_channel_gmail_alias
+
+        doc["channel_gmail_alias"] = normalize_channel_gmail_alias(
+            doc.get("channel_gmail_alias"),
+            doc.get("channels") or [],
+            env_keys,
+            prev=prev_norm.get("channel_gmail_alias"),
+        )
+    if item.channel_phone_seq is not None:
+        from mino_nexus.services.phone_pool_lease import normalize_channel_phone_seq
+
+        doc["channel_phone_seq"] = normalize_channel_phone_seq(
+            doc.get("channel_phone_seq"),
+            doc.get("channels") or [],
+            env_keys,
+            prev=prev_norm.get("channel_phone_seq"),
+        )
     if not doc.get("environments"):
         raise HTTPException(status_code=400, detail="至少保留一个环境")
     if doc["default_profile"] not in {e["key"] for e in doc["environments"]}:

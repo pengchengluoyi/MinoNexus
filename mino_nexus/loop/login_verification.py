@@ -41,12 +41,12 @@ def verification_send_required_message(ctx: Any | None) -> str:
     kind = login_kind_for_ctx(ctx)
     if ch == UiChannel.WEB and kind == "email":
         return (
-            "须先 input_text(field=email) 填租号邮箱，再点 Send 或 request_sms_code 向邮箱发验证码，"
+            "须先完成账号填写（account_fill），再点 Send 或 request_sms_code 向邮箱发验证码，"
             "再 get_otp。Web 邮箱登录无手机短信。"
         )
     if kind == "email":
         return (
-            "邮箱登录须先 input_text(field=email) 填入租号邮箱，再 request_sms_code 发码，最后 get_otp。"
+            "须先完成账号填写（account_fill），再 request_sms_code 发码，最后 get_otp。"
         )
     return (
         "须先 request_sms_code 成功发送短信验证码，再 get_otp / 填验证码。禁止跳过发送步骤。"
@@ -59,10 +59,10 @@ def otp_not_sent_executor_summary(ctx: Any | None) -> str:
     kind = login_kind_for_ctx(ctx)
     if ch == UiChannel.WEB and kind == "email":
         return (
-            "尚未向邮箱发码：请先 input_text(邮箱)，再点 Send 或 request_sms_code，然后 get_otp"
+            "尚未向邮箱发码：请先完成账号填写（account_fill），再点 Send 或 request_sms_code，然后 get_otp"
         )
     if kind == "email":
-        return "尚未发码：请先完成 input_text(邮箱) 与 request_sms_code，再 get_otp"
+        return "尚未发码：请先完成账号填写（account_fill）与 request_sms_code，再 get_otp"
     return "尚未发码：请先 request_sms_code 发送短信验证码，再 get_otp"
 
 

@@ -30,6 +30,8 @@ class CheckPoint:
     required: bool = True
     natural_language: str = ""
     weight: float = 1.0
+    delta: int = 0
+    baseline_key: str = ""
 
 
 @dataclass
@@ -54,8 +56,43 @@ def _terms(expected: str) -> list[str]:
     return out[:12]
 
 
+def _plan_from_checkpoints_v1(exp: str) -> CheckPlan | None:
+    """扩展包 / expected 内嵌 mino.checkpoints.v1（P5）。"""
+    import json
+
+    if not exp.startswith("{"):
+        return None
+    try:
+        doc = json.loads(exp)
+    except json.JSONDecodeError:
+        return None
+    if str(doc.get("schema") or "") != "mino.checkpoints.v1":
+        return None
+    plan = CheckPlan(raw_expected=exp)
+    for cp in doc.get("checkpoints") or []:
+        if not isinstance(cp, dict):
+            continue
+        cid = str(cp.get("id") or "").strip() or f"cp{len(plan.points) + 1}"
+        kind = str(cp.get("type") or "element_exists").strip().lower()
+        sel = str(cp.get("selector") or cp.get("title") or cp.get("text") or "").strip()
+        plan.points.append(
+            CheckPoint(
+                id=cid,
+                kind=kind,
+                required=bool(cp.get("required", True)),
+                natural_language=sel or cid,
+                delta=int(cp.get("delta") or 0),
+                baseline_key=str(cp.get("baseline_key") or cid),
+            )
+        )
+    return plan if plan.points else None
+
+
 def build_check_plan(expected: str, *, instruction: str = "") -> CheckPlan:
     exp = str(expected or "").strip()
+    v1 = _plan_from_checkpoints_v1(exp)
+    if v1 is not None:
+        return v1
     plan = CheckPlan(raw_expected=exp)
     if not exp:
         return plan

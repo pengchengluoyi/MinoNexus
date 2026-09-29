@@ -144,3 +144,15 @@ Scout REGISTER: executors[].provides（abstract cap 字符串）
 
 Agent 在 prep/do 菜单里也可主动调 `recover_<规则id>`（prep 阶段已含 `recovery` tool_kind）。
 
+## 9. FSM 逻辑块与独占能力
+
+登录等固定顺序由 **Nav FSM 逻辑块**编排（`nav_flow_block_catalog`），与能力目录解耦：目录仍声明「能做什么」，块声明「登录七步」顺序与块内 guards/fuse。
+
+| 能力 | 何时仅块内 hook / 从菜单剔除 |
+|---|---|
+| `lease_account` | 登录块 `email_fill` 未 pass |
+| `get_otp` | 登录块 `otp_fill` 未 pass 且已发码 |
+| `request_sms_code` | 登录步且块已展开（与 macro 隐藏一致） |
+
+通用 `tap_element` / `input_text` 仍由 LLM 决策。块定义、HTTP、`steps_json` v2、check `mino.checkpoints.v1` 见 [FLOW_BLOCKS.md](FLOW_BLOCKS.md)。
+

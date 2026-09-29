@@ -11,7 +11,7 @@ def _history_has_lease_account_pass(history_lines: list[str] | None) -> bool:
     for line in history_lines or []:
         if "lease_account" not in line:
             continue
-        if re.search(r"\bpass\b", line, re.I):
+        if "→ pass" in line or re.search(r"\bpass\b", line, re.I):
             return True
     return False
 
@@ -34,6 +34,15 @@ def prep_lease_account_signal_done_block_reason(
         return None
     if ctx is not None and bool(getattr(ctx, "prep_lease_account_done", False)):
         return None
+    if ctx is not None:
+        lease = getattr(ctx, "resource_lease", None)
+        if isinstance(lease, dict) and str(lease.get("account_id") or "").strip():
+            return None
+        picked = getattr(ctx, "picked_account", None)
+        if isinstance(picked, dict) and str(
+            picked.get("account_id") or picked.get("id") or ""
+        ).strip():
+            return None
     if _history_has_lease_account_pass(history_lines):
         return None
     return (

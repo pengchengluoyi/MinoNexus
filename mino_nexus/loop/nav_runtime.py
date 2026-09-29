@@ -53,6 +53,8 @@ class NavRuntime:
         account_id: str = "",
         target_package: str = "",
         platform: str = "android",
+        env_profile: str = "",
+        env_surface: str = "",
     ) -> None:
         self.app_id = app_id
         self.project_id = project_id
@@ -65,6 +67,8 @@ class NavRuntime:
         self.account_id = str(account_id or "")
         self.target_package = str(target_package or "")
         self.platform = str(platform or "android")
+        self.env_profile = str(env_profile or "").strip()
+        self.env_surface = str(env_surface or "").strip()
         self.gate = GuardGate(run_type=self.run_type)
 
         self._captures_recorded: int = 0
@@ -139,6 +143,8 @@ class NavRuntime:
             account_id=account_id,
             target_package=str(getattr(ctx, "target_package", "") or ""),
             platform=str(getattr(ctx, "platform", "") or "android"),
+            env_profile=str(getattr(ctx, "env_profile", "") or ""),
+            env_surface=str(getattr(ctx, "env_surface", "") or ""),
         )
         inst._run_id = str(run_id or "")
         inst._app_version = str(getattr(ctx, "app_version", "") or "").strip()
@@ -218,6 +224,11 @@ class NavRuntime:
                 ambiguous=False,
                 degraded=True,
             )
+            if not self.active or not isinstance(self.fsm, dict):
+                self._record_capture(
+                    snap, writer=writer, localized=self.localized, screenshot=screenshot
+                )
+                return snap
             self.plan = F.build_plan(
                 self.fsm,
                 state_id="",
@@ -471,11 +482,19 @@ class NavRuntime:
         try:
             from mino_nexus.services.nav_target_scope import resolve_app_target_scope, scope_from_values
 
-            scope = scope_from_values(self.platform, self.target_package) or resolve_app_target_scope(
-                self.app_id,
-                platform=self.platform,
-                target_package=self.target_package,
+            run_target = str(self.target_package or "").strip()
+            scope = (
+                scope_from_values(self.platform, run_target)
+                if run_target
+                else None
             )
+            if scope is None:
+                scope = resolve_app_target_scope(
+                    self.app_id,
+                    platform=self.platform,
+                    target_package=run_target,
+                )
+            stored_target = run_target or (scope.target_id if scope else "")
             meta = cap_store.append_turn(
                 self.app_id,
                 self.session_id,
@@ -489,9 +508,11 @@ class NavRuntime:
                 hierarchy_stale=snap.stale,
                 localized=localized or {},
                 layout_hierarchy={},
-                target_package=scope.target_id if scope else self.target_package,
-                platform=scope.platform if scope else self.platform,
+                target_package=stored_target,
+                platform=self.platform or (scope.platform if scope else "android"),
                 target_scope=scope.as_dict() if scope else None,
+                env_profile=self.env_profile,
+                env_surface=self.env_surface,
                 cap_id=cap_id,
                 error=snap.error,
                 screenshot_b64=image_b64,

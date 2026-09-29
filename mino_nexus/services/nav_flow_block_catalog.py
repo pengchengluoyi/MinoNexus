@@ -5,6 +5,21 @@ from typing import Any
 
 from mino_nexus.models.nav_flow_block_catalog import GLOBAL_APP_ID, NavFlowBlockCatalog
 
+# 文档 / catalog 示例里的短 id → 库内 block_id
+BLOCK_ID_ALIASES: dict[str, str] = {
+    "login_email": "fb.global.login",
+    "email_web_login": "fb.global.login",
+    "fb.global.login.email_web": "fb.global.login",
+    "login": "fb.global.login",
+}
+
+
+def normalize_block_id(block_id: str) -> str:
+    bid = str(block_id or "").strip()
+    if not bid:
+        return ""
+    return BLOCK_ID_ALIASES.get(bid, bid)
+
 
 def load_block_row(*, app_id: str, block_id: str) -> dict[str, Any] | None:
     from mino_nexus.core.database import SessionLocal
@@ -12,7 +27,7 @@ def load_block_row(*, app_id: str, block_id: str) -> dict[str, Any] | None:
     db = SessionLocal()
     try:
         app = str(app_id or "").strip()
-        bid = str(block_id or "").strip()
+        bid = normalize_block_id(block_id)
         if app and app != GLOBAL_APP_ID:
             row = (
                 db.query(NavFlowBlockCatalog)
@@ -37,13 +52,21 @@ def load_block_row(*, app_id: str, block_id: str) -> dict[str, Any] | None:
 
 
 def _row_dict(row: NavFlowBlockCatalog) -> dict[str, Any]:
+    from mino_nexus.services.case_key_registry import default_block_key_ref
+
+    bid = str(row.block_id or "")
+    ref = str(getattr(row, "key_ref", "") or "").strip() or default_block_key_ref(bid)
     return {
         "app_id": str(row.app_id or ""),
-        "block_id": str(row.block_id or ""),
+        "block_id": bid,
         "block_origin": str(row.block_origin or ""),
         "display_name": str(row.display_name or ""),
+        "description": str(row.description or ""),
         "steps_json": list(row.steps_json or []),
         "version": str(row.version or "v1"),
+        "enabled": bool(int(row.enabled or 0)),
+        "key_ref": ref,
+        "dsl": f"【块:{bid}】" if bid else "",
     }
 
 
@@ -62,7 +85,7 @@ def _overrides_for_app(app_id: str) -> list[dict[str, Any]]:
     return [x for x in raw if isinstance(x, dict)]
 
 
-def list_catalog(*, app_id: str = "") -> list[dict[str, Any]]:
+def list_catalog(*, app_id: str = "", channel: str = "") -> list[dict[str, Any]]:
     from mino_nexus.core.database import SessionLocal
     from mino_nexus.models.nav_flow_block_catalog import GLOBAL_APP_ID
 
@@ -75,9 +98,24 @@ def list_catalog(*, app_id: str = "") -> list[dict[str, Any]]:
         else:
             q = q.filter(NavFlowBlockCatalog.app_id == GLOBAL_APP_ID)
         rows = q.order_by(NavFlowBlockCatalog.block_id).all()
-        return [_row_dict(r) for r in rows]
+        out = [_row_dict(r) for r in rows]
+        ch = str(channel or "").strip().lower()
+        if ch:
+            out = [r for r in out if _block_matches_channel(r, ch)]
+        return out
     finally:
         db.close()
+
+
+def _block_matches_channel(row: dict[str, Any], channel: str) -> bool:
+    bid = str(row.get("block_id") or "")
+    if bid in ("fb.global.login", "fb.global.login.email_web", "fb.global.system_dialog"):
+        return True
+    if channel == "web":
+        return "email_web" in bid or ".web" in bid
+    if channel in ("android", "ios"):
+        return "email_web" not in bid
+    return True
 
 
 def get_overrides(app_id: str) -> list[dict[str, Any]]:
@@ -141,8 +179,68 @@ def strip_global_flow_blocks_from_doc(doc: dict[str, Any] | None) -> dict[str, A
     return out
 
 
+def upsert_global_block(
+    *,
+    block_id: str,
+    display_name: str = "",
+    description: str = "",
+    steps_json: list[dict[str, Any]] | None = None,
+    version: str = "v1",
+    enabled: bool = True,
+    key_ref: str = "",
+) -> dict[str, Any]:
+    from mino_nexus.core.database import SessionLocal
+
+    from mino_nexus.services.case_key_registry import default_block_key_ref
+
+    bid = str(block_id or "").strip()
+    if not bid:
+        return {}
+    resolved_ref = str(key_ref or "").strip() or default_block_key_ref(bid)
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(NavFlowBlockCatalog)
+            .filter(
+                NavFlowBlockCatalog.app_id == GLOBAL_APP_ID,
+                NavFlowBlockCatalog.block_id == bid,
+            )
+            .first()
+        )
+        if row is None:
+            row = NavFlowBlockCatalog(
+                app_id=GLOBAL_APP_ID,
+                block_id=bid,
+                block_origin="global_catalog",
+                display_name=display_name or bid,
+                description=description or "",
+                steps_json=list(steps_json or []),
+                version=version,
+                enabled=1 if enabled else 0,
+                key_ref=resolved_ref,
+            )
+            db.add(row)
+        else:
+            if display_name:
+                row.display_name = display_name
+            if description:
+                row.description = description
+            if steps_json is not None:
+                row.steps_json = list(steps_json)
+            if version:
+                row.version = version
+            row.enabled = 1 if enabled else 0
+            if key_ref or not str(getattr(row, "key_ref", "") or "").strip():
+                row.key_ref = resolved_ref
+        db.commit()
+        db.refresh(row)
+        return _row_dict(row)
+    finally:
+        db.close()
+
+
 def resolve_effective_steps(*, app_id: str, block_id: str) -> list[dict[str, Any]]:
-    base = load_block_row(app_id=GLOBAL_APP_ID, block_id=block_id)
+    base = load_block_row(app_id=GLOBAL_APP_ID, block_id=normalize_block_id(block_id))
     if not base:
         return []
     steps = [dict(s) for s in (base.get("steps_json") or []) if isinstance(s, dict)]

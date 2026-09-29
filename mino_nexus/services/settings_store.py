@@ -79,6 +79,7 @@ def _root() -> dict[str, Any]:
     raw.setdefault("robots", {"items": []})
     raw.setdefault("knowledge_jobs", {})
     raw.setdefault("knowledge_job_users", {})
+    raw.setdefault("case_import", {})
     return raw
 
 
@@ -232,6 +233,7 @@ def _provider_public(provider_id: str, raw: Optional[dict[str, Any]] = None) -> 
         "case_execution_use": case_execution_use,
         "plan_compress_ratio": float(raw.get("plan_compress_ratio") or 3.0),
         "web_compress_ratio": float(raw.get("web_compress_ratio") or 2.0),
+        "android_compress_ratio": float(raw.get("android_compress_ratio") or 1.0),
     }
 
 
@@ -287,6 +289,8 @@ def save_ai_provider(provider_id: str, payload: dict[str, Any]) -> dict[str, Any
         row["plan_compress_ratio"] = float(payload.get("plan_compress_ratio") or 3)
     if "web_compress_ratio" in payload:
         row["web_compress_ratio"] = float(payload.get("web_compress_ratio") or 2)
+    if "android_compress_ratio" in payload:
+        row["android_compress_ratio"] = float(payload.get("android_compress_ratio") or 1)
     ai[pid] = row
     if payload.get("set_default"):
         ai["_default_provider"] = pid
@@ -390,6 +394,7 @@ def get_ai_provider_credentials(provider_id: str | None = None) -> dict[str, Any
         "embedding_model": str(raw.get("embedding_model") or "").strip(),
         "plan_compress_ratio": float(raw.get("plan_compress_ratio") or 3.0),
         "web_compress_ratio": float(raw.get("web_compress_ratio") or 2.0),
+        "android_compress_ratio": float(raw.get("android_compress_ratio") or 1.0),
     }
 
 
@@ -599,6 +604,33 @@ def save_knowledge_job_settings(
     root["knowledge_job_users"] = users
     _save(root)
     return _public_knowledge_jobs(payload, user_id=uid)
+
+
+def get_case_import_settings() -> dict[str, Any]:
+    ci = _root().get("case_import") if isinstance(_root().get("case_import"), dict) else {}
+    return {
+        "block_on_step_key_issues_default": bool(ci.get("block_on_step_key_issues_default")),
+    }
+
+
+def save_case_import_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    root = _root()
+    ci = root.setdefault("case_import", {})
+    if not isinstance(ci, dict):
+        ci = {}
+        root["case_import"] = ci
+    if "block_on_step_key_issues_default" in payload:
+        ci["block_on_step_key_issues_default"] = bool(payload.get("block_on_step_key_issues_default"))
+    _save(root)
+    return get_case_import_settings()
+
+
+def resolve_block_on_step_key_issues(explicit: bool | None) -> bool:
+    if explicit is True:
+        return True
+    if explicit is False:
+        return False
+    return bool(get_case_import_settings().get("block_on_step_key_issues_default"))
 
 
 def knowledge_capture_enabled(user_id: str = "", **_ignored) -> bool:

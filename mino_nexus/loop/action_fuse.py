@@ -257,6 +257,14 @@ class ProgressGate:
         self.last_intervention: str = ""
         self._milestone_exhausted: bool = False
 
+    def note_submilestone_pass(self) -> None:
+        """子里程碑推进：缓解步数预算熔断对登录等多步子流程的误判。"""
+        self.no_progress_streak = 0
+        self.fuse_block_streak = 0
+        self._milestone_exhausted = False
+        self.warning_hint = ""
+        self.milestone_turns = max(0, int(self.milestone_turns or 0) - 3)
+
     def reset_milestone(self, phase: str, step: int = 0) -> None:
         key = f"{phase}:{step}"
         if key == self._milestone:
@@ -380,8 +388,6 @@ class ProgressGate:
                 )
 
         states = self._post_states
-        if web_channel:
-            states = []
         if not explore and len(states) >= STATE_MIN_SAMPLES:
             recent = states[-STATE_WINDOW:]
             uniq = len(set(recent))
@@ -398,7 +404,7 @@ class ProgressGate:
                         f"{hint}"
                     )
 
-        if not explore and not web_channel:
+        if not explore:
             cycle = _detect_state_cycle(states)
             if cycle is not None:
                 period, _pat = cycle
@@ -462,8 +468,8 @@ class ProgressGate:
                         f"{hint}"
                     )
 
-        # 连续 N 次操作后界面指纹未变 → 第 N+1 次前熔断（Web 不用 DOM/截图指纹，见 web_focus）
-        if not web_channel and self.no_progress_streak >= NO_PROGRESS_THRESHOLD - 1:
+        # 两端都用 progress_key：连续不变则熔断。web_channel 不再整段跳过。
+        if self.no_progress_streak >= NO_PROGRESS_THRESHOLD - 1:
             if not fp_neutral_cap(
                 cap_id,
                 params,
@@ -475,10 +481,6 @@ class ProgressGate:
                     f"【熔断·无进展】连续 {self.no_progress_streak} 次操作后界面指纹未变。"
                     f"{hint}"
                 )
-
-        if web_channel:
-            self.warning_hint = ""
-            return None
 
         if self.no_progress_streak >= NO_PROGRESS_THRESHOLD - 2:
             self.warning_hint = (
@@ -514,17 +516,10 @@ class ProgressGate:
             if wff and wff != self._last_web_focus_fp:
                 self.fuse_block_streak = 0
                 self._last_web_focus_fp = wff
-            self._post_states.append(wff or post)
-            if len(self._post_states) > 32:
-                self._post_states = self._post_states[-32:]
             wk = web_tap_coarse_key(cap_id, params)
             self._web_coarse_actions.append(wk)
             if len(self._web_coarse_actions) > 24:
                 self._web_coarse_actions = self._web_coarse_actions[-24:]
-            self._coarse_actions.append(coarse_action_key(cap_id, params))
-            if len(self._coarse_actions) > 24:
-                self._coarse_actions = self._coarse_actions[-24:]
-            return
         neutral = fp_neutral_cap(
             cap_id,
             params,

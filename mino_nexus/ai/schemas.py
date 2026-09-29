@@ -389,6 +389,37 @@ class AgentAction(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict, description="含绝对像素坐标等")
 
 
+class VisionPlanDecision(BaseModel):
+    """agent-vision-plan：本回合规划（不下发设备 cap）。P6-P0 起逐步替代 decide 内的 milestones 规划职责。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    thought: str = ""
+    milestones: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="兼容：新 id 视为 milestones_append",
+    )
+    milestones_append: list[dict[str, Any]] = Field(default_factory=list)
+    flow_block_ops: list[dict[str, Any]] = Field(default_factory=list)
+    hook_calls: list[dict[str, Any]] = Field(default_factory=list)
+    checkpoints_plan: list[dict[str, Any]] = Field(default_factory=list)
+    plan_digest: dict[str, Any] = Field(default_factory=dict)
+    failure_verdict: dict[str, Any] = Field(
+        default_factory=dict,
+        description="复核模式：blocking=true 表示 program failed 不可翻案",
+    )
+    step_requirements_complete: bool = Field(
+        False,
+        description="兼容字段：为 true 时等同 exit_allowed",
+    )
+    exit_allowed: bool = Field(
+        False,
+        description="准出。默认 false；仅当本回合判断执行完剩余列表即可离开本步时为 true。false 表示不改已有值。",
+    )
+    raw_llm: dict[str, Any] = Field(default_factory=dict)
+    parse_warnings: list[str] = Field(default_factory=list)
+
+
 class AgentDecision(BaseModel):
     """decide_next_action 的单步决策（D2：看图直接出坐标；D3：每步）。"""
 
@@ -415,6 +446,14 @@ class AgentDecision(BaseModel):
     allow_foreign_foreground_llm_image: Optional[bool] = Field(
         None,
         description="前台非被测 App 时：true 申请本回合送截图重决策；false 保持 withhold",
+    )
+    milestones: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="首轮本步子里程碑草案（写入 success_criteria）",
+    )
+    step_outcome: str = Field(
+        "",
+        description="pass|give_up|ask_human|skip，绑定当前用例步+phase",
     )
     raw_llm: dict[str, Any] = Field(default_factory=dict)
     parse_warnings: list[str] = Field(default_factory=list)

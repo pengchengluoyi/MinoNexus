@@ -10,14 +10,14 @@ DEFAULT_PHASES: dict[str, dict[str, Any]] = {
     "prep": {
         "id": "prep",
         "job": "agent-decide",
-        "tool_kinds": ["prep", "generic"],
+        "tool_kinds": ["generic"],
         "guards": ["skip_repeat_read_device"],
         "advance_on": "signal_done",
     },
     "do": {
         "id": "do",
         "job": "agent-decide",
-        "tool_kinds": ["do", "generic"],
+        "tool_kinds": ["generic"],
         "guards": ["skip_repeat_tap"],
         "advance_on": "signal_done",
     },
@@ -57,6 +57,8 @@ def normalize_phase(raw: Any) -> dict[str, Any]:
     base.update(raw)
     base["id"] = pid
     base["job"] = str(base.get("job") or "agent-decide").strip() or "agent-decide"
+    ej = str(base.get("exec_job") or "").strip()
+    base["exec_job"] = ej
     base["tool_kinds"] = _norm_str_list(base.get("tool_kinds"), set(ALL_KINDS)) or list(
         DEFAULT_PHASES.get(pid, DEFAULT_PHASES["do"]).get("tool_kinds") or list(ALL_KINDS)
     )

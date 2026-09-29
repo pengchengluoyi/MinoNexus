@@ -238,6 +238,30 @@ def _runtime_roles() -> list[dict[str, Any]]:
             system_prompt=_job_prompt("agent-decide"),
             owner="test-engineer", job="agent-decide",
         ),
+        _role(
+            id="agent-vision-plan", label="看图规划", group="runtime", kind="json",
+            source="llm_jobs",
+            used_in=["Agent 逐步执行"],
+            summary="规划子里程碑与逻辑块；不直接下发设备操作。",
+            system_prompt=_job_prompt("agent-vision-plan"),
+            owner="test-engineer", job="agent-vision-plan",
+        ),
+        _role(
+            id="agent-vision-exec", label="看图执行", group="runtime", kind="json",
+            source="llm_jobs",
+            used_in=["Agent 逐步执行"],
+            summary="按 plan_digest 输出单步 capability。",
+            system_prompt=_job_prompt("agent-vision-exec"),
+            owner="test-engineer", job="agent-vision-exec",
+        ),
+        _role(
+            id="agent-vision-assert", label="看图校验", group="runtime", kind="json",
+            source="llm_jobs",
+            used_in=["Agent 逐步执行"],
+            summary="check 阶段批量视觉校验点。",
+            system_prompt=_job_prompt("agent-vision-assert"),
+            owner="test-engineer", job="agent-vision-assert",
+        ),
     ]
 
 

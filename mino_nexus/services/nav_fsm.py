@@ -82,6 +82,8 @@ class NavPlan:
 
 
 def state_by_id(fsm: dict[str, Any], state_id: str) -> Optional[dict[str, Any]]:
+    if not isinstance(fsm, dict):
+        return None
     for st in fsm.get("states") or []:
         if str(st.get("id") or st.get("state_id") or "") == str(state_id or ""):
             return st

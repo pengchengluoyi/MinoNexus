@@ -132,7 +132,7 @@ class RouterProxy:
         prefer: Optional[tuple[str, ...]] = None,
         force_fresh: bool = True,
         timeout_sec: float = _OBSERVE_TIMEOUT_SEC,
-        compress_ratio: float = 2.0,
+        compress_ratio: float | None = None,
     ) -> CapturedScreen:
         """替代上游的 `capture_screen(ctx, ...)`，返回值保持 CapturedScreen 形状。"""
         return _run_sync(
@@ -191,11 +191,23 @@ class RouterProxy:
                 local_reason="task_cancelled",
             )
 
+        from mino_nexus.catalog.skill_channel import CAP_ALIASES, canonical_cap
+
+        raw_cap = str(getattr(event, "capability_id", "") or "")
+        if raw_cap in CAP_ALIASES:
+            mapped = canonical_cap(raw_cap)
+            event.capability_id = mapped
+            if str(getattr(event, "event_kind", "") or "") == raw_cap:
+                event.event_kind = mapped
+
         if is_local_cap(event.capability_id):
             from mino_nexus.loop.local_executors import dispatch_local
 
             ctx = kwargs.get("ctx")
-            return dispatch_local(
+            # 本地能力里还会再 dispatch（例如 relogin → read_web_auth）。
+            # 放在线程里，事件循环才能接着把这次 EXECUTE 发给 Scout。
+            return await asyncio.to_thread(
+                dispatch_local,
                 event,
                 ctx=ctx,
                 router=self,
@@ -213,6 +225,27 @@ class RouterProxy:
             reason = "no_impl_for_device" if "无可用实现" in msg else "cap_not_in_catalog"
             return _fail(event, started, t0, msg, executor_used="router_proxy", local_reason=reason)
 
+        plat = _device_platform(self.sn, node)
+        family = set(executors_for_platform(plat))
+        sanitized = [ex for ex in order if ex in family]
+        if sanitized != order:
+            SLog.w(
+                TAG,
+                f"[{(self.run_id or '')[:8]}] executor_order 与平台不符 sn={self.sn}"
+                f" plat={plat} was={order} now={sanitized}",
+            )
+        order = sanitized
+        if not order:
+            return _fail(
+                event,
+                started,
+                t0,
+                f"cap={event.capability_id} 在 {self.sn}（{plat}）上无合法执行通道"
+                f"（允许 {sorted(family)}）",
+                executor_used="router_proxy",
+                local_reason="executor_platform_family_empty",
+            )
+
         from mino_nexus.catalog.tool_schema import fill_target_package
 
         params = fill_target_package(
@@ -221,8 +254,7 @@ class RouterProxy:
             target_package=self.target_package,
             low_level=(impl or {}).get("low_level"),
         )
-        if params.get("package") and not str((event.params or {}).get("package") or "").strip():
-            event.params = params
+        event.params = params
 
         req = P.Execute(
             run_id=run_id or self.run_id,
@@ -255,7 +287,7 @@ class RouterProxy:
         prefer: Optional[tuple[str, ...]] = None,
         force_fresh: bool = True,
         timeout_sec: float = _OBSERVE_TIMEOUT_SEC,
-        compress_ratio: float = 2.0,
+        compress_ratio: float | None = None,
     ) -> CapturedScreen:
         if self._task_aborted():
             return CapturedScreen(ok=False, source="router_proxy", error="任务已取消")
@@ -264,6 +296,12 @@ class RouterProxy:
             return CapturedScreen(ok=False, source="router_proxy", error=why)
 
         plat = _device_platform(self.sn, node)
+        if compress_ratio is None and kind == "screenshot":
+            from mino_nexus.services.settings import channel_screenshot_compress_ratio
+
+            compress_ratio = channel_screenshot_compress_ratio(plat)
+        elif compress_ratio is None:
+            compress_ratio = 1.0
         family = set(executors_for_platform(plat))
         device_order = executors_for_device(self.sn, node)
         if prefer is None:
@@ -452,12 +490,12 @@ def executors_for_platform(platform: str) -> tuple[str, ...]:
 def _device_platform(sn: str, node: NodeSession) -> str:
     from mino_nexus.runtime.run_context import is_web_slot
 
+    if is_web_slot(sn):
+        return "web"
     dev = node.devices.get(sn)
     plat = str(getattr(dev, "platform", "") or "").strip().lower()
     if plat:
         return plat
-    if is_web_slot(sn):
-        return "web"
     return "android"
 
 

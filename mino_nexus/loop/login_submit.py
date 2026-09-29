@@ -51,7 +51,10 @@ def account_session_logged_in(ctx: Any | None) -> bool:
 
 
 def _sms_send_done(history: list[str], intents_done: set[str] | None) -> bool:
-    """仅以 request_sms_code 成功或 Web 发码 tap 为准；勿凭 sms_send 意图提前 get_otp。"""
+    """request_sms_code / Web Send tap，或已记录的 sms_send 意图（避免 history 滑窗丢发码行）。"""
+    done = set(intents_done or set())
+    if "sms_send" in done:
+        return True
     if _history_has(history, "request_sms_code"):
         return True
     for line in history or []:
@@ -76,9 +79,18 @@ def _email_login_kind(ctx: Any) -> bool:
 def _email_ready_for_otp(history: list[str], intents_done: set[str] | None) -> bool:
     done = set(intents_done or set())
     if "login_email" in done:
-        return True
+        for line in history or []:
+            if "input_text" not in line or "pass" not in line.lower():
+                continue
+            if re.search(r"焦点未确认|focus\s*not\s*confirmed", line, re.I):
+                continue
+            if re.search(r"field=email|邮箱|@", line, re.I):
+                return True
+        return False
     for line in history or []:
         if "input_text" not in line or "pass" not in line.lower():
+            continue
+        if re.search(r"焦点未确认|focus\s*not\s*confirmed", line, re.I):
             continue
         if re.search(r"field=email|邮箱|@", line, re.I):
             return True
@@ -184,18 +196,26 @@ def login_flow_do_may_finish(
 def _otp_code_already_entered(
     history: list[str],
     intents_done: set[str] | None,
+    cursor: Any | None = None,
 ) -> bool:
     """发码之后验证码是否已填入（勿把发码前的「输入 11 字」手机号当成验证码）。"""
-    done = set(intents_done or set())
-    if "otp_fill" in done:
-        return True
+    if cursor is not None:
+        try:
+            from mino_nexus.loop.milestones import otp_fill_device_complete
+
+            if otp_fill_device_complete(cursor, history):
+                return True
+        except Exception:
+            pass
     after_sms = _lines_after_sms_sent(history)
     if not after_sms:
         return False
     for line in after_sms:
         if "input_text" not in line or "pass" not in line.lower():
             continue
-        if re.search(r"验证码|sms|otp", line, re.I):
+        if re.search(r"焦点未确认|focus\s*not\s*confirmed", line, re.I):
+            continue
+        if re.search(r"验证码|sms_code|\(sms_code\)", line, re.I):
             return True
         m = re.search(r"输入\s*(\d+)\s*字", line)
         if m:
@@ -505,13 +525,25 @@ def otp_fetch_allowed(
     history_lines: list[str],
     intents_done: set[str] | None,
     ctx: Any,
+    cursor: Any = None,
 ) -> bool:
     if not _sms_send_done(history_lines, intents_done):
         return False
     if _email_login_kind(ctx) and not _email_ready_for_otp(history_lines, intents_done):
-        return False
-    if float(getattr(ctx, "otp_sent_at", 0) or 0) <= 0:
-        return False
+        if cursor is not None:
+            from mino_nexus.loop.milestones import _milestone_passed, milestone_by_id, read_state
+
+            ef = milestone_by_id(read_state(cursor), "account_fill")
+            if not (ef and _milestone_passed(ef)):
+                return False
+        else:
+            return False
+    sent_at = float(getattr(ctx, "otp_sent_at", 0) or 0)
+    if sent_at <= 0:
+        # 历史里的 Send / request_sms_code 已经证明发过。前置阶段点 Send 不会写入 sms_send 意图。
+        from mino_nexus.loop.login_verification import record_verification_send
+
+        record_verification_send(ctx)
     return True
 
 

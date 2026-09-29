@@ -1,6 +1,6 @@
 """只读 catalog_entries。
 
-kind∈{prep,do,check,generic} → 可调用能力。
+kind∈{generic,check} → 可调用技能。kind=base → 平台基座，不进模型菜单。
 kind=recovery → 按 payload 形状同时支持 L0 规则与可派单原子能力（wake_screen 等）。
 """
 from __future__ import annotations
@@ -8,12 +8,20 @@ from __future__ import annotations
 import threading
 from typing import Any, Optional
 
-from mino_nexus.catalog.exec_classes import CAPABILITY_KINDS, LOCAL_ORCH_IDS, RECOVERY_KIND
+from mino_nexus.catalog.exec_classes import BASE_KIND, CAPABILITY_KINDS, LOCAL_ORCH_IDS, RECOVERY_KIND
 from mino_nexus.catalog.models import Capability, LoadError, RecoveryRule
 from mino_nexus.catalog.recovery_shape import is_recovery_atomic_payload, is_recovery_rule_payload
 from mino_nexus.core.log import SLog
 
 TAG = "PluginLoader"
+
+
+def _visible_to_list(raw: Any) -> list[str]:
+    if raw is None:
+        return ["system"]
+    if isinstance(raw, list):
+        return [str(x) for x in raw if str(x).strip()]
+    return ["system"]
 
 
 def _strip_impl(raw: Any) -> dict[str, Any]:
@@ -47,7 +55,7 @@ def _load_capability_row(
             platforms=list(row.platforms_json or []),
             needs_vlm=bool(payload.get("needs_vlm")),
             implementations=impls,
-            visible_to=list(row.visible_to_json or ["case", "system"]),
+            visible_to=_visible_to_list(row.visible_to_json),
             params=list(payload.get("params") or []),
             ui=payload.get("ui") or {},
             enabled=bool(row.enabled),
@@ -158,7 +166,7 @@ class PluginLoader:
     def _hydrate_row(self, row) -> None:
         payload = dict(row.payload_json or {})
         kind = str(row.kind or "").strip()
-        if kind in CAPABILITY_KINDS:
+        if kind in CAPABILITY_KINDS or kind == BASE_KIND:
             _load_capability_row(self._capabilities, self._errors, row, kind=kind, payload=payload)
             return
         if kind == RECOVERY_KIND:

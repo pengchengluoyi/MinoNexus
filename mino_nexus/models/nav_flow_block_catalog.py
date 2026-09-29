@@ -22,3 +22,4 @@ class NavFlowBlockCatalog(Base):
     steps_json = Column(JSON, nullable=False, default=list)
     version = Column(String, default="v1")
     enabled = Column(Integer, default=1)
+    key_ref = Column(String, default="")

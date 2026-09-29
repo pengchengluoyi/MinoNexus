@@ -275,6 +275,8 @@ def append_turn(
     target_package: str = "",
     platform: str = "",
     target_scope: dict[str, Any] | None = None,
+    env_profile: str = "",
+    env_surface: str = "",
     cap_id: str = "",
     error: str = "",
     screenshot_b64: str = "",
@@ -326,6 +328,9 @@ def append_turn(
         "foreground_id": str(screen_pkg.get("foreground_id") or screen_pkg.get("foreground_package") or ""),
         "screen_kind": screen_pkg["screen_kind"],
         "target_scope": scope.as_dict() if scope else {},
+        "env_profile": str(env_profile or "").strip()[:64],
+        "env_surface": str(env_surface or "").strip()[:128],
+        "run_target_package": str(target_package or "").strip()[:512],
         "cap_id": str(cap_id or ""),
         "app_version": str(app_version or "").strip()[:64],
         "error": str(error or "")[:200],
@@ -352,11 +357,15 @@ def append_turn(
         }
     )
     turns.sort(key=lambda x: int(x.get("turn_id") or 0))
+    surf = str(env_surface or meta.get("env_surface") or "").strip()
+    prof = str(env_profile or meta.get("env_profile") or "").strip()
     index.update(
         {
             "app_id": str(app_id or ""),
             "session_id": str(session_id or ""),
             "project_id": str(project_id or ""),
+            "env_surface": str(index.get("env_surface") or surf or ""),
+            "env_profile": str(index.get("env_profile") or prof or ""),
             "updated_at": int(time.time()),
             "turn_count": len(turns),
             "turns": turns,
@@ -405,6 +414,11 @@ def read_turn(app_id: str, session_id: str, turn_id: int) -> dict[str, Any] | No
     meta = _read_json(root / f"{stem}.meta.json", None)
     if not meta:
         return None
+    index = _read_json(root / INDEX_NAME, {})
+    if not str(meta.get("env_surface") or "").strip():
+        meta["env_surface"] = str(index.get("env_surface") or "").strip()
+    if not str(meta.get("env_profile") or "").strip():
+        meta["env_profile"] = str(index.get("env_profile") or "").strip()
     nodes = _read_json(root / f"{stem}.nodes.json", [])
     row = {**meta, "nodes": nodes}
     from mino_nexus.services.nav_target_scope import resolve_app_target_scope

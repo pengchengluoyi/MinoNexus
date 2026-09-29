@@ -128,41 +128,12 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
         },
     },
     "wait_screen_ready": {"type": "object", "properties": {}},
-    "launch_app": {
-        "type": "object",
-        "properties": {
-            "package": {"type": "string", "description": "必须是本趟目标应用包名"},
-        },
-        "required": ["package"],
-    },
-    "close_app": {
-        "type": "object",
-        "properties": {"package": {"type": "string"}},
-        "required": ["package"],
-    },
-    "kill_app": {
-        "type": "object",
-        "properties": {"package": {"type": "string"}},
-        "required": ["package"],
-    },
-    "get_app_version": {
-        "type": "object",
-        "properties": {"package": {"type": "string"}},
-    },
-    "clear_app_cache": {
-        "type": "object",
-        "properties": {
-            "package": {"type": "string", "description": "必须是本趟目标应用包名"},
-        },
-        "required": ["package"],
-    },
-    "system_pkg_clear": {
-        "type": "object",
-        "properties": {
-            "package": {"type": "string", "description": "必须是本趟目标应用包名"},
-        },
-        "required": ["package"],
-    },
+    "launch_app": {"type": "object", "properties": {}},
+    "close_app": {"type": "object", "properties": {}},
+    "kill_app": {"type": "object", "properties": {}},
+    "get_app_version": {"type": "object", "properties": {}},
+    "clear_app_cache": {"type": "object", "properties": {}},
+    "system_pkg_clear": {"type": "object", "properties": {}},
     "get_foreground_app": {"type": "object", "properties": {}},
     "human_input_text": {
         "type": "object",
@@ -288,13 +259,24 @@ _TOOL_META_PROPS: dict[str, Any] = {
         "items": {"type": "string"},
         "description": "还需某条知识原文时填写 id",
     },
+    "step_outcome": {
+        "type": "string",
+        "enum": ["", "pass", "give_up", "ask_human", "skip"],
+        "description": "本用例步+phase 收工意图（check 全部里程碑 pass 后再 signal_done）",
+    },
 }
 
 
-def _with_tool_meta(parameters: dict[str, Any]) -> dict[str, Any]:
+_TOOL_META_SLIM: dict[str, Any] = {
+    "thought": _TOOL_META_PROPS["thought"],
+}
+
+
+def _with_tool_meta(parameters: dict[str, Any], *, slim: bool = False) -> dict[str, Any]:
     spec = dict(parameters or {"type": "object", "properties": {}})
     props = dict(spec.get("properties") or {})
-    for key, schema in _TOOL_META_PROPS.items():
+    meta = _TOOL_META_SLIM if slim else _TOOL_META_PROPS
+    for key, schema in meta.items():
         if key not in props:
             props[key] = schema
     spec["type"] = spec.get("type") or "object"
@@ -428,10 +410,12 @@ def params_schema_for(cap_id: str, catalog_params: Any = None) -> dict[str, Any]
     default = dict(PARAM_DEFAULTS.get(str(cap_id or ""), {"type": "object", "properties": {}}))
     from_catalog = _params_to_schema(catalog_params)
     if not from_catalog:
-        return default
+        return _strip_target_app_params(str(cap_id or ""), default)
     if not (default.get("properties") or {}):
-        return from_catalog
-    return _merge_param_schemas(default, from_catalog)
+        schema = from_catalog
+    else:
+        schema = _merge_param_schemas(default, from_catalog)
+    return _strip_target_app_params(str(cap_id or ""), schema)
 
 
 def schema_to_param_rows(schema: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -475,6 +459,18 @@ def cap_specific_param_names(cap_id: str, catalog_params: Any = None) -> list[st
 
 
 # Scout low_level 模板 `{package}` 从 EXECUTE.params 取值，不读 device_hint。
+_CONTEXT_ADDRESS_CAPS = frozenset({
+    "launch_app",
+    "close_app",
+    "kill_app",
+    "get_app_version",
+    "clear_app_cache",
+    "system_pkg_clear",
+    "open_url",
+    "open_app",
+})
+
+
 PACKAGE_PARAM_CAPS = frozenset({
     "launch_app",
     "close_app",
@@ -523,6 +519,23 @@ def fill_input_text_from_ctx(
     return out
 
 
+def _strip_target_app_params(cap_id: str, schema: dict[str, Any]) -> dict[str, Any]:
+    """被测应用的打开、关闭、清缓存不把包名交给模型。"""
+    if str(cap_id or "") not in _CONTEXT_ADDRESS_CAPS:
+        return schema
+    out = dict(schema or {})
+    props = dict(out.get("properties") or {})
+    props.pop("package", None)
+    props.pop("url", None)
+    out["properties"] = props
+    required = [x for x in (out.get("required") or []) if str(x) not in ("package", "url")]
+    if required:
+        out["required"] = required
+    else:
+        out.pop("required", None)
+    return out
+
+
 def fill_target_package(
     params: dict[str, Any] | None,
     *,
@@ -530,32 +543,52 @@ def fill_target_package(
     target_package: str,
     low_level: Any = None,
 ) -> dict[str, Any]:
-    """派单前补本趟包名。模型漏填时仍能 pm clear / force-stop。"""
+    """被测应用的包名和地址只取本趟上下文，模型多填的不采用。"""
     out = dict(params or {})
     pkg = str(target_package or "").strip()
+    cid = str(cap_id or "").strip()
     if not pkg:
         return out
-    if str(out.get("package") or "").strip():
+    address = cid in _CONTEXT_ADDRESS_CAPS or _low_level_needs_package(low_level)
+    if not address:
         return out
-    cid = str(cap_id or "").strip()
-    if cid in PACKAGE_PARAM_CAPS or _low_level_needs_package(low_level):
-        out["package"] = pkg
+    out.pop("package", None)
+    out["package"] = pkg
+    if cid in ("launch_app", "open_url", "open_app") and (
+        pkg.startswith("http://") or pkg.startswith("https://")
+    ):
+        out.pop("url", None)
+        out["url"] = pkg
     return out
 
 
-def openai_tool(name: str, description: str, parameters: dict[str, Any]) -> dict[str, Any]:
+def openai_tool(
+    name: str,
+    description: str,
+    parameters: dict[str, Any],
+    *,
+    slim: bool = False,
+) -> dict[str, Any]:
     return {
         "type": "function",
         "function": {
             "name": str(name or "").strip(),
             "description": (description or name or "")[:240],
-            "parameters": _with_tool_meta(parameters or {"type": "object", "properties": {}}),
+            "parameters": _with_tool_meta(
+                parameters or {"type": "object", "properties": {}},
+                slim=slim,
+            ),
         },
     }
 
 
-def tools_for_menu(menu: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """当前 Run 可用能力 + 三个控制信号。assert / 资源网关能力不进 tools。"""
+def tools_for_menu(
+    menu: list[dict[str, Any]],
+    *,
+    slim_envelope: bool = False,
+    include_control_tools: bool = True,
+) -> list[dict[str, Any]]:
+    """当前 Run 可用能力；可选控制信号。assert / 资源网关能力不进 tools。"""
     tools: list[dict[str, Any]] = []
     seen: set[str] = set()
     for row in menu or []:
@@ -575,12 +608,16 @@ def tools_for_menu(menu: list[dict[str, Any]]) -> list[dict[str, Any]]:
             catalog_params = getattr(cap, "params", None) if cap is not None else None
         except Exception:
             catalog_params = None
-        tools.append(openai_tool(
-            cid,
-            str(row.get("summary") or cid),
-            params_schema_for(cid, catalog_params),
-        ))
-    tools.extend(CONTROL_TOOLS)
+        tools.append(
+            openai_tool(
+                cid,
+                str(row.get("summary") or cid),
+                params_schema_for(cid, catalog_params),
+                slim=slim_envelope,
+            )
+        )
+    if include_control_tools and not slim_envelope:
+        tools.extend(CONTROL_TOOLS)
     return tools
 
 
@@ -594,6 +631,12 @@ def tools_chat_payload(tools: list[dict[str, Any]], *, required: bool = True) ->
     }
 
 
+_DECISION_ENVELOPE_KEYS = (
+    "screen_layout",
+    "vlm_hierarchy",
+    "milestones",
+    "step_outcome",
+)
 _VISUAL_ENVELOPE_KEYS = ("screen_layout", "vlm_hierarchy")
 
 
@@ -632,6 +675,9 @@ def merge_decision_visual_fields(
                 continue
             if not decision.get(key):
                 decision[key] = val
+        for key in ("milestones", "step_outcome"):
+            if key in extra and extra.get(key) and not decision.get(key):
+                decision[key] = extra.get(key)
     return decision
 
 
@@ -674,6 +720,9 @@ def decision_from_tool_calls(
     thought = str(args.pop("thought", "") or content or "").strip()
     remember = args.pop("remember", None)
     knowledge_ids = args.pop("knowledge_ids", None)
+    args.pop("milestone_updates", None)
+    milestones = args.pop("milestones", None)
+    step_outcome = str(args.pop("step_outcome", "") or "").strip()
     out: dict[str, Any] = {
         "thought": thought,
         "status": "continue",
@@ -683,6 +732,10 @@ def decision_from_tool_calls(
         "knowledge_ids": knowledge_ids if isinstance(knowledge_ids, list) else [],
         "_tool_name": name,
     }
+    if isinstance(milestones, list) and milestones:
+        out["milestones"] = milestones
+    if step_outcome:
+        out["step_outcome"] = step_outcome
     out.update(envelope)
     if name == SIGNAL_DONE:
         out["status"] = "done"

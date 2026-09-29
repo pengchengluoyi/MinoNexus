@@ -46,47 +46,9 @@ def continuity_blockers(
     *,
     precondition: str,
 ) -> list[str]:
-    if state.avatar_profile_ready:
-        return []
-    if not _pre_requires_avatar_configured(precondition):
-        return []
-    reason = state.block_reason.strip() or (
-        "同设备上一条用例未完成形象/onboarding 链路，"
-        "本用例前置要求「已配置形象」。Nexus 将自动跳过直至链路跑通。"
-    )
-    return [reason]
-
-
-def _fail_clears_avatar_chain(*, summary: str, case: dict[str, Any], precondition: str) -> bool:
-    """仅形象/onboarding 实质失败才连坐「已配置形象」用例；熔断/登录态漂移不算。"""
-    pre = str(precondition or case.get("precondition") or "")
-    if not (_pre_avatar_setup_lane(pre) or _case_establishes_avatar(case)):
-        return False
-    s = str(summary or "")
-    if "【熔断" in s:
-        return False
-    if re.search(
-        r"logged_in_session_drift|session_drift|设备未登录|登录态漂移|登录页.*个人",
-        s,
-        re.I,
-    ):
-        return False
-    if re.search(r"无进展|fsm_navigate|导航", s, re.I) and not re.search(
-        r"形象|头像|资料|onboarding", s, re.I
-    ):
-        return False
-    # 机态已在个人中心/资料页，步骤却在找 onboarding 多头像 picker → 前置与真机不符，勿连坐「已配置形象」
-    if re.search(
-        r"不存在多个头像|没有完成按钮|未进入.*形象|未出现.*形象选择|形象选择页",
-        s,
-        re.I,
-    ) and re.search(
-        r"个人中心|个人页|3333|我的发布|作品集|资料已",
-        s,
-        re.I,
-    ):
-        return False
-    return True
+    """上一条用例的失败不拦截下一条。每条用例自己跑前置。"""
+    _ = (state, precondition)
+    return []
 
 
 def update_after_case(
@@ -109,15 +71,7 @@ def update_after_case(
         return
     if st not in ("fail", "blocked"):
         return
-    if not _fail_clears_avatar_chain(summary=summary, case=case, precondition=pre):
-        return
-    if _pre_avatar_setup_lane(pre) or _case_establishes_avatar(case):
-        state.avatar_profile_ready = False
-        cid = str(case.get("case_id") or "")
-        state.block_reason = (
-            f"设备机态：形象配置链路未在本批跑通（最近失败 case={cid}）。"
-            f"摘要：{str(summary or '')[:120]}"
-        )
+    # 失败只记在本条用例上，不把摘要写成同设备后续用例的开跑失败。
 
 
 def get_sn_state(store: dict[str, SnRunContinuity], sn: str) -> SnRunContinuity:

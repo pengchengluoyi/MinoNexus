@@ -6,7 +6,7 @@ from mino_nexus.core.database import Base
 
 
 class CatalogEntry(Base):
-    """能力目录：prep / do / check / generic / recovery。"""
+    """能力目录：generic / check / recovery / base。"""
 
     __tablename__ = "catalog_entries"
     __table_args__ = (UniqueConstraint("kind", "id", name="uq_catalog_kind_id"),)

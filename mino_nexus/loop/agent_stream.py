@@ -98,22 +98,18 @@ def get_run_events(run_id: str) -> dict[str, Any] | None:
         return copy.deepcopy(hit) if hit else None
 
 
-_LLM_JPEG_EDGE_MIN = 720
-_LLM_JPEG_EDGE_MAX = 1280
-_LLM_JPEG_EDGE_DEFAULT = 800
-_LLM_JPEG_QUALITY = 72
-_LLM_JPEG_WEB_EDGE = 1280
-_LLM_JPEG_WEB_QUALITY = 82
+_LLM_JPEG_QUALITY = 82
 
 
 def make_llm_jpeg(
     raw_b64: str,
     *,
-    long_edge: int = _LLM_JPEG_EDGE_DEFAULT,
+    compress_ratio: float | None = None,
     quality: int = _LLM_JPEG_QUALITY,
 ) -> tuple[str, str]:
-    """Vision job 用图：长边压到 720–900 的 JPEG。点按仍用千分比，不依赖原图像素。
+    """喂给大模型的图：各渠道都转 JPEG，按 plan_compress_ratio 等比缩小。
 
+    1.0 不缩小。点按仍用千分比，不依赖像素。
     返回 ``(jpeg_b64, image/jpeg)``；失败则 ``("", "")``，调用方回落原图。
     """
     if not raw_b64:
@@ -126,19 +122,23 @@ def make_llm_jpeg(
             blob = blob.split(",", 1)[1]
         img = Image.open(BytesIO(base64.b64decode(blob))).convert("RGB")
         w, h = img.size
-        long = max(w, h)
-        edge = int(long_edge or _LLM_JPEG_EDGE_DEFAULT)
-        q = int(quality or _LLM_JPEG_QUALITY)
-        if long >= 1100:
-            edge = max(edge, min(_LLM_JPEG_WEB_EDGE, long))
-            q = max(q, _LLM_JPEG_WEB_QUALITY)
-        edge = max(_LLM_JPEG_EDGE_MIN, min(_LLM_JPEG_EDGE_MAX, edge))
-        if long > edge:
-            scale = edge / float(long)
+        ratio = compress_ratio
+        if ratio is None:
+            from mino_nexus.services.settings import get_ai_plan_compress_ratio
+
+            ratio = get_ai_plan_compress_ratio()
+        try:
+            ratio = float(ratio)
+        except (TypeError, ValueError):
+            ratio = 3.0
+        if ratio < 1.0:
+            ratio = 1.0
+        if ratio > 1.0 and w > 0 and h > 0:
             img = img.resize(
-                (max(1, int(w * scale)), max(1, int(h * scale))),
+                (max(1, int(round(w / ratio))), max(1, int(round(h / ratio)))),
                 Image.Resampling.LANCZOS,
             )
+        q = int(quality or _LLM_JPEG_QUALITY)
         buf = BytesIO()
         img.save(buf, format="JPEG", quality=max(40, min(90, q)))
         return base64.b64encode(buf.getvalue()).decode("ascii"), "image/jpeg"

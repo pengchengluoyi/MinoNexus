@@ -52,20 +52,35 @@ def normalize_input_text_for_lease(
     acc = dict(getattr(ctx, "picked_account", None) or {}) if ctx is not None else {}
     kind = login_kind_from_ctx(ctx) if ctx is not None else "phone"
     field = str(out.get("field") or "text").strip().lower()
+    email = lease_email_address(acc)
+    _cred_fields = frozenset({"sms_code", "验证码", "otp", "password"})
+
+    if email and field not in _cred_fields and field != "phone":
+        use_lease_email = kind == "email" or field in ("email", "login_email")
+        if not use_lease_email and field == "text" and ctx is not None:
+            try:
+                from mino_nexus.loop.login_verification import is_web_email_login
+
+                use_lease_email = is_web_email_login(ctx)
+            except Exception:
+                use_lease_email = False
+        if not use_lease_email and field == "text":
+            mt = str(out.get("text") or "").strip()
+            if mt != email and (not mt or "@" in mt):
+                if not (mt and "@" not in mt and mt.isdigit()):
+                    use_lease_email = True
+        if use_lease_email:
+            out["field"] = "email"
+            out["text"] = email
+            out["selector_text"] = "email"
+            out["target"] = {"text": "email", "content_desc": "email"}
+            return out
 
     if kind == "email":
         if field in ("phone", "username", "login_phone"):
-            field = "email"
             out["field"] = "email"
-        elif field == "text" and not str(out.get("text") or "").strip():
             field = "email"
-            out["field"] = "email"
-        email = lease_email_address(acc)
-        if field in ("email", "login_email"):
-            if email:
-                out["text"] = email
-            return out
-        if email and field == "text" and "@" not in str(out.get("text") or ""):
+        if email and field in ("email", "login_email", "text"):
             out["field"] = "email"
             out["text"] = email
             return out
@@ -85,7 +100,6 @@ def normalize_input_text_for_lease(
             return out
 
     if field in ("email", "login_email"):
-        email = lease_email_address(acc)
         if email:
             out["text"] = email
         return out

@@ -295,6 +295,8 @@ def detect_layout_framework(
     nodes = sample.get("nodes") or []
     if not nodes:
         return {"kind": "unknown", "columns": 0, "widgets": []}
+    if _nodes_are_web_dom(nodes):
+        return {"kind": "web_document", "columns": 0, "widgets": [], "channel": "web"}
 
     from mino_nexus.services.nav_screen_layout import infer_content_bands
 
@@ -344,10 +346,30 @@ _CHROMELESS_FP_KINDS = _FEED_LIKE_KINDS
 _KIND_PRIORITY = ("feed_grid", "feed_list", "content_page", "chrome_page", "tab_shell", "unknown")
 
 
+def _nodes_are_web_dom(nodes: list[dict[str, Any]]) -> bool:
+    """HTML/role 节点不走安卓底栏布局。"""
+    android = 0
+    web = 0
+    for node in nodes[:40]:
+        if not isinstance(node, dict):
+            continue
+        cls = str(node.get("class") or "").lower()
+        role = str(node.get("role") or "").lower()
+        if "android." in cls or cls.startswith("xcui"):
+            android += 1
+        if cls in {"input", "textarea", "button", "div", "span", "a", "html", "body"} or cls.startswith("html"):
+            web += 1
+        if role in {"textbox", "button", "link", "dialog", "alertdialog"}:
+            web += 1
+    return web >= 2 and android == 0
+
+
 def semantic_page_role(fw: dict[str, Any] | None) -> str:
-    """业务子页角色：feed / profile / detail / main。控件组合不单独成页。"""
+    """业务子页角色：feed / profile / detail / main / web。控件组合不单独成页。"""
     data = fw if isinstance(fw, dict) else {}
     kind = str(data.get("kind") or "")
+    if kind == "web_document":
+        return "web"
     if kind == "profile_page":
         return "profile"
     if kind == "detail_page" or data.get("has_back"):
@@ -424,7 +446,7 @@ def sub_page_identity_from_state(st: dict[str, Any]) -> tuple[str, str, tuple[st
 def framework_fingerprint(fw: dict[str, Any], chrome: list[str]) -> tuple[str, tuple[str, ...]]:
     role = semantic_page_role(fw)
     fp = f"role:{role}"
-    if role in ("feed", "main"):
+    if role in ("feed", "main", "web"):
         return fp, ()
     stable = tuple(sorted({t for t in chrome if t and not is_volatile_text(t)})[:4])
     return fp, stable

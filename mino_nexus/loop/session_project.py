@@ -186,6 +186,7 @@ def _turn_bucket(turns: dict[int, dict[str, Any]], turn: int) -> dict[str, Any]:
             "turn_end": None,
             "think": None,
             "stream": [],
+            "trace": None,
         }
     return turns[n]
 
@@ -237,6 +238,8 @@ def project_turns(session_id: str) -> dict[str, Any] | None:
         elif typ == "context/slots":
             body = payload.get("slots") if isinstance(payload.get("slots"), dict) else payload
             bucket["slots"] = dict(body or {})
+        elif typ == "context/trace":
+            bucket["trace"] = dict(payload or {})
         elif typ == "llm/request":
             pending_llm[turn] = {
                 "job_id": payload.get("job_id") or "",
@@ -338,9 +341,15 @@ def project_trajectory(session_id: str) -> dict[str, Any] | None:
     slots: dict[str, Any] = {}
 
     ui_events: list[dict[str, Any]] = []
+    turn_elapsed = _turn_elapsed_ms(events)
     if stream_rows:
         for row in stream_rows:
             payload = dict(row.get("payload") or {})
+            if str(payload.get("phase") or "") == "result":
+                step = int(payload.get("step") or row.get("turn") or 0)
+                stamped = turn_elapsed.get(step)
+                if stamped:
+                    payload["elapsed_ms"] = stamped
             turn = int(payload.get("step") or row.get("turn") or 0)
             payload = _enrich_ui_event(
                 payload,
@@ -397,6 +406,47 @@ def project_trajectory(session_id: str) -> dict[str, Any] | None:
             if str(row.get("type") or "") == "inspection/done"
         ],
     }
+
+
+def _parse_event_ts(ts: str) -> float | None:
+    text = str(ts or "").strip()
+    if not text:
+        return None
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
+def _turn_elapsed_ms(events: list[dict[str, Any]]) -> dict[int, int]:
+    """每个回合从 turn/start 到该回合最后一条 result 的耗时。"""
+    start: dict[int, float] = {}
+    end: dict[int, float] = {}
+    for row in events:
+        turn = int(row.get("turn") or 0)
+        if turn <= 0:
+            continue
+        ts = _parse_event_ts(str(row.get("ts") or ""))
+        if ts is None:
+            continue
+        typ = str(row.get("type") or "")
+        if typ == "turn/start":
+            start.setdefault(turn, ts)
+        elif typ == "stream/emit":
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            if str(payload.get("phase") or "") == "result":
+                end[turn] = ts
+        elif typ == "turn/end" and turn not in end:
+            end[turn] = ts
+    out: dict[int, int] = {}
+    for turn, t1 in end.items():
+        t0 = start.get(turn)
+        if t0 is None or t1 < t0:
+            continue
+        out[turn] = max(1, int((t1 - t0) * 1000))
+    return out
 
 
 def _resource_transition_summary(payload: dict[str, Any]) -> str:

@@ -44,8 +44,24 @@ def gmail_inbox_address(env_doc: dict | None, *, plugin_user_id: str = "") -> st
                 return plug
         except Exception:
             pass
-    doc = env_doc if isinstance(env_doc, dict) else {}
-    return str(_norm_gmail_inbox(doc.get("gmail_inbox")).get("address") or "").strip()
+    try:
+        from mino_nexus.services import plugins_store
+
+        fallback = plugins_store.first_configured_gmail_inbox()
+        if fallback:
+            return fallback
+    except Exception:
+        pass
+    return ""
+
+
+def plugin_user_id_from_ctx(ctx: Any) -> str:
+    return str(getattr(ctx, "plugin_user_id", "") or getattr(ctx, "user_id", "") or "").strip()
+
+
+def resolve_gmail_inbox(env_doc: dict | None, ctx: Any | None = None) -> str:
+    uid = plugin_user_id_from_ctx(ctx) if ctx is not None else ""
+    return gmail_inbox_address(env_doc, plugin_user_id=uid)
 
 
 def login_kind_from_secrets(secrets: dict | None) -> str:

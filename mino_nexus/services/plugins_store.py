@@ -125,7 +125,7 @@ INTEGRATION_PLUGIN_SPECS: list[dict[str, Any]] = [
         "kind": "im",
         "categories": ["im"],
         "color": "#07c160",
-        "summary": "个人微信。扫码登录尚未搬到 Nexus，配置可以先存。",
+        "summary": "个人微信。扫码登录后可收消息并回复。",
         "capabilities": [
             {"id": "connect", "label": "连接", "desc": "微信扫码绑定", "categories": ["im"]},
             {"id": "chat", "label": "对话", "desc": "收消息并回复", "categories": ["im"]},
@@ -704,6 +704,28 @@ def get_gmail_inbox_address(user_id: str = "") -> str:
     return str(raw.get("inbox_address") or raw.get("address") or "").strip()[:200]
 
 
+def first_configured_gmail_inbox() -> str:
+    """跑批开号兜底：任意已配 Gmail 插件的用户（单租户 Studio 常见）。"""
+    try:
+        from mino_nexus.core.database import SessionLocal, ensure_db
+        from mino_nexus.models.plugin import UserPluginSecret
+
+        ensure_db()
+        db = SessionLocal()
+        try:
+            rows = db.query(UserPluginSecret).limit(200).all()
+        finally:
+            db.close()
+        for row in rows or []:
+            uid = str(getattr(row, "id", "") or "")
+            inbox = get_gmail_inbox_address(uid)
+            if inbox and get_gmail_app_password(uid):
+                return inbox
+    except Exception:
+        pass
+    return ""
+
+
 def _gmail_otp_settings(user_id: str = "") -> dict[str, Any]:
     pwd = get_gmail_app_password(user_id)
     inbox = get_gmail_inbox_address(user_id)
@@ -736,7 +758,9 @@ def _plugin_configured(plugin_id: str, cfg: dict[str, Any], user_id: str = "") -
     if plugin_id in ("wecom", "dingtalk", "slack"):
         return any(b.get("platform") == plugin_id and b.get("configured") for b in list_robot_integrations(user_id))
     if plugin_id == "wechat":
-        return False
+        from mino_nexus.services.wechat_ilink import is_logged_in
+
+        return is_logged_in()
     if plugin_id == "figma":
         return bool(_figma_settings(user_id).get("configured"))
     if plugin_id == "gmail_otp":
@@ -785,12 +809,15 @@ def _plugin_public_config(plugin_id: str, cfg: dict[str, Any]) -> dict[str, Any]
                 "last": {},
             }
         if plugin_id == "wechat":
-            public["wechat_account"] = {"logged_in": False}
+            from mino_nexus.services.wechat_ilink import listener_status, public_account
+
+            public["wechat_account"] = public_account()
+            listener = listener_status()
             public["chat_listener"] = {
-                "running": False,
-                "wanted": False,
-                "connected": False,
-                "error": WECHAT_NOT_PORTED,
+                "running": bool(listener.get("running")),
+                "wanted": bool(listener.get("wanted")),
+                "connected": bool(listener.get("connected")),
+                "error": str(listener.get("error") or ""),
                 "last": {},
             }
     return public

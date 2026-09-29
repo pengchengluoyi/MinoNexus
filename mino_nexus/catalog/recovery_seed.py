@@ -417,7 +417,7 @@ def upgrade_recovery_rules() -> int:
 
         prep = (
             db.query(CatalogEntry)
-            .filter(CatalogEntry.kind == "prep", CatalogEntry.id == "read_device_data")
+            .filter(CatalogEntry.kind == "generic", CatalogEntry.id == "read_device_data")
             .first()
         )
         if prep and str(prep.description or "").strip() != READ_DEVICE_DATA_DESCRIPTION:
@@ -466,7 +466,7 @@ def upgrade_check_run_env_capability() -> int:
     with session_scope() as db:
         row = (
             db.query(CatalogEntry)
-            .filter(CatalogEntry.kind == "prep", CatalogEntry.id == "check_run_env")
+            .filter(CatalogEntry.kind == "generic", CatalogEntry.id == "check_run_env")
             .first()
         )
         if row:
@@ -476,7 +476,7 @@ def upgrade_check_run_env_capability() -> int:
             return updated
         db.add(
             CatalogEntry(
-                kind="prep",
+                kind="generic",
                 id="check_run_env",
                 display_name="确认运行环境",
                 description=CHECK_RUN_ENV_DESCRIPTION,
@@ -709,18 +709,20 @@ def upgrade_account_capabilities() -> int:
     return updated
 
 
-PACKAGE_PARAM_SPEC = [
-    {
-        "name": "package",
-        "type": "string",
-        "required": True,
-        "description": "必须是本趟目标应用包名",
-    }
-]
+_TARGET_APP_CAPS = (
+    "launch_app",
+    "close_app",
+    "kill_app",
+    "get_app_version",
+    "clear_app_cache",
+    "system_pkg_clear",
+    "open_url",
+    "open_app",
+)
 
 
 def upgrade_package_param_capabilities() -> int:
-    """clear_app_cache / system_pkg_clear：菜单与 EXECUTE 都要有 package。"""
+    """被测应用的打开、关闭、清缓存：扩展里去掉 package，由本趟上下文填。"""
     from sqlalchemy.orm.attributes import flag_modified
 
     from mino_nexus.core.database import session_scope
@@ -730,15 +732,16 @@ def upgrade_package_param_capabilities() -> int:
     with session_scope() as db:
         rows = (
             db.query(CatalogEntry)
-            .filter(CatalogEntry.id.in_(("clear_app_cache", "system_pkg_clear")))
+            .filter(CatalogEntry.id.in_(_TARGET_APP_CAPS))
             .all()
         )
         for row in rows:
             payload = dict(row.payload_json or {})
-            cur = list(payload.get("params") or [])
-            if cur == PACKAGE_PARAM_SPEC:
+            cur = [p for p in (payload.get("params") or []) if isinstance(p, dict)]
+            nxt = [p for p in cur if str(p.get("name") or "") not in ("package", "url")]
+            if nxt == cur:
                 continue
-            payload["params"] = [dict(x) for x in PACKAGE_PARAM_SPEC]
+            payload["params"] = nxt
             row.payload_json = payload
             flag_modified(row, "payload_json")
             updated += 1

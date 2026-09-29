@@ -89,6 +89,15 @@ class AtlasFlowGroupRow(BaseModel):
     state_ids: list[str] = Field(default_factory=list)
 
 
+class ScreenKeyRefRow(BaseModel):
+    state_id: str = ""
+    key_ref: str = ""
+
+
+class ScreenKeyRefsBody(BaseModel):
+    items: list[ScreenKeyRefRow] = Field(default_factory=list)
+
+
 class AtlasFlowGroupsBody(BaseModel):
     project_id: str = ""
     groups: list[AtlasFlowGroupRow] = Field(default_factory=list)
@@ -152,6 +161,25 @@ class AtlasMorphVlmBody(BaseModel):
 @router.get("")
 def list_nav_fsm(_sess: dict = Depends(current_session)):
     return ok(store.list_apps())
+
+
+@router.get("/{app_id}/screen-key-refs")
+def get_screen_key_refs(app_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.nav_screen_key_refs import list_screen_rows
+
+    return ok({"app_id": app_id, "items": list_screen_rows(app_id)})
+
+
+@router.put("/{app_id}/screen-key-refs")
+def put_screen_key_refs(app_id: str, body: ScreenKeyRefsBody, sess: dict = Depends(current_session)):
+    from mino_nexus.services.nav_screen_key_refs import patch_screen_key_refs
+
+    saved = patch_screen_key_refs(
+        app_id,
+        [r.model_dump() for r in (body.items or [])],
+        updated_by=str(sess.get("username") or sess.get("user_id") or ""),
+    )
+    return ok({"app_id": app_id, "items": saved})
 
 
 @router.get("/{app_id}")
@@ -536,6 +564,8 @@ def get_screen_atlas(
     app_id: str,
     project_id: str = "",
     session_id: str = "",
+    env_surface: str = "",
+    env_profile: str = "",
     app_version: str = "",
     nav_view_id: str = "",
     include_pending: bool = False,
@@ -547,6 +577,8 @@ def get_screen_atlas(
         app_id,
         project_id=project_id,
         session_id=str(session_id or "").strip(),
+        env_surface=str(env_surface or "").strip(),
+        env_profile=str(env_profile or "").strip(),
         rebuild=bool(rebuild),
         updated_by=str(sess.get("username") or sess.get("user_id") or ""),
     )

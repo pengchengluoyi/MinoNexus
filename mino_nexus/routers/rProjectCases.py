@@ -44,7 +44,17 @@ class CaseImportCommitBody(BaseModel):
     preview_token: str = ""
     default_on_conflict: str = "skip"
     default_platform: str = ""
+    block_on_step_key_issues: bool | None = None
     rows: list[CaseImportCommitRow] = Field(default_factory=list)
+
+
+class CaseStepKeysValidateBody(BaseModel):
+    precondition: str = ""
+    steps_raw: str = ""
+    expected_raw: str = ""
+    steps: list[str] = Field(default_factory=list)
+    expected: list[str] = Field(default_factory=list)
+    app_id: str = ""
 
 
 class CaseDeleteBody(BaseModel):
@@ -109,6 +119,24 @@ def list_project_cases(project_id: str, _sess: dict = Depends(current_session)):
     return ok(cim.cases_payload(project_id))
 
 
+@router.get("/{project_id}/cases/{case_id}")
+def get_project_case(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.case_key_registry import step_keys_summary_for_case
+    from mino_nexus.services.case_store import get_case
+
+    _project(project_id)
+    cid = str(case_id or "").strip()
+    row = get_case(project_id, cid)
+    if not row:
+        raise HTTPException(status_code=404, detail="用例不存在")
+    return ok(
+        {
+            "case": row,
+            "step_keys_summary": step_keys_summary_for_case(row),
+        }
+    )
+
+
 @router.get("/{project_id}/requirements")
 def list_import_requirements(project_id: str, _sess: dict = Depends(current_session)):
     _project(project_id)
@@ -156,6 +184,45 @@ def update_one_case(
     return ok({"case": saved}, msg="用例已保存")
 
 
+@router.post("/{project_id}/cases/step-keys/validate")
+def validate_case_step_keys_body(
+    project_id: str,
+    body: CaseStepKeysValidateBody,
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.case_key_registry import validate_case_step_keys
+
+    _project(project_id)
+    case_like = {
+        "precondition": body.precondition,
+        "steps_raw": body.steps_raw,
+        "expected_raw": body.expected_raw,
+        "steps": body.steps,
+        "expected": body.expected,
+    }
+    return ok(validate_case_step_keys(case_like, app_id=str(body.app_id or "").strip()))
+
+
+@router.post("/{project_id}/cases/{case_id}/step-keys/compile")
+def compile_case_step_keys(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.case_step_key_compiler import sync_case_step_program_keys
+    from mino_nexus.services.case_store import get_case, save_case
+
+    _project(project_id)
+    cid = str(case_id or "").strip()
+    existing = get_case(project_id, cid)
+    if not existing:
+        raise HTTPException(status_code=404, detail="用例不存在")
+    synced = sync_case_step_program_keys(dict(existing))
+    rid = str(existing.get("requirement_id") or "").strip()
+    saved = save_case(project_id, synced, requirement_id=rid)
+    warnings = (saved.get("meta") or {}).get("key_compile_warnings") or []
+    return ok(
+        {"case": saved, "warning_count": len(warnings)},
+        msg="已编译操作/预期 step_program_keys",
+    )
+
+
 @router.post("/{project_id}/cases/{case_id}/resource-key/compile")
 def compile_case_resource_key(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
     from mino_nexus.services.case_resource_claim import sync_case_resource_metadata
@@ -200,6 +267,8 @@ def import_commit(project_id: str, body: CaseImportCommitBody, _sess: dict = Dep
     try:
         rows = [r.model_dump() for r in body.rows] if body.rows else None
         default_action = "overwrite" if body.default_on_conflict == "overwrite" else "skip"
+        from mino_nexus.services.settings_store import resolve_block_on_step_key_issues
+
         data = cim.commit_import(
             project_id=project_id,
             requirement_id=body.requirement_id,
@@ -207,6 +276,7 @@ def import_commit(project_id: str, body: CaseImportCommitBody, _sess: dict = Dep
             rows=rows,
             default_on_conflict=default_action,
             default_platform=str(body.default_platform or "").strip(),
+            block_on_step_key_issues=resolve_block_on_step_key_issues(body.block_on_step_key_issues),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

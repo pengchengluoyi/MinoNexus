@@ -1725,6 +1725,14 @@ def _atlas_cluster_doc(
                     "session_id": str(turn.get("session_id") or ""),
                     "turn_id": int(turn.get("turn_id") or 0),
                     "at": int(turn.get("at") or 0),
+                    "platform": str(turn.get("platform") or ""),
+                    "target_package": str(
+                        turn.get("run_target_package")
+                        or turn.get("target_package")
+                        or ""
+                    ),
+                    "env_surface": str(turn.get("env_surface") or ""),
+                    "env_profile": str(turn.get("env_profile") or ""),
                 }
             )
         score = len(wf.get("regions") or []) * 1000 + int(turn.get("at") or 0)
@@ -3388,15 +3396,160 @@ def persist_atlas_studio_snapshot(
     store.save(app_id, raw, updated_by=updated_by, allow_calibrate=True)
 
 
+def _normalize_atlas_target(value: str, platform: str = "") -> str:
+    from mino_nexus.services.nav_target_scope import _looks_like_url, _norm_platform
+
+    v = str(value or "").strip()
+    if not v:
+        return ""
+    plat = _norm_platform(platform)
+    if plat == "web" or _looks_like_url(v):
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(v if "://" in v else f"https://{v}")
+            path = (parsed.path or "/").rstrip("/") or ""
+            return f"{parsed.hostname or ''}{path}".lower()
+        except Exception:  # noqa: BLE001
+            return v.rstrip("/").lower()
+    return v
+
+
+def _channel_target_for_env(
+    env_doc: dict[str, Any],
+    *,
+    env_profile: str,
+    channel_id: str,
+) -> str:
+    from mino_nexus.services.project_env import _profile_value, profile_snapshot
+
+    channels = [c for c in (env_doc.get("channels") or []) if isinstance(c, dict)]
+    ch = next((c for c in channels if str(c.get("id") or "") == channel_id), None)
+    if not ch:
+        return ""
+    snap = profile_snapshot(env_doc, env_profile)
+    block = snap.get(channel_id) if isinstance(snap, dict) else {}
+    return str(_profile_value(block, str(ch.get("field") or "value")) or "").strip()
+
+
+def filter_atlas_doc_by_env_surface(
+    doc: dict[str, Any],
+    *,
+    env_surface: str,
+    project_id: str = "",
+    env_profile: str = "",
+) -> dict[str, Any]:
+    """按跑批 channel.id（env_surface）裁剪屏面图谱；优先匹配采集落盘的 env_surface。"""
+    want = str(env_surface or "").strip()
+    if not want or not isinstance(doc, dict):
+        return doc
+    refs = list((doc.get("meta") or {}).get("atlas_turn_refs") or [])
+    if not refs:
+        return doc
+
+    env_doc: dict[str, Any] = {}
+    pid = str(project_id or doc.get("project_id") or "").strip()
+    prof = str(env_profile or "").strip() or "test"
+    if pid:
+        try:
+            from mino_nexus.services import project_store as ps
+
+            env_doc = ps.project_env(pid) or {}
+            prof = str(env_profile or env_doc.get("default_profile") or "test").strip()
+        except Exception:  # noqa: BLE001
+            env_doc = {}
+    configured = _channel_target_for_env(env_doc, env_profile=prof, channel_id=want) if env_doc else ""
+    cfg_norm = _normalize_atlas_target(configured, "web")
+
+    def _ref_matches(ref: dict[str, Any]) -> bool:
+        if not isinstance(ref, dict):
+            return False
+        surf = str(ref.get("env_surface") or "").strip()
+        if surf:
+            return surf == want
+        tgt = _normalize_atlas_target(
+            str(ref.get("target_package") or ""),
+            str(ref.get("platform") or ""),
+        )
+        if configured and tgt and cfg_norm:
+            return tgt == cfg_norm or tgt.endswith(cfg_norm) or cfg_norm.endswith(tgt)
+        if configured and tgt:
+            return configured.rstrip("/") == str(ref.get("target_package") or "").rstrip("/")
+        return False
+
+    has_surface_meta = any(str(r.get("env_surface") or "").strip() for r in refs if isinstance(r, dict))
+    has_target_meta = any(str(r.get("target_package") or "").strip() for r in refs if isinstance(r, dict))
+    if not has_surface_meta and not has_target_meta and not configured:
+        return doc
+
+    matching = [r for r in refs if isinstance(r, dict) and _ref_matches(r)]
+    state_ids = {str(r.get("state_id") or "").strip() for r in matching}
+    state_ids.discard("")
+    if not state_ids:
+        return {
+            **doc,
+            "states": [],
+            "edges": [],
+            "meta": {
+                **(doc.get("meta") or {}),
+                "atlas_turn_refs": [],
+                "arch_channel_filter": want,
+            },
+        }
+
+    def _edge_endpoints(edge: dict[str, Any]) -> tuple[str, str]:
+        return (
+            str(edge.get("from") or edge.get("from_state") or "").strip(),
+            str(edge.get("to") or edge.get("to_state") or "").strip(),
+        )
+
+    states = [s for s in (doc.get("states") or []) if str(s.get("id") or "").strip() in state_ids]
+    edges = [
+        e
+        for e in (doc.get("edges") or [])
+        if all(x in state_ids for x in _edge_endpoints(e))
+    ]
+    return {
+        **doc,
+        "states": states,
+        "edges": edges,
+        "meta": {
+            **(doc.get("meta") or {}),
+            "atlas_turn_refs": matching,
+            "arch_channel_filter": want,
+        },
+    }
+
+
 def fetch_screen_atlas(
     app_id: str,
     *,
     project_id: str = "",
     session_id: str = "",
+    env_surface: str = "",
+    env_profile: str = "",
     rebuild: bool = False,
     updated_by: str = "",
 ) -> dict[str, Any]:
     """Studio 架构图：默认读库内快照；rebuild=True 时全量 build_atlas 并更新快照。"""
+    want_surface = str(env_surface or "").strip()
+
+    def _apply_surface_filter(row: dict[str, Any]) -> dict[str, Any]:
+        if not want_surface or not row.get("doc"):
+            return row
+        doc = filter_atlas_doc_by_env_surface(
+            row["doc"],
+            env_surface=want_surface,
+            project_id=project_id or str(row.get("project_id") or ""),
+            env_profile=env_profile,
+        )
+        return {
+            **row,
+            "doc": doc,
+            "screen_count": len(doc.get("states") or []),
+            "edge_count": len(doc.get("edges") or []),
+        }
+
     if not rebuild:
         cached = load_atlas_studio_snapshot_doc(app_id)
         if cached is not None:
@@ -3410,21 +3563,23 @@ def fetch_screen_atlas(
                 if isinstance(sm, dict):
                     snap_meta = sm
             doc_meta = dict(doc.get("meta") or {})
-            return {
-                "app_id": app_id,
-                "project_id": project_id or str(doc.get("project_id") or ""),
-                "source": "screen_atlas_cached",
-                "doc": doc,
-                "screens": [],
-                "screen_count": len(doc.get("states") or []),
-                "edge_count": len(doc.get("edges") or []),
-                "capture": {
-                    "turns_app": int(doc_meta.get("capture_turns") or 0),
-                    "sessions": int(doc_meta.get("capture_sessions") or 0),
-                },
-                "updated_at": int(snap_meta.get("saved_at") or doc_meta.get("atlas_built_at") or 0),
-                "cached": True,
-            }
+            return _apply_surface_filter(
+                {
+                    "app_id": app_id,
+                    "project_id": project_id or str(doc.get("project_id") or ""),
+                    "source": "screen_atlas_cached",
+                    "doc": doc,
+                    "screens": [],
+                    "screen_count": len(doc.get("states") or []),
+                    "edge_count": len(doc.get("edges") or []),
+                    "capture": {
+                        "turns_app": int(doc_meta.get("capture_turns") or 0),
+                        "sessions": int(doc_meta.get("capture_sessions") or 0),
+                    },
+                    "updated_at": int(snap_meta.get("saved_at") or doc_meta.get("atlas_built_at") or 0),
+                    "cached": True,
+                }
+            )
 
     built = build_atlas(app_id, project_id=project_id, session_id=session_id)
     persist_atlas_studio_snapshot(
@@ -3435,7 +3590,7 @@ def fetch_screen_atlas(
     out = dict(built)
     out["source"] = "screen_atlas"
     out["cached"] = False
-    return out
+    return _apply_surface_filter(out)
 
 
 def build_atlas(

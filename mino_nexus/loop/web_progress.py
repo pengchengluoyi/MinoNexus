@@ -15,6 +15,7 @@ def normalize_web_focus(raw: Any) -> dict[str, Any]:
         "id": str(raw.get("id") or "").strip()[:64],
         "name": str(raw.get("name") or "").strip()[:64],
         "value_len": int(raw.get("value_len") or 0),
+        "value": str(raw.get("value") or "")[:120],
         "reason": str(raw.get("reason") or "").strip()[:32],
     }
     bb = raw.get("bounds")
@@ -35,9 +36,14 @@ def web_focus_fingerprint(focus: Any) -> str:
     f = normalize_web_focus(focus)
     if not f.get("editable_ready"):
         return f"idle:{f.get('reason') or 'none'}"
+    value = str(f.get("value") or "")
+    value_fp = (
+        hashlib.sha1(value.encode("utf-8", errors="ignore")).hexdigest()[:8]
+        if value
+        else f"len={f.get('value_len')}"
+    )
     blob = (
-        f"{f.get('tag')}|{f.get('type')}|{f.get('id')}|{f.get('name')}|"
-        f"len={f.get('value_len')}"
+        f"{f.get('tag')}|{f.get('type')}|{f.get('id')}|{f.get('name')}|{value_fp}"
     )
     return hashlib.sha1(blob.encode("utf-8", errors="ignore")).hexdigest()[:12]
 

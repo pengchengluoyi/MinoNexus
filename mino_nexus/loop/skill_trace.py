@@ -29,7 +29,13 @@ def _ids(rows: list[dict[str, Any]]) -> list[str]:
     return out
 
 
-def build_slots(cursor, steps: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+def build_slots(
+    cursor,
+    steps: list[dict[str, Any]],
+    *,
+    run_status: str = "",
+    run_summary: str = "",
+) -> dict[str, list[dict[str, Any]]]:
     by_phase: dict[str, list[dict[str, Any]]] = {"prep": [], "do": [], "check": []}
     for row in steps or []:
         phase = str(row.get("loop_phase") or "")
@@ -38,12 +44,19 @@ def build_slots(cursor, steps: list[dict[str, Any]]) -> dict[str, list[dict[str,
 
     prep_rows = by_phase["prep"]
     prep_title = str(getattr(cursor, "precondition", "") or "").strip() or "前置"
+    loop_phase = str(getattr(cursor, "phase", "") or "")
     prep = []
     if prep_title or prep_rows:
+        if prep_rows:
+            prep_status = _status_of(prep_rows)
+        elif loop_phase == "prep":
+            prep_status = "queued"
+        else:
+            prep_status = "pass"
         prep.append({
             "id": "prep",
             "title": prep_title.splitlines()[0][:80] if prep_title else "前置",
-            "status": _status_of(prep_rows) if prep_rows else ("pass" if getattr(cursor, "phase", "") != "prep" else "queued"),
+            "status": prep_status,
             "step_ids": _ids(prep_rows),
         })
 
@@ -57,18 +70,24 @@ def build_slots(cursor, steps: list[dict[str, Any]]) -> dict[str, list[dict[str,
         do_rows = [r for r in by_phase["do"] if int(r.get("case_step") or r.get("case_step_index") or 0) == n]
         ck_rows = [r for r in by_phase["check"] if int(r.get("case_step") or r.get("case_step_index") or 0) == n]
         if inst:
+            op_st = _status_of(do_rows)
+            if not do_rows and loop_phase in ("check", "done") and int(getattr(cursor, "step_ops", 0) or 0) == 0:
+                op_st = "skipped"
             ops.append({
                 "id": f"op-{n}",
                 "title": inst,
-                "status": _status_of(do_rows),
+                "status": op_st,
                 "step_ids": _ids(do_rows),
                 "step_num": n,
             })
         if exp:
+            ck_st = _status_of(ck_rows)
+            if not ck_rows and str(run_status or "").strip().lower() in ("fail", "failed"):
+                ck_st = "fail"
             checks.append({
                 "id": f"check-{n}",
                 "title": exp,
-                "status": _status_of(ck_rows),
+                "status": ck_st,
                 "step_ids": _ids(ck_rows),
                 "step_num": n,
             })
@@ -86,7 +105,11 @@ def envelope(
     skill = skill if isinstance(skill, dict) else {}
     view = skill.get("view") if isinstance(skill.get("view"), dict) else {}
     view_id = str(view.get("id") or skill.get("view_id") or "job-timeline")
-    slots = build_slots(cursor, steps or []) if cursor is not None else {"prep": [], "ops": [], "checks": []}
+    slots = (
+        build_slots(cursor, steps or [], run_status=status, run_summary=summary)
+        if cursor is not None
+        else {"prep": [], "ops": [], "checks": []}
+    )
     case_step = 0
     loop_phase = ""
     if cursor is not None:

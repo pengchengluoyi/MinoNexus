@@ -93,14 +93,47 @@ def get_ai_provider_credentials(provider_id: Optional[str] = None) -> dict[str, 
     return cred
 
 
-def get_ai_web_compress_ratio(provider_id: Optional[str] = None) -> float:
-    """Web 截图压缩比；1.0=不压缩，默认 2.0。随 EXECUTE screenshot 的 params 下发给 Scout（协议 §4.4）。"""
-    raw = get_ai_provider_credentials(provider_id).get("web_compress_ratio")
+def _compress_ratio(raw: Any, default: float) -> float:
     try:
-        v = float(raw)
-        return v if 1.0 <= v <= 8.0 else 2.0
+        value = float(raw)
     except (TypeError, ValueError):
-        return 2.0
+        return default
+    if 1.0 <= value <= 8.0:
+        return value
+    return default
+
+
+def _provider_for_ratio(provider_id: Optional[str] = None) -> dict[str, Any]:
+    pid = str(provider_id or "").strip() or find_case_execution_provider_id()
+    return get_ai_provider_credentials(pid or None)
+
+
+def get_ai_web_compress_ratio(provider_id: Optional[str] = None) -> float:
+    """Web 采集压缩比；1.0=不压缩，默认 2.0。随 EXECUTE screenshot 下发给 Scout。"""
+    raw = _provider_for_ratio(provider_id).get("web_compress_ratio")
+    return _compress_ratio(raw, 2.0)
+
+
+def get_ai_android_compress_ratio(provider_id: Optional[str] = None) -> float:
+    """安卓采集压缩比；1.0=不压缩，默认 1.0。随 EXECUTE screenshot 下发给 Scout。"""
+    raw = _provider_for_ratio(provider_id).get("android_compress_ratio")
+    return _compress_ratio(raw, 1.0)
+
+
+def get_ai_plan_compress_ratio(provider_id: Optional[str] = None) -> float:
+    """喂给大模型的统一压缩比；1.0=不缩小，默认 3.0。各渠道都转 JPEG。"""
+    raw = _provider_for_ratio(provider_id).get("plan_compress_ratio")
+    return _compress_ratio(raw, 3.0)
+
+
+def channel_screenshot_compress_ratio(platform: str, provider_id: Optional[str] = None) -> float:
+    """采集端按渠道锁定压缩比。Web 用 web_compress_ratio，安卓用 android_compress_ratio。"""
+    plat = str(platform or "").strip().lower()
+    if plat in ("web", "browser", "playwright"):
+        return get_ai_web_compress_ratio(provider_id)
+    if plat in ("android", "adb"):
+        return get_ai_android_compress_ratio(provider_id)
+    return 1.0
 
 
 def find_case_execution_provider_id() -> str:

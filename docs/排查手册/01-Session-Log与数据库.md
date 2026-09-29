@@ -69,10 +69,13 @@ export MINO_NEXUS_DATA_DIR=/path/to/data
 | `session/start` · `session/end` | 起止、最终 status / summary |
 | `turn/start` · `turn/end` | 每轮决策边界；`decision_cap` / `decision_status` |
 | `inspection/done` | 开跑 inspect：`session_block`、`required=logged_in` 等 |
-| `context/slots` | 模型当轮可见槽（goal、checkpoints、session_block 摘要） |
+| `context/slots` | 模型当轮可见槽（goal、checkpoints、session_json、history 本步等） |
+| `context/trace` | 排查用全量（history_full、device_brief、prompt_block_full、menu 快照）；**不注入 LLM** |
 | `llm/request` · `llm/response` | 与 dispatch 互链；看模型原始决策 |
 | `tool/call` · `tool/result` | 能力执行；`capability_id`、`status`、`summary` |
 | `guard/block` | 守卫拦截；`guard_id`、`reason`、`rewritten_cap` |
+| `milestone/exit_eval` | 逻辑块步级准出；`exit_status`、`would_block`、`reason` |
+| `block/exit_eval` | 逻辑块块级准出影子（如 `do_to_check` 前）；`would_block`、`issues[]` |
 | `ops/guard_summary` | 会话结束 guard 统计 |
 | `nav/attempt` | `fsm_navigate` 规划与降级 |
 | `decision/give_up` · `decision/ask_human` | 模型主动放弃 / 问人 |

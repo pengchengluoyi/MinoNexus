@@ -30,7 +30,7 @@ def _step_ready(
 ) -> bool:
     cap = str(step.get("cap") or "")
     sid = str(step.get("id") or cap)
-    if sid in _macro_done(ctx) or _history_passed(history, cap):
+    if sid in _macro_done(ctx):
         return False
     if cap == "request_sms_code":
         from mino_nexus.loop.sms_auto import sms_send_geometry_ready
@@ -87,14 +87,25 @@ def try_run_login_flow_macro(
             label=f"宏·{sid}",
         )
         from mino_nexus.core.protocol import EventStatus
-        from mino_nexus.loop.local_executors import dispatch_local
+        from mino_nexus.loop.local_executors import _dispatch_device, dispatch_local
+        from mino_nexus.loop.router_proxy import is_local_cap
 
-        res = dispatch_local(
-            event,
-            ctx=ctx,
-            router=proxy,
-            target_package=str(getattr(ctx, "target_package", "") or ""),
-        )
+        if is_local_cap(cap):
+            res = dispatch_local(
+                event,
+                ctx=ctx,
+                router=proxy,
+                target_package=str(getattr(ctx, "target_package", "") or ""),
+            )
+        else:
+            res = _dispatch_device(
+                proxy,
+                ctx=ctx,
+                seq=int(turn_seq),
+                cap=cap,
+                params=dict(step.get("params") or {}),
+                label=f"宏·{sid}",
+            )
         st = res.status.value if hasattr(res.status, "value") else str(res.status)
         ok = str(st) in ("pass", EventStatus.PASS.value)
         if ok:
@@ -127,9 +138,12 @@ def login_block_required_steps_done(
     for step in steps:
         if step.get("optional"):
             continue
-        cap = str(step.get("cap") or "")
+        cap = str(step.get("cap") or step.get("hook_cap") or "")
         sid = str(step.get("id") or cap)
-        if sid in done or _history_passed(history_lines, cap):
+        if sid in done:
+            continue
+        # tap_element / input_text 在链上出现多次，不能拿历史里的同名能力当成这一步已完成。
+        if cap and cap not in ("tap_element", "input_text") and _history_passed(history_lines, cap):
             continue
         return False
     return True
@@ -141,7 +155,7 @@ def maybe_emit_login_flow_complete(
     app_id: str,
     history_lines: list[str],
 ) -> bool:
-    """登录流块必做步骤完成且已登录（或 get_otp 已成功）时写 device_app + 号池。"""
+    """登录流必做步骤都完成，且会话已是 logged_in 时，写 device_app 与号池。"""
     if getattr(ctx, "_login_flow_transition_emitted", False):
         return True
     if not login_block_required_steps_done(ctx, app_id=app_id, history_lines=history_lines):
@@ -151,8 +165,7 @@ def maybe_emit_login_flow_complete(
     sn = str(getattr(ctx, "sn", "") or "").strip()
     pkg = str(getattr(ctx, "target_package", "") or "").strip()
     sess = effective_device_session(ctx, sn=sn, package_id=pkg)
-    otp_ok = "otp_fill" in _macro_done(ctx) or _history_passed(history_lines, "get_otp")
-    if sess != "logged_in" and not otp_ok:
+    if sess != "logged_in":
         return False
     from mino_nexus.services.resource_transition_engine import fire_transition
 

@@ -143,6 +143,9 @@ def _row_fields(
         project_id=project_id,
         force_recompile=force_recompile_resource_key,
     )
+    from mino_nexus.services.case_step_key_compiler import sync_case_step_program_keys
+
+    raw = sync_case_step_program_keys(raw)
     cid = str(raw.get("case_id") or "").strip()
     extra = dict(raw)
     return dict(
