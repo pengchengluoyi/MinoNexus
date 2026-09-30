@@ -58,7 +58,7 @@ def _llm_image(image_base64: str, image_mime: str = "image/png") -> tuple[str, s
     if not raw:
         return "", str(image_mime or "image/png")
     try:
-        from mino_nexus.loop.agent_stream import make_llm_jpeg
+        from mino_nexus.loop.observe.agent_stream import make_llm_jpeg
 
         jpeg, mime = make_llm_jpeg(raw)
         if jpeg:
@@ -74,7 +74,7 @@ def _chat(*, job: str, provider, messages, job_meta: dict | None = None, **kwarg
     tok = dispatch.bind(role="test-engineer", job=job, skill=job)
     try:
         try:
-            from mino_nexus.loop.session_log import append_llm_request
+            from mino_nexus.loop.observe.session_log import append_llm_request
 
             append_llm_request(job_id=job, messages=messages)
         except Exception:
@@ -575,6 +575,14 @@ def _parse_vision_plan(raw: dict[str, Any]) -> VisionPlanDecision:
         or str(exit_raw or "").strip().lower() in ("true", "1", "yes")
         or step_complete
     )
+    insert_raw = raw.get("insert_before")
+    insert_before = insert_raw is True or str(insert_raw or "").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    if any(str((row or {}).get("place") or "").strip().lower() == "before" for row in append_rows):
+        insert_before = True
     return VisionPlanDecision(
         thought=str(raw.get("thought") or "")[:2000],
         milestones=ms_rows,
@@ -586,6 +594,7 @@ def _parse_vision_plan(raw: dict[str, Any]) -> VisionPlanDecision:
         failure_verdict=dict(fv),
         step_requirements_complete=step_complete,
         exit_allowed=exit_allowed,
+        insert_before=insert_before,
         raw_llm=raw,
         parse_warnings=warnings,
     )
@@ -934,9 +943,9 @@ def _parse_inspect_session_raw(
 ) -> dict[str, Any]:
     from mino_nexus.services.nav_screen_layout import normalize_vision_layout
 
-    session = str(raw.get("session") or "unknown").strip().lower()
-    if session not in {"logged_out", "logged_in", "unknown"}:
-        session = "unknown"
+    from mino_nexus.services.session_match import normalize_device_session
+
+    session = normalize_device_session(raw.get("session") or "")
     identity = str(raw.get("identity") or "unknown").strip().lower()
     if identity not in {"match", "mismatch", "unknown"}:
         identity = "unknown"
@@ -993,7 +1002,7 @@ def inspect_session(
     width = int(screen_w or 0) or 1080
     height = int(screen_h or 0) or 1920
     empty = {
-        "session": "unknown",
+        "session": "guest",
         "identity": "unknown",
         "seen": "",
         "probe": False,

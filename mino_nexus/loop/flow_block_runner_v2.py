@@ -196,7 +196,7 @@ def try_dispatch_block_hook(
             )
     hook_summary = str(res.summary or res.error or cap)
     hook_params = dict(step.get("params") or {}) if step else {}
-    from mino_nexus.loop.program_tool_log import log_program_tool
+    from mino_nexus.loop.observe.program_tool_log import log_program_tool
 
     log_program_tool(
         writer,
@@ -320,7 +320,7 @@ def _dispatch_email_fill(
         )
     from mino_nexus.loop.channel_observation import bind_fresh_observation, read_field
     from mino_nexus.loop.flow_block_exit import device_input_text_exit
-    from mino_nexus.loop.program_tool_log import log_program_tool
+    from mino_nexus.loop.observe.program_tool_log import log_program_tool
     from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
 
     res = _dispatch_device(
@@ -389,7 +389,7 @@ def _dispatch_otp_fill(
     from mino_nexus.loop.device_execute_params import enrich_web_input_text_params
     from mino_nexus.loop.local_executors import _dispatch_device, _resolve_otp
 
-    from mino_nexus.loop.program_tool_log import log_program_tool
+    from mino_nexus.loop.observe.program_tool_log import log_program_tool
 
     code, _src = _resolve_otp(ctx)
     if not code:

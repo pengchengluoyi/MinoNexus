@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextvars
 import hashlib
 import threading
+import time
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
@@ -99,6 +100,11 @@ class SessionWriter:
         self._phase = ""
         self._closed = False
         self._lock = _session_lock(self.session_id)
+        self._t0 = time.perf_counter()
+        self._turn_t0 = self._t0
+        self._llm_ms = 0
+        self._tool_ms = 0
+        self._guard_blocks = 0
 
     @property
     def turn(self) -> int:
@@ -121,6 +127,16 @@ class SessionWriter:
         if not evt_type:
             return 0
         body = _sanitize_payload(payload or {})
+        if evt_type == "turn/start":
+            self._turn_t0 = time.perf_counter()
+        elif evt_type == "turn/end" and "elapsed_ms" not in body:
+            body["elapsed_ms"] = max(0, int((time.perf_counter() - self._turn_t0) * 1000))
+        elif evt_type == "llm/response":
+            self._llm_ms += int(body.get("elapsed_ms") or 0)
+        elif evt_type == "tool/result":
+            self._tool_ms += int(body.get("elapsed_ms") or 0)
+        elif evt_type == "guard/block":
+            self._guard_blocks += 1
         with self._lock:
             try:
                 return session_store.append_event(
@@ -142,12 +158,25 @@ class SessionWriter:
             if meta and str(meta.get("finished_at") or "").strip():
                 self._closed = True
                 return
+            wall_ms = max(0, int((time.perf_counter() - self._t0) * 1000))
+            self.append(
+                "perf/summary",
+                {
+                    "wall_ms": wall_ms,
+                    "llm_ms": self._llm_ms,
+                    "tool_ms": self._tool_ms,
+                    "other_ms": max(0, wall_ms - self._llm_ms - self._tool_ms),
+                    "guard_blocks": self._guard_blocks,
+                    "turns": self._turn,
+                },
+            )
             self.append(
                 "session/end",
                 {
                     "status": status,
                     "summary": summary,
                     "step_count": step_count,
+                    "wall_ms": wall_ms,
                 },
             )
             try:

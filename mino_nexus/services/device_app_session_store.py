@@ -13,11 +13,13 @@ def _now() -> str:
 
 
 def _row_to_dict(row: DeviceAppSession) -> dict[str, Any]:
+    from mino_nexus.services.session_match import normalize_device_session
+
     return {
         "sn": row.sn,
         "package_id": row.package_id,
         "app_version": row.app_version or "",
-        "session": row.session or "unknown",
+        "session": normalize_device_session(row.session or ""),
         "bound_account_id": row.bound_account_id or "",
         "identity_hint": row.identity_hint or "",
         "stale": bool(row.stale),
@@ -94,7 +96,9 @@ def upsert_session(
             row = DeviceAppSession(sn=s, package_id=p, updated_at=now, observed_at=now)
             db.add(row)
         if session is not None:
-            row.session = str(session or "unknown").strip().lower()[:32]
+            from mino_nexus.services.session_match import normalize_device_session
+
+            row.session = normalize_device_session(session)[:32]
             row.observed_at = now
         if clear_binding:
             row.bound_account_id = ""

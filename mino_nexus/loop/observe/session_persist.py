@@ -13,9 +13,9 @@ def stamp_session_observation(ctx: Any, row: dict[str, Any] | None) -> None:
     """inspect-session 成功后写入 ctx.session_fact / task_session。"""
     if not isinstance(row, dict) or not row.get("ok"):
         return
-    session = str(row.get("session") or "").strip().lower()
-    if session not in ("logged_in", "guest", "logged_out", "unknown"):
-        return
+    from mino_nexus.services.session_match import normalize_device_session
+
+    session = normalize_device_session(row.get("session") or "")
     if bool(getattr(ctx, "prep_clear_done", False)) and session == "logged_in":
         prev = dict(getattr(ctx, "session_fact", None) or {})
         if (
@@ -53,12 +53,14 @@ def mark_session_dirty(ctx: Any, *, reason: str = "") -> None:
 
 def execution_context_session_line(ctx: Any) -> str:
     """供 decide/assert 的紧凑登录态字段（与 session_block 互补）。"""
+    from mino_nexus.services.session_match import normalize_device_session
+
     fact = dict(getattr(ctx, "session_fact", None) or {})
     scene = dict(getattr(ctx, "case_scene", None) or {})
     parts = [
         f"session_dirty={bool(getattr(ctx, 'session_dirty', False))}",
         f"required_session={str(scene.get('required_session') or 'any')}",
-        f"task_session={str(fact.get('session') or 'unknown')}",
+        f"task_session={normalize_device_session(fact.get('session') or '')}",
     ]
     stale = str(fact.get("stale_reason") or "").strip()
     if stale:
@@ -115,7 +117,7 @@ def effective_session_block(ctx: Any, slot_block: str = "") -> str:
     elif req == "logged_in":
         line = f"{line} required=logged_in"
     try:
-        from mino_nexus.loop.llm_screenshot_gate import execution_line as _llm_img_line
+        from mino_nexus.loop.fuse.llm_screenshot_gate import execution_line as _llm_img_line
 
         line = f"{line} | {_llm_img_line(ctx)}"
     except Exception:

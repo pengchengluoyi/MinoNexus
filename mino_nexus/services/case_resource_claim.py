@@ -55,21 +55,15 @@ def _parse_precondition_lines(pre: str) -> list[tuple[str, str]]:
 
 
 def _required_session_from_value(val: str) -> str:
-    v = str(val or "").strip()
-    if re.search(r"未登录|游客", v):
-        return "guest"
-    if re.search(r"已登录", v):
-        return "logged_in"
-    return "any"
+    from mino_nexus.services.session_match import precondition_device_session
+
+    return precondition_device_session(val)
 
 
 def _account_session_from_value(val: str) -> str:
-    v = str(val or "").strip()
-    if re.search(r"未登录|游客", v):
-        return "logged_out"
-    if re.search(r"已登录", v):
-        return "logged_in"
-    return "any"
+    from mino_nexus.services.session_match import precondition_account_session
+
+    return precondition_account_session(val)
 
 
 def compile_resource_key_from_precondition(
@@ -101,7 +95,7 @@ def compile_resource_key_from_precondition(
             ars = _account_session_from_value(val)
             if ars != "any":
                 account_required_session = ars
-        elif not title and re.search(r"未登录|已登录|游客", val):
+        elif not title and re.search(r"未登录|已登录|已登出|已退出|游客", val):
             rs = _required_session_from_value(val)
             if rs != "any" and required_session == "any":
                 required_session = rs
@@ -143,9 +137,9 @@ def compile_resource_key_from_precondition(
         "target_app": {"package": str(package or "").strip()},
         "device_app": {
             "required_session": device_app_session,
-            "allow": ["logged_out", "guest", "unknown"]
+            "allow": ["logged_out", "guest"]
             if required_session == "guest"
-            else (["logged_in"] if required_session == "logged_in" else ["logged_out", "guest", "logged_in", "unknown"]),
+            else (["logged_in"] if required_session == "logged_in" else ["logged_out", "guest", "logged_in"]),
             "prep": prep_items,
             "binding": "must_match_lease",
         },
@@ -351,13 +345,15 @@ def preflight_device_app_gap(
     allow = [str(x).strip().lower() for x in (da.get("allow") or []) if str(x).strip()]
     from mino_nexus.services.device_app_session_store import get_session
 
-    row = get_session(sn, package_id) or {"session": "unknown"}
-    cur = str(row.get("session") or "unknown").strip().lower()
+    row = get_session(sn, package_id) or {}
+    from mino_nexus.services.session_match import normalize_device_session
+
+    cur = normalize_device_session(row.get("session") or "")
     gaps: list[str] = []
     if req and req not in ("any", ""):
-        ok = cur == req or (allow and cur in allow)
-        if not ok and req == "logged_out":
-            ok = cur in ("logged_out", "guest", "unknown")
+        from mino_nexus.services.session_match import device_session_meets
+
+        ok = device_session_meets(req, cur, allow)
         if not ok:
             gaps.append(f"device_app.session 需要 {req}（允许 {allow or [req]}），当前 {cur}")
     for prep in da.get("prep") or []:

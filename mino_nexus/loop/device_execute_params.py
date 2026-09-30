@@ -61,10 +61,14 @@ def web_tap_params_for_selector(
 
 
 def enrich_web_tap_params(params: dict[str, Any], ctx: Any | None = None) -> dict[str, Any]:
-    """Web tap：从 VLM/hierarchy 补坐标；Scout 仅按坐标点击。"""
+    """Web tap：看图缺坐标时不从层级补点。DOM 方案仍可按节点补。"""
     out = dict(params or {})
     out["web_coordinate_only"] = True
     out["tap_prefer_coordinates"] = True
+    from mino_nexus.action_space.scheme import action_scheme
+
+    if action_scheme(ctx) != "dom":
+        return out
     if out.get("x") is None or out.get("y") is None:
         sel = str(out.get("selector_text") or out.get("text") or "").strip()
         if sel and ctx is not None:
@@ -76,7 +80,7 @@ def enrich_web_tap_params(params: dict[str, Any], ctx: Any | None = None) -> dic
 
 
 def _coords_from_web_focus(ctx: Any) -> dict[str, Any]:
-    from mino_nexus.loop.web_progress import normalize_web_focus
+    from mino_nexus.loop.web.web_progress import normalize_web_focus
     from mino_nexus.loop.ui_consent import tap_params_for_control
 
     focus = normalize_web_focus(getattr(ctx, "web_focus", None) if ctx else None)
@@ -180,11 +184,24 @@ def _coords_from_login_field(
     fld = str(field or "").strip().lower()
     if fld in ("email", "login_email") and ctx is not None:
         cached = getattr(ctx, "web_email_tap_milli", None)
+        cached_xy: tuple[int, int] | None = None
         if isinstance(cached, (list, tuple)) and len(cached) >= 2:
             try:
-                return {"x": int(cached[0]), "y": int(cached[1])}
+                cached_xy = (int(cached[0]), int(cached[1]))
             except (TypeError, ValueError):
-                pass
+                cached_xy = None
+        if nodes:
+            from mino_nexus.loop.ui_dom import find_dom_email_field
+
+            email_n = find_dom_email_field(nodes)
+            if email_n is not None:
+                ep = tap_params_for_control(email_n, nodes)
+                if cached_xy is None or not _same_sent_point(
+                    cached_xy[0], cached_xy[1], ep.get("x"), ep.get("y"), ctx, tol_px=48
+                ):
+                    return ep
+        if cached_xy is not None:
+            return {"x": cached_xy[0], "y": cached_xy[1]}
     if fld in ("sms_code", "验证码", "otp"):
         if prior_otp_tap_only:
             cached = getattr(ctx, "web_sms_code_tap_milli", None) if ctx is not None else None
@@ -340,6 +357,18 @@ def enrich_web_input_text_params(params: dict[str, Any], ctx: Any | None = None)
         locked_email = (
             bool(out.get("email_coords_from_prior_tap_only")) and out.get("x") is not None
         )
+        if (
+            locked_email
+            and field in ("email", "login_email")
+            and extra.get("x") is not None
+            and not _same_sent_point(
+                out.get("x"), out.get("y"), extra.get("x"), extra.get("y"), ctx, tol_px=48
+            )
+        ):
+            out["x"] = extra["x"]
+            out["y"] = extra["y"]
+            out.pop("email_coords_from_prior_tap_only", None)
+            locked_email = False
         if (
             not locked
             and not locked_email

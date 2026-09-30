@@ -51,30 +51,22 @@ def effective_device_session(
     fact = dict(getattr(ctx, "session_fact", None) or {})
     fs = str(fact.get("session") or "").strip().lower()
     dirty = bool(getattr(ctx, "session_dirty", False))
+    from mino_nexus.services.session_match import normalize_device_session
+
     if fs and not dirty:
-        return fs
+        return normalize_device_session(fs)
     from mino_nexus.services.device_app_session_store import get_session
 
     row = get_session(sn, package_id)
     if row:
-        return str(row.get("session") or "unknown").strip().lower()
-    return fs or "unknown"
+        return normalize_device_session(row.get("session") or "")
+    return normalize_device_session(fs)
 
 
 def _session_allows_required(required: str, current: str, allow: list[str]) -> bool:
-    req = str(required or "").strip().lower()
-    cur = str(current or "unknown").strip().lower()
-    if not req or req == "any":
-        return True
-    if cur == req:
-        return True
-    if allow and cur in allow:
-        return True
-    if req == "logged_out":
-        return cur in ("logged_out", "guest", "unknown")
-    if req == "guest":
-        return cur in ("guest", "logged_out", "unknown")
-    return False
+    from mino_nexus.services.session_match import device_session_meets
+
+    return device_session_meets(required, current, allow)
 
 
 def run_start_resource_blockers(
@@ -113,13 +105,15 @@ def run_start_resource_blockers(
     from mino_nexus.services.device_app_session_store import get_session
 
     row = get_session(str(sn).strip(), str(package_id).strip()) or {}
-    cur = str(row.get("session") or "unknown").strip().lower()
+    from mino_nexus.services.session_match import normalize_device_session
+
+    cur = normalize_device_session(row.get("session") or "")
     if cur != "logged_in":
         return blockers
     if claim_requires_clear_cache(claim, scene_row, pre):
         return blockers
     blockers.append(
-        "【拒跑】登记簿机态为 logged_in，用例要求未登录/游客，且未声明「清除应用缓存」prep，"
+        "【拒跑】登记簿机态为 logged_in，用例要求未登录/已登出/游客，且未声明「清除应用缓存」prep，"
         "请先清缓存或调整前置/密钥。"
     )
     return blockers

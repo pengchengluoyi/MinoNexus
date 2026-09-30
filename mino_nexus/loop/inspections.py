@@ -56,7 +56,7 @@ def program_session_block_from_hierarchy(
 
     if find_consent_control(list(nodes)) is not None:
         return (
-            "session=unknown identity=unknown seen=in_app_legal_consent "
+            "session=guest identity=unknown seen=in_app_legal_consent "
             "next=accept_legal_consent "
             "reason=应用内隐私/用户协议弹窗（hierarchy），请 accept_legal_consent；"
             "非系统权限页，勿 recover_bring_target_app_foreground"
@@ -78,7 +78,7 @@ def program_session_block_from_hierarchy(
         return ""
     if af == "yes" and overlay != "yes":
         return (
-            "session=unknown identity=unknown seen=target_app_foreground "
+            "session=guest identity=unknown seen=target_app_foreground "
             "next=observe "
             "reason=被测 App 已在前台（probe/hierarchy）；会话态待本步判定，"
             "优先 accept_legal_consent 或 tap，勿仅凭截图猜系统权限"
@@ -109,7 +109,7 @@ def _clear_foreign_session_block(slot_sink: dict[str, str]) -> None:
 def llm_session_block(ctx, block: str) -> str:
     """前台非被测 App 时不向 decide 传 session_block（与送图 withhold 一致）。"""
     try:
-        from mino_nexus.loop.llm_screenshot_gate import should_withhold_llm_image
+        from mino_nexus.loop.fuse.llm_screenshot_gate import should_withhold_llm_image
 
         if should_withhold_llm_image(ctx):
             return ""
@@ -237,7 +237,7 @@ def refresh_session_block(
     )
     row = reconcile_inspect_session(row, required=req_enum)
     slot_sink["session_block"] = format_session_block(row, required=req_enum)
-    from mino_nexus.loop.session_persist import stamp_session_observation
+    from mino_nexus.loop.observe.session_persist import stamp_session_observation
 
     stamp_session_observation(ctx, row)
     layout = row.get("screen_layout") if isinstance(row.get("screen_layout"), dict) else {}
@@ -295,7 +295,7 @@ def _log_inspection(
     session_block: str = "",
 ) -> None:
     try:
-        from mino_nexus.loop.session_log import active_writer
+        from mino_nexus.loop.observe.session_log import active_writer
 
         writer = active_writer()
         if writer is None:
@@ -542,7 +542,7 @@ def _log_knowledge(
     scene: dict[str, Any] | None = None,
 ) -> None:
     try:
-        from mino_nexus.loop.session_log import active_writer
+        from mino_nexus.loop.observe.session_log import active_writer
 
         writer = active_writer()
         if writer is None:
@@ -584,7 +584,7 @@ def _log_doc_match(
     query: str = "",
 ) -> None:
     try:
-        from mino_nexus.loop.session_log import active_writer
+        from mino_nexus.loop.observe.session_log import active_writer
 
         writer = active_writer()
         if writer is None:

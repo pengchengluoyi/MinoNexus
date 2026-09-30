@@ -32,6 +32,7 @@ from mino_nexus.routers import (
     rFlowBlocks,
     rMe,
     rNavFsm,
+    rObserve,
     rPacks,
     rProject,
     rProjectCases,
@@ -145,6 +146,7 @@ def create_app() -> FastAPI:
     app.include_router(rReleases.router)
     app.include_router(rDevice.router)
     app.include_router(rCaseRunner.router)
+    app.include_router(rObserve.router)
     app.include_router(rSettings.router)
     app.include_router(rDocs.router)
     app.include_router(rPacks.router)

@@ -252,7 +252,7 @@ def run_email_login_ui_chain(
 
     if not _email_input_done(history_lines, intents_done):
         if ch == "web_dom" and proxy is not None:
-            from mino_nexus.loop.web_progress import refresh_web_focus, web_editable_focus_ready
+            from mino_nexus.loop.web.web_progress import refresh_web_focus, web_editable_focus_ready
             from mino_nexus.loop.ui_consent import tap_params_for_control
 
             refresh_web_focus(ctx, proxy)

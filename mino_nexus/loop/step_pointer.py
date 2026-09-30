@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from mino_nexus.ai.case_text import parse_numbered_items_rules
-from mino_nexus.loop.action_fuse import ProgressGate
+from mino_nexus.loop.fuse.action_fuse import ProgressGate
 from mino_nexus.services.run_store import spec_lines
 
 _POINTER_TEMPLATES: dict[str, str] = {
@@ -454,7 +454,6 @@ class StepCursor:
         self.correction_hint: str = ""
         self.prep_session_skip_streak: int = 0
         self.prep_guard_streak: int = 0
-        self.login_scope_block_streak: int = 0
         self.require_do_work_streak: int = 0
         self.recovery_block_streak: int = 0
         self.do_subphase: str = "operation"
@@ -498,7 +497,6 @@ class StepCursor:
         self.prep_session_skip_streak = 0
         self.prep_guard_streak = 0
         self.prep_resource_gate_streak = 0
-        self.login_scope_block_streak = 0
         self.recovery_block_streak = 0
         self.do_subphase = "operation"
         self.step_nav_plan_hint = ""
@@ -589,6 +587,13 @@ class StepCursor:
         """do 阶段业务意图已达成时立即进入 check（或无 expected 时下一步），不等模型 signal_done。"""
         if self.phase != "do":
             return False
+        from mino_nexus.loop.milestones import _TERMINAL, read_state
+
+        for row in read_state(self).get("milestones") or []:
+            if not isinstance(row, dict) or row.get("optional"):
+                continue
+            if str(row.get("status") or "pending").strip().lower() not in _TERMINAL:
+                return False
         self.refresh_do_subphase()
         if self.do_subphase != "achievement":
             return False

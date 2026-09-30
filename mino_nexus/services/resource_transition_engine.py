@@ -121,7 +121,7 @@ def _write_audit(
 
 
 def _mirror_session_log(ctx: Any, payload: dict[str, Any]) -> None:
-    from mino_nexus.loop.session_log import active_writer
+    from mino_nexus.loop.observe.session_log import active_writer
 
     writer = active_writer()
     if writer is None:

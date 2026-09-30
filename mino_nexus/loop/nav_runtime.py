@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from mino_nexus.core.log import SLog
-from mino_nexus.loop.guard_gate import ACTION_ALLOW, GuardGate, Verdict
+from mino_nexus.loop.fuse.guard_gate import ACTION_ALLOW, GuardGate, Verdict
 from mino_nexus.loop.hierarchy_slots import (
     HierarchySnapshot,
     capture,

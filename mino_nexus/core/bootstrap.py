@@ -212,6 +212,7 @@ def bootstrap() -> None:
             upgrade_agent_vision_plan_to_v9,
             upgrade_agent_vision_plan_to_v10,
             upgrade_agent_vision_plan_to_v11,
+            upgrade_agent_vision_plan_to_v12,
             upgrade_agent_vision_exec_to_v2,
             upgrade_agent_vision_exec_to_v3,
             upgrade_agent_vision_exec_to_v4,
@@ -272,6 +273,14 @@ def bootstrap() -> None:
         vp11 = upgrade_agent_vision_plan_to_v11()
         if vp11:
             SLog.i(TAG, "agent-vision-plan upgraded to prompt v11 no invented clicks")
+        vp12 = upgrade_agent_vision_plan_to_v12()
+        if vp12:
+            SLog.i(TAG, "agent-vision-plan upgraded to prompt v12 insert_before")
+        from mino_nexus.catalog.guard_recovery_seed import seed_guard_recovery_rows
+
+        gr = seed_guard_recovery_rows()
+        if gr:
+            SLog.i(TAG, f"guard recovery base rows seeded {gr}")
         from mino_nexus.loop.login_state_probe import ensure_read_web_auth_capability
 
         if ensure_read_web_auth_capability():

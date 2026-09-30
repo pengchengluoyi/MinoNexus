@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import copy
+import json
+import re
 import threading
 import uuid
 from datetime import datetime
@@ -23,21 +25,164 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _root() -> dict[str, Any]:
-    from mino_nexus.core.database import SessionLocal, ensure_db
-    from mino_nexus.models.run import AppRegressionRun
+_KEEP_RUNS = 400
+_THUMB_RE = re.compile(r'"thumb"\s*:\s*"(?:[^"\\]|\\.)*"')
+
+
+def _parse_payload(raw: Any) -> dict[str, Any]:
+    """读历史任务时先抹掉步骤截图再解析。截图在 session 的 observe/screen 里。"""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="replace")
+    if raw is None:
+        return {}
+    text_payload = raw if isinstance(raw, str) else str(raw)
+    if not text_payload:
+        return {}
+    if len(text_payload) > 200_000 and '"thumb"' in text_payload:
+        text_payload = _THUMB_RE.sub('"thumb":""', text_payload)
+    try:
+        data = json.loads(text_payload)
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _slim_doc(doc: dict[str, Any]) -> dict[str, Any]:
+    """落库前去掉 engine_steps 里的截图，避免单条任务涨到几十 MB。"""
+    for case in doc.get("cases") or []:
+        if not isinstance(case, dict):
+            continue
+        steps = case.get("engine_steps")
+        if not isinstance(steps, list):
+            continue
+        for step in steps:
+            if isinstance(step, dict) and step.get("thumb"):
+                step["thumb"] = ""
+    return doc
+
+
+def _fetch_payloads(
+    *,
+    limit: int,
+    offset: int = 0,
+    app_id: str = "",
+    status: str = "",
+    run_id: str = "",
+) -> list[dict[str, Any]]:
+    """先按索引列取出 run_id，再只读这一页的 payload。避免排序时把历史截图整表拉进内存。"""
+    from sqlalchemy import text
+
+    from mino_nexus.core.database import engine, ensure_db
 
     ensure_db()
-    db = SessionLocal()
-    try:
-        rows = []
-        for row in db.query(AppRegressionRun).all():
-            payload = dict(row.payload or {}) if isinstance(row.payload, dict) else {}
-            if payload:
-                rows.append(payload)
-        return {"runs": rows}
-    finally:
-        db.close()
+    where = " WHERE 1=1"
+    params: dict[str, Any] = {}
+    if run_id:
+        where += " AND run_id = :run_id"
+        params["run_id"] = run_id
+    if app_id:
+        where += " AND app_id = :app_id"
+        params["app_id"] = app_id
+    if status:
+        where += " AND status = :status"
+        params["status"] = status
+    with engine.connect() as conn:
+        if run_id:
+            id_rows = conn.execute(
+                text(f"SELECT run_id FROM app_regression_runs{where}"),
+                params,
+            ).fetchall()
+        else:
+            params["limit"] = max(0, int(limit))
+            params["offset"] = max(0, int(offset))
+            id_rows = conn.execute(
+                text(
+                    "SELECT run_id FROM app_regression_runs"
+                    f"{where} ORDER BY started_at DESC LIMIT :limit OFFSET :offset"
+                ),
+                params,
+            ).fetchall()
+        ids = [str(r[0]) for r in id_rows if r and r[0]]
+        if not ids:
+            return []
+        binds = {f"id{i}": rid for i, rid in enumerate(ids)}
+        placeholders = ", ".join(f":id{i}" for i in range(len(ids)))
+        payload_rows = conn.execute(
+            text(f"SELECT run_id, payload FROM app_regression_runs WHERE run_id IN ({placeholders})"),
+            binds,
+        ).fetchall()
+    by_id: dict[str, dict[str, Any]] = {}
+    for rid, raw in payload_rows:
+        doc = _parse_payload(raw)
+        if doc.get("run_id"):
+            by_id[str(rid)] = doc
+    return [by_id[rid] for rid in ids if rid in by_id]
+
+
+def _count_runs(*, app_id: str = "", status: str = "") -> int:
+    from sqlalchemy import text
+
+    from mino_nexus.core.database import engine, ensure_db
+
+    ensure_db()
+    sql = "SELECT COUNT(*) FROM app_regression_runs WHERE 1=1"
+    params: dict[str, Any] = {}
+    if app_id:
+        sql += " AND app_id = :app_id"
+        params["app_id"] = app_id
+    if status:
+        sql += " AND status = :status"
+        params["status"] = status
+    with engine.connect() as conn:
+        return int(conn.execute(text(sql), params).scalar() or 0)
+
+
+def _distinct_app_ids() -> list[str]:
+    from sqlalchemy import text
+
+    from mino_nexus.core.database import engine, ensure_db
+
+    ensure_db()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT DISTINCT app_id FROM app_regression_runs WHERE app_id != ''")
+        ).fetchall()
+    return [str(r[0]) for r in rows if r and r[0]]
+
+
+def _upsert_run(doc: dict[str, Any]) -> None:
+    from mino_nexus.core.database import session_scope
+
+    with session_scope() as db:
+        db.merge(_run_row(doc))
+
+
+def _trim_runs(keep: int = _KEEP_RUNS) -> None:
+    from sqlalchemy import text
+
+    from mino_nexus.core.database import engine, ensure_db
+
+    ensure_db()
+    with engine.connect() as conn:
+        total = int(conn.execute(text("SELECT COUNT(*) FROM app_regression_runs")).scalar() or 0)
+        extra = total - int(keep)
+        if extra <= 0:
+            return
+        old = conn.execute(
+            text("SELECT run_id FROM app_regression_runs ORDER BY started_at ASC LIMIT :n"),
+            {"n": extra},
+        ).fetchall()
+        ids = [str(r[0]) for r in old if r and r[0]]
+        if not ids:
+            return
+        binds = {f"id{i}": rid for i, rid in enumerate(ids)}
+        placeholders = ", ".join(f":id{i}" for i in range(len(ids)))
+        conn.execute(text(f"DELETE FROM app_regression_runs WHERE run_id IN ({placeholders})"), binds)
+        conn.commit()
+    for rid in ids:
+        _LIVE.pop(rid, None)
 
 
 def _run_row(row: dict) -> Any:
@@ -58,21 +203,6 @@ def _run_row(row: dict) -> Any:
         started_at=str(row.get("started_at") or ""),
         finished_at=row.get("finished_at"),
     )
-
-
-def _persist_runs(runs: list[dict[str, Any]]) -> None:
-    from mino_nexus.core.database import session_scope
-    from mino_nexus.models.run import AppRegressionRun
-
-    with session_scope() as db:
-        keep = set()
-        for row in runs:
-            if isinstance(row, dict) and row.get("run_id"):
-                db.merge(_run_row(row))
-                keep.add(str(row["run_id"]))
-        for row in db.query(AppRegressionRun).all():
-            if row.run_id not in keep:
-                db.delete(row)
 
 
 def new_run_id() -> str:
@@ -207,6 +337,8 @@ def to_task_json(doc: dict[str, Any] | None, *, include_cases: bool = True) -> d
         "platform": doc.get("platform") or "android",
         "platforms_by_sn": dict(doc.get("platforms_by_sn") or {}),
         "env_profile": doc.get("env_profile") or "",
+        "env_surface": doc.get("env_surface") or "",
+        "action_scheme": "dom" if str(doc.get("action_scheme") or "").strip().lower() == "dom" else "visual",
         "package": doc.get("package") or "",
         "requirement_id": doc.get("requirement_id") or "",
         "release_id": doc.get("release_id") or "",
@@ -230,6 +362,8 @@ def to_task_json(doc: dict[str, Any] | None, *, include_cases: bool = True) -> d
         "current_case_id": doc.get("current_case_id") or "",
         "title": doc.get("title") or "",
         "engine": doc.get("engine") or "agent",
+        "boot_ms": int(doc.get("boot_ms") or 0),
+        "boot_phases": list(doc.get("boot_phases") or []),
     }
     cases = [c for c in (doc.get("cases") or []) if isinstance(c, dict)]
     if include_cases:
@@ -273,63 +407,69 @@ def _public_case(case: dict[str, Any]) -> dict[str, Any]:
 
 
 def put(doc: dict[str, Any]) -> dict[str, Any]:
-    doc = _recompute(doc)
+    doc = _slim_doc(_recompute(doc))
     rid = str(doc.get("run_id") or "")
     with _LOCK:
         _LIVE[rid] = doc
-        root = _root()
-        found = False
-        for i, row in enumerate(root["runs"]):
-            if isinstance(row, dict) and row.get("run_id") == rid:
-                root["runs"][i] = copy.deepcopy(doc)
-                found = True
-                break
-        if not found:
-            root["runs"].append(copy.deepcopy(doc))
-        root["runs"] = root["runs"][-400:]
-        _persist_runs(root["runs"])
+        _upsert_run(doc)
+        _trim_runs()
     return copy.deepcopy(doc)
 
 
 def get(run_id: str) -> Optional[dict[str, Any]]:
     rid = str(run_id or "").strip()
+    if not rid:
+        return None
     with _LOCK:
         if rid in _LIVE:
             return copy.deepcopy(_LIVE[rid])
-        for row in reversed(_root()["runs"]):
-            if isinstance(row, dict) and row.get("run_id") == rid:
-                return copy.deepcopy(row)
-    return None
+    rows = _fetch_payloads(limit=1, run_id=rid)
+    return copy.deepcopy(rows[0]) if rows else None
 
 
-def list_runs(*, limit: int = 30, app_id: str = "") -> list[dict[str, Any]]:
+def list_runs(
+    *,
+    limit: int = 30,
+    app_id: str = "",
+    status: str = "",
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    cap = max(0, int(limit or 30))
+    off = max(0, int(offset or 0))
+    want_app = str(app_id or "").strip()
+    want_status = str(status or "").strip().lower()
+    rows = _fetch_payloads(limit=cap, offset=off, app_id=want_app, status=want_status)
     with _LOCK:
-        rows = [copy.deepcopy(r) for r in _root()["runs"] if isinstance(r, dict)]
-        for live in _LIVE.values():
-            rid = live.get("run_id")
-            for i, row in enumerate(rows):
-                if row.get("run_id") == rid:
-                    rows[i] = copy.deepcopy(live)
-                    break
-            else:
-                rows.append(copy.deepcopy(live))
-    if app_id:
-        rows = [r for r in rows if r.get("app_id") == app_id]
-    rows.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
-    return rows[: max(0, int(limit or 30))]
+        live_docs = [copy.deepcopy(d) for d in _LIVE.values()]
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        rid = str(row.get("run_id") or "")
+        if rid:
+            by_id[rid] = row
+    for live in live_docs:
+        if want_app and str(live.get("app_id") or "") != want_app:
+            continue
+        if want_status and str(live.get("status") or "") != want_status:
+            continue
+        rid = str(live.get("run_id") or "")
+        if not rid:
+            continue
+        if rid in by_id or off == 0:
+            by_id[rid] = live
+    out = list(by_id.values())
+    out.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
+    return out[:cap] if off == 0 else out
 
 
 def list_tasks(app_id: str = "", status: str = "", limit: int = 50, offset: int = 0) -> dict[str, Any]:
-    rows = list_runs(limit=400, app_id=app_id)
     want = str(status or "").strip().lower()
-    tasks = [to_task_json(r, include_cases=False) for r in rows]
-    if want:
-        tasks = [t for t in tasks if t.get("status") == want]
-    total = len(tasks)
     offset = max(0, int(offset or 0))
     limit = max(0, int(limit or 50))
+    total = _count_runs(app_id=app_id, status=want)
+    rows = list_runs(limit=limit, offset=offset, app_id=app_id, status=want)
+    tasks = [to_task_json(r, include_cases=False) for r in rows]
     return {
-        "items": tasks[offset:offset + limit],
+        "items": tasks,
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -341,7 +481,7 @@ def list_tasks(app_id: str = "", status: str = "", limit: int = 50, offset: int 
 def summary_for_apps(app_ids: list[str]) -> list[dict[str, Any]]:
     ids = [a for a in app_ids if a]
     if not ids:
-        ids = list({str(r.get("app_id") or "") for r in list_runs(limit=400) if r.get("app_id")})
+        ids = _distinct_app_ids()
     out = []
     for aid in ids:
         rows = list_runs(limit=80, app_id=aid)
@@ -378,20 +518,42 @@ def _run_matches_sn(row: dict[str, Any], sn: str) -> bool:
     return want == str(row.get("sn") or "") or want in sns
 
 
+def running_index() -> dict[str, list[str]]:
+    """在途任务按设备聚合。只读 status=running，不扫历史 payload。"""
+    docs = _fetch_payloads(limit=80, status="running")
+    with _LOCK:
+        live = [copy.deepcopy(d) for d in _LIVE.values()]
+    by_id = {str(d.get("run_id") or ""): d for d in docs if d.get("run_id")}
+    for doc in live:
+        rid = str(doc.get("run_id") or "")
+        if not rid:
+            continue
+        if str(doc.get("status") or "") == "running":
+            by_id[rid] = doc
+        else:
+            by_id.pop(rid, None)
+    idx: dict[str, list[str]] = {}
+    for doc in by_id.values():
+        rid = str(doc.get("run_id") or "")
+        if not rid:
+            continue
+        sns = [str(x).strip() for x in (doc.get("sns") or []) if str(x).strip()]
+        head = str(doc.get("sn") or "").strip()
+        if head and head not in sns:
+            sns.insert(0, head)
+        for sn in sns:
+            bucket = idx.setdefault(sn, [])
+            if rid not in bucket:
+                bucket.append(rid)
+    return idx
+
+
 def running_run_ids_for_sn(sn: str, *, limit: int = 400) -> list[str]:
     """Nexus 侧在途任务（不依赖 Scout active_runs 上报）。"""
     want = str(sn or "").strip()
     if not want:
         return []
-    out: list[str] = []
-    for row in list_runs(limit=limit):
-        if row.get("status") != "running":
-            continue
-        if _run_matches_sn(row, want):
-            rid = str(row.get("run_id") or "")
-            if rid:
-                out.append(rid)
-    return out
+    return running_index().get(want, [])[: max(0, int(limit or 0)) or 400]
 
 
 def busy_task_for_sn(sn: str) -> str:
@@ -450,9 +612,7 @@ def cancel_run(run_id: str, *, reason: str = "已取消") -> dict[str, Any]:
 def reconcile_stale_running_runs(*, reason: str = "Nexus 重启，任务中断") -> list[str]:
     """启动时清扫僵尸 running（线程已死、仅 DB 残留）。"""
     done: list[str] = []
-    for row in list_runs(limit=400):
-        if str(row.get("status") or "") != "running":
-            continue
+    for row in list_runs(limit=80, status="running"):
         rid = str(row.get("run_id") or "").strip()
         if not rid:
             continue
@@ -495,7 +655,7 @@ def _session_status_for_close(case_status: str) -> str:
 
 
 def _close_open_sessions(doc: dict[str, Any], *, summary: str = "") -> None:
-    from mino_nexus.loop.session_log import force_close_session
+    from mino_nexus.loop.observe.session_log import force_close_session
 
     rid = str(doc.get("run_id") or "")
     for case in doc.get("cases") or []:
@@ -518,8 +678,8 @@ def _close_open_sessions(doc: dict[str, Any], *, summary: str = "") -> None:
 
 def interrupt_runs(run_ids: list[str], *, reason: str) -> list[str]:
     """节点断开 / 设备丢失：在途 run 立刻失败，不重派。"""
-    from mino_nexus.loop.agent_stream import emit_testing_task
-    from mino_nexus.loop.web_env import release_devices_for_run
+    from mino_nexus.loop.observe.agent_stream import emit_testing_task
+    from mino_nexus.loop.web.web_env import release_devices_for_run
 
     done: list[str] = []
     seen: set[str] = set()

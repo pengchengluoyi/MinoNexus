@@ -6,7 +6,7 @@ from typing import Any, Optional
 from mino_nexus.core.schemas import PlanEvent
 from mino_nexus.loop.router_proxy import RouterProxy
 from mino_nexus.loop.step_contract import instruction_allows_login_flow
-from mino_nexus.loop.web_env import frame_step
+from mino_nexus.loop.web.web_env import frame_step
 from mino_nexus.runtime.session_gate import compile_sms_send_hint
 
 

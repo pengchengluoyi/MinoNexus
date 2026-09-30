@@ -18,16 +18,25 @@ def _task_browser_key(ctx: Any) -> str:
 
 
 def note_web_context_start(ctx: Any) -> None:
-    """同一任务里第一次打开网页记为未登录。之后同进程里的打开沿用已记录的登录态。"""
+    """网页每次打开记为 guest。任务结束另记 logged_out，两词都是未登录，用来区分启动和收尾。"""
     if _platform(ctx) not in _WEB_PLATFORMS:
         return
     key = _task_browser_key(ctx)
     if not key.strip("|") or key in _OPEN_BROWSERS:
         return
     _OPEN_BROWSERS.add(key)
-    from mino_nexus.services.resource_transition import emit_device_logout
+    from mino_nexus.services.resource_transition import mark_web_run_devices
 
-    emit_device_logout(ctx, source="browser_start")
+    sn, pkg = _sn_pkg(ctx)
+    if not sn or not pkg:
+        return
+    mark_web_run_devices(
+        str(getattr(ctx, "run_id", "") or ""),
+        "guest",
+        source="browser_start",
+        package=pkg,
+        doc={"sn": sn, "package": pkg, "sns": [sn], "platform": "web"},
+    )
 
 
 def note_web_context_closed(ctx: Any) -> None:
@@ -48,7 +57,9 @@ def _sn_pkg(ctx: Any) -> tuple[str, str]:
 
 def remember_session(ctx: Any, session: str, source: str) -> None:
     """写入本趟上下文，并在有设备标识时落到 device_app_sessions。"""
-    sess = str(session or "unknown").strip().lower() or "unknown"
+    from mino_nexus.services.session_match import normalize_device_session
+
+    sess = normalize_device_session(session)
     src = str(source or "")[:32]
     setattr(ctx, "device_session", sess)
     setattr(ctx, "device_session_source", src)
@@ -57,7 +68,7 @@ def remember_session(ctx: Any, session: str, source: str) -> None:
         scene["observed_session"] = sess
         scene["observed_session_source"] = src
     sn, pkg = _sn_pkg(ctx)
-    if not sn or not pkg or sess == "unknown":
+    if not sn or not pkg:
         return
     if sess == "logged_in":
         from mino_nexus.services.resource_transition import emit_login_complete
@@ -68,6 +79,20 @@ def remember_session(ctx: Any, session: str, source: str) -> None:
         from mino_nexus.services.resource_transition import emit_device_logout
 
         emit_device_logout(ctx, package_id=pkg, source=src or "probe", sync_account=True)
+        return
+    if sess == "guest":
+        from mino_nexus.services.device_app_session_store import upsert_session
+
+        upsert_session(
+            sn,
+            pkg,
+            session="guest",
+            clear_binding=True,
+            stale=False,
+            stale_reason="",
+            lease_run_id=str(getattr(ctx, "run_id", "") or "")[:80],
+            source=src or "probe",
+        )
         return
     from mino_nexus.services.device_app_session_store import upsert_session
 
@@ -85,36 +110,24 @@ def stored_session(ctx: Any) -> tuple[str, str]:
     """返回 (session, note)。跨任务记录只作提示，不覆盖本趟已写入的值。"""
     sn, pkg = _sn_pkg(ctx)
     if not sn or not pkg:
-        return "unknown", "无设备会话记录"
+        return "guest", "没有设备会话记录，按 guest"
     from mino_nexus.services.device_app_session_store import get_session
+    from mino_nexus.services.session_match import normalize_device_session
 
     row = get_session(sn, pkg) or {}
-    sess = str(row.get("session") or "unknown").strip().lower() or "unknown"
+    sess = normalize_device_session(row.get("session") or "")
     run_id = str(getattr(ctx, "run_id", "") or "").strip()
     same = bool(run_id) and str(row.get("lease_run_id") or "") == run_id
-    if sess == "unknown":
-        return "unknown", "测试资源中登录态未知"
     note = "本趟已记录的登录态" if same else "跨任务登录态提示，执行中若不一致再登录或登出"
     return sess, note
 
 
 def screen_proves_session(row: dict[str, Any]) -> bool:
-    """隐私协议、启动弹窗不能当成登录态。登录入口或已登录主页可以。"""
+    """只认结构化 session。不从模型说明文字里找「已登录」「登录页」。"""
     if not row or not row.get("ok"):
         return False
     session = str(row.get("session") or "").strip().lower()
-    text = f"{row.get('reason') or ''} {row.get('seen') or ''}"
-    if any(w in text for w in ("协议", "隐私", "同意并继续", "同意", "启动弹窗")):
-        return False
-    if session == "logged_in" and any(
-        w in text for w in ("已登录", "退出登录", "个人主页", "Log out", "Sign out")
-    ):
-        return True
-    if session in ("guest", "logged_out") and any(
-        w in text for w in ("登录按钮", "登录页", "登录入口", "未登录", "Log in", "Sign in")
-    ):
-        return True
-    return False
+    return session in {"logged_in", "logged_out", "guest"}
 
 
 def _is_web_ctx(ctx: Any) -> bool:
@@ -143,8 +156,26 @@ def _app_web_url(ctx: Any) -> str:
     return ""
 
 
+def _guest_probe(summary: str) -> dict[str, Any]:
+    return {"session": "guest", "source": "tool_api", "summary": summary}
+
+
+def _web_probe_session(data: dict[str, Any], app_url: str) -> str:
+    """已登录只认当前被测站点上的 JWT 或明确令牌。否则 guest，不返回 unknown。"""
+    evidence = str(data.get("evidence") or "").strip()
+    host = str(data.get("host") or "").strip().lower()
+    expected = _host_of(app_url)
+    if str(data.get("session") or "").strip().lower() != "logged_in":
+        return "guest"
+    if evidence not in ("jwt", "auth_token") or not host:
+        return "guest"
+    if expected and not _hosts_related(host, expected):
+        return "guest"
+    return "logged_in"
+
+
 def probe_web_auth(ctx: Any, router: Any) -> dict[str, Any] | None:
-    """网页 Cookie / localStorage / sessionStorage。没有页面或能力未接通时返回 None。"""
+    """网页登录存储。已登录或 guest；读失败也是 guest。非网页或没有 router 时返回 None。"""
     if router is None or not _is_web_ctx(ctx):
         return None
     from mino_nexus.core.protocol import EventStatus
@@ -159,8 +190,8 @@ def probe_web_auth(ctx: Any, router: Any) -> dict[str, Any] | None:
         expected_executor="playwright",
     )
     run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
-    from mino_nexus.loop.program_tool_log import log_program_tool
-    from mino_nexus.loop.session_log import active_writer
+    from mino_nexus.loop.observe.program_tool_log import log_program_tool
+    from mino_nexus.loop.observe.session_log import active_writer
 
     writer = active_writer()
     try:
@@ -176,7 +207,7 @@ def probe_web_auth(ctx: Any, router: Any) -> dict[str, Any] | None:
             executor_used="playwright",
             source="relogin",
         )
-        return {"session": "unknown", "source": "tool_api", "summary": summary, "failed": True}
+        return _guest_probe(summary)
     status = getattr(res, "status", None)
     status_val = status.value if hasattr(status, "value") else str(status or "")
     raw = str(getattr(res, "summary", "") or "").strip()
@@ -190,51 +221,17 @@ def probe_web_auth(ctx: Any, router: Any) -> dict[str, Any] | None:
         source="relogin",
     )
     if status != EventStatus.PASS:
-        return {
-            "session": "unknown",
-            "source": "tool_api",
-            "summary": raw[:240] or "read_web_auth 未通过",
-            "failed": True,
-        }
+        return _guest_probe(raw[:240] or "read_web_auth 未通过，按 guest")
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        return {
-            "session": "unknown",
-            "source": "tool_api",
-            "summary": "read_web_auth 返回的不是登录态",
-            "failed": True,
-        }
+        return _guest_probe("read_web_auth 返回的不是登录态，按 guest")
     if not isinstance(data, dict):
-        return {
-            "session": "unknown",
-            "source": "tool_api",
-            "summary": "read_web_auth 返回的不是登录态",
-            "failed": True,
-        }
-    session = str(data.get("session") or "unknown").strip().lower()
-    evidence = str(data.get("evidence") or "").strip()
-    host = str(data.get("host") or "").strip().lower()
-    expected = _host_of(app_url)
-    if session == "logged_in" and (
-        evidence not in ("jwt", "auth_token")
-        or not host
-        or (expected and not _hosts_related(host, expected))
-    ):
-        return {
-            "session": "unknown",
-            "source": "tool_api",
-            "summary": "凭据没有落在当前被测网页上，不能当成已登录",
-            "failed": True,
-        }
-    if session not in ("logged_in", "logged_out", "guest"):
-        return {
-            "session": "unknown",
-            "source": "tool_api",
-            "summary": raw[:240] or "网页登录存储未能确认登录态",
-            "failed": True,
-        }
-    return {"session": session, "source": "tool_api", "summary": raw[:240]}
+        return _guest_probe("read_web_auth 返回的不是登录态，按 guest")
+    session = _web_probe_session(data, app_url)
+    if session == "logged_in":
+        return {"session": "logged_in", "source": "tool_api", "summary": raw[:240]}
+    return _guest_probe("凭据没有落在当前被测网页上，按 guest")
 
 
 def ensure_read_web_auth_capability() -> int:
@@ -264,24 +261,13 @@ def ensure_read_web_auth_capability() -> int:
 def observe_login_state(ctx: Any, router: Any, shot: Any) -> tuple[str, str]:
     """按优先级给出本趟登录态，并写入上下文。网页只读登录存储，不看图。"""
     if _is_web_ctx(ctx):
-        api = probe_web_auth(ctx, router) or {}
-        session = str(api.get("session") or "unknown").strip().lower()
-        if session in ("logged_in", "logged_out", "guest") and not api.get("failed"):
-            remember_session(ctx, session, "tool_api")
-            return session, f"接口确认 session={session}"
-        stored, note = stored_session(ctx)
-        if stored != "unknown":
-            setattr(ctx, "device_session", stored)
-            setattr(ctx, "device_session_source", "resource")
-            scene = getattr(ctx, "case_scene", None)
-            if isinstance(scene, dict):
-                scene["observed_session"] = stored
-                scene["observed_session_source"] = "resource"
-            return stored, f"{note}：session={stored}"
-        setattr(ctx, "device_session", "unknown")
-        setattr(ctx, "device_session_source", "tool_api")
-        reason = str(api.get("summary") or "").strip() or "网页登录存储未能确认登录态"
-        return "unknown", reason
+        api = probe_web_auth(ctx, router) or _guest_probe("未读取到网页登录存储，按 guest")
+        session = "logged_in" if str(api.get("session") or "") == "logged_in" else "guest"
+        remember_session(ctx, session, "tool_api")
+        if session == "logged_in":
+            return session, "接口确认 session=logged_in"
+        reason = str(api.get("summary") or "").strip() or "当前被测网页没有关联的登录凭据，按 guest"
+        return "guest", reason
 
     from mino_nexus.ai.planner import inspect_session
     from mino_nexus.runtime.session_gate import format_required_session_brief
@@ -301,25 +287,21 @@ def observe_login_state(ctx: Any, router: Any, shot: Any) -> tuple[str, str]:
         screen_h=int(getattr(shot, "height", 0) or 0) if shot else 0,
     )
     if screen_proves_session(row):
-        session = str(row.get("session") or "unknown").strip().lower()
-        if session == "guest":
-            session = "logged_out"
+        from mino_nexus.services.session_match import normalize_device_session
+
+        session = normalize_device_session(row.get("session") or "")
         stored, _stored_note = stored_session(ctx)
         remember_session(ctx, session, "screen")
         reason = str(row.get("reason") or "").strip() or f"当前屏证明 session={session}"
-        if stored not in ("", "unknown") and stored != session:
+        if stored != session:
             setattr(ctx, "session_contradiction", {"stored": stored, "screen": session})
             reason = f"同任务登录态矛盾：已记录 {stored}，当前屏 {session}。{reason}"
         return session, reason
 
     stored, note = stored_session(ctx)
-    if stored != "unknown":
-        setattr(ctx, "device_session", stored)
-        setattr(ctx, "device_session_source", "resource")
-        if isinstance(scene, dict):
-            scene["observed_session"] = stored
-            scene["observed_session_source"] = "resource"
-        return stored, f"{note}：session={stored}"
-    setattr(ctx, "device_session", "unknown")
-    setattr(ctx, "device_session_source", "unknown")
-    return "unknown", "接口与当前屏都无法证明登录态，测试资源中也没有记录"
+    setattr(ctx, "device_session", stored)
+    setattr(ctx, "device_session_source", "resource")
+    if isinstance(scene, dict):
+        scene["observed_session"] = stored
+        scene["observed_session_source"] = "resource"
+    return stored, f"{note}：session={stored}"

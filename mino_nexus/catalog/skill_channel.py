@@ -47,6 +47,7 @@ CAP_ALIASES = {
 # 目录里没有、但逻辑块会写的渠道技能。
 CHANNEL_PLATFORMS = {
     "clear_app_cache": frozenset({"android"}),
+    "confirm_login_state": frozenset({"web"}),
 }
 
 # 程序自己派发，规划追加时允许，不要求出现在 case 菜单。
@@ -125,14 +126,14 @@ def channel_platforms_for(cap_id: str) -> frozenset[str] | None:
     """有明确渠道限制时返回平台集合。全渠道返回 None。"""
     cap = canonical_cap(cap_id)
     extra = CHANNEL_PLATFORMS.get(cap)
+    if extra:
+        return extra
     from mino_nexus.catalog.registry import get_capability
 
     row = get_capability(cap)
     plats = [normalize_platform(p) for p in (getattr(row, "platforms", None) or []) if str(p).strip()]
     if plats:
         return frozenset(plats)
-    if extra:
-        return extra
     return None
 
 

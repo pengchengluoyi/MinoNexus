@@ -44,7 +44,7 @@ def run_vision_exec_turn(
         provider_id=provider_id or None,
         phase=phase,
         tool_kinds=phase_tool_kinds,
-        menu_ids=focus_exec_menu_ids(cursor),
+        menu_ids=focus_exec_menu_ids(cursor, ctx),
         session_block=session_block,
         knowledge_hint=str(inspect_slots.get("knowledge_hint") or ""),
         knowledge_body=str(inspect_slots.get("knowledge_body") or ""),

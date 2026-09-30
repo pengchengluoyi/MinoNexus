@@ -15,7 +15,14 @@ from mino_nexus.loop.milestones import (
 )
 from mino_nexus.loop.vision_flags import vision_plan_v1_enabled
 
-_PREP_APPEND_HINTS = ("确认", "验收", "登录态", "session", "游客", "未登录", "已登录", "guest")
+_PREP_APPEND_MUTATE = frozenset({
+    "tap_element",
+    "input_text",
+    "swipe_element_to_element",
+    "swipe_direction",
+    "long_press_element",
+    "multi_tap",
+})
 
 
 def _program_milestones_open(cursor: Any) -> bool:
@@ -130,13 +137,16 @@ def retire_repeat_wait_focus(cursor: Any, *, writer: Any = None) -> bool:
 
 
 def _prep_plan_append_allowed(raw: dict[str, Any]) -> bool:
+    """前置追加看 kind 和 hook_cap，不看标题里的固定词。"""
     kind = str((raw or {}).get("kind") or "").strip().lower()
     if kind in ("checkpoint", "internal"):
         return True
     if kind == "hook" and str((raw or {}).get("evaluate") or "").strip():
         return True
-    title = str((raw or {}).get("title") or "")
-    return any(h in title for h in _PREP_APPEND_HINTS)
+    caps = _row_cap_ids(raw)
+    if not caps:
+        return False
+    return not bool(caps & _PREP_APPEND_MUTATE)
 
 
 def _case_from_ctx(ctx: Any) -> dict[str, Any] | None:
@@ -301,7 +311,37 @@ def apply_vision_plan_to_cursor(
             )
         except Exception:  # noqa: BLE001
             pass
-    _append_rows(ms, by_id, kept, source="plan_append")
+    insert_before = bool(getattr(plan, "insert_before", False))
+    if insert_before and kept:
+        idx = next(
+            (
+                i
+                for i, row in enumerate(ms)
+                if str(row.get("status") or "").strip().lower() == "in_progress"
+            ),
+            len(ms),
+        )
+        if idx < len(ms):
+            ms[idx]["status"] = "pending"
+        inserted: list[dict[str, Any]] = []
+        for raw in kept:
+            row = _normalize_milestone_row(raw, warnings=[])
+            if not row:
+                continue
+            mid = str(row.get("id") or "").strip()
+            if mid and mid in by_id:
+                continue
+            row["source"] = "plan_insert"
+            row["status"] = "pending"
+            inserted.append(row)
+            if mid:
+                by_id[mid] = row
+        if inserted:
+            inserted[0]["status"] = "in_progress"
+            ms[idx:idx] = inserted
+            setattr(cursor, "milestone_hold_exec", True)
+    else:
+        _append_rows(ms, by_id, kept, source="plan_append")
     from mino_nexus.loop.milestones import _TERMINAL
 
     still_open = [
@@ -395,6 +435,10 @@ def run_vision_plan_turn_if_enabled(
     from mino_nexus.catalog.skill_channel import case_menu_ids
 
     criteria = dict(success_criteria_for_llm(cursor))
+    recovery = str(getattr(cursor, "correction_hint", "") or "").strip()
+    if recovery:
+        criteria["recovery"] = recovery
+        setattr(cursor, "correction_hint", "")
     allowed = sorted(case_menu_ids(ctx, phase))
     if allowed:
         criteria["allowed_capability_ids"] = allowed
@@ -432,6 +476,7 @@ def run_vision_plan_turn_if_enabled(
                     "case_step": case_step,
                     "thought": (plan.thought or "")[:500],
                     "milestone_count": len(st.get("milestones") or []),
+                    "insert_before": bool(getattr(plan, "insert_before", False)),
                     "parse_warnings": list(plan.parse_warnings or []),
                     "review_mode": bool(review_program_fail),
                 },

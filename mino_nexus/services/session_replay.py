@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from mino_nexus.core.log import SLog
-from mino_nexus.loop.session_harness import build_fork_plan, build_replay_plan, fork_state_from_plan
+from mino_nexus.loop.observe.session_harness import build_fork_plan, build_replay_plan, fork_state_from_plan
 from mino_nexus.services import app_automation as aas
 from mino_nexus.services import project_store as ps
 from mino_nexus.services import run_store

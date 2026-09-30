@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from mino_nexus.loop.hierarchy_slots import dom_structure_fingerprint
 from mino_nexus.loop.step_pointer import screen_fingerprint
 from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
-from mino_nexus.loop.web_progress import normalize_web_focus
+from mino_nexus.loop.web.web_progress import normalize_web_focus
 
 _WEB_DIALOG_RE = re.compile(r"\b(dialog|alertdialog|modal)\b", re.I)
 _WEB_FORM_RE = re.compile(r"^(input|textarea|select)\b|textbox|searchbox", re.I)
@@ -201,7 +201,7 @@ def _focused_input(nodes: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 def capture_decision_frame(proxy: Any, ctx: Any) -> tuple[Any, str]:
     """先采层级，再截屏。截屏不早于这次层级，卡片和判断用同一时刻。"""
-    from mino_nexus.loop.agent_stream import make_thumb
+    from mino_nexus.loop.observe.agent_stream import make_thumb
     from mino_nexus.loop.hierarchy_slots import capture
 
     snap = capture(proxy, turn_id=0)
@@ -252,11 +252,38 @@ def bind_fresh_observation(ctx: Any, proxy: Any) -> None:
 
 
 def attach_input_readback(ctx: Any, params: dict[str, Any] | None) -> dict[str, Any]:
-    """Web 输入在本地参数上附上读回值，供准出判断。不改派给设备的原参数。"""
+    """输入回看只认节点里的字。不改派给设备的原参数，也不用焦点回显。"""
     out = dict(params or {})
-    if ctx is None or ui_channel_from_ctx(ctx) != UiChannel.WEB:
+    if ctx is None:
         return out
     field = str(out.get("field") or "")
-    out["_field_value"] = read_field(ctx, getattr(ctx, "nav_hierarchy_nodes", None), field)
+    rows = _nodes(getattr(ctx, "nav_hierarchy_nodes", None))
+    fld = field.strip().lower()
+    hit = None
+    if ui_channel_from_ctx(ctx) == UiChannel.WEB:
+        if fld in ("email", "login_email"):
+            from mino_nexus.loop.ui_dom import find_dom_email_field
+
+            hit = find_dom_email_field(rows)
+        elif fld in ("phone", "tel"):
+            from mino_nexus.loop.ui_dom import find_dom_phone_field
+
+            hit = find_dom_phone_field(rows)
+        elif fld in ("sms_code", "otp", "验证码"):
+            from mino_nexus.loop.ui_dom import find_dom_otp_field
+
+            hit = find_dom_otp_field(rows) or _focused_input(rows)
+    else:
+        if fld in ("email", "login_email"):
+            from mino_nexus.loop.ui_sms_request import find_android_email_field
+
+            hit = find_android_email_field(rows)
+        elif fld in ("phone", "tel"):
+            from mino_nexus.loop.ui_sms_request import find_phone_field
+
+            hit = find_phone_field(rows)
+        else:
+            hit = _focused_input(rows)
+    out["_field_value"] = _node_value(hit)
     out["_field_value_read"] = True
     return out

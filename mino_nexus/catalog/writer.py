@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from mino_nexus.catalog.exec_classes import ALL_KINDS, CAPABILITY_KINDS, RECOVERY_KIND
+from mino_nexus.catalog.exec_classes import ALL_KINDS, BASE_KIND, CAPABILITY_KINDS, RECOVERY_KIND
 from mino_nexus.catalog.models import Capability, RecoveryRule
 from mino_nexus.catalog.recovery_shape import is_recovery_atomic_payload, is_recovery_rule_payload
 
@@ -285,6 +285,8 @@ def _validate(kind: str, fields: dict[str, Any]) -> None:
                     params=list(payload.get("params") or []) if isinstance(payload.get("params"), list) else [],
                     ui=payload.get("ui") if isinstance(payload.get("ui"), dict) else {},
                 )
+            return
+        if kind == BASE_KIND:
             return
     except ValidationError as exc:
         raise CatalogWriteError(str(exc)) from exc

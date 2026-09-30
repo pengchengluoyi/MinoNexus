@@ -25,7 +25,7 @@ DEFAULT_SOP = {
             "job": "agent-vision-plan",
             "exec_job": "agent-vision-exec",
             "tool_kinds": ["generic", "recovery"],
-            "guards": ["skip_repeat_check_run_env", "skip_repeat_get_app_version", "skip_repeat_read_device", "skip_repeat_clear_app_cache", "prep_clear_before_launch", "skip_repeat_launch_app", "skip_recover_bring_when_foreground", "skip_recover_screen_when_display_guard", "action_fuse", "exec_script_params", "block_login_flow_unless_step_scope", "block_mutate_when_thought_done", "block_prep_guest_mine_tab"],
+            "guards": ["prep_clear_before_launch", "exec_script_params", "action_fuse"],
             "advance_on": "milestones",
         },
         {
@@ -33,7 +33,7 @@ DEFAULT_SOP = {
             "job": "agent-vision-plan",
             "exec_job": "agent-vision-exec",
             "tool_kinds": ["generic", "recovery"],
-            "guards": ["action_fuse", "limit_recovery_retry", "block_mutate_when_thought_done", "block_back_without_nav_back_semantics", "block_login_after_guest", "block_login_flow_unless_step_scope", "block_do_after_step_goal", "block_idle_wait_in_do", "swipe_direction_vs_instruction", "skip_repeat_swipe_stuck", "skip_repeat_structural_cap", "block_repeat_get_otp_when_ready", "require_sms_send_before_otp", "block_repeat_email_tab", "require_otp_before_login_tap", "require_do_work", "block_assert_in_do", "skip_repeat_launch_app", "skip_recover_bring_when_foreground", "skip_recover_screen_when_display_guard", "block_fsm_off_step_target", "skip_repeat_fsm_open_loop", "skip_repeat_fsm_declined"],
+            "guards": ["action_fuse", "limit_recovery_retry", "require_sms_send_before_otp", "block_repeat_get_otp_when_ready", "require_otp_before_login_tap", "block_fsm_off_step_target", "block_back_without_nav_back_semantics", "block_assert_in_do"],
             "advance_on": "milestones",
         },
         {
@@ -131,7 +131,7 @@ def builtin_skills() -> list[dict[str, Any]]:
                         "id": "do",
                         "job": "agent-decide",
                         "tool_kinds": ["generic", "recovery"],
-                        "guards": ["action_fuse", "limit_recovery_retry", "block_login_after_guest"],
+                        "guards": ["action_fuse", "limit_recovery_retry"],
                         "advance_on": "signal_done",
                     },
                 ],

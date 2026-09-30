@@ -185,10 +185,14 @@ def try_run_system_dialog_macro(
     """系统挡屏时走 fb.global.system_dialog（与 recovery unified 同源）。"""
     if getattr(ctx, "system_dialog_macro_done", False):
         return None
+    from mino_nexus.loop.recovery_permission import permission_choice_dialog_present
+
+    nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
+    choice_dialog = permission_choice_dialog_present(nodes)
     overlay = str(getattr(ctx, "system_overlay", "") or "").strip().lower()
     fg = str(getattr(ctx, "app_foreground", "") or "").strip().lower()
     overlay_on = overlay in ("yes", "true", "1")
-    if not overlay_on and fg != "no":
+    if not choice_dialog and not overlay_on and fg != "no":
         return None
     from mino_nexus.loop.system_dialog_recovery import try_proactive_system_permission
 

@@ -144,13 +144,15 @@ def history_block_scoped(
 
 def build_session_json(ctx: Any, slot_block: str = "") -> dict[str, Any]:
     from mino_nexus.loop.session_ensure import parse_session_value
-    from mino_nexus.loop.session_persist import execution_context_session_line
+    from mino_nexus.loop.observe.session_persist import execution_context_session_line
 
     fact = dict(getattr(ctx, "session_fact", None) or {})
     scene = dict(getattr(ctx, "case_scene", None) or {})
     block = str(slot_block or "").strip()
     parsed = parse_session_value(block) if block and not block.startswith("（") else ""
-    session = str(fact.get("session") or parsed or "unknown").strip().lower()
+    from mino_nexus.services.session_match import normalize_device_session
+
+    session = normalize_device_session(fact.get("session") or parsed or "")
     return {
         "session": session,
         "identity": str(fact.get("identity") or "").strip(),

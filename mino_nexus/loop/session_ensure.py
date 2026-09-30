@@ -101,7 +101,11 @@ def session_mismatch_reason(
 ) -> Optional[str]:
     req = required_session(scene=scene)
     current = parse_session_value(session_block)
-    if not req or req == "any" or not current or current in ("unknown",):
+    from mino_nexus.services.session_match import normalize_device_session
+
+    if current:
+        current = normalize_device_session(current)
+    if not req or req == "any" or not current:
         return None
     if req == "guest" and current == "logged_in":
         return (
@@ -209,7 +213,7 @@ def try_logout_via_nav(
     if router is None:
         return False, "未连接设备，无法执行 logout"
     from mino_nexus.core.schemas import PlanEvent
-    from mino_nexus.loop.web_env import agent_step_idx
+    from mino_nexus.loop.web.web_env import agent_step_idx
 
     event = PlanEvent(
         seq=seq,

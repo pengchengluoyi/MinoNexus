@@ -47,6 +47,53 @@ def _lease_account(ctx: Any) -> tuple[str, str]:
     return pid, aid
 
 
+def mark_web_run_devices(
+    run_id: str,
+    session: str,
+    *,
+    source: str,
+    package: str = "",
+    doc: dict[str, Any] | None = None,
+) -> None:
+    """网页任务的机态标记。启动写 guest，结束写 logged_out。不改账号 facets。"""
+    from mino_nexus.runtime.run_context import is_web_slot
+    from mino_nexus.services.session_match import normalize_device_session
+
+    rid = str(run_id or "").strip()
+    sess = normalize_device_session(session)
+    if sess not in ("guest", "logged_out"):
+        return
+    body = doc if isinstance(doc, dict) else {}
+    if not body and rid:
+        from mino_nexus.services import run_store
+
+        body = run_store.get(rid) or {}
+    pkg = str(package or body.get("package") or "").strip()
+    if not pkg:
+        return
+    platforms = body.get("platforms_by_sn") if isinstance(body.get("platforms_by_sn"), dict) else {}
+    sns = [str(x).strip() for x in (body.get("sns") or []) if str(x).strip()]
+    head = str(body.get("sn") or "").strip()
+    if head and head not in sns:
+        sns.insert(0, head)
+    task_plat = str(body.get("platform") or "").strip().lower()
+    for sn in sns:
+        plat = str(platforms.get(sn) or "").strip().lower()
+        if not is_web_slot(sn, plat or task_plat):
+            continue
+        upsert_session(
+            sn,
+            pkg,
+            session=sess,
+            clear_binding=True,
+            stale=False,
+            stale_reason="",
+            lease_run_id=rid[:80],
+            source=str(source or "")[:32],
+        )
+        SLog.i(TAG, f"web device session={sess} sn={sn[:8]} source={source}")
+
+
 def emit_device_logout(
     ctx: Any,
     *,
@@ -94,9 +141,9 @@ def emit_clear_app_cache(ctx: Any, *, package_id: str = "") -> None:
 def emit_inspect_session(ctx: Any, row: dict[str, Any] | None, *, package_id: str = "") -> None:
     if not isinstance(row, dict) or not row.get("ok"):
         return
-    session = str(row.get("session") or "").strip().lower()
-    if session not in ("logged_in", "guest", "logged_out", "unknown"):
-        return
+    from mino_nexus.services.session_match import normalize_device_session
+
+    session = normalize_device_session(row.get("session") or "")
     sn = _ctx_sn(ctx)
     pkg = _ctx_package(ctx, package_id)
     if not sn or not pkg:

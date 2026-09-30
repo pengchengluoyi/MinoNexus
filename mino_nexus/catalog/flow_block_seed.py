@@ -23,7 +23,24 @@ _UNIFIED_LOGIN_STEPS = [
         "hook_cap": "lease_account",
         "cap": "input_text",
     },
-    {"id": "send_code", "kind": "visual_tap", "title": "发送验证码", "cap": "tap_element"},
+    {
+        "id": "send_code",
+        "kind": "visual_tap",
+        "title": "发送验证码",
+        "cap": "tap_element",
+        "match": ["Send", "Send code", "Get code", "Resend", "发送验证码", "获取验证码", "重新发送"],
+        "exclude": [
+            "Continue",
+            "通过 Google 继续操作",
+            "通过 Apple 继续操作",
+            "Continue with Google",
+            "Continue with Apple",
+            "登录",
+            "Log in",
+            "Login",
+            "Sign in",
+        ],
+    },
     {
         "id": "otp_fetch",
         "kind": "hook",
@@ -54,6 +71,21 @@ _UNIFIED_LOGIN_STEPS = [
         "kind": "visual_tap",
         "title": "提交登录",
         "cap": "tap_element",
+        "match": ["登录", "Log in", "Login", "Sign in"],
+        "match_when": [{"text": "Continue", "when": "otp_filled"}],
+        "exclude": [
+            "Send",
+            "Send code",
+            "Get code",
+            "Resend",
+            "发送验证码",
+            "获取验证码",
+            "重新发送",
+            "通过 Google 继续操作",
+            "通过 Apple 继续操作",
+            "Continue with Google",
+            "Continue with Apple",
+        ],
         "fuse": {"same_target_repeat": 2, "action": "fuse_block"},
     },
     {
@@ -82,7 +114,7 @@ def seed_global_flow_blocks() -> int:
                 "display_name": "登录流（通用）",
                 "description": "登录入口→填账号→发码→取码→填验证码→同意协议→提交→确认登录态。lease_account / get_otp 按用例给凭证。",
                 "steps_json": list(_UNIFIED_LOGIN_STEPS),
-                "version": "v9",
+                "version": "v10",
             },
             {
                 "block_id": SYSTEM_DIALOG_BLOCK_ID,
@@ -121,7 +153,7 @@ def seed_global_flow_blocks() -> int:
                     existing.display_name = str(row["display_name"])
                     n += 1
                 ver = str(row.get("version") or "")
-                if ver in ("v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9") and str(existing.version or "") != ver:
+                if ver in ("v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10") and str(existing.version or "") != ver:
                     existing.steps_json = row["steps_json"]
                     existing.version = ver
                     existing.display_name = str(row["display_name"])

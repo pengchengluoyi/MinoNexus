@@ -56,7 +56,7 @@ def _safe_record_llm(*, messages, parsed=None, raw_text: str = "", meta=None) ->
         if did and isinstance(meta, dict):
             meta["dispatch_id"] = did
         try:
-            from mino_nexus.loop.session_log import append_llm_response
+            from mino_nexus.loop.observe.session_log import append_llm_response
 
             append_llm_response(row)
         except Exception:

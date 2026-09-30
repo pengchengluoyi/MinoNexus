@@ -41,7 +41,7 @@ _KEYS = (
 def _emit(event: str, payload: dict[str, Any]) -> None:
     """写不进去也不能影响跑批 —— 遥测是观测，不是主链。"""
     try:
-        from mino_nexus.loop.session_log import active_writer
+        from mino_nexus.loop.observe.session_log import active_writer
 
         writer = active_writer()
         if writer is None:

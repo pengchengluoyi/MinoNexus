@@ -179,6 +179,9 @@ def milestones_from_flow_steps(
                 row["device_cap"] = device_cap
         elif device_cap:
             row["device_cap"] = device_cap
+        for key in ("match", "exclude", "match_when"):
+            if step.get(key):
+                row[key] = step.get(key)
         rows.append(row)
     if rows:
         return rows
@@ -508,6 +511,18 @@ def _mark_hook_ready_flag(state: dict[str, Any], milestone_id: str, flag: str) -
     state["milestones"] = ms
 
 
+def _tool_matches_declared(row: dict[str, Any], cap: str) -> bool:
+    """里程碑写了能力时，别的技能不能把它记成完成。"""
+    declared = {
+        str(row.get(key) or "").strip()
+        for key in ("device_cap", "hook_cap", "cap")
+        if str(row.get(key) or "").strip()
+    }
+    if not declared:
+        return True
+    return cap in declared or any(_hook_cap_matches_tool(item, cap) for item in declared)
+
+
 def note_tool_pass_milestone(
     cursor: Any,
     *,
@@ -603,6 +618,15 @@ def note_tool_pass_milestone(
                 row["exit_eval"] = "pass"
                 changed = True
                 break
+            if cap == "tap_element":
+                from mino_nexus.loop.intent_tap import tap_surface_blocks_pass
+
+                if tap_surface_blocks_pass(
+                    cursor, row, params=p, summary=str(tool_summary or ""), writer=writer, ctx=ctx
+                ):
+                    break
+            if not _tool_matches_declared(row, cap):
+                break
             row["status"] = "pass"
             row["evidence"] = cap
             changed = True
@@ -660,6 +684,15 @@ def note_tool_pass_milestone(
                 setattr(cursor, "otp_field_refocus_after_rewind", False)
             if cap == "tap_element" and rid == "account_field":
                 _record_email_field_tap_coords(ctx, p)
+            if cap == "tap_element":
+                from mino_nexus.loop.intent_tap import tap_surface_blocks_pass
+
+                if tap_surface_blocks_pass(
+                    cursor, row, params=p, summary=str(tool_summary or ""), writer=writer, ctx=ctx
+                ):
+                    break
+            if not _tool_matches_declared(row, cap):
+                break
             row["status"] = "pass"
             row["evidence"] = cap
             changed = True
@@ -872,7 +905,7 @@ def note_tool_pass_milestone(
     from mino_nexus.loop.milestone_orchestrator import advance_in_progress_focus
 
     advance_in_progress_focus(cursor, writer=writer)
-    from mino_nexus.loop.interrupt_stack import maybe_pop_interrupt
+    from mino_nexus.loop.fuse.interrupt_stack import maybe_pop_interrupt
 
     maybe_pop_interrupt(cursor, writer=writer)
     pg = getattr(cursor, "progress_gate", None)
@@ -897,7 +930,7 @@ def note_tool_fail_milestone(
 
     if not vision_exec_v1_enabled():
         return False
-    from mino_nexus.loop.interrupt_stack import note_in_progress_tool_fail
+    from mino_nexus.loop.fuse.interrupt_stack import note_in_progress_tool_fail
 
     return note_in_progress_tool_fail(
         cursor,
@@ -930,7 +963,7 @@ def _seed_login_when_required_session_unmet(cursor: Any, ctx: Any, *, writer: An
     if required_session(scene=scene if isinstance(scene, dict) else None) != "logged_in":
         return
     session = str(getattr(ctx, "device_session", "") or "").strip().lower()
-    if session in ("", "logged_in", "unknown"):
+    if session in ("", "logged_in"):
         return
     if _case_steps_include_login(getattr(ctx, "case", None)):
         return
@@ -1305,7 +1338,7 @@ def evaluate_milestones(
         write_state(cursor, state)
         return MilestoneVerdict(phase_complete=True, status="pass", summary="程序化校验通过")
     if not pending_required:
-        from mino_nexus.loop.interrupt_stack import stack_depth
+        from mino_nexus.loop.fuse.interrupt_stack import stack_depth
 
         if stack_depth(cursor) > 0:
             return MilestoneVerdict(

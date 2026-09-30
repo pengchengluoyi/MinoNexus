@@ -97,6 +97,8 @@ def find_dom_email_field(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]
     if not ranked:
         return None
     ranked.sort(key=lambda row: row[0], reverse=True)
+    if len(ranked) == 1:
+        return ranked[0][1]
     best_score, best = ranked[0]
     if best_score < 25:
         return None

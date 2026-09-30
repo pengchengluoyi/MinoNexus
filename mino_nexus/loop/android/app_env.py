@@ -7,7 +7,7 @@ from mino_nexus.core.log import SLog
 from mino_nexus.core.protocol import EventStatus
 from mino_nexus.core.schemas import PlanEvent
 from mino_nexus.loop.router_proxy import RouterProxy
-from mino_nexus.loop.web_env import frame_step
+from mino_nexus.loop.web.web_env import frame_step
 from mino_nexus.runtime.run_context import is_web_slot
 TAG = "AppEnv"
 

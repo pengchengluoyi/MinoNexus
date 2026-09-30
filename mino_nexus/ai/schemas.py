@@ -416,6 +416,10 @@ class VisionPlanDecision(BaseModel):
         False,
         description="准出。默认 false；仅当本回合判断执行完剩余列表即可离开本步时为 true。false 表示不改已有值。",
     )
+    insert_before: bool = Field(
+        False,
+        description="为 true 时把 milestones_append 插到当前 in_progress 之前，当前行改回 pending，本回合不执行。",
+    )
     raw_llm: dict[str, Any] = Field(default_factory=dict)
     parse_warnings: list[str] = Field(default_factory=list)
 

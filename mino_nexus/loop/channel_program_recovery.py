@@ -37,7 +37,7 @@ def maybe_recover_foreground(
     """hierarchy 错前台时程序拉起；Web 槽直接跳过。"""
     if ui_channel_from_ctx(ctx) == UiChannel.WEB:
         return None
-    from mino_nexus.loop.app_env import launch_if_hierarchy_away
+    from mino_nexus.loop.android.app_env import launch_if_hierarchy_away
 
     return launch_if_hierarchy_away(
         proxy,

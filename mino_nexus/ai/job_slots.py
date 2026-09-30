@@ -50,7 +50,7 @@ def assemble_agent_decide_slots(
     ph = str(phase or "do").strip().lower()
     sess_obj = dict(session_json or {})
     if not sess_obj:
-        sess_obj = {"session": "unknown", "note": "session_json missing"}
+        sess_obj = {"session": "guest", "note": "session_json missing"}
     if ph == "prep":
         sess_default = "（前置不观察登录态；按 precondition 完成即可 signal_done。）"
     else:

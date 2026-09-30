@@ -80,6 +80,7 @@ class RunContext:
     app_version: str = ""
     env_profile: str = ""
     env_surface: str = ""
+    action_scheme: str = "visual"
     env_label: str = ""
     env_fact: dict[str, Any] = field(default_factory=dict)
     # 发码时刻（unix），Gmail IMAP 取码时间窗

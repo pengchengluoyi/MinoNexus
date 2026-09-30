@@ -73,7 +73,7 @@ def _clause_for_field_option(defn: dict[str, Any], value: str, label: str = "") 
     key = str(defn.get("key") or "").strip()
     val = str(value or "").strip().lower()
     if key == "session" and val == "logged_out":
-        return _clause("session", "in", "logged_out,guest,unknown")
+        return _clause("session", "in", "logged_out,guest")
     if key == "lifecycle" and val == "unregistered":
         return _clause("lifecycle", "in", "unregistered,unknown")
     return _clause(key, "eq", val)
@@ -271,7 +271,12 @@ def _clauses_for_account_data(value: str, field_defs: list[dict[str, Any]]) -> l
 
 
 def _clauses_for_account_login(value: str) -> list[dict[str, str]]:
+    from mino_nexus.services.session_match import precondition_account_session
+
     defn = _session_field_def()
+    mapped = precondition_account_session(value)
+    if mapped in ("logged_out", "guest", "logged_in"):
+        return [_clause_for_field_option(defn, mapped)]
     clause = _clause_for_named_status(defn, value)
     return [clause] if clause else []
 

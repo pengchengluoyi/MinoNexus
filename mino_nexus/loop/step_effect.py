@@ -365,7 +365,7 @@ def maybe_mark_deferred_nav_tab(
     """expected 延后到 check 时，人已在目标页则 nav_tab 意图视为完成（底栏 Tab 可能已不可见）。"""
     from mino_nexus.loop.step_intent import instruction_required_intents
     from mino_nexus.loop.step_pointer import _expected_defers_to_check
-    from mino_nexus.loop.thought_done import thought_implies_signal_done
+    from mino_nexus.loop.fuse.thought_done import thought_implies_signal_done
 
     if not _expected_defers_to_check(expected):
         return False

@@ -224,7 +224,7 @@ def collect_evidence(ctx, router, *, target_package: str = "") -> Evidence:
         label="设备取证",
     )
     try:
-        from mino_nexus.loop.web_env import frame_step
+        from mino_nexus.loop.web.web_env import frame_step
 
         scout_run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
         case_seq = int(getattr(ctx, "case_seq", 0) or 0)
@@ -419,7 +419,7 @@ def _dispatch(
 ):
     if is_local_cap(event.capability_id):
         return dispatch_local(event, ctx=ctx, router=router)
-    from mino_nexus.loop.web_env import frame_step, recovery_action_step_idx
+    from mino_nexus.loop.web.web_env import frame_step, recovery_action_step_idx
 
     scout_run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
     case_seq = int(getattr(ctx, "case_seq", 0) or 0)

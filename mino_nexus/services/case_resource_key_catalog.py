@@ -140,7 +140,7 @@ def _entries() -> list[dict[str, Any]]:
             claim_path="account.required_session / account.requirements.session",
             resource="pool_accounts + pool_account_facets.session",
             config_keys=["session"],
-            dsl="session eq logged_in | session in logged_out,guest,unknown",
+            dsl="session eq logged_in | session in logged_out,guest",
             runtime="仅当写了「账号登录态」才约束号池；勿映射 login_flow",
         ),
         _entry(
@@ -480,7 +480,7 @@ def _example_claim() -> dict[str, Any]:
         "target_app": {"app_id": "<项目内应用 ID>", "package": "<包名，派单解析>"},
         "device_app": {
             "required_session": "logged_out",
-            "allow": ["logged_out", "guest", "unknown"],
+            "allow": ["logged_out", "guest"],
             "prep": [{"kind": "clear_cache", "phase": "before_launch", "text": "清除应用缓存"}],
             "binding": "must_match_lease",
         },

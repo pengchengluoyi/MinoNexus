@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mino_nexus.loop.session_project import project_turns
+from mino_nexus.loop.observe.session_project import project_turns
 from mino_nexus.services import session_store
 
 

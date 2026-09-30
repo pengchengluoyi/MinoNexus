@@ -406,7 +406,9 @@ def reconcile_inspect_session(row: dict[str, Any], *, required: str = "any") -> 
     if not row.get("ok"):
         return row
     req = str(required or "any").strip().lower()
-    session = str(row.get("session") or "unknown").strip().lower()
+    from mino_nexus.services.session_match import normalize_device_session
+
+    session = normalize_device_session(row.get("session") or "")
     nxt = str(row.get("next") or "keep").strip().lower()
     if req == "guest" and session == "logged_in" and nxt == "keep":
         reason = str(row.get("reason") or "").strip()
@@ -466,20 +468,15 @@ def observe_session(
     seen = str(row.get("seen") or "")[:240]
     blob = seen or str(screen_text or "")
 
-    observed = "unknown"
-    how = "unknown"
+    from mino_nexus.services.session_match import normalize_device_session
+
+    observed = normalize_device_session(vlm_session)
+    how = "vlm" if inspect_ok else ""
     reason = str(row.get("reason") or "")
-    if vlm_session == "logged_in":
-        observed = "logged_in"
-        how = "vlm"
+    if observed == "logged_in":
         reason = reason or "看图判定已登录"
-    elif vlm_session == "logged_out":
-        observed = "guest"
-        how = "vlm"
-        reason = reason or "看图判定未登录"
-    else:
-        how = "vlm" if inspect_ok else "unknown"
-        reason = reason or "看图无法确认登录态"
+    elif not reason:
+        reason = "看图没有已登录凭据，按 guest" if observed == "guest" else "看图判定未登录"
 
     wx_blob = f"{seen} {reason}" if inspect_ok else ""
     return {
@@ -499,8 +496,10 @@ def observe_session(
 
 def evaluate_gate(fact: dict[str, Any]) -> dict[str, Any]:
     """返回 {ok, status, category, reason}。status 为 pass|fail|untestable。"""
+    from mino_nexus.services.session_match import normalize_device_session
+
     required = str(fact.get("required") or "any")
-    observed = str(fact.get("observed") or "unknown")
+    observed = normalize_device_session(fact.get("observed") or "")
     if required == "any":
         return {"ok": True, "status": "pass", "category": "", "reason": ""}
     if required == "logged_in":
@@ -524,7 +523,7 @@ def evaluate_gate(fact: dict[str, Any]) -> dict[str, Any]:
             "reason": reason[:240],
         }
     if required == "guest":
-        if observed == "guest":
+        if observed in ("guest", "logged_out"):
             return {"ok": True, "status": "pass", "category": "", "reason": ""}
         if observed == "logged_in":
             return {
@@ -557,7 +556,9 @@ def can_reuse_task_session(
     if dirty:
         return False
     sess = task_session if isinstance(task_session, dict) else {}
-    observed = str(sess.get("observed") or "").strip().lower()
+    from mino_nexus.services.session_match import normalize_device_session
+
+    observed = normalize_device_session(sess.get("observed") or "")
     logged_in = bool(sess.get("logged_in")) or observed == "logged_in"
     want = str(required or "any").strip().lower() or "any"
     phone = re.sub(r"\s+", "", str(picked_phone or ""))
@@ -569,5 +570,5 @@ def can_reuse_task_session(
     if want == "guest":
         return observed == "guest" or (not logged_in and observed in {"guest", "logged_out"})
     if want == "any":
-        return bool(observed and observed != "unknown")
+        return bool(observed)
     return False

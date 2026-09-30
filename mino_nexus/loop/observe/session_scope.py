@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from mino_nexus.core.log import SLog
-from mino_nexus.loop.session_persist import mark_session_dirty
+from mino_nexus.loop.observe.session_persist import mark_session_dirty
 from mino_nexus.runtime.session_gate import required_session
 
 TAG = "SessionScope"
@@ -16,7 +16,7 @@ def begin_case_session_scope(ctx: Any, *, case_id: str, scene: dict[str, Any] | 
     setattr(ctx, "case_session_scope_id", cid)
     mark_session_dirty(ctx, reason=f"case_start:{cid or '?'}")
     ctx.session_fact = {
-        "session": "unknown",
+        "session": "guest",
         "identity": "",
         "seen": "",
         "source": "case_start",

@@ -16,6 +16,8 @@ def build_resource_card(
     preflight_gaps: list[str] | None = None,
     account_lease: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from mino_nexus.services.session_match import normalize_device_session
+
     rk = resource_key if isinstance(resource_key, dict) else {}
     da = rk.get("device_app") if isinstance(rk.get("device_app"), dict) else {}
     acct = rk.get("account") if isinstance(rk.get("account"), dict) else {}
@@ -39,7 +41,7 @@ def build_resource_card(
             "prep": list(da.get("prep") or [])[:20],
         },
         "registry": {
-            "session": str(reg.get("session") or "unknown"),
+            "session": normalize_device_session(reg.get("session") or ""),
             "bound_account_id": str(reg.get("bound_account_id") or ""),
             "stale": bool(reg.get("stale")),
         },

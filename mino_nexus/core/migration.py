@@ -56,6 +56,14 @@ def run_auto_migration() -> None:
         _ensure_column("doc_sources", "auto_sync", "auto_sync INTEGER DEFAULT 0")
         _ensure_column("doc_sources", "sync_interval_sec", "sync_interval_sec INTEGER DEFAULT 3600")
         _ensure_column("doc_chunks", "embedding_json", "embedding_json JSON")
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_app_regression_runs_started "
+                    "ON app_regression_runs(started_at)"
+                )
+            )
+            conn.commit()
         from mino_nexus.services.doc_store import ensure_fts
 
         ensure_fts()

@@ -97,19 +97,19 @@ def _session_cli(argv: list[str]) -> int:
     ensure_db()
 
     if args.cmd == "eval":
-        from mino_nexus.loop.session_harness import project_eval
+        from mino_nexus.loop.observe.session_harness import project_eval
 
         print(json.dumps(project_eval(args.session_id), ensure_ascii=False, indent=2))
     elif args.cmd == "audit":
-        from mino_nexus.loop.session_harness import project_audit
+        from mino_nexus.loop.observe.session_harness import project_audit
 
         print(json.dumps(project_audit(args.session_id), ensure_ascii=False, indent=2))
     elif args.cmd == "replay-plan":
-        from mino_nexus.loop.session_harness import build_replay_plan
+        from mino_nexus.loop.observe.session_harness import build_replay_plan
 
         print(json.dumps(build_replay_plan(args.session_id, up_to_turn=args.turn), ensure_ascii=False, indent=2))
     elif args.cmd == "fork-plan":
-        from mino_nexus.loop.session_harness import build_fork_plan
+        from mino_nexus.loop.observe.session_harness import build_fork_plan
 
         print(json.dumps(
             build_fork_plan(
@@ -121,7 +121,7 @@ def _session_cli(argv: list[str]) -> int:
             indent=2,
         ))
     elif args.cmd == "harvest":
-        from mino_nexus.loop.session_harness import harvest_sessions
+        from mino_nexus.loop.observe.session_harness import harvest_sessions
 
         expect = {}
         if args.expect_status:

@@ -32,7 +32,6 @@ GUARD_CODES: dict[str, str] = {
     "limit_recovery_retry": "limit_recovery_retry",
     "stuck_alternation": "stuck_alternation",
     "block_login_after_guest": "block_login_after_guest",
-    "block_login_flow_unless_step_scope": "block_login_flow_unless_step_scope",
     "block_mutate_when_thought_done": "block_mutate_when_thought_done",
     "block_prep_guest_mine_tab": "block_prep_guest_mine_tab",
     "block_do_after_step_goal": "block_do_after_step_goal",

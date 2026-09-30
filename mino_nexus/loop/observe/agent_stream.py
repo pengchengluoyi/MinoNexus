@@ -180,7 +180,7 @@ def make_thumb(png_b64: str, *, width: int = 360, quality: int = 70, web: bool =
 def emit_agent_event(data: dict[str, Any]) -> None:
     _buffer(data)
     try:
-        from mino_nexus.loop.session_log import mirror_stream_event
+        from mino_nexus.loop.observe.session_log import mirror_stream_event
 
         seq = mirror_stream_event(data)
         if seq:

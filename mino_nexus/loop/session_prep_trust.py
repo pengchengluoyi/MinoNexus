@@ -85,9 +85,11 @@ def prep_session_signal_done_block_reason(
     if req != "logged_in":
         return reason
 
-    block_sess = parse_session_value(str(session_block or ""))
+    from mino_nexus.services.session_match import normalize_device_session
+
+    block_sess = normalize_device_session(parse_session_value(str(session_block or "")))
     fact: dict[str, Any] = dict(getattr(ctx, "session_fact", None) or {}) if ctx is not None else {}
-    fact_sess = str(fact.get("session") or "").strip().lower()
+    fact_sess = normalize_device_session(fact.get("session") or "")
     dirty = bool(getattr(ctx, "session_dirty", False)) if ctx is not None else True
 
     if block_sess in ("logged_out", "guest") or fact_sess in ("logged_out", "guest"):
@@ -101,14 +103,6 @@ def prep_session_signal_done_block_reason(
     if block_sess == "logged_in":
         return None
 
-    if dirty or fact_sess in ("", "unknown") or block_sess in ("", "unknown"):
-        return (
-            "前置要求已登录，但本任务尚未确认 session（"
-            f"block={block_sess or 'empty'} fact={fact_sess or 'empty'}）。"
-            "请先观察主界面或 inspect_session；并行跑批时勿信任登记簿 alone。"
-            "禁止 signal_done。"
-        )
-
     sn = str(getattr(ctx, "sn", "") or "").strip() if ctx is not None else ""
     pkg = str(getattr(ctx, "target_package") or "").strip() if ctx is not None else ""
     if sn and pkg and ctx is not None and not dirty:
@@ -119,6 +113,6 @@ def prep_session_signal_done_block_reason(
             return None
 
     return (
-        "前置要求已登录，session 仍未确认。"
-        "请 inspect_session 或完成租号后再 signal_done。"
+        "当前不是已登录，本条要求已登录。"
+        "请先完成登录后再 signal_done。"
     )

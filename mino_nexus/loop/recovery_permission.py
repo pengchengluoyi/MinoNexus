@@ -148,6 +148,22 @@ def pick_permission_tap_for_grant(
     return None, ""
 
 
+def permission_choice_dialog_present(
+    hierarchy_nodes: list[dict[str, Any]] | None = None,
+) -> bool:
+    """同时有「使用时允许」和「拒绝」才算系统权限二选一，避免误点页面里的允许。"""
+    allow, _kind = pick_permission_tap_for_grant(hierarchy_nodes=hierarchy_nodes)
+    if not allow:
+        return False
+    for node in hierarchy_nodes or []:
+        if not isinstance(node, dict) or node.get("clickable") is False:
+            continue
+        for val in _node_texts(node):
+            if _DENY_RE.search(val):
+                return True
+    return False
+
+
 def pick_permission_dismiss_text(
     *,
     hierarchy_nodes: list[dict[str, Any]] | None = None,

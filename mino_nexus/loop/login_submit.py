@@ -42,7 +42,7 @@ def account_session_logged_in(ctx: Any | None) -> bool:
     if ctx is None:
         return False
     try:
-        from mino_nexus.loop.session_persist import effective_session_block
+        from mino_nexus.loop.observe.session_persist import effective_session_block
 
         block = str(effective_session_block(ctx, "") or "")
     except Exception:
@@ -176,7 +176,7 @@ def login_flow_do_may_finish(
     """「完成登录」类 do 步：意图齐了也不等于已登录，须 session=logged_in。"""
     if not instruction_requires_login_completion(instruction):
         return True, ""
-    from mino_nexus.loop.session_persist import effective_session_block, parse_session_value
+    from mino_nexus.loop.observe.session_persist import effective_session_block, parse_session_value
 
     block = effective_session_block(ctx, "") if ctx is not None else ""
     sess = parse_session_value(block)
@@ -304,7 +304,7 @@ def try_auto_otp_fill(
         except Exception:
             pass
         try:
-            from mino_nexus.loop.web_progress import refresh_web_focus
+            from mino_nexus.loop.web.web_progress import refresh_web_focus
 
             refresh_web_focus(ctx, proxy)
         except Exception:

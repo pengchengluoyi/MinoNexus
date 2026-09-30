@@ -315,7 +315,7 @@ def _guard_block_mutate_when_thought_done(ctx: dict[str, Any]) -> Optional[str]:
     phase = str(ctx.get("phase") or "")
     if phase not in ("do", "prep"):
         return None
-    from mino_nexus.loop.thought_done import thought_implies_signal_done
+    from mino_nexus.loop.fuse.thought_done import thought_implies_signal_done
 
     thought = str(ctx.get("decision_thought") or "")
     if not thought_implies_signal_done(thought):
@@ -354,85 +354,6 @@ def _guard_block_prep_guest_mine_tab(ctx: dict[str, Any]) -> Optional[str]:
         "session_block 仍为 logged_in，本用例要求 guest。"
         "勿点「我的」进登录页收工；请走路线图 logout 边或 recover_restart_target_app 后再 signal_done。"
     )
-
-
-def _guard_block_login_flow_unless_step_scope(ctx: dict[str, Any]) -> Optional[str]:
-    phase = str(ctx.get("phase") or "")
-    if phase not in ("do", "prep"):
-        return None
-    if ctx.get("login_flow_interrupt"):
-        return None
-    cap = str(ctx.get("cap_id") or "")
-    if not cap or cap.startswith("recover_") or cap.startswith("signal_"):
-        return None
-    # 前置租号是账号与数据，不是登录链。
-    if phase == "prep" and cap == "lease_account":
-        return None
-    # 应用内隐私/协议弹窗不是「延后登录弹窗」；步骤 1 进详情前常必须先同意。
-    if cap == "accept_legal_consent":
-        return None
-    cur = ctx.get("cursor")
-    step_cursor = ctx.get("step_cursor")
-    instr = str(getattr(cur, "instruction", "") or "").strip() if cur else ""
-    expected = str(getattr(cur, "expected", "") or "").strip() if cur else ""
-    from mino_nexus.loop.step_contract import instruction_allows_login_flow
-    from mino_nexus.loop.step_flow_scope import login_flow_allowed
-
-    if step_cursor is not None:
-        allowed, defer_msg = login_flow_allowed(
-            cursor=step_cursor,
-            phase=phase,
-            instruction=instr,
-            expected=expected,
-        )
-        if not allowed and defer_msg:
-            login_caps = {
-                "get_otp",
-                "request_sms_code",
-                "lease_account",
-            }
-            if cap in login_caps:
-                return defer_msg
-            if cap == "input_text":
-                field = str((ctx.get("params") or {}).get("field") or "").lower()
-                if field in ("phone", "sms_code", "password", "验证码"):
-                    return defer_msg
-            if cap == "tap_element":
-                from mino_nexus.loop.step_pointer import tap_summary_is_login_entry
-
-                blob = str(ctx.get("tap_summary") or "")
-                if tap_summary_is_login_entry(blob):
-                    return defer_msg
-
-    if instruction_allows_login_flow(instr, login_module_case=False):
-        return None
-    login_caps = {
-        "get_otp",
-        "request_sms_code",
-        "lease_account",
-    }
-    if cap in login_caps:
-        return (
-            "本步未要求登录/验证码流程，禁止调用 "
-            f"{cap}。若屏上 expected 已满足请 signal_done，勿展开登录链。"
-        )
-    if cap == "input_text":
-        field = str((ctx.get("params") or {}).get("field") or "").lower()
-        if field in ("phone", "sms_code", "password", "验证码"):
-            return (
-                "本步未要求登录/验证码，禁止 input_text 填 "
-                f"{field}。请 signal_done 或做本步 instruction 内的操作。"
-            )
-    if cap == "tap_element":
-        from mino_nexus.loop.step_pointer import tap_summary_is_login_entry
-
-        blob = str(ctx.get("tap_summary") or "")
-        if tap_summary_is_login_entry(blob):
-            return (
-                "本步未要求登录，禁止点击登录入口。"
-                "若本步目标页已出现请 signal_done。"
-            )
-    return None
 
 
 def _guard_block_back_without_nav_back_semantics(ctx: dict[str, Any]) -> Optional[str]:
@@ -697,14 +618,6 @@ def _guard_require_session(ctx: dict[str, Any]) -> Optional[str]:
     )
     if not reason:
         return None
-    thought = str(ctx.get("decision_thought") or "")
-    block = str(ctx.get("session_block") or "")
-    if re.search(r"未登录|登录页|guest|游客|前置.{0,6}满足", thought, re.I) and "session=logged_in" in block:
-        return (
-            f"{reason} "
-            "思考声称未登录/前置已满足，但 session_block 仍为 logged_in；"
-            "请先 logout/recover 再 signal_done，勿与 require_session 结论矛盾。"
-        )
     return reason
 
 
@@ -1270,7 +1183,6 @@ GUARDS: dict[str, GuardFn] = {
     "limit_recovery_retry": _guard_limit_recovery_retry,
     "stuck_alternation": _guard_stuck_alternation,
     "block_login_after_guest": _guard_block_login_after_guest,
-    "block_login_flow_unless_step_scope": _guard_block_login_flow_unless_step_scope,
     "block_mutate_when_thought_done": _guard_block_mutate_when_thought_done,
     "block_prep_guest_mine_tab": _guard_block_prep_guest_mine_tab,
     "block_back_without_nav_back_semantics": _guard_block_back_without_nav_back_semantics,
@@ -1333,13 +1245,13 @@ PROVIDERS: dict[str, str] = {
 
 
 def run_guards(names: list[str], ctx: dict[str, Any]) -> Optional[str]:
-    from mino_nexus.loop.dispatch_gate import first_block_reason
+    from mino_nexus.loop.fuse.dispatch_gate import first_block_reason
 
     return first_block_reason(names, ctx, guards=GUARDS)
 
 
 def run_guards_verdict(names: list[str], ctx: dict[str, Any]):
-    from mino_nexus.loop.dispatch_gate import evaluate_guards
+    from mino_nexus.loop.fuse.dispatch_gate import evaluate_guards
 
     return evaluate_guards(names, ctx, guards=GUARDS)
 

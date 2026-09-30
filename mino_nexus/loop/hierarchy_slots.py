@@ -271,6 +271,7 @@ def normalize_nodes(raw: Any) -> list[dict[str, Any]]:
             "checkable": node_flag(item, "checkable"),
             "checked": node_flag(item, "checked"),
             "focused": node_flag(item, "focused"),
+            "editable": node_flag(item, "editable"),
             "bounds": int_list(item.get("bounds"), 4),
             "center": int_list(item.get("center"), 2),
         }
@@ -323,6 +324,8 @@ def flatten(nodes: list[dict[str, Any]]) -> str:
             bits.append("checked")
         if node.get("focused"):
             bits.append("focused")
+        if node.get("editable"):
+            bits.append("editable")
         lines.append(" ".join(bits))
         if len(lines) >= _MAX_TEXT_NODES:
             lines.append(f"...(+{max(0, len(nodes) - len(lines))} 个节点未列出)")

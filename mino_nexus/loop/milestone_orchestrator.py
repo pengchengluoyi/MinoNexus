@@ -125,6 +125,206 @@ def needs_vision_plan_gate(state: dict[str, Any]) -> bool:
     return False
 
 
+_SKIP_PLAN_CAPS = frozenset({"tap_element", "input_text", "swipe", "scroll", "press_key"})
+_KEEP_PLAN_CAPS = frozenset(
+    {
+        "relogin",
+        "confirm_login_state",
+        "wait_screen_ready",
+        "wait_ms",
+        "lease_account",
+        "get_otp",
+    }
+)
+_LOGIN_FOCUS_IDS = frozenset(
+    {
+        "login_entry",
+        "account_field",
+        "account_fill",
+        "send_code",
+        "otp_fetch",
+        "otp_field",
+        "otp_fill",
+        "legal_consent",
+        "submit_login",
+        "login_state",
+    }
+)
+
+
+def _milestone_cap(row: dict[str, Any]) -> str:
+    return str(row.get("device_cap") or row.get("hook_cap") or row.get("cap") or "").strip()
+
+
+def _blocking_overlay(ctx: Any) -> str:
+    """权限二选一或系统挡屏。协议勾选框不算，登录页上本来就有。"""
+    if ctx is None:
+        return ""
+    overlay = str(getattr(ctx, "system_overlay", "") or "").strip().lower()
+    if overlay in ("yes", "true", "1"):
+        return "system_overlay"
+    nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
+    from mino_nexus.loop.recovery_permission import permission_choice_dialog_present
+
+    if permission_choice_dialog_present(nodes):
+        return "permission_dialog"
+    return ""
+
+
+def _sparse_blocking_sheet(ctx: Any) -> bool:
+    """少按钮、有长文案、底部一条宽按钮：像还没写进里程碑的协议层。信息流按钮很多，不算。"""
+    if ctx is None:
+        return False
+    from mino_nexus.loop.ui_consent import _bounds, _center, _label_text, _screen_wh
+
+    nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
+    labeled = []
+    long_text = False
+    for node in nodes:
+        text = _label_text(node)
+        if len(text) >= 12:
+            long_text = True
+        if node.get("clickable") and text:
+            labeled.append(node)
+    if not long_text or len(labeled) > 6:
+        return False
+    sw, sh = _screen_wh(nodes)
+    if sw <= 0 or sh <= 0:
+        return False
+    for node in labeled:
+        text = _label_text(node)
+        if len(text) > 8:
+            continue
+        b = _bounds(node)
+        width = b[2] - b[0]
+        cy = _center(b)[1]
+        if width >= sw * 0.45 and cy > sh * 0.45:
+            return True
+    return False
+
+
+def _login_form_mismatches_focus(ctx: Any, row: dict[str, Any]) -> bool:
+    """当前步不是登录块，屏上却已经是登录表单：仍要规划，把登录插到前面。"""
+    mid = str(row.get("id") or "")
+    if mid in _LOGIN_FOCUS_IDS or str(row.get("source_block") or "").strip():
+        return False
+    nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
+    if not nodes:
+        return False
+    from mino_nexus.loop.ui_channel import ui_channel_from_ctx, ui_channel_label
+    from mino_nexus.loop.ui_sms_request import credential_field_for_login
+    from mino_nexus.services.account_credential_text import login_kind_from_ctx
+
+    hit = credential_field_for_login(
+        nodes,
+        login_kind=login_kind_from_ctx(ctx),
+        channel=ui_channel_label(ui_channel_from_ctx(ctx)),
+    )
+    return hit is not None
+
+
+def seeded_single_focus_skips_plan(state: dict[str, Any], ctx: Any) -> bool:
+    """只有一条 open，动作已经明确：直接执行，不再打一轮规划。"""
+    if count_open_milestones(state) != 1:
+        return False
+    row = in_progress_milestone(state)
+    if not isinstance(row, dict):
+        return False
+    if str(row.get("status") or "") == "failed" or row.get("program_fail"):
+        return False
+    mid = str(row.get("id") or "")
+    # 登录块聚焦之后只看图执行，不再为这一步打规划。
+    if mid in _LOGIN_FOCUS_IDS and mid != "login_state":
+        if _blocking_overlay(ctx) or _unlisted_agree_control(state, ctx):
+            return False
+        return True
+    cap = _milestone_cap(row)
+    if cap in _KEEP_PLAN_CAPS:
+        return False
+    kind = str(row.get("kind") or "").strip().lower()
+    if cap not in _SKIP_PLAN_CAPS and not kind.startswith("visual"):
+        return False
+    if _blocking_overlay(ctx) or _unlisted_agree_control(state, ctx):
+        return False
+    if _login_form_mismatches_focus(ctx, row):
+        return False
+    if _sparse_blocking_sheet(ctx) and not kind.startswith("visual") and cap not in _SKIP_PLAN_CAPS:
+        return False
+    return True
+
+
+def _unlisted_agree_control(state: dict[str, Any], ctx: Any) -> bool:
+    """屏上有「同意」类按钮，但当前里程碑还没写这一步。前置收工和跳过规划都会漏掉协议弹窗。"""
+    if ctx is None:
+        return False
+    from mino_nexus.loop.ui_consent import _label_text
+
+    nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
+    found = False
+    for node in nodes:
+        if not node.get("clickable"):
+            continue
+        text = _label_text(node)
+        if text in ("同意", "Agree", "Accept", "我同意") or text.startswith("同意并"):
+            found = True
+            break
+    if not found:
+        return False
+    for row in _milestones_list(state):
+        if str(row.get("status") or "").strip().lower() in _TERMINAL:
+            continue
+        blob = f"{row.get('id') or ''} {row.get('title') or ''}"
+        if "agree" in blob.lower() or "同意" in blob:
+            return False
+    return True
+
+
+def _login_finished_but_form_open(state: dict[str, Any], ctx: Any) -> bool:
+    """登录块步骤都点过了，登录表单还在：不能据此进入校验。"""
+    ids = {str(row.get("id") or "") for row in _milestones_list(state)}
+    if "submit_login" not in ids and "account_fill" not in ids:
+        return False
+    nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
+    if not nodes:
+        return False
+    from mino_nexus.loop.ui_channel import ui_channel_from_ctx, ui_channel_label
+    from mino_nexus.loop.ui_sms_request import credential_field_for_login
+    from mino_nexus.services.account_credential_text import login_kind_from_ctx
+
+    return (
+        credential_field_for_login(
+            nodes,
+            login_kind=login_kind_from_ctx(ctx),
+            channel=ui_channel_label(ui_channel_from_ctx(ctx)),
+        )
+        is not None
+    )
+
+
+def program_exit_allowed(state: dict[str, Any], ctx: Any) -> bool:
+    """必填都终态，且屏上没有还没写进列表的障碍：程序准出，不打 exit_latch。"""
+    phase = str(state.get("phase") or "").strip().lower()
+    # 前置的协议弹窗是 exit_latch 规划追加的。这里提前准出会直接跳过「同意」。
+    if phase == "prep":
+        return False
+    if _blocking_overlay(ctx) or _sparse_blocking_sheet(ctx) or _unlisted_agree_control(state, ctx):
+        return False
+    if _login_finished_but_form_open(state, ctx):
+        return False
+    last: Optional[dict[str, Any]] = None
+    for row in _milestones_list(state):
+        if row.get("optional"):
+            continue
+        if str(row.get("status") or "").strip().lower() not in _TERMINAL:
+            return False
+        last = row
+    if last is None:
+        return False
+    if _milestone_cap(last) in ("wait_screen_ready", "wait_ms"):
+        return False
+    return True
+
+
 def _may_eval_auto_phase_transition(cursor: Any, state: dict[str, Any]) -> bool:
     """open=0 时是否允许仅凭 evaluate 自动 phase 流转（do 须有过操作或 do 子里程碑）。"""
     from mino_nexus.loop.milestones import milestones_for_phase_eval
@@ -177,8 +377,23 @@ def may_run_vision_exec(cursor: Any) -> bool:
 _VISUAL_STEP_CAPS = ("tap_element", "input_text", "swipe_direction", "press_key")
 
 
-def focus_exec_menu_ids(cursor: Any) -> Optional[set[str]]:
-    """in_progress 已明确时，执行菜单只留这一步的能力。"""
+_PHASE_DEVICE_SKILLS = frozenset({
+    "tap_element",
+    "input_text",
+    "swipe_direction",
+    "swipe_element_to_element",
+    "long_press_element",
+    "multi_tap",
+    "press_key",
+    "wait_ms",
+    "wait_screen_ready",
+    "set_clipboard",
+    "dismiss_ime",
+})
+
+
+def focus_exec_menu_ids(cursor: Any, ctx: Any = None) -> Optional[set[str]]:
+    """视觉步放开本阶段设备技能。租号、取码、清缓存仍只出现在自己的里程碑上。"""
     row = in_progress_milestone(read_state(cursor))
     if not row:
         return None
@@ -191,13 +406,21 @@ def focus_exec_menu_ids(cursor: Any) -> Optional[set[str]]:
     hook = str(row.get("hook_cap") or "").strip()
     if device and hook and device != hook and (row.get("lease_ready") or row.get("otp_ready")):
         return {device}
-    hook = hook or device
-    if hook:
-        return {hook}
     kind = str(row.get("kind") or "").strip().lower()
     if kind in ("visual_action", "visual_tap", "visual_input"):
-        return set(_VISUAL_STEP_CAPS)
+        return _phase_device_menu(cursor, ctx)
+    if hook or device:
+        return {hook or device}
     return None
+
+
+def _phase_device_menu(cursor: Any, ctx: Any) -> set[str]:
+    from mino_nexus.catalog.skill_channel import PROGRAM_CAPS, case_menu_ids
+
+    phase = step_scope_key(cursor)[1] if cursor is not None else "do"
+    menu = case_menu_ids(ctx, phase) if ctx is not None else set()
+    device = {cap for cap in menu if cap in _PHASE_DEVICE_SKILLS and cap not in PROGRAM_CAPS}
+    return device or set(_VISUAL_STEP_CAPS)
 
 
 def success_criteria_for_exec_llm(cursor: Any) -> dict[str, Any]:
@@ -206,6 +429,16 @@ def success_criteria_for_exec_llm(cursor: Any) -> dict[str, Any]:
     fid = in_progress_milestone_id(cursor)
     if fid:
         state["active_focus_milestone_id"] = fid
+        for row in state.get("milestones") or []:
+            if isinstance(row, dict) and str(row.get("id") or "") == fid:
+                if row.get("match") or row.get("exclude"):
+                    state["active_surface"] = {
+                        "milestone_id": fid,
+                        "match": list(row.get("match") or []),
+                        "exclude": list(row.get("exclude") or []),
+                        "match_when": list(row.get("match_when") or []),
+                    }
+                break
     return state
 
 
@@ -236,7 +469,7 @@ def complete_in_progress_on_tool(
     state["milestones"] = ms
     write_state(cursor, state)
     if ok:
-        from mino_nexus.loop.interrupt_stack import maybe_pop_interrupt
+        from mino_nexus.loop.fuse.interrupt_stack import maybe_pop_interrupt
 
         maybe_pop_interrupt(cursor, writer=writer)
     advance_in_progress_focus(cursor, writer=writer)
@@ -316,7 +549,7 @@ def run_vision_orchestrated_turn(
         app_id=str(getattr(ctx, "app_id", "") or ""),
         include_prep=False,
     )
-    from mino_nexus.loop.interrupt_stack import maybe_pop_interrupt
+    from mino_nexus.loop.fuse.interrupt_stack import maybe_pop_interrupt
 
     maybe_pop_interrupt(cursor, writer=writer)
     ensure_single_in_progress(cursor, writer=writer)
@@ -330,7 +563,24 @@ def run_vision_orchestrated_turn(
     if not milestones_empty(state) and count_open_milestones(state) == 0 and _may_eval_auto_phase_transition(
         cursor, state
     ):
+        granted_exit = False
+        if state.get("exit_allowed") is not True and program_exit_allowed(state, ctx):
+            granted_exit = True
+            state["exit_allowed"] = True
+            state = _sync_scope(cursor, state)
+            write_state(cursor, state)
+            if writer:
+                writer.append(
+                    "orchestrator/plan_gate",
+                    {
+                        "reason": "program_exit",
+                        "open": 0,
+                        **dict(zip(("case_step", "phase"), step_scope_key(cursor))),
+                    },
+                )
+            state = read_state(cursor)
         mv = evaluate_milestones(cursor, ctx)
+        transitioned = False
         if mv.phase_complete:
             from mino_nexus.loop.step_phase_fsm import apply_phase_transition, step_phase_fsm_v1_enabled
 
@@ -339,7 +589,12 @@ def run_vision_orchestrated_turn(
                     cursor, ctx, mv, writer=writer, in_prep=in_prep, in_check=in_check
                 )
                 if tr:
+                    transitioned = True
                     return OrchestratedTurn(phase_transition=tr, plan_only=True)
+        if granted_exit and not transitioned:
+            state = read_state(cursor)
+            state["exit_allowed"] = False
+            write_state(cursor, state)
 
     plan_obj = None
 
@@ -358,10 +613,25 @@ def run_vision_orchestrated_turn(
                 },
             )
         return OrchestratedTurn(
-            decision=AgentDecision(status="fail", thought=summary),
+            decision=AgentDecision(status="give_up", thought=summary),
             plan_only=True,
         )
     plan_gate = vision_plan_v1_enabled() and needs_vision_plan_gate(state)
+    if plan_gate:
+        open_n = count_open_milestones(read_state(cursor))
+        if open_n == 1 and seeded_single_focus_skips_plan(read_state(cursor), ctx):
+            if writer:
+                focus = in_progress_milestone(read_state(cursor)) or {}
+                writer.append(
+                    "orchestrator/plan_gate",
+                    {
+                        "reason": "skip_seeded_focus",
+                        "open": 1,
+                        "milestone_id": str(focus.get("id") or ""),
+                        **dict(zip(("case_step", "phase"), step_scope_key(cursor))),
+                    },
+                )
+            plan_gate = False
     if plan_gate:
         open_n = count_open_milestones(read_state(cursor))
         if writer:
@@ -395,6 +665,13 @@ def run_vision_orchestrated_turn(
         from mino_nexus.loop.vision_plan import retire_repeat_wait_focus
 
         retire_repeat_wait_focus(cursor, writer=writer)
+        if getattr(cursor, "milestone_hold_exec", False):
+            setattr(cursor, "milestone_hold_exec", False)
+            thought = str(getattr(plan_obj, "thought", "") or "已把步骤插到当前焦点之前，本回合改执行新的第一条")
+            return OrchestratedTurn(
+                decision=AgentDecision(status="continue", thought=thought[:500]),
+                plan_only=True,
+            )
         if plan_obj is not None:
             tr = apply_step_requirements_complete(
                 cursor, ctx, plan_obj, writer=writer, in_prep=in_prep, in_check=in_check
@@ -457,12 +734,17 @@ def run_vision_orchestrated_turn(
         ms = _milestones_list(state)
         focus = in_progress_milestone(state)
         if focus is not None:
-            focus["status"] = "skipped"
-            focus["skip_reason"] = "unregistered"
-            focus["skipped_by"] = "menu"
-            state["milestones"] = ms
-            write_state(cursor, state)
-        ensure_single_in_progress(cursor, writer=writer)
+            from mino_nexus.catalog.skill_channel import PROGRAM_CAPS
+
+            cap = str(focus.get("hook_cap") or focus.get("device_cap") or "").strip()
+            # 程序自己派的能力不在用例菜单里。缺菜单不等于未注册，不能把里程碑跳过。
+            if cap not in PROGRAM_CAPS:
+                focus["status"] = "skipped"
+                focus["skip_reason"] = "unregistered"
+                focus["skipped_by"] = "menu"
+                state["milestones"] = ms
+                write_state(cursor, state)
+                ensure_single_in_progress(cursor, writer=writer)
         return OrchestratedTurn(
             decision=AgentDecision(
                 status="continue",

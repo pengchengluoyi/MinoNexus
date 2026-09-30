@@ -254,6 +254,12 @@ class RouterProxy:
             target_package=self.target_package,
             low_level=(impl or {}).get("low_level"),
         )
+        from mino_nexus.action_space.assemble import stamp_scheme_params
+        from mino_nexus.action_space.scheme import action_scheme
+
+        ctx = kwargs.get("ctx")
+        scheme = action_scheme(ctx) if ctx is not None else str(getattr(self, "action_scheme", "") or "visual")
+        params = stamp_scheme_params(event.capability_id, params, scheme)
         event.params = params
 
         req = P.Execute(

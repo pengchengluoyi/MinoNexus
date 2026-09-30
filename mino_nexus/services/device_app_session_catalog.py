@@ -12,11 +12,11 @@ from mino_nexus.runtime.run_context import version_string_looks_invalid
 def _enrich_session_row(row: dict[str, Any]) -> dict[str, Any]:
     out = dict(row)
     registered = bool(out.get("registered"))
-    sess = str(out.get("session") or "unknown").strip().lower()
+    from mino_nexus.services.session_match import normalize_device_session
+
+    sess = normalize_device_session(out.get("session") or "")
     if not registered:
         out["session_display"] = "未观测"
-    elif sess == "unknown":
-        out["session_display"] = "未知（待 inspect）"
     elif sess == "logged_in":
         out["session_display"] = "已登录"
     elif sess in ("logged_out", "guest"):
@@ -147,7 +147,7 @@ def list_project_device_app_matrix(
             "sn": sn_val,
             "package_id": pkg,
             "app_version": "",
-            "session": "unknown",
+            "session": "guest",
             "bound_account_id": "",
             "identity_hint": "",
             "stale": False,

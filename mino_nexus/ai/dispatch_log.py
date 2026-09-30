@@ -120,7 +120,7 @@ def infer_call_meta(row: dict | None = None, *, output: Any = None, system_promp
         return {"trigger": "case_run", "job": "agent-decide", "role": "test-engineer", "skill": "run-case", "source": "case_run"}
     if parsed.get("session_prep") in ("relogin", "logout", "skip") and parsed.get("required_session"):
         return {"trigger": "case_run", "job": "inspect-session", "role": "test-engineer", "skill": "inspect-session", "source": "case_run"}
-    if parsed.get("session") in ("logged_out", "logged_in", "unknown") and parsed.get("identity"):
+    if parsed.get("session") in ("logged_out", "logged_in", "guest", "unknown") and parsed.get("identity"):
         return {"trigger": "case_run", "job": "inspect-session", "role": "test-engineer", "skill": "inspect-session", "source": "case_run"}
     if parsed.get("thought") and any(k in parsed for k in ("action", "tool", "capability_id", "done", "x", "y")):
         return {"trigger": "case_run", "job": "agent-decide", "role": "test-engineer", "skill": "run-case", "source": "case_run"}

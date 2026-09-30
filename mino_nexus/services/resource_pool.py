@@ -294,14 +294,14 @@ def compile_requirements_from_text(
         if "lifecycle" not in pre and "注册" not in pre:
             req["prefer"].append(_clause("lifecycle", "eq", "registered"))
     elif session == "guest":
-        req["all"].append(_clause("session", "in", "logged_out,guest,unknown"))
+        req["all"].append(_clause("session", "in", "logged_out,guest"))
         if re.search(r"新用户|未注册|游客", pre):
             req["prefer"].append(_clause("lifecycle", "eq", "unregistered"))
 
     if "新用户" in pre or "未注册" in pre:
         req["all"].append(_clause("lifecycle", "eq", "unregistered"))
         req["all"].append(_clause("register_flow", "ne", "registered"))
-        req["prefer"].append(_clause("session", "in", "logged_out,guest,unknown"))
+        req["prefer"].append(_clause("session", "in", "logged_out,guest"))
     elif "老用户" in pre or ("已注册" in pre and "未注册" not in pre):
         req["all"].append(_clause("lifecycle", "eq", "registered"))
 
@@ -324,7 +324,7 @@ def compile_requirements_from_text(
         if "已登录" in pre and session != "logged_in":
             req["prefer"].append(_clause("session", "eq", "logged_in"))
         elif "未登录" in pre or "游客" in pre:
-            req["all"].append(_clause("session", "in", "logged_out,guest,unknown"))
+            req["all"].append(_clause("session", "in", "logged_out,guest"))
 
     from mino_nexus.services.account_requirement_compile import apply_profile_data_hints
 
@@ -438,6 +438,8 @@ def _eval_clause(
     op = str(clause.get("op") or "eq").strip().lower()
     want = str(clause.get("value") or "").strip().lower()
     got = str(facets.get(facet) or "unknown").strip().lower()
+    if facet == "session" and got in ("", "unknown"):
+        got = "guest"
     defn = _facet_field_def(field_defs, facet)
     from mino_nexus.services.account_requirement_compile import PROFILE_SHAPE_FACETS
 
@@ -746,6 +748,10 @@ def apply_facet_updates(
         key = str(key).strip()
         new_val = str(new_val).strip().lower()
         if key in static_ext:
+            # 形象这类静态号池字段只接受人工编辑和用例预期已证明的写回。
+            # 用例结束的模型推断不能把「已配置形象」写成「未配置形象」。
+            if source not in ("manual", "manual_console", "case_pass", "reset", "log_restore"):
+                continue
             out[key] = new_val
             continue
         if key not in DEFAULT_FACETS and key not in ext:

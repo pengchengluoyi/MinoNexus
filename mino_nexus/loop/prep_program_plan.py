@@ -150,9 +150,6 @@ def build_prep_program_plan(
     steps_out: list[dict[str, Any]] = []
     need_lease = bool(_account_clause(precondition, case, scene))
     device_want, device_label = _device_session_clause(precondition)
-    is_web = ui_channel_from_ctx(ctx) == UiChannel.WEB or str(
-        claim.get("platform") or getattr(ctx, "platform", "") or ""
-    ).strip().lower() in ("web", "playwright")
     need_clear = claim_requires_clear_cache(claim, scene, precondition)
     env_label = _env_clear_clause(precondition) if need_clear else ""
     launch_cap = _launch_hook_cap(ctx, claim)
@@ -187,10 +184,7 @@ def build_prep_program_plan(
                 "hook_cap": "clear_app_cache",
                 "optional": False,
             }
-            if is_web:
-                clear_step["status"] = "skipped"
-                clear_step["skip_reason"] = "channel_absent"
-            elif not need_clear:
+            if not need_clear:
                 clear_step["status"] = "skipped"
                 clear_step["skip_reason"] = "not_required"
             steps_out.append(clear_step)
@@ -204,10 +198,7 @@ def build_prep_program_plan(
             "hook_cap": "clear_app_cache",
             "optional": False,
         }
-        if is_web:
-            clear_step["status"] = "skipped"
-            clear_step["skip_reason"] = "channel_absent"
-        elif not need_clear:
+        if not need_clear:
             clear_step["status"] = "skipped"
             clear_step["skip_reason"] = "not_required"
         steps_out.append(clear_step)
@@ -272,6 +263,8 @@ def milestones_from_prep_program(plan: dict[str, Any]) -> list[dict[str, Any]]:
         }
         if step.get("hook_cap"):
             row["hook_cap"] = str(step.get("hook_cap") or "")
+        if step.get("required_session"):
+            row["required_session"] = str(step.get("required_session") or "")
         if str(step.get("status") or "") == "skipped":
             row["status"] = "skipped"
             row["skip_reason"] = str(step.get("skip_reason") or "channel_absent")
@@ -293,7 +286,13 @@ def sync_prep_internal_milestones(cursor: Any, ctx: Any) -> bool:
     if not ms:
         return False
     sn = str(getattr(ctx, "sn", "") or "").strip()
-    cleared = bool(getattr(ctx, "prep_clear_done", False))
+    cache_passed = any(
+        isinstance(row, dict)
+        and str(row.get("id") or "") == "prep_clear_cache"
+        and str(row.get("status") or "") == "pass"
+        for row in ms
+    )
+    cleared = bool(getattr(ctx, "prep_clear_done", False)) or cache_passed
     launch_ok = bool(getattr(ctx, "app_launch_confirmed", False))
     changed = False
     for row in ms:
@@ -310,6 +309,17 @@ def sync_prep_internal_milestones(cursor: Any, ctx: Any) -> bool:
         elif mid == "prep_clear_cache" and cleared:
             row["status"] = "pass"
             row["evidence"] = "clear_app_cache"
+            cache_passed = True
+            changed = True
+        elif (
+            mid == "prep_device_session"
+            and cache_passed
+            and str(row.get("hook_cap") or "") == "relogin"
+            and str(row.get("required_session") or "").strip().lower() in ("guest", "logged_out")
+        ):
+            # 刚 pm clear，前置就是未登录：不必再看图确认登录态。要已登录时仍走 relogin。
+            row["status"] = "pass"
+            row["evidence"] = "pm clear"
             changed = True
         elif mid == "prep_launch_app" and launch_ok:
             hook = str(row.get("hook_cap") or "").strip()

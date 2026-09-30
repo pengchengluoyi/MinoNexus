@@ -229,10 +229,8 @@ def dispatch_local(
                 summary = f"已登出（原 session=logged_in）；{logout_msg}"
             else:
                 summary = f"资源与要求不一致：仍为已登录。{logout_msg}"
-        elif req == "logged_in" and session not in ("logged_in", "unknown"):
+        elif req == "logged_in" and session != "logged_in":
             summary = f"当前 session={session}，与要求的已登录不一致；已写入上下文，后续步骤继续登录。{reason}"
-        elif session == "unknown":
-            summary = reason or "登录态未知，已跳过界面猜测"
         src = str(getattr(ctx, "device_session_source", "") or "")
         if src == "tool_api":
             executor = "playwright"
@@ -342,7 +340,7 @@ def _dispatch_device(
     label: str,
 ) -> Any:
     from mino_nexus.core.schemas import PlanEvent
-    from mino_nexus.loop.web_env import agent_step_idx
+    from mino_nexus.loop.web.web_env import agent_step_idx
 
     from mino_nexus.loop.device_execute_params import prepare_device_execute_params
 
@@ -1214,7 +1212,7 @@ def _fsm_navigate(
             raw_response={"nav_attempt": nav_attempt},
         )
 
-    from mino_nexus.loop.web_env import agent_step_idx
+    from mino_nexus.loop.web.web_env import agent_step_idx
 
     exec_label = step_params.get("selector_text") or step_params.get("key") or step_cap
     exec_event = PlanEvent(

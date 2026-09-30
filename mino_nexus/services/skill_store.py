@@ -137,7 +137,24 @@ def upgrade_run_case_sop_guards() -> int:
                 continue
             want_guards = [str(g).strip() for g in (spec.get("guards") or []) if str(g).strip()]
             guards = [str(g).strip() for g in (phase.get("guards") or []) if str(g).strip()]
-            deprecated = {"skip_repeat_tap", "stuck_alternation"}
+            from mino_nexus.loop.focus_turn import SATISFY_GUARD_IDS
+
+            deprecated = {
+                "skip_repeat_tap",
+                "stuck_alternation",
+                "limit_advise_recovery",
+                "block_mutate_when_thought_done",
+                "block_do_after_step_goal",
+                "require_do_work",
+                "block_idle_wait_in_do",
+                "swipe_direction_vs_instruction",
+                "block_login_after_guest",
+                "block_repeat_email_tab",
+                "block_repeat_continue_submit",
+                "block_prep_guest_mine_tab",
+                "block_login_flow_unless_step_scope",
+                *SATISFY_GUARD_IDS,
+            }
             guards = [g for g in guards if g not in deprecated]
             for g in want_guards:
                 if g not in guards:
