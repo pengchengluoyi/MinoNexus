@@ -17,6 +17,8 @@ def _is_valid_thumb(thumb: str) -> bool:
         return False
     if "(+" in s:
         return False
+    if s.startswith("/static/"):
+        return True
     raw = s.split(",", 1)[-1] if s.startswith("data:") else s
     return len(raw) >= 64
 
@@ -124,6 +126,27 @@ def _turn_sidecars(
     return dispatch, slots, menus, inspections
 
 
+def _exec_mode_by_turn(events: list[dict[str, Any]]) -> dict[int, str]:
+    """replay / interrupt / heal_skip，后写覆盖前写。"""
+    out: dict[int, str] = {}
+    for row in events:
+        typ = str(row.get("type") or "")
+        turn = int(row.get("turn") or 0)
+        payload = dict(row.get("payload") or {})
+        mode = str(payload.get("exec_mode") or "")
+        if typ == "exec/replay":
+            mode = "replay"
+        elif typ == "exec/heal_skip":
+            mode = "heal_skip"
+        elif typ in ("exec/interrupt", "interrupt/push"):
+            mode = "interrupt"
+        elif typ == "binding_cache/hit":
+            mode = mode or "replay"
+        if turn > 0 and mode:
+            out[turn] = mode
+    return out
+
+
 def _enrich_ui_event(
     payload: dict[str, Any],
     *,
@@ -132,6 +155,7 @@ def _enrich_ui_event(
     slots: dict[int, dict[str, Any]],
     menus: dict[int, dict[str, Any]],
     inspections: list[dict[str, Any]],
+    exec_mode: str = "",
 ) -> dict[str, Any]:
     out = dict(payload or {})
     if turn <= 0:
@@ -149,6 +173,8 @@ def _enrich_ui_event(
     turn_inspections = [x for x in inspections if int(x.get("turn") or 0) == turn]
     if turn_inspections and not out.get("inspections"):
         out["inspections"] = turn_inspections
+    if exec_mode and not out.get("exec_mode"):
+        out["exec_mode"] = exec_mode
     return out
 
 
@@ -181,6 +207,9 @@ def _turn_bucket(turns: dict[int, dict[str, Any]], turn: int) -> dict[str, Any]:
             "decisions": [],
             "guards": [],
             "recovery": [],
+            "interrupt": [],
+            "binding_cache": [],
+            "exec_mode": "",
             "inspections": [],
             "tools": [],
             "turn_end": None,
@@ -268,6 +297,20 @@ def project_turns(session_id: str) -> dict[str, Any] | None:
             bucket["guards"].append({"ts": ts, **payload})
         elif typ == "recovery/match":
             bucket["recovery"].append({"ts": ts, **payload})
+        elif typ.startswith("interrupt/"):
+            bucket["interrupt"].append({"type": typ, "ts": ts, **payload})
+            if typ == "interrupt/push":
+                bucket["exec_mode"] = "interrupt"
+        elif typ.startswith("binding_cache/") or typ in ("exec/replay", "exec/heal_skip", "exec/interrupt"):
+            bucket["binding_cache"].append({"type": typ, "ts": ts, **payload})
+            if typ == "exec/replay" or typ == "binding_cache/hit":
+                bucket["exec_mode"] = bucket.get("exec_mode") or "replay"
+            elif typ == "exec/heal_skip":
+                bucket["exec_mode"] = "heal_skip"
+            elif typ == "exec/interrupt":
+                bucket["exec_mode"] = "interrupt"
+        elif typ == "exec/vision" and payload.get("exec_mode"):
+            bucket["exec_mode"] = str(payload.get("exec_mode") or "")
         elif typ == "inspection/done":
             bucket["inspections"].append({"ts": ts, **payload})
         elif typ == "turn/end":
@@ -330,6 +373,7 @@ def project_trajectory(session_id: str) -> dict[str, Any] | None:
 
     dispatch, slots_by_turn, menus_by_turn, inspections = _turn_sidecars(events)
     observe_thumbs = _observe_thumbs_by_turn(events)
+    exec_modes = _exec_mode_by_turn(events)
     stream_rows = [e for e in events if e.get("type") == "stream/emit"]
     start = next((e for e in events if e.get("type") == "session/start"), None)
     end = next((e for e in reversed(events) if e.get("type") == "session/end"), None)
@@ -358,6 +402,7 @@ def project_trajectory(session_id: str) -> dict[str, Any] | None:
                 slots=slots_by_turn,
                 menus=menus_by_turn,
                 inspections=inspections,
+                exec_mode=exec_modes.get(turn) or "",
             )
             _resolve_event_thumb(payload, turn=turn, observe_thumbs=observe_thumbs)
             if payload.get("goal") and not goal:
@@ -376,6 +421,7 @@ def project_trajectory(session_id: str) -> dict[str, Any] | None:
             slots_by_turn=slots_by_turn,
             menus_by_turn=menus_by_turn,
             inspections=inspections,
+            exec_modes=exec_modes,
         )
 
     status = (end or {}).get("payload", {}).get("status") or (meta or {}).get("status") or ""
@@ -400,12 +446,57 @@ def project_trajectory(session_id: str) -> dict[str, Any] | None:
         "event_count": len(events),
         "source": "session_log",
         "llm_calls": project_llm_calls(sid),
+        "exec_metrics": _exec_metrics(events),
         "inspections": [
             dict(row.get("payload") or {})
             for row in events
             if str(row.get("type") or "") == "inspection/done"
         ],
     }
+
+
+def _exec_metrics(events: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {
+        "vision_plan": 0,
+        "vision_exec": 0,
+        "replay": 0,
+        "heal_skip": 0,
+        "interrupt_push": 0,
+        "interrupt_pop": 0,
+        "promote_hint": 0,
+        "cache_hit": 0,
+        "cache_miss": 0,
+        "cache_skip_write": 0,
+        "cache_write": 0,
+        "plan_append_rejected": 0,
+    }
+    for row in events:
+        typ = str(row.get("type") or "")
+        if typ == "plan/vision":
+            counts["vision_plan"] += 1
+        elif typ == "exec/vision":
+            counts["vision_exec"] += 1
+        elif typ == "exec/replay":
+            counts["replay"] += 1
+        elif typ == "exec/heal_skip":
+            counts["heal_skip"] += 1
+        elif typ == "interrupt/push":
+            counts["interrupt_push"] += 1
+        elif typ == "interrupt/pop":
+            counts["interrupt_pop"] += 1
+        elif typ == "interrupt/promote_hint":
+            counts["promote_hint"] += 1
+        elif typ == "binding_cache/hit":
+            counts["cache_hit"] += 1
+        elif typ == "binding_cache/miss":
+            counts["cache_miss"] += 1
+        elif typ == "binding_cache/skip_write":
+            counts["cache_skip_write"] += 1
+        elif typ == "binding_cache/write":
+            counts["cache_write"] += 1
+        elif typ == "plan_append/rejected":
+            counts["plan_append_rejected"] += 1
+    return counts
 
 
 def _parse_event_ts(ts: str) -> float | None:
@@ -554,12 +645,14 @@ def _structured_to_ui(
     slots_by_turn: dict[int, dict[str, Any]] | None = None,
     menus_by_turn: dict[int, dict[str, Any]] | None = None,
     inspections: list[dict[str, Any]] | None = None,
+    exec_modes: dict[int, str] | None = None,
 ) -> list[dict[str, Any]]:
     """无 stream/emit 时，用 structured event 拼简易 UI 时间线。"""
     dispatch = dispatch or {}
     slots_by_turn = slots_by_turn or {}
     menus_by_turn = menus_by_turn or {}
     inspections = inspections or []
+    exec_modes = exec_modes or {}
     out: list[dict[str, Any]] = []
     for row in events:
         typ = str(row.get("type") or "")
@@ -622,6 +715,7 @@ def _structured_to_ui(
                 slots=slots_by_turn,
                 menus=menus_by_turn,
                 inspections=inspections,
+                exec_mode=exec_modes.get(turn) or "",
             ))
     if events and str(events[-1].get("type") or "") == "session/end":
         end_payload = dict(events[-1].get("payload") or {})

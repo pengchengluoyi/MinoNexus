@@ -72,8 +72,12 @@ def available_menu_brief(
     """id + summary。不把 platforms / implementations / low_level 塞进 prompt。"""
     kind = (kind or "agent").strip().lower()
     plat = str(platform or getattr(ctx, "platform", "") or "").strip()
+    from mino_nexus.catalog.skill_channel import menu_caller_ok
+
     out: list[dict[str, Any]] = []
     for cap in available_capabilities(ctx, phase=phase, platform=plat, tool_kinds=tool_kinds):
+        if audience == "case" and not menu_caller_ok(cap, phase):
+            continue
         if not _visible_to(cap, audience):
             continue
         row: dict[str, Any] = {"id": cap.id, "kind": cap.kind}
@@ -87,7 +91,11 @@ def available_menu_brief(
         if not cap_id or cap_id in seen:
             continue
         cap = plugin_registry.get_capability(cap_id)
-        if cap is None or not getattr(cap, "enabled", True):
+        if cap is None:
+            continue
+        from mino_nexus.catalog.skill_channel import capability_dispatch_ok
+
+        if not capability_dispatch_ok(cap_id):
             continue
         if plat and not plugin_registry.platform_ok(list(cap.platforms or []), plat):
             continue

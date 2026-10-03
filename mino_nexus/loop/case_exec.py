@@ -293,8 +293,6 @@ def _run_case_list(
                 run_env_brief=env_brief,
                 next_case=next_case if isinstance(next_case, dict) else None,
             )
-            if not _task_still_running(run_id):
-                break
             doc = run_store.get(run_id) or doc
             env_brief = str(doc.get("env_brief") or env_brief)
             run_store.patch_case(
@@ -316,6 +314,8 @@ def _run_case_list(
                 "status": result.get("status"),
                 "app_id": str(doc.get("app_id") or ""),
             })
+            if not _task_still_running(run_id):
+                break
             update_after_case(
                 sn_state,
                 status=str(result.get("status") or "fail"),

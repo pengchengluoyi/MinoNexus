@@ -43,9 +43,13 @@ class Capability(BaseModel):
     implementations: list[Implementation] = Field(default_factory=list)
     ui: CapabilityUI = Field(default_factory=CapabilityUI)
     visible_to: list[str] = Field(default_factory=lambda: ["case", "system"])
+    caller: str = ""
+    phases: list[str] = Field(default_factory=list)
     params: list[dict[str, Any]] = Field(default_factory=list)
     enabled: bool = True
     lifecycle: str = "active"
+    ui_coverable: bool = True
+    observe: str = ""
 
 
 class RecoveryMatch(BaseModel):

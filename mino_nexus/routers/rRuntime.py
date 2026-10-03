@@ -20,7 +20,7 @@ from mino_nexus.services.node_workload import workload_for_node_id
 
 router = APIRouter(prefix="/runtime", tags=["Runtime"])
 
-_REMOTE_COMMANDS = frozenset({"stop", "restart", "update"})
+_REMOTE_COMMANDS = frozenset({"stop", "restart", "update", "sleep", "wake"})
 
 
 class NodeCommandBody(BaseModel):
@@ -218,7 +218,10 @@ async def command_node(
     if live is None or not live.alive or live.send is None:
         raise HTTPException(status_code=409, detail="节点离线，无法下发")
 
-    update_timeout = 600.0 if cmd == "update" else 20.0
+    if cmd == "update":
+        update_timeout = 600.0
+    else:
+        update_timeout = 20.0
     payload = P.Execute(
         run_id="",
         step_idx=-1,
@@ -242,6 +245,8 @@ async def command_node(
         raise HTTPException(status_code=504, detail=hint)
     extra: dict[str, Any] = dict(getattr(result, "extra", None) or {})
     status = getattr(getattr(result, "status", None), "value", None) or getattr(result, "status", "")
+    if str(status).lower() in ("pass", "passed", "ok", "success") and cmd in ("sleep", "wake"):
+        get_registry().note_host_mode(node_id, "asleep" if cmd == "sleep" else "running")
     return ok({
         "node_id": node_id,
         "command": cmd,

@@ -21,6 +21,28 @@ def _history_passed(history: list[str], cap: str) -> bool:
     return any(needle in line for line in (history or []))
 
 
+_WEB_POINT_CAPS = frozenset({
+    "tap_element",
+    "input_text",
+    "long_press_element",
+    "multi_tap",
+    "swipe_element_to_element",
+})
+
+
+def _web_point_missing(ctx: Any, cap: str, params: dict[str, Any]) -> bool:
+    """Web 上这步要点坐标，但当前补不出来。交给看图，不要发空点击。"""
+    if cap not in _WEB_POINT_CAPS:
+        return False
+    from mino_nexus.loop.device_execute_params import prepare_device_execute_params
+    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+
+    if ui_channel_from_ctx(ctx) != UiChannel.WEB:
+        return False
+    merged = prepare_device_execute_params(cap, params, ctx)
+    return merged.get("x") is None or merged.get("y") is None
+
+
 def _step_ready(
     step: dict[str, Any],
     *,
@@ -77,12 +99,31 @@ def try_run_login_flow_macro(
             continue
         cap = str(step.get("cap") or "")
         sid = str(step.get("id") or cap)
+        params = dict(step.get("params") or {})
+        if _web_point_missing(ctx, cap, params):
+            from mino_nexus.loop.program_device_fallback import vision_fallback_result
+
+            yielded = getattr(ctx, "login_macro_yielded", None)
+            if isinstance(yielded, dict) and str(yielded.get("id") or "") == sid:
+                newer = list(history_lines or [])[int(yielded.get("hist_len") or 0):]
+                if _history_passed(newer, cap):
+                    _macro_done(ctx).add(sid)
+                    continue
+            setattr(ctx, "login_macro_yielded", {"id": sid, "hist_len": len(history_lines or [])})
+            return vision_fallback_result(
+                capability_id=cap,
+                params=params,
+                reason="no_web_coords",
+                milestone_id=sid,
+                block_id=LOGIN_BLOCK_ID,
+                step_id=sid,
+            )
         setattr(ctx, "login_flow_macro_active", True)
         event = PlanEvent(
             seq=int(turn_seq),
             capability_id=cap,
             event_kind=cap,
-            params=dict(step.get("params") or {}),
+            params=params,
             ai_reasoning=f"登录逻辑块 {LOGIN_BLOCK_ID} · {sid}",
             label=f"宏·{sid}",
         )
@@ -103,7 +144,7 @@ def try_run_login_flow_macro(
                 ctx=ctx,
                 seq=int(turn_seq),
                 cap=cap,
-                params=dict(step.get("params") or {}),
+                params=params,
                 label=f"宏·{sid}",
             )
         st = res.status.value if hasattr(res.status, "value") else str(res.status)

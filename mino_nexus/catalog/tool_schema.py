@@ -269,6 +269,15 @@ _TOOL_META_PROPS: dict[str, Any] = {
 
 _TOOL_META_SLIM: dict[str, Any] = {
     "thought": _TOOL_META_PROPS["thought"],
+    "prior_status": {
+        "type": "string",
+        "enum": ["done", "pending"],
+        "description": (
+            "仅当 success_criteria.prior_action 存在时填写。"
+            "done：上一步已在画面上完成，本次工具做当前焦点的下一步，不要重复上一步。"
+            "pending：上一步没完成（例如字没进输入框）。本次工具的坐标或文本用来完成上一步，不要做下一步。"
+        ),
+    },
 }
 
 
@@ -723,6 +732,7 @@ def decision_from_tool_calls(
     args.pop("milestone_updates", None)
     milestones = args.pop("milestones", None)
     step_outcome = str(args.pop("step_outcome", "") or "").strip()
+    prior_status = str(args.pop("prior_status", "") or "").strip().lower()
     out: dict[str, Any] = {
         "thought": thought,
         "status": "continue",
@@ -736,6 +746,8 @@ def decision_from_tool_calls(
         out["milestones"] = milestones
     if step_outcome:
         out["step_outcome"] = step_outcome
+    if prior_status:
+        out["prior_status"] = prior_status
     out.update(envelope)
     if name == SIGNAL_DONE:
         out["status"] = "done"

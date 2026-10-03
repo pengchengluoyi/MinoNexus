@@ -100,6 +100,8 @@ def patch(kind: str, entry_id: str, body: dict[str, Any]) -> dict[str, Any]:
             fields["enabled"] = bool(body["enabled"])
         if body.get("lifecycle"):
             fields["lifecycle"] = str(body["lifecycle"])
+        if "ui_coverable" in body and body["ui_coverable"] is not None:
+            fields["ui_coverable"] = bool(body["ui_coverable"])
         if "display_name" in body and body["display_name"] is not None:
             fields["display_name"] = str(body["display_name"])
         if "description" in body and body["description"] is not None:
@@ -125,6 +127,12 @@ def patch(kind: str, entry_id: str, body: dict[str, Any]) -> dict[str, Any]:
         payload = dict(fields.get("payload_json") or {})
         if body.get("needs_vlm") is not None:
             payload["needs_vlm"] = bool(body.get("needs_vlm"))
+        if "observe" in body and body.get("observe") is not None:
+            obs = str(body.get("observe") or "").strip().lower()
+            if obs in ("exec", "visual_each_run", "program"):
+                payload["observe"] = obs
+            else:
+                payload.pop("observe", None)
         fields["payload_json"] = _clean_payload(payload)
         _validate(target_ck, fields)
         for key, val in fields.items():
@@ -158,6 +166,7 @@ def _row_fields(row) -> dict[str, Any]:
         "description": row.description or "",
         "enabled": bool(row.enabled),
         "lifecycle": row.lifecycle or "active",
+        "ui_coverable": getattr(row, "ui_coverable", True) is not False,
         "provider": row.provider or "",
         "owner": row.owner or "",
         "platforms_json": list(row.platforms_json or []),
@@ -191,7 +200,7 @@ def _prepare(kind: str, eid: str, body: dict[str, Any]) -> dict[str, Any]:
     for key in (
         "event_kind", "needs_vlm", "params", "ui", "implementations",
         "when", "mode", "match", "actions", "verify", "forbid", "prompt_snippet",
-        "priority", "max_attempts", "evidence_notes", "caller", "returns",
+        "priority", "max_attempts", "evidence_notes", "caller", "returns", "observe",
     ):
         if key in body and key not in payload:
             payload[key] = body[key]
@@ -208,6 +217,7 @@ def _prepare(kind: str, eid: str, body: dict[str, Any]) -> dict[str, Any]:
         "description": str(body.get("description") or body.get("when") or ""),
         "enabled": body.get("enabled", True) is not False,
         "lifecycle": str(body.get("lifecycle") or "active"),
+        "ui_coverable": body.get("ui_coverable", True) is not False,
         "provider": str(body.get("provider") or ""),
         "owner": str(body.get("owner") or ""),
         "platforms_json": list(platforms or []),

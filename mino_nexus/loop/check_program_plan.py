@@ -67,6 +67,7 @@ def milestones_from_check_program(plan: dict[str, Any]) -> list[dict[str, Any]]:
                 "key_ref": str(cp.get("key_ref") or ""),
                 "checkpoint_kind": str(assert_payload.get("mode") or "vlm"),
                 "assert": assert_payload,
+                "observe": str(cp.get("observe") or "exec"),
             }
         )
     return rows

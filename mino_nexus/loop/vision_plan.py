@@ -70,18 +70,10 @@ def _wait_already_passed(cursor: Any) -> bool:
 
 
 def _do_plan_locks_append(cursor: Any, case: dict[str, Any] | None) -> bool:
-    """登录这类逻辑块种下之后不再追加。看图操作步仍允许补下一步。"""
-    from mino_nexus.loop.do_program_plan import has_do_program_steps, resolve_do_program_plan
+    """有 do 程序图时禁止规划追加业务边。"""
+    from mino_nexus.loop.do_program_plan import has_do_program_steps
 
-    if not has_do_program_steps(cursor, case):
-        return False
-    plan = resolve_do_program_plan(case, cursor)
-    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
-    return any(
-        isinstance(step, dict)
-        and (str(step.get("kind") or "") == "flow_block" or str(step.get("block_id") or "").strip())
-        for step in steps
-    )
+    return has_do_program_steps(cursor, case)
 
 
 def hold_visual_do_exit_until_effect(cursor: Any, ctx: Any) -> None:

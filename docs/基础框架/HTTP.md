@@ -59,7 +59,7 @@ https://github.com/<owner>/MinoScout/releases/latest/download/manifest.json
 | GET | `/runtime/nodes` | 当前用户可见的节点。`?studio_id=` 为本工作台 id。未归属仅管理员可见；离线节点仍列出 |
 | POST | `/runtime/nodes/install-token` | 短 TTL 节点凭证。Studio 写入 Scout 配置 |
 | PATCH | `/runtime/nodes/{node_id}` | **Console 管理员**：改 `owner_user_id` / `studio_id`（离线节点也生效） |
-| POST | `/runtime/nodes/{node_id}/command` | Studio 对已连接节点下发 `stop` / `restart` / `update`。离线 409。`start` 400 |
+| POST | `/runtime/nodes/{node_id}/command` | Studio 对已连接节点下发 `stop` / `restart` / `update` / `sleep` / `wake`。离线 409。`start` 400（进程已退出时不能远程拉起） |
 | GET | `/runtime/nodes/{node_id}/workload` | 合并 Scout `device_workload` 与 Nexus 在途 run（按 sn） |
 | GET | `/runtime/nodes/{node_id}/logs?lines=` | `EXECUTE node.log_tail`（Scout ≥ 下一版含该指令） |
 | POST | `/device/{sn}/ime/system` | Android 设备恢复系统输入法（关闭 ADB Keyboard） |
@@ -79,10 +79,10 @@ HITL 问人界面、排期 cron、基线库、从设计稿/定位抽登录图标
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/project/{project_id}/cases` | 项目用例列表（含 `step_keys_summary`） |
-| GET | `/project/{project_id}/cases/{case_id}` | 单条用例 + `step_keys_summary` / warnings 预览 |
+| GET | `/project/{project_id}/cases` | 项目用例列表。每条含 `step_keys_summary`（含 `ui_automation.coverable` / `blocked_by` / 逐步 `lights`） |
+| GET | `/project/{project_id}/cases/{case_id}` | 单条用例 + `step_keys_summary`。`coverable=false` 时 Studio 选用例应禁用开跑 |
 | GET | `/project/{project_id}/requirements` | 导入可选需求（项目内各 App 聚合） |
-| POST | `/project/{project_id}/cases/import/preview` | 解析表格；body 含 `table`、`header_row`、`skip_rows`、`column_map` |
+| POST | `/project/{project_id}/cases/import/preview` | 解析表格。每行：`steps_parsed` / `expected_parsed`（编译出的事件）、`remark`（不可覆盖的人话）、`ui_automation`。`flags` 仍是机器码。**不拦入库** |
 | POST | `/project/{project_id}/cases/import/commit` | 写入；body 含 `preview_token`、各行 `on_conflict`；`block_on_step_key_issues` 省略时用 `GET /settings/case-import` 默认 |
 | DELETE | `/project/{project_id}/cases/{case_id}` | 删除单条用例 |
 | POST | `/project/{project_id}/cases/delete` | 批量删除；body `{ case_ids: [] }` |
@@ -120,6 +120,8 @@ Console **Jobs** 页读写下列 API。Studio 写入口经 `client_gate` 拦截�
 ## 技能
 
 技能是可编辑产品对象（角色 + SOP + prompt + 结果视图），与 `/packs` 分开。引擎 / 指针 / 视图只能选自已注册枚举。
+
+扩展包 `GET/PUT/PATCH /packs`：列表项分开展示 `lifecycle`（`status` 仍只投影 lifecycle+enabled）、`enabled`、`ui_coverable`（可做/不可做）、`observe`（`exec` / `visual_each_run` / `program`）。不要合成一个下拉。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|

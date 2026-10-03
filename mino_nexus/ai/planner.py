@@ -522,6 +522,13 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
             if isinstance(item, dict) and (item.get("id") or item.get("title")):
                 ms_rows.append(dict(item))
     step_outcome = str(raw.get("step_outcome") or "").strip().lower()
+    prior_status = str(raw.get("prior_status") or "").strip().lower()
+    if prior_status in ("in_progress", "incomplete", "unfinished", "fail", "failed"):
+        prior_status = "pending"
+    elif prior_status in ("pass", "complete", "completed", "ok", "true"):
+        prior_status = "done"
+    elif prior_status not in ("pending", "done", ""):
+        prior_status = ""
     return AgentDecision(
         thought=str(raw.get("thought") or "").strip(),
         action=action,
@@ -538,6 +545,7 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
         allow_foreign_foreground_llm_image=allow_ff,
         milestones=ms_rows,
         step_outcome=step_outcome,
+        prior_status=prior_status,
         raw_llm=raw,
         parse_warnings=warnings,
     )

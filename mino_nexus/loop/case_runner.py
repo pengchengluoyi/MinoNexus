@@ -53,6 +53,38 @@ def _instruction_case(instruction: str) -> dict[str, Any]:
     }
 
 
+def _case_ui_automation(case: dict[str, Any]) -> dict[str, Any]:
+    meta = case.get("meta") if isinstance(case.get("meta"), dict) else {}
+    ua = meta.get("ui_automation") if isinstance(meta.get("ui_automation"), dict) else None
+    if isinstance(ua, dict) and "coverable" in ua:
+        return ua
+    from mino_nexus.services.case_step_key_compiler import compile_case_step_program_keys
+
+    compiled = compile_case_step_program_keys(case)
+    row = compiled.get("ui_automation")
+    return dict(row) if isinstance(row, dict) else {"coverable": True, "blocked_by": []}
+
+
+def _reject_uncoverable_cases(cases: list[dict[str, Any]]) -> None:
+    blocked: list[dict[str, Any]] = []
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        ua = _case_ui_automation(case)
+        if ua.get("coverable") is not False:
+            continue
+        items = [x for x in (ua.get("blocked_by") or []) if isinstance(x, dict)]
+        blocked.append(
+            {
+                "case_id": str(case.get("case_id") or ""),
+                "name": str(case.get("name") or "")[:80],
+                "blocked_by": items,
+            }
+        )
+    if blocked:
+        raise UiNotCoverable(blocked)
+
+
 def _pick_online_sns() -> list[str]:
     return [str(d.get("sn") or "") for d in ui_devices.ui_devices() if d.get("status") == "online" and d.get("sn")]
 
@@ -150,6 +182,8 @@ def run_cases(
         cases = cases[start_index:]
     if not cases:
         raise ValueError("没有可执行的用例草稿。请先在流程里生成用例，或指定 case_ids。")
+    if not instruction:
+        _reject_uncoverable_cases(cases)
     mark("cases")
 
     roster = ui_devices.ui_devices()
@@ -477,6 +511,27 @@ def _ensure_web_parallel_capacity(sn: str) -> None:
     active = len(ids)
     if active >= WEB_PLAYWRIGHT_PARALLEL_LANES:
         raise WebSlotFull(sn, active, WEB_PLAYWRIGHT_PARALLEL_LANES)
+
+
+class UiNotCoverable(Exception):
+    def __init__(self, blocked: list[dict[str, Any]]):
+        self.blocked = list(blocked or [])
+        bits: list[str] = []
+        for row in self.blocked:
+            cid = str(row.get("case_id") or "")
+            for item in row.get("blocked_by") or []:
+                if not isinstance(item, dict):
+                    continue
+                step = item.get("case_step")
+                clause = str(item.get("source_clause") or "").strip()
+                message = str(item.get("user_message") or "").strip()
+                if message:
+                    bits.append(message)
+                    continue
+                reason = str(item.get("reason") or "")
+                bits.append(f"{cid} 第{step}步「{clause}」({reason})")
+        msg = "无法 UI 自动化测试：" + ("；".join(bits[:8]) if bits else "存在写不到具体事件的步骤")
+        super().__init__(msg)
 
 
 class DeviceBusy(Exception):

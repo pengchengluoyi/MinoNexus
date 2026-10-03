@@ -80,6 +80,33 @@ def try_dispatch_block_hook(
         return None
     if str(pending.get("kind") or "").strip().lower() != "hook":
         return None
+    from mino_nexus.catalog.skill_channel import capability_dispatch_ok
+
+    if not capability_dispatch_ok(cap):
+        return {
+            "ok": False,
+            "case_fail": True,
+            "status": "fail",
+            "summary": f"{cap} 未启用或当前不可覆盖，不能派发",
+            "capability_id": cap,
+            "milestone_id": mid,
+        }
+    from mino_nexus.catalog.skill_channel import phase_allows
+
+    phase = str(getattr(cursor, "phase", "") or "")
+    if phase in ("prep", "do", "check") and not phase_allows(cap, phase):
+        if writer is not None:
+            writer.append(
+                "guard/block",
+                {"capability_id": cap, "reason": "phase", "phase": phase, "milestone_id": mid},
+            )
+        return {
+            "ok": False,
+            "status": "skipped",
+            "summary": f"{cap} 不能在{phase}阶段派发",
+            "capability_id": cap,
+            "milestone_id": mid,
+        }
 
     hist = list(history_lines or [])
     intents = set(getattr(cursor, "step_intents_done", None) or set())
@@ -164,12 +191,8 @@ def try_dispatch_block_hook(
             return None
 
     from mino_nexus.loop.router_proxy import is_local_cap
-
-    if not is_local_cap(cap):
-        return None
     from mino_nexus.core.schemas import PlanEvent
     from mino_nexus.core.protocol import EventStatus
-    from mino_nexus.loop.local_executors import dispatch_local
 
     event = PlanEvent(
         seq=int(turn_seq),
@@ -179,12 +202,19 @@ def try_dispatch_block_hook(
         ai_reasoning=f"逻辑块 {block_id} · milestone {mid}",
         label=f"块·{mid or cap}",
     )
-    res = dispatch_local(
-        event,
-        ctx=ctx,
-        router=proxy,
-        target_package=str(getattr(ctx, "target_package", "") or ""),
-    )
+    if is_local_cap(cap):
+        from mino_nexus.loop.local_executors import dispatch_local
+
+        res = dispatch_local(
+            event,
+            ctx=ctx,
+            router=proxy,
+            target_package=str(getattr(ctx, "target_package", "") or ""),
+        )
+        executor_used = "internal"
+    else:
+        res = proxy.dispatch(event, run_id=run_id, step_idx=int(turn_seq))
+        executor_used = str(getattr(res, "executor_used", "") or "scout")
     st = res.status.value if hasattr(res.status, "value") else str(res.status)
     ok = str(st) in ("pass", EventStatus.PASS.value)
     if cap == "get_otp" and mid == "otp_fill":
@@ -204,7 +234,7 @@ def try_dispatch_block_hook(
         params=hook_params,
         status=st,
         summary=hook_summary,
-        executor_used="internal",
+        executor_used=executor_used,
     )
     if ok:
         note_tool_pass_milestone(
@@ -318,7 +348,7 @@ def _dispatch_email_fill(
             block_id=block_id,
             step_id=mid,
         )
-    from mino_nexus.loop.channel_observation import bind_fresh_observation, read_field
+    from mino_nexus.loop.channel_observation import read_field_after_input
     from mino_nexus.loop.flow_block_exit import device_input_text_exit
     from mino_nexus.loop.observe.program_tool_log import log_program_tool
     from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
@@ -335,8 +365,7 @@ def _dispatch_email_fill(
     summ = str(res.summary or res.error or "input_text")
     field_value = None
     if ui_channel_from_ctx(ctx) == UiChannel.WEB:
-        bind_fresh_observation(ctx, proxy)
-        field_value = read_field(ctx, getattr(ctx, "nav_hierarchy_nodes", None), field)
+        field_value = read_field_after_input(ctx, proxy, field)
     exit_st, _ = device_input_text_exit(
         summary=summ,
         field=field,
@@ -463,13 +492,12 @@ def _dispatch_otp_fill(
     )
     st = res.status.value if hasattr(res.status, "value") else str(res.status)
     summ = str(res.summary or res.error or "input_text")
-    from mino_nexus.loop.channel_observation import bind_fresh_observation, read_field
+    from mino_nexus.loop.channel_observation import read_field_after_input
     from mino_nexus.loop.flow_block_exit import device_input_text_exit, log_milestone_exit_eval
 
     field_value = None
     if ui_channel_from_ctx(ctx) == UiChannel.WEB:
-        bind_fresh_observation(ctx, proxy)
-        field_value = read_field(ctx, getattr(ctx, "nav_hierarchy_nodes", None), "sms_code")
+        field_value = read_field_after_input(ctx, proxy, "sms_code")
     sent = getattr(ctx, "last_device_execute_params", None) if ctx is not None else None
     if not isinstance(sent, dict):
         sent = params
@@ -583,6 +611,23 @@ def try_dispatch_otp_fill_after_get_otp(
     )
 
 
+def _visual_login_form_open(shot: Any) -> bool | None:
+    """纯视觉：看决策图判断账号框和验证码框是否还同时在。看不了就返回 None，不当成已离开。"""
+    if shot is None or not getattr(shot, "has_image", lambda: False)():
+        return None
+    from mino_nexus.loop.vision_assert import vision_assert_checkpoints
+
+    result = vision_assert_checkpoints(
+        expectation="账号输入框和验证码输入框是否同时仍在画面中。两者都在则不通过；已经看不到这组输入框则通过。",
+        image_base64=str(getattr(shot, "image_base64", "") or ""),
+        image_mime=str(getattr(shot, "image_mime", "") or "image/png"),
+    )
+    warnings = list(getattr(result, "parse_warnings", None) or [])
+    if any("provider" in str(w) or "job render" in str(w) for w in warnings):
+        return None
+    return not bool(getattr(result, "passed", False))
+
+
 def _dispatch_login_state(
     proxy: Any,
     ctx: Any,
@@ -604,9 +649,29 @@ def _dispatch_login_state(
         max_turns = max(1, int(params.get("max_turns") or 3))
     except (TypeError, ValueError):
         max_turns = 3
-    _shot, frame_thumb = capture_decision_frame(proxy, ctx)
-    nodes = getattr(ctx, "nav_hierarchy_nodes", None)
-    if login_credential_form_open(nodes if isinstance(nodes, list) else None):
+    from mino_nexus.action_space.scheme import action_scheme
+
+    visual = action_scheme(ctx) == "visual"
+    _shot, frame_thumb = capture_decision_frame(proxy, ctx, hierarchy=not visual)
+    if visual:
+        form_open = _visual_login_form_open(_shot)
+        if form_open is None:
+            return {
+                "ok": False,
+                "status": "wait",
+                "defer": True,
+                "summary": "看图未能判断是否还在登录表单，下一回合再看当前屏",
+                "capability_id": "confirm_login_state",
+                "block_id": block_id,
+                "step_id": "login_state",
+                "milestone_id": "login_state",
+                "session_logged": "flow_block",
+                "thumb": frame_thumb,
+            }
+    else:
+        nodes = getattr(ctx, "nav_hierarchy_nodes", None)
+        form_open = login_credential_form_open(nodes if isinstance(nodes, list) else None)
+    if form_open:
         streak = int(getattr(cursor, "login_state_waits", 0) or 0) + 1
         cursor.login_state_waits = streak
         if streak >= max_turns:

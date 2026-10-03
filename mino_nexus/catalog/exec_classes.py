@@ -15,11 +15,14 @@ ALL_KINDS: Tuple[str, ...] = CAPABILITY_KINDS + PACK_KINDS
 # 菜单 / 派单：阶段 tool_kinds 含 recovery 时，recovery 原子能力也进 capabilities。
 MENU_ATOMIC_KINDS: Tuple[str, ...] = CAPABILITY_KINDS + (RECOVERY_KIND,)
 
-# 无 implementations、由 Nexus 本地编排的能力。Scout 不执行。
-LOCAL_ORCH_IDS = frozenset({
+# 不出网的本地执行器。菜单过滤和派发读同一份。
+LOCAL_EXECUTOR_IDS = frozenset({
     "relogin", "lease_account", "get_otp", "get_phone", "release_account", "fsm_navigate",
     "accept_legal_consent", "dismiss_ime", "request_sms_code",
+    "assert_visual", "persona_subtask", "wait_ms", "wait_screen_ready",
+    "check_run_env", "signal_nav_calib_step",
 })
+LOCAL_ORCH_IDS = LOCAL_EXECUTOR_IDS
 
 KIND_META: Dict[str, Dict[str, str]] = {
     "check": {"label": "预期", "desc": "只在校验阶段注入模型"},

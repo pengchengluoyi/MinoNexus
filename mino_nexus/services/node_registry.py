@@ -60,6 +60,7 @@ class NodeSession:
     hostname: str = ""
     studio_id: str = ""
     owner_user_id: str = ""
+    host: dict[str, Any] = field(default_factory=dict)
     # 发一条消息并等应答；由 websocket/node.py 注入
     send: Optional[Callable[..., Any]] = None
 
@@ -114,6 +115,7 @@ class NodeSession:
             "last_seen": self.last_seen,
             "last_seen_ago_sec": round(time.time() - self.last_seen, 1),
             "update_job": dict(self.update_job or {}),
+            "host": dict(self.host or {}),
         }
 
     def persist_snapshot(self) -> None:
@@ -298,6 +300,8 @@ class NodeRegistry:
             node.busy = hb.busy
             node.active_runs = list(hb.active_runs or [])
             node.device_workload = list(hb.device_workload or [])
+            host = getattr(hb, "host", None)
+            node.host = dict(host) if isinstance(host, dict) else {}
             ver = str(getattr(hb, "scout_version", "") or "").strip()
             if ver:
                 node.scout_version = ver
@@ -317,6 +321,21 @@ class NodeRegistry:
             self._purge_orphaned_legacy_web_slots()
             if node is not None:
                 node.persist_snapshot()
+
+    def note_host_mode(self, node_id: str, mode: str) -> None:
+        """休眠/启动的回执先于下一次心跳。立刻改 mode，避免列表还显示旧状态。"""
+        nid = str(node_id or "").strip()
+        want = "asleep" if str(mode or "") == "asleep" else "running"
+        with self._lock:
+            node = self._nodes.get(nid)
+            if node is None:
+                return
+            host = dict(node.host or {})
+            host["mode"] = want
+            if want == "asleep":
+                host["inhibit"] = False
+            node.host = host
+            node.last_seen = time.time()
 
     def node_event(self, req: P.Execute, *, node_id: str = "") -> list[str]:
         """处理 S→N 框架 EXECUTE（node.device_lost 等）。`shutting_down` 返回在途 run_id。"""

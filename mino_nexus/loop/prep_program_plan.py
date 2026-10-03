@@ -78,6 +78,63 @@ def _device_session_clause(pre: str) -> tuple[str, str]:
     return "", ""
 
 
+def _extra_prep_catalog_steps(pre: str, used_caps: set[str]) -> list[dict[str, Any]]:
+    """编号前置行里目录能认出、固定模板又没收的事件，按 hook 追加。"""
+    from mino_nexus.catalog.skill_channel import capability_dispatch_ok
+    from mino_nexus.services.account_requirement_compile import TITLE_OTHER, classify_precondition_title
+    from mino_nexus.services.case_resource_key_catalog import catalog_payload
+
+    out: list[dict[str, Any]] = []
+    known = {str(x) for x in (used_caps or set())}
+    entries = [
+        e
+        for e in (catalog_payload().get("entries") or [])
+        if isinstance(e, dict) and str(e.get("key_layer") or "") == "precondition"
+    ]
+    for title, val in _pre_lines(pre):
+        if classify_precondition_title(title) != TITLE_OTHER:
+            continue
+        text = str(val or "").strip()
+        if text.lower() in _EMPTY_PRE_VALUE:
+            continue
+        blob = f"{title}{text}"
+        hit: dict[str, Any] | None = None
+        best = 0
+        for ent in entries:
+            cat = str(ent.get("write_category") or "").strip()
+            examples = [str(x).strip() for x in (ent.get("write_examples") or []) if str(x).strip()]
+            score = 0
+            if cat and cat in blob:
+                score = max(score, len(cat))
+            for ex in examples:
+                if ex in blob or blob in ex:
+                    score = max(score, len(ex))
+            if score > best:
+                best = score
+                hit = ent
+        if not hit or best < 2:
+            continue
+        caps = [str(x).strip() for x in (hit.get("config_keys") or []) if str(x).strip()]
+        cap = next((c for c in caps if capability_dispatch_ok(c)), "")
+        if not cap or cap in known:
+            continue
+        known.add(cap)
+        label = f"{title}：{text}".strip("：") if title else text
+        out.append(
+            {
+                "id": f"prep_extra_{cap}"[:64],
+                "prep_flow_id": "catalog",
+                "title": label[:240],
+                "kind": "hook",
+                "hook_cap": cap,
+                "optional": False,
+                "key_ref": str(hit.get("key_ref") or ""),
+                "source_clause": label[:240],
+            }
+        )
+    return out
+
+
 def _account_clause(pre: str, case: dict[str, Any] | None, scene: dict[str, Any] | None) -> str:
     """账号登录态与账号与数据。文案保留字段名和状态。"""
     from mino_nexus.services.account_requirement_compile import (
@@ -225,6 +282,14 @@ def build_prep_program_plan(
                 "required_session": device_want,
             }
         )
+
+    used_caps = {
+        str(step.get("hook_cap") or "")
+        for step in steps_out
+        if isinstance(step, dict) and str(step.get("hook_cap") or "").strip()
+    }
+    for extra in _extra_prep_catalog_steps(precondition, used_caps):
+        steps_out.append(extra)
 
     da = claim.get("device_app") if isinstance(claim.get("device_app"), dict) else {}
     return {

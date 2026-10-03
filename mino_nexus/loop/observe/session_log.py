@@ -38,6 +38,14 @@ def _hash_text(text: str) -> str:
 
 
 _THUMB_CAP = 65536
+_screenshot_hash: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "mino_screenshot_hash", default=""
+)
+
+
+def set_screenshot_hash(value: str) -> None:
+    """本回合决策图的文件哈希。llm/request 只记这个，不重复存图。"""
+    _screenshot_hash.set(str(value or ""))
 
 
 def _clip_value(val: Any, cap: int = _PAYLOAD_CAP) -> Any:
@@ -47,6 +55,8 @@ def _clip_value(val: Any, cap: int = _PAYLOAD_CAP) -> Any:
         cap = max(int(cap), 16_000)
     if isinstance(val, str):
         s = val.strip()
+        if s.startswith("/static/"):
+            return s
         if len(s) <= cap:
             return s
         return s[: cap - 20] + f"...(+{len(s) - cap + 20})"
@@ -318,16 +328,27 @@ def summarize_messages(messages: list | None) -> list[dict[str, Any]]:
             continue
         role = str(msg.get("role") or "")
         content = msg.get("content")
+        image_hash = ""
         if isinstance(content, list):
             text_bits = []
             for part in content:
                 if isinstance(part, dict) and part.get("type") == "text":
                     text_bits.append(str(part.get("text") or ""))
                 elif isinstance(part, dict) and part.get("type") == "image_url":
+                    url = ""
+                    raw = part.get("image_url")
+                    if isinstance(raw, dict):
+                        url = str(raw.get("url") or "")
+                    elif isinstance(raw, str):
+                        url = raw
+                    image_hash = _hash_text(url)
                     text_bits.append("[image]")
             content = "\n".join(text_bits)
         text = str(content or "")
-        rows.append({"role": role, "len": len(text), "hash": _hash_text(text)})
+        row = {"role": role, "len": len(text), "hash": _hash_text(text)}
+        if image_hash:
+            row["image_hash"] = image_hash
+        rows.append(row)
     return rows
 
 
@@ -339,6 +360,8 @@ def append_llm_request(*, job_id: str, messages: list | None) -> int:
         "job_id": job_id,
         "messages": summarize_messages(messages),
     }
+    if _screenshot_hash.get():
+        payload["screenshot_hash"] = _screenshot_hash.get()
     if job_id == "agent-decide":
         try:
             from mino_nexus.services.job_store import get_job

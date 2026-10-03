@@ -10,6 +10,7 @@ from mino_nexus.loop.milestones import _normalize_milestone_row, milestone_v1_en
 SCHEMA = "mino.interrupt_stack.v1"
 MAX_DEPTH = 2
 _FOCUS_FAIL_BEFORE_PUSH = 2
+_PROMOTE_AFTER = 2
 
 def _resolve_steps(cursor: Any, ctx: Any, *, reason: str) -> list[dict[str, Any]]:
     from mino_nexus.loop.interrupt_recovery import resolve_interrupt_steps
@@ -36,6 +37,30 @@ def _set_stack(cursor: Any, frames: list[dict[str, Any]]) -> None:
 
 def stack_depth(cursor: Any) -> int:
     return len(_stack(cursor))
+
+
+def _note_promote_hint(cursor: Any, parent_id: str, reason: str, writer: Any) -> None:
+    """同一父步连续打断成功：只发提示，不改用例。"""
+    pid = str(parent_id or "").strip()
+    if not pid:
+        return
+    bag = getattr(cursor, "interrupt_promote_v1", None)
+    if not isinstance(bag, dict):
+        bag = {}
+    n = int(bag.get(pid) or 0) + 1
+    bag[pid] = n
+    cursor.interrupt_promote_v1 = bag
+    if n < _PROMOTE_AFTER or writer is None:
+        return
+    writer.append(
+        "interrupt/promote_hint",
+        {
+            "parent_step_id": pid,
+            "reason": str(reason or "")[:120],
+            "success_streak": n,
+            "hint": "可收进逻辑块或 optional 边；需人工确认，默认不改用例",
+        },
+    )
 
 
 def note_in_progress_tool_fail(
@@ -163,6 +188,7 @@ def maybe_pop_interrupt(cursor: Any, *, writer: Any = None) -> bool:
     if not iids:
         return False
     open_interrupt = False
+    interrupt_passed = True
     for row in ms:
         if str(row.get("id") or "") not in iids:
             continue
@@ -170,6 +196,8 @@ def maybe_pop_interrupt(cursor: Any, *, writer: Any = None) -> bool:
         if st in ("pending", "in_progress"):
             open_interrupt = True
             break
+        if st not in ("passed", "skipped"):
+            interrupt_passed = False
     if open_interrupt:
         return False
     parent_id = str(frame.get("parent_step_id") or "")
@@ -195,8 +223,11 @@ def maybe_pop_interrupt(cursor: Any, *, writer: Any = None) -> bool:
                 "depth": len(frames),
                 "case_step": case_step,
                 "phase": phase,
+                "focus_restored": parent_id,
             },
         )
+        if interrupt_passed:
+            _note_promote_hint(cursor, parent_id, str(frame.get("reason") or ""), writer)
     return True
 
 

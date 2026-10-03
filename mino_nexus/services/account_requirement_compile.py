@@ -27,6 +27,30 @@ def classify_precondition_title(title: str) -> str:
     t = str(title or "").strip()
     if not t:
         return TITLE_OTHER
+    from mino_nexus.services.case_resource_key_catalog import catalog_payload
+
+    nt = "".join(t.lower().split())
+    for ent in catalog_payload().get("entries") or []:
+        if not isinstance(ent, dict):
+            continue
+        if str(ent.get("key_layer") or "") != "precondition":
+            continue
+        cat = str(ent.get("write_category") or "").strip()
+        if not cat:
+            continue
+        nc = "".join(cat.lower().split())
+        if nt != nc and nc not in nt:
+            continue
+        sec = str(ent.get("section") or "")
+        if sec == "device_app":
+            return TITLE_DEVICE_LOGIN
+        if sec == "account" and "登录" in cat:
+            return TITLE_ACCOUNT_LOGIN
+        if sec == "account":
+            return TITLE_ACCOUNT_DATA
+        if sec == "prep" or "环境" in cat or "缓存" in cat:
+            return TITLE_ENV_PERM
+        return TITLE_OTHER
     if _ACCOUNT_LOGIN_TITLE_RE.search(t):
         return TITLE_ACCOUNT_LOGIN
     if _DEVICE_LOGIN_TITLE_RE.search(t):

@@ -459,5 +459,9 @@ class AgentDecision(BaseModel):
         "",
         description="pass|give_up|ask_human|skip，绑定当前用例步+phase",
     )
+    prior_status: str = Field(
+        "",
+        description="done|pending。看图执行在同一张图上判断上一步是否完成。空视为 done。",
+    )
     raw_llm: dict[str, Any] = Field(default_factory=dict)
     parse_warnings: list[str] = Field(default_factory=list)

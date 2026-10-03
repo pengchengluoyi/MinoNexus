@@ -53,6 +53,8 @@ def refresh_web_focus(ctx: Any, proxy: Any) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if proxy is None or ctx is None:
         return out
+    if str(getattr(proxy, "action_scheme", "") or "").strip().lower() == "visual":
+        return out
     try:
         shot = proxy.observe("hierarchy", force_fresh=True)
         detail = dict(getattr(shot, "remote_detail", None) or {})

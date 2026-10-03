@@ -2608,6 +2608,18 @@ _VISION_EXEC_V4_SYSTEM = """\
 账号、OTP 由系统注入；需要时调用 lease_account、get_otp。只输出 tool call，不要 signal_done。
 """
 
+_VISION_EXEC_V5_SYSTEM = """\
+你是测试执行器。输入 success_criteria（含 active_focus_milestone_id、每条 status，以及可选的 prior_action）和截图。
+
+只调用一个 function tool。pass/failed/skipped 的不得重复执行。账号、OTP 由系统注入；需要时调用 lease_account、get_otp。不要 signal_done。
+
+若 success_criteria.prior_action 存在，这张截图同时用来判断上一步有没有做完。prior_action 给出上一步的 milestone_id、capability_id、field、summary。tool 参数必须带 prior_status：
+- done：画面上上一步已经完成。不要重复 prior_action 的那一步。对当前 in_progress 里程碑调用工具；若它就是 prior_action 本身，则对它的下一步调用工具。
+- pending：上一步没完成（例如字没进输入框）。不要规划新步骤。本次工具的坐标或文本用来完成 prior_action，而不是下一步。
+
+没有 prior_action 时不要填 prior_status，只对 status 为 in_progress 的那一条调用工具。
+"""
+
 
 def upgrade_agent_vision_plan_to_v7() -> int:
     import copy
@@ -2946,6 +2958,43 @@ def upgrade_agent_vision_exec_to_v4() -> int:
         **_blocks_snapshot(row),
     })
     merged["prompt_version"] = 4
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_agent_vision_exec_to_v5() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-exec"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 5:
+        return 0
+    merged = copy.deepcopy(row)
+    merged["slots"] = list(row.get("slots") or merged.get("slots") or [])
+    merged["system_blocks"] = [{"id": "main", "text": _VISION_EXEC_V5_SYSTEM.strip()}]
+    merged["user_blocks"] = list(_VISION_EXEC_V3_USER_BLOCKS)
+    merged["summary"] = "同一张图判断上一步；未完成则用本次坐标继续，不另开规划"
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v5 same-turn prior_status",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 5
     _set_revisions(merged, revisions)
     _validate_job(merged)
     _smoke_render(merged)

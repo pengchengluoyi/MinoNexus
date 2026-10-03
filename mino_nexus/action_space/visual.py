@@ -3,7 +3,15 @@ from __future__ import annotations
 
 from typing import Any
 
-_LABEL_KEYS = ("target", "selector_text", "description", "label", "content_desc", "anchor_between")
+_LABEL_KEYS = (
+    "target",
+    "selector_text",
+    "description",
+    "label",
+    "content_desc",
+    "anchor_between",
+    "fallback_xy",
+)
 
 
 def apply_visual_point(params: dict[str, Any], *, keep_text: bool = False) -> dict[str, Any]:

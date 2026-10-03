@@ -18,6 +18,7 @@ class CatalogEntry(Base):
     description = Column(Text, default="")
     enabled = Column(Boolean, default=True)
     lifecycle = Column(String, default="active")
+    ui_coverable = Column(Boolean, default=True)
     provider = Column(String, default="")
     owner = Column(String, default="")
     platforms_json = Column(JSON, default=list)

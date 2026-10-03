@@ -9,10 +9,6 @@ _TAP_RE = re.compile(r"点击|点按|轻触|选中|勾选", re.I)
 _SWIPE_RE = re.compile(r"上滑|下滑|左滑|右滑|滑动|swipe", re.I)
 _INPUT_RE = re.compile(r"输入|填写|填入", re.I)
 _CLEAR_RE = re.compile(r"清缓存|清除缓存|清理缓存|清除应用缓存|清除.{0,6}缓存|clear.?cache", re.I)
-_LOGIN_FLOW_RE = re.compile(
-    r"登录|验证码|短信|手机号|密码|一键登录|发码|获取验证码|sms|otp",
-    re.I,
-)
 
 _CAP_FAMILY: dict[str, str] = {
     "launch_app": "open",
@@ -112,9 +108,22 @@ def instruction_allows_login_flow(
     *,
     login_module_case: bool = False,
 ) -> bool:
-    """当前 instruction 是否声明登录/验证码操作（login_module 不再整条用例放行）。"""
+    """当前 instruction 是否声明登录流（看编译结果，不靠中文正则）。"""
     _ = login_module_case
-    return bool(_LOGIN_FLOW_RE.search(str(instruction or "")))
+    from mino_nexus.services.case_step_key_compiler import compile_operation_text
+
+    steps, _, refs = compile_operation_text(str(instruction or ""), case_step=1)
+    if any(str(r or "") == "operation.login_flow" for r in refs):
+        return True
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("key_ref") or "") == "operation.login_flow":
+            return True
+        bid = str(step.get("block_id") or "").strip().lower()
+        if bid.startswith("fb.global.login"):
+            return True
+    return False
 
 
 def step_actions_satisfied(

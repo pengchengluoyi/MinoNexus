@@ -556,6 +556,15 @@ class StepCursor:
                 tap_label=sel,
                 intents_done=self.step_intents_done,
             )
+        if cap == "input_text":
+            text = str((params or {}).get("text") or "")
+            cur = self.current()
+            step_n = int(getattr(cur, "n", 0) or 0) if cur is not None else 0
+            bag = getattr(self, "typed_by_step", None)
+            if not isinstance(bag, dict):
+                self.typed_by_step = {}
+                bag = self.typed_by_step
+            bag.setdefault(step_n, []).append(text)
         if cap and is_structural_cap(cap):
             self.step_structural_caps_done.add(cap)
         if cap and not is_structural_cap(cap):

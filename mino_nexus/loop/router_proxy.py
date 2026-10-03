@@ -26,6 +26,7 @@ from typing import Any, Optional
 
 from mino_nexus.core import protocol as P
 from mino_nexus.catalog import registry as catalog
+from mino_nexus.catalog.exec_classes import LOCAL_EXECUTOR_IDS as LOCAL_CAPS
 from mino_nexus.services.device_secrets import get_lock_password
 from mino_nexus.core.log import SLog
 from mino_nexus.services.node_registry import NodeSession, get_registry
@@ -47,24 +48,8 @@ def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
     global _MAIN_LOOP
     _MAIN_LOOP = loop
 
-# 这四个 capability 由 Nexus 本地 executor 处理，**不出网**（CLAUDE.md §2.3）。
-# 搞错会让 Scout 收到它 supports() 返回 False 的能力，白跑一圈 fallback。
+# 本地 executor 不出网（CLAUDE.md §2.3）。名单在 exec_classes.LOCAL_EXECUTOR_IDS。
 LOCAL_CAP_PREFIXES = ("human_", "recover_", "signal_")
-LOCAL_CAPS = frozenset({
-    "assert_visual",
-    "persona_subtask",
-    "wait_ms",
-    "wait_screen_ready",
-    "relogin",
-    "lease_account",
-    "get_otp",
-    "check_run_env",
-    "signal_nav_calib_step",
-    "fsm_navigate",  # NavFSM 最短路在 Nexus 算，不经 Scout（local_executors._fsm_navigate）
-    "accept_legal_consent",
-    "dismiss_ime",
-    "request_sms_code",
-})
 
 
 def is_local_cap(capability_id: str) -> bool:
@@ -191,7 +176,7 @@ class RouterProxy:
                 local_reason="task_cancelled",
             )
 
-        from mino_nexus.catalog.skill_channel import CAP_ALIASES, canonical_cap
+        from mino_nexus.catalog.skill_channel import CAP_ALIASES, canonical_cap, capability_dispatch_ok
 
         raw_cap = str(getattr(event, "capability_id", "") or "")
         if raw_cap in CAP_ALIASES:
@@ -199,6 +184,16 @@ class RouterProxy:
             event.capability_id = mapped
             if str(getattr(event, "event_kind", "") or "") == raw_cap:
                 event.event_kind = mapped
+
+        if not capability_dispatch_ok(event.capability_id):
+            return _fail(
+                event,
+                started,
+                t0,
+                f"能力未启用或当前不可覆盖: {event.capability_id}",
+                executor_used="router_proxy",
+                local_reason="capability_disabled",
+            )
 
         if is_local_cap(event.capability_id):
             from mino_nexus.loop.local_executors import dispatch_local

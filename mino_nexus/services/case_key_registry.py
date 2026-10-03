@@ -72,6 +72,35 @@ def nav_screen_key_refs(app_id: str) -> dict[str, str]:
     return out
 
 
+def ui_automation_summary(case: dict[str, Any] | None) -> dict[str, Any]:
+    """Studio 选用例 / 详情：能否 UI 自动化 + blocked_by。"""
+    empty = {"schema": "mino.ui_automation.v1", "coverable": True, "blocked_by": []}
+    if not isinstance(case, dict):
+        return dict(empty)
+    meta = case.get("meta") if isinstance(case.get("meta"), dict) else {}
+    ua = meta.get("ui_automation") if isinstance(meta.get("ui_automation"), dict) else None
+    if isinstance(ua, dict) and "coverable" in ua:
+        return {
+            "schema": str(ua.get("schema") or "mino.ui_automation.v1"),
+            "coverable": ua.get("coverable") is not False,
+            "blocked_by": [x for x in (ua.get("blocked_by") or []) if isinstance(x, dict)][:24],
+        }
+    try:
+        from mino_nexus.services.case_step_key_compiler import compile_case_step_program_keys
+
+        compiled = compile_case_step_program_keys(case)
+        row = compiled.get("ui_automation")
+        if isinstance(row, dict):
+            return {
+                "schema": str(row.get("schema") or "mino.ui_automation.v1"),
+                "coverable": row.get("coverable") is not False,
+                "blocked_by": [x for x in (row.get("blocked_by") or []) if isinstance(x, dict)][:24],
+            }
+    except Exception:  # noqa: BLE001
+        pass
+    return dict(empty)
+
+
 def step_keys_summary_for_case(case: dict[str, Any] | None) -> dict[str, Any]:
     """Console 用例详情：密钥编译摘要（不重复全文 warnings）。"""
     if not isinstance(case, dict):
@@ -80,21 +109,59 @@ def step_keys_summary_for_case(case: dict[str, Any] | None) -> dict[str, Any]:
     warnings = list(meta.get("key_compile_warnings") or [])
     spk = meta.get("step_program_keys") if isinstance(meta.get("step_program_keys"), dict) else {}
     fb = sum(1 for w in warnings if isinstance(w, dict) and w.get("fallback"))
+    ua = ui_automation_summary(case)
+    blocked = ua.get("blocked_by") or []
+    blocked_by_step: dict[str, list[dict[str, Any]]] = {}
+    for item in blocked:
+        if not isinstance(item, dict):
+            continue
+        blocked_by_step.setdefault(str(item.get("case_step") or ""), []).append(item)
     steps_out: dict[str, Any] = {}
     for key, bundle in spk.items():
         if not isinstance(bundle, dict):
             continue
+        do_plan = bundle.get("do_program_plan") if isinstance(bundle.get("do_program_plan"), dict) else {}
+        ck_plan = bundle.get("check_program_plan") if isinstance(bundle.get("check_program_plan"), dict) else {}
+        do_steps = [s for s in (do_plan.get("steps") or []) if isinstance(s, dict)]
+        checks = [s for s in (ck_plan.get("checkpoints") or []) if isinstance(s, dict)]
+        lights = []
+        for s in do_steps:
+            lights.append(
+                {
+                    "id": str(s.get("id") or ""),
+                    "phase": "do",
+                    "title": str(s.get("title") or "")[:160],
+                    "observe": str(s.get("observe") or "exec"),
+                    "key_ref": str(s.get("key_ref") or ""),
+                    "source_clause": str(s.get("source_clause") or s.get("source_line") or "")[:200],
+                }
+            )
+        for s in checks:
+            lights.append(
+                {
+                    "id": str(s.get("id") or ""),
+                    "phase": "check",
+                    "title": str(s.get("title") or "")[:160],
+                    "observe": str(s.get("observe") or "exec"),
+                    "key_ref": str(s.get("key_ref") or ""),
+                    "source_clause": str(s.get("source_clause") or s.get("source_line") or "")[:200],
+                }
+            )
         steps_out[str(key)] = {
             "operations": list(bundle.get("operations") or []),
             "expected": list(bundle.get("expected") or []),
-            "do_step_count": len((bundle.get("do_program_plan") or {}).get("steps") or []),
-            "check_count": len((bundle.get("check_program_plan") or {}).get("checkpoints") or []),
+            "do_step_count": len(do_steps),
+            "check_count": len(checks),
+            "blocked_by": list(blocked_by_step.get(str(key), [])),
+            "lights": lights,
         }
     return {
-        "telemetry": "red" if fb else "green",
+        "telemetry": "red" if fb or not ua.get("coverable", True) else "green",
         "warning_count": len(warnings),
         "fallback_count": fb,
         "warnings_preview": warnings[:12],
+        "ui_automation": ua,
+        "coverable": ua.get("coverable") is not False,
         "steps": steps_out,
     }
 
@@ -121,6 +188,7 @@ def catalog_entries_by_layer() -> dict[str, Any]:
                 "write_examples": list(ent.get("write_examples") or [])[:8],
                 "dsl": str(ent.get("dsl") or ""),
                 "runtime": str(ent.get("runtime") or ""),
+                "observe": str(ent.get("observe") or "exec"),
             }
         )
     return {
@@ -219,6 +287,121 @@ def validate_case_step_keys(
     }
 
 
+_BLOCK_REASON_ZH = {
+    "unmapped": "未映射到事件",
+    "uncoverable_event": "当前不能做",
+    "unavailable_cap": "事件已下线",
+}
+
+
+def _block_reason_zh(reason: str) -> str:
+    raw = str(reason or "").strip()
+    return _BLOCK_REASON_ZH.get(raw, raw or "无法覆盖")
+
+
+def _format_plan_line(step: dict[str, Any], *, case_step: int) -> str:
+    title = str(step.get("title") or step.get("source_clause") or step.get("source_line") or "").strip()
+    ref = str(step.get("key_ref") or "").strip()
+    rules = {}
+    assert_payload = step.get("assert") if isinstance(step.get("assert"), dict) else {}
+    params = step.get("params") if isinstance(step.get("params"), dict) else {}
+    if isinstance(assert_payload.get("rules"), dict):
+        rules = assert_payload["rules"]
+    elif isinstance(params.get("rules"), dict):
+        rules = params["rules"]
+    element = assert_payload.get("element") if isinstance(assert_payload.get("element"), dict) else {}
+    if not element and isinstance(params.get("element"), dict):
+        element = params["element"]
+    bit = title or ref or "（空）"
+    role = str(element.get("role") or "").strip()
+    if role and role not in bit:
+        bit = f"{bit} · {role}"
+    if rules:
+        shown = "，".join(f"{k}={v}" for k, v in list(rules.items())[:4])
+        bit = f"{bit}（{shown}）"
+    elif ref and title and ref not in title:
+        bit = f"{bit} → {ref}"
+    return f"{int(case_step)}. {bit}"[:240]
+
+
+def _format_block_line(item: dict[str, Any], *, case_step: int) -> str:
+    message = str(item.get("user_message") or "").strip()
+    if message:
+        return message[:240]
+    clause = str(item.get("source_clause") or item.get("line") or item.get("raw_text") or "").strip()
+    reason = _block_reason_zh(str(item.get("reason") or "unmapped"))
+    return f"{int(case_step)}. × {clause}（{reason}）"[:240]
+
+
+def compile_preview_view(case: dict[str, Any] | None) -> dict[str, Any]:
+    """导入预览：把程序图和未映射句编成步骤/预期/备注文案。"""
+    if not isinstance(case, dict):
+        return {
+            "steps_parsed": [],
+            "expected_parsed": [],
+            "remark": "",
+            "ui_automation": {"schema": "mino.ui_automation.v1", "coverable": True, "blocked_by": []},
+        }
+    from mino_nexus.services.case_step_key_compiler import sync_case_step_program_keys
+
+    synced = sync_case_step_program_keys(dict(case))
+    meta = synced.get("meta") if isinstance(synced.get("meta"), dict) else {}
+    ua = ui_automation_summary(synced)
+    spk = meta.get("step_program_keys") if isinstance(meta.get("step_program_keys"), dict) else {}
+    steps_parsed: list[str] = []
+    expected_parsed: list[str] = []
+
+    def _step_num(key: str) -> int:
+        try:
+            return int(key)
+        except (TypeError, ValueError):
+            return 0
+
+    for key in sorted(spk.keys(), key=_step_num):
+        bundle = spk.get(key) if isinstance(spk.get(key), dict) else {}
+        n = _step_num(str(key)) or 1
+        do_plan = bundle.get("do_program_plan") if isinstance(bundle.get("do_program_plan"), dict) else {}
+        ck_plan = bundle.get("check_program_plan") if isinstance(bundle.get("check_program_plan"), dict) else {}
+        for s in do_plan.get("steps") or []:
+            if isinstance(s, dict):
+                steps_parsed.append(_format_plan_line(s, case_step=n))
+        for w in do_plan.get("compile_warnings") or []:
+            blocked = w.get("blocked") if isinstance(w, dict) and isinstance(w.get("blocked"), dict) else None
+            if blocked:
+                steps_parsed.append(_format_block_line(blocked, case_step=n))
+        for s in ck_plan.get("checkpoints") or []:
+            if isinstance(s, dict):
+                expected_parsed.append(_format_plan_line(s, case_step=n))
+        for w in ck_plan.get("compile_warnings") or []:
+            blocked = w.get("blocked") if isinstance(w, dict) and isinstance(w.get("blocked"), dict) else None
+            if blocked:
+                expected_parsed.append(_format_block_line(blocked, case_step=n))
+    remarks: list[str] = []
+    for item in ua.get("blocked_by") or []:
+        if not isinstance(item, dict):
+            continue
+        n = int(item.get("case_step") or 0) or 1
+        message = str(item.get("user_message") or "").strip()
+        if message:
+            remarks.append(message)
+            continue
+        clause = str(item.get("source_clause") or "").strip()
+        reason = _block_reason_zh(str(item.get("reason") or ""))
+        if clause:
+            remarks.append(f"第{n}步「{clause}」{reason}")
+        else:
+            remarks.append(f"第{n}步{reason}")
+    remark = ""
+    if remarks:
+        remark = "无法 UI 自动化：" + "；".join(remarks[:8])
+    return {
+        "steps_parsed": steps_parsed[:40],
+        "expected_parsed": expected_parsed[:40],
+        "remark": remark[:800],
+        "ui_automation": ua,
+    }
+
+
 def import_row_key_summary(row: dict[str, Any], *, app_id: str = "") -> dict[str, Any]:
     case_like = {
         "precondition": row.get("precondition") or "",
@@ -228,10 +411,17 @@ def import_row_key_summary(row: dict[str, Any], *, app_id: str = "") -> dict[str
         "expected_raw": row.get("expected_raw") or "",
     }
     v = validate_case_step_keys(case_like, app_id=app_id)
+    view = compile_preview_view(case_like)
+    ua = view.get("ui_automation") or {}
     return {
-        "telemetry": "red" if v.get("issues") else "green",
+        "telemetry": "red" if v.get("issues") or not ua.get("coverable", True) else "green",
         "fallback_count": v.get("fallback_count"),
         "unknown_block_count": v.get("unknown_block_count"),
         "unknown_screen_count": v.get("unknown_screen_count"),
         "issues": (v.get("issues") or [])[:24],
+        "ui_automation": ua,
+        "coverable": ua.get("coverable") is not False,
+        "steps_parsed": list(view.get("steps_parsed") or []),
+        "expected_parsed": list(view.get("expected_parsed") or []),
+        "remark": str(view.get("remark") or ""),
     }

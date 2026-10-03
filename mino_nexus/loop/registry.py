@@ -4,7 +4,6 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Optional
 
-from mino_nexus.catalog.exec_classes import MUTATE_CAPS
 from mino_nexus.loop.step_pointer import (
     format_skip_repeat_tap_message,
     is_guest_entry_step,
@@ -29,17 +28,20 @@ GuardFn = Callable[[dict[str, Any]], Optional[str]]
 
 
 def _guard_deny_mutate(ctx: dict[str, Any]) -> Optional[str]:
-    if str(ctx.get("phase") or "") == "check" and str(ctx.get("cap_id") or "") in MUTATE_CAPS:
-        cap_id = str(ctx.get("cap_id") or "")
-        from mino_nexus.loop.step_phase_fsm import (
-            check_phase_allows_recovery_cap,
-            step_phase_fsm_v1_enabled,
-        )
+    if str(ctx.get("phase") or "") != "check":
+        return None
+    cap_id = str(ctx.get("cap_id") or "")
+    from mino_nexus.catalog.skill_channel import phase_allows
+    from mino_nexus.loop.step_phase_fsm import (
+        check_phase_allows_recovery_cap,
+        step_phase_fsm_v1_enabled,
+    )
 
-        if step_phase_fsm_v1_enabled() and check_phase_allows_recovery_cap(cap_id):
-            return None
-        return "校验阶段不能改界面，已拒绝这次操作"
-    return None
+    if step_phase_fsm_v1_enabled() and check_phase_allows_recovery_cap(cap_id):
+        return None
+    if phase_allows(cap_id, "check"):
+        return None
+    return "校验阶段不能改界面，已拒绝这次操作"
 
 
 RECOVER_PREFIX = "recover_"
@@ -296,10 +298,14 @@ def _guard_require_do_work(ctx: dict[str, Any]) -> Optional[str]:
 
 
 def _guard_block_assert_in_do(ctx: dict[str, Any]) -> Optional[str]:
-    """突变步不得用 assert_visual 跳过 do；观察步允许（随后仍进 check）。"""
+    """操作阶段的 phases 不含 assert_visual。观察步允许（随后仍进 check）。"""
     if str(ctx.get("phase") or "") != "do":
         return None
     if str(ctx.get("cap_id") or "") != "assert_visual":
+        return None
+    from mino_nexus.catalog.skill_channel import phase_allows
+
+    if phase_allows("assert_visual", "do"):
         return None
     cur = ctx.get("cursor")
     instr = str(getattr(cur, "instruction", "") or "").strip() if cur else ""

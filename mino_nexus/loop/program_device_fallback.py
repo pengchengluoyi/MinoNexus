@@ -42,6 +42,19 @@ def _fallback_hint(payload: dict[str, Any]) -> str:
     )
 
 
+def note_vision_fallback_streak(cursor: Any, payload: dict[str, Any]) -> int:
+    """同一里程碑连续拿不到坐标的次数。换了里程碑就从头计。"""
+    mid = str((payload or {}).get("milestone_id") or (payload or {}).get("step_id") or "")
+    cap = str((payload or {}).get("capability_id") or "input_text")
+    key = f"{mid}:{cap}"
+    prev = getattr(cursor, "vision_fallback_streak", None)
+    if not isinstance(prev, dict) or prev.get("key") != key:
+        prev = {"key": key, "n": 0}
+    prev["n"] = int(prev.get("n") or 0) + 1
+    setattr(cursor, "vision_fallback_streak", prev)
+    return int(prev["n"])
+
+
 def activate_program_vision_fallback(
     cursor: Any,
     writer: Any,
@@ -95,5 +108,6 @@ __all__ = [
     "clear_program_vision_fallback",
     "is_vision_fallback",
     "merge_program_vision_fallback_slots",
+    "note_vision_fallback_streak",
     "vision_fallback_result",
 ]

@@ -224,7 +224,7 @@ def _login_form_mismatches_focus(ctx: Any, row: dict[str, Any]) -> bool:
 
 
 def seeded_single_focus_skips_plan(state: dict[str, Any], ctx: Any) -> bool:
-    """只有一条 open，动作已经明确：直接执行，不再打一轮规划。"""
+    """程序种下的焦点动作已经明确：直接执行，不再打一轮规划。挡屏或失败除外。"""
     if count_open_milestones(state) != 1:
         return False
     row = in_progress_milestone(state)
@@ -232,24 +232,31 @@ def seeded_single_focus_skips_plan(state: dict[str, Any], ctx: Any) -> bool:
         return False
     if str(row.get("status") or "") == "failed" or row.get("program_fail"):
         return False
-    mid = str(row.get("id") or "")
-    # 登录块聚焦之后只看图执行，不再为这一步打规划。
-    if mid in _LOGIN_FOCUS_IDS and mid != "login_state":
-        if _blocking_overlay(ctx) or _unlisted_agree_control(state, ctx):
-            return False
-        return True
-    cap = _milestone_cap(row)
-    if cap in _KEEP_PLAN_CAPS:
-        return False
-    kind = str(row.get("kind") or "").strip().lower()
-    if cap not in _SKIP_PLAN_CAPS and not kind.startswith("visual"):
-        return False
     if _blocking_overlay(ctx) or _unlisted_agree_control(state, ctx):
         return False
+    mid = str(row.get("id") or "")
+    source = str(row.get("source") or "")
+    programish = source in ("prep_program", "do_program", "check_program", "program_seed") or bool(
+        str(row.get("source_block") or "").strip()
+    )
+    if mid in _LOGIN_FOCUS_IDS and mid != "login_state":
+        if _login_form_mismatches_focus(ctx, row):
+            return False
+        return True
+    if not programish:
+        cap = _milestone_cap(row)
+        if cap in _KEEP_PLAN_CAPS:
+            return False
+        kind = str(row.get("kind") or "").strip().lower()
+        if cap not in _SKIP_PLAN_CAPS and not kind.startswith("visual"):
+            return False
     if _login_form_mismatches_focus(ctx, row):
         return False
-    if _sparse_blocking_sheet(ctx) and not kind.startswith("visual") and cap not in _SKIP_PLAN_CAPS:
-        return False
+    if _sparse_blocking_sheet(ctx) and not programish:
+        kind = str(row.get("kind") or "").strip().lower()
+        cap = _milestone_cap(row)
+        if not kind.startswith("visual") and cap not in _SKIP_PLAN_CAPS:
+            return False
     return True
 
 
@@ -415,11 +422,11 @@ def focus_exec_menu_ids(cursor: Any, ctx: Any = None) -> Optional[set[str]]:
 
 
 def _phase_device_menu(cursor: Any, ctx: Any) -> set[str]:
-    from mino_nexus.catalog.skill_channel import PROGRAM_CAPS, case_menu_ids
+    from mino_nexus.catalog.skill_channel import case_menu_ids, is_program_caller
 
     phase = step_scope_key(cursor)[1] if cursor is not None else "do"
     menu = case_menu_ids(ctx, phase) if ctx is not None else set()
-    device = {cap for cap in menu if cap in _PHASE_DEVICE_SKILLS and cap not in PROGRAM_CAPS}
+    device = {cap for cap in menu if cap in _PHASE_DEVICE_SKILLS and not is_program_caller(cap)}
     return device or set(_VISUAL_STEP_CAPS)
 
 
@@ -427,6 +434,11 @@ def success_criteria_for_exec_llm(cursor: Any) -> dict[str, Any]:
     """exec 注入：标出 in_progress 为 active_focus。"""
     state = dict(read_state(cursor))
     fid = in_progress_milestone_id(cursor)
+    from mino_nexus.loop.visual_review import prior_action_payload
+
+    prior = prior_action_payload(cursor)
+    if prior:
+        state["prior_action"] = prior
     if fid:
         state["active_focus_milestone_id"] = fid
         for row in state.get("milestones") or []:
@@ -633,6 +645,25 @@ def run_vision_orchestrated_turn(
                 )
             plan_gate = False
     if plan_gate:
+        from mino_nexus.action_space.scheme import action_scheme
+        from mino_nexus.loop.visual_review import has_visual_prior
+
+        if (
+            action_scheme(ctx) == "visual"
+            and has_visual_prior(cursor)
+            and in_progress_milestone(read_state(cursor)) is not None
+        ):
+            plan_gate = False
+            if writer:
+                writer.append(
+                    "orchestrator/plan_gate",
+                    {
+                        "reason": "skip_visual_prior",
+                        "open": count_open_milestones(read_state(cursor)),
+                        **dict(zip(("case_step", "phase"), step_scope_key(cursor))),
+                    },
+                )
+    if plan_gate:
         open_n = count_open_milestones(read_state(cursor))
         if writer:
             writer.append(
@@ -700,6 +731,21 @@ def run_vision_orchestrated_turn(
 
     focus = in_progress_milestone(read_state(cursor))
     focus_cap = str((focus or {}).get("hook_cap") or "").strip()
+    focus_obs = str((focus or {}).get("observe") or "exec").strip().lower()
+    focus_params = (
+        dict((focus or {}).get("params") or {})
+        if isinstance((focus or {}).get("params"), dict)
+        else {}
+    )
+    if focus_obs == "program" and focus_cap:
+        title = str((focus or {}).get("title") or focus_cap)
+        return OrchestratedTurn(
+            decision=AgentDecision(
+                status="continue",
+                thought=title[:240],
+                action=AgentAction(capability_id=focus_cap, params=focus_params),
+            )
+        )
     if in_prep and focus_cap:
         from mino_nexus.loop.router_proxy import is_local_cap
 
@@ -716,6 +762,24 @@ def run_vision_orchestrated_turn(
                     )
                 )
 
+    from mino_nexus.loop.binding_cache import try_replay_decision
+
+    replayed = try_replay_decision(cursor, ctx, writer=writer, focus=focus)
+    if replayed is not None:
+        return OrchestratedTurn(decision=replayed)
+
+    exec_mode = "replay"
+    try:
+        from mino_nexus.loop.fuse.interrupt_stack import stack_depth
+
+        if stack_depth(cursor) > 0:
+            exec_mode = "interrupt"
+        elif focus_obs == "visual_each_run":
+            exec_mode = "heal_skip"
+    except Exception:  # noqa: BLE001
+        if focus_obs == "visual_each_run":
+            exec_mode = "heal_skip"
+
     decision = run_vision_exec_turn(
         cursor=cursor,
         ctx=ctx,
@@ -727,6 +791,7 @@ def run_vision_orchestrated_turn(
         phase_tool_kinds=phase_tool_kinds,
         session_block="",
         send_image=send_image,
+        exec_mode=exec_mode,
     )
     warnings = list(getattr(decision, "parse_warnings", None) or [])
     if "focused cap missing from menu" in warnings:
@@ -734,11 +799,11 @@ def run_vision_orchestrated_turn(
         ms = _milestones_list(state)
         focus = in_progress_milestone(state)
         if focus is not None:
-            from mino_nexus.catalog.skill_channel import PROGRAM_CAPS
+            from mino_nexus.catalog.skill_channel import is_program_caller
 
             cap = str(focus.get("hook_cap") or focus.get("device_cap") or "").strip()
             # 程序自己派的能力不在用例菜单里。缺菜单不等于未注册，不能把里程碑跳过。
-            if cap not in PROGRAM_CAPS:
+            if not is_program_caller(cap):
                 focus["status"] = "skipped"
                 focus["skip_reason"] = "unregistered"
                 focus["skipped_by"] = "menu"

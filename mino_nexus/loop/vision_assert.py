@@ -99,15 +99,26 @@ def checkpoints_from_milestones(cursor: Any) -> list[dict[str, Any]]:
         if str(row.get("kind") or "") != "checkpoint":
             continue
         assert_payload = row.get("assert") if isinstance(row.get("assert"), dict) else {}
-        out.append(
-            {
-                "point_id": str(row.get("id") or ""),
-                "title": str(row.get("title") or ""),
-                "checkpoint_kind": str(row.get("checkpoint_kind") or "element_exists"),
-                "expectation": str(assert_payload.get("expectation") or row.get("title") or ""),
-            }
-        )
-    return out
+        element = assert_payload.get("element") if isinstance(assert_payload.get("element"), dict) else {}
+        rules = assert_payload.get("rules") if isinstance(assert_payload.get("rules"), dict) else {}
+        item: dict[str, Any] = {
+            "point_id": str(row.get("id") or ""),
+            "title": str(row.get("title") or ""),
+            "key_ref": str(row.get("key_ref") or ""),
+            "checkpoint_kind": str(assert_payload.get("mode") or row.get("checkpoint_kind") or "element_exists"),
+        }
+        if element:
+            item["element"] = element
+        if rules:
+            item["rules"] = rules
+        if isinstance(assert_payload.get("bind"), dict):
+            item["bind"] = assert_payload["bind"]
+        if not element and not rules:
+            item["expectation"] = str(assert_payload.get("expectation") or row.get("title") or "")
+        out.append(item)
+    from mino_nexus.loop.structured_check import hydrate_bound_text
+
+    return hydrate_bound_text(cursor, out)
 
 
 def run_vision_assert_if_enabled(
@@ -124,14 +135,20 @@ def run_vision_assert_if_enabled(
     if getattr(cursor, "vision_assert_done", False):
         return None
     cps = checkpoints_from_milestones(cursor)
+    structured = bool(cps) and all(isinstance(c, dict) and (c.get("element") or c.get("rules")) for c in cps)
+    ctx_for_job = (
+        "只按校验点 JSON 的 element 与 rules 判断。不要根据编号原文另找目标。"
+        if structured
+        else context_block
+    )
     img = ""
     if callable(getattr(shot, "has_image", None)) and shot.has_image():
         img = str(getattr(shot, "image_base64", "") or "")
     result = vision_assert_checkpoints(
-        expectation=str(expected or ""),
+        expectation="" if structured else str(expected or ""),
         image_base64=img,
         image_mime=str(getattr(shot, "image_mime", "") or "image/png"),
-        context_block=context_block,
+        context_block=ctx_for_job,
         provider_id=provider_id or None,
         checkpoints=cps,
     )

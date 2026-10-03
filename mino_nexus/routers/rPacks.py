@@ -30,6 +30,8 @@ class PackWriteBody(BaseModel):
     description: str = ""
     enabled: bool = True
     lifecycle: str = "active"
+    ui_coverable: bool = True
+    observe: str = ""
     provider: str = ""
     owner: str = ""
     platforms: list[str] = Field(default_factory=list)
@@ -45,6 +47,8 @@ class PackPatchBody(BaseModel):
     kind: Optional[str] = None
     enabled: Optional[bool] = None
     lifecycle: Optional[str] = None
+    ui_coverable: Optional[bool] = None
+    observe: Optional[str] = None
     status: Optional[str] = None
     display_name: Optional[str] = None
     description: Optional[str] = None
@@ -69,6 +73,8 @@ def _status_patch(body: PackPatchBody) -> dict[str, Any]:
             out["lifecycle"] = "deprecated"
         if body.enabled is True and "lifecycle" not in out:
             out["lifecycle"] = "active"
+    if body.ui_coverable is not None:
+        out["ui_coverable"] = bool(body.ui_coverable)
     return out
 
 
@@ -126,6 +132,8 @@ def _pack_row_from_entry(row) -> dict[str, Any]:
         "description": row.description or "",
         "enabled": enabled,
         "lifecycle": lifecycle,
+        "ui_coverable": getattr(row, "ui_coverable", True) is not False,
+        "observe": str(payload.get("observe") or "exec"),
         "status": _ui_status({"enabled": enabled, "lifecycle": lifecycle}),
         "provider": row.provider or "",
         "owner": row.owner or "",

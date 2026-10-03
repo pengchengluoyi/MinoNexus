@@ -131,6 +131,16 @@ def dispatch_local(
 ) -> EventResult:
     cap = event.capability_id
     t0 = time.time()
+    from mino_nexus.catalog.skill_channel import capability_dispatch_ok
+
+    if not capability_dispatch_ok(cap):
+        return _result(
+            event,
+            status=EventStatus.FAIL,
+            summary=f"能力未启用或当前不可覆盖: {cap}",
+            error="capability_disabled",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
     if cap == "signal_nav_calib_step":
         key = str((event.params or {}).get("step_key") or "").strip()
         summary = f"校准里程碑 {key}" if key else "校准里程碑（未给 step_key）"
@@ -447,6 +457,22 @@ def _fetch_gmail_otp(ctx: Any) -> str:
     if not app_password:
         raise GmailOtpError("请在 Studio → 插件 → Gmail 收信 中配置应用专用密码")
     since = float(getattr(ctx, "otp_sent_at", 0) or 0) or None
+
+    def _stop() -> bool:
+        deadline = float(getattr(ctx, "case_deadline_ts", 0) or 0)
+        if deadline and time.time() >= deadline:
+            return True
+        rid = str(getattr(ctx, "run_id", "") or "")
+        task = rid.split("::", 1)[0] if "::" in rid else rid
+        if not task:
+            return False
+        try:
+            from mino_nexus.services import run_store
+
+            return bool(run_store.task_cancelled(task))
+        except Exception:
+            return False
+
     return fetch_otp_via_imap(
         inbox_address=inbox,
         app_password=app_password,
@@ -456,6 +482,8 @@ def _fetch_gmail_otp(ctx: Any) -> str:
         subject_contains=str(otp.get("subject_contains") or ""),
         poll_interval_ms=int(otp.get("poll_interval_ms") or 3000),
         max_wait_ms=int(otp.get("max_wait_ms") or 90_000),
+        should_stop=_stop,
+        deadline_ts=float(getattr(ctx, "case_deadline_ts", 0) or 0) or None,
     )
 
 
@@ -480,6 +508,15 @@ def _get_otp(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
             from mino_nexus.services.gmail_otp import GmailOtpError
 
             summary = str(exc) if isinstance(exc, GmailOtpError) else f"Gmail 取码失败：{exc}"
+            if "已取消" in summary or "超过用例时间" in summary:
+                return _result(
+                    event,
+                    status=EventStatus.FAIL,
+                    summary=summary,
+                    error="otp wait stopped",
+                    executor="internal",
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                )
             if ctx is not None:
                 setattr(
                     ctx,

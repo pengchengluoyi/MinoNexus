@@ -91,6 +91,10 @@ def milestones_from_do_program(plan: dict[str, Any], *, app_id: str = "", ctx: A
         if kind == "nav" and step.get("nav_target"):
             row["hook_cap"] = "fsm_navigate"
             row["nav_target"] = str(step.get("nav_target") or "")
+        if step.get("observe"):
+            row["observe"] = str(step.get("observe") or "exec")
+        if isinstance(step.get("params"), dict) and step.get("params"):
+            row["params"] = dict(step["params"])
         rows.append(row)
     return rows
 

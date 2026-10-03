@@ -210,12 +210,14 @@ def ui_nodes(registry: Optional[NodeRegistry] = None) -> list[dict[str, Any]]:
             out.append(_offline_row(snap))
             continue
         devices = ui_devices_for_node(session, registry=reg)
+        mode = str((session.host or {}).get("mode") or "")
+        asleep = bool(session.alive and mode == "asleep")
         out.append({
             **session.brief(),
             "studio_id": session.studio_id or snap.get("studio_id") or "",
             "owner_user_id": session.owner_user_id or snap.get("owner_user_id") or "",
             "hostname": session.hostname or snap.get("hostname") or "",
-            "status": "online" if session.alive else "offline",
+            "status": "asleep" if asleep else ("online" if session.alive else "offline"),
             "online": session.alive,
             "device_count": len(session.devices),
             "last_heartbeat": _iso(session.last_seen),

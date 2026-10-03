@@ -199,13 +199,13 @@ def _focused_input(nodes: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
-def capture_decision_frame(proxy: Any, ctx: Any) -> tuple[Any, str]:
-    """先采层级，再截屏。截屏不早于这次层级，卡片和判断用同一时刻。"""
+def capture_decision_frame(proxy: Any, ctx: Any, *, hierarchy: bool = True) -> tuple[Any, str]:
+    """先采层级，再截屏。截屏不早于这次层级，卡片和判断用同一时刻。纯视觉只截屏。"""
     from mino_nexus.loop.observe.agent_stream import make_thumb
     from mino_nexus.loop.hierarchy_slots import capture
 
-    snap = capture(proxy, turn_id=0)
-    if getattr(snap, "ok", False):
+    snap = capture(proxy, turn_id=0) if hierarchy else None
+    if snap is not None and getattr(snap, "ok", False):
         setattr(
             ctx,
             "nav_hierarchy_nodes",
@@ -236,6 +236,17 @@ def login_credential_form_open(nodes: list[dict[str, Any]] | None) -> bool:
     if email is None:
         return False
     return find_dom_otp_field(rows, email_field=email) is not None
+
+
+def read_field_after_input(ctx: Any, proxy: Any, field: str) -> str | None:
+    """动作后读回。纯视觉没有层级，返回 None：这次没读，不是框里是空的。"""
+    scheme = str(
+        getattr(proxy, "action_scheme", "") or getattr(ctx, "action_scheme", "") or ""
+    ).strip().lower()
+    if scheme == "visual":
+        return None
+    bind_fresh_observation(ctx, proxy)
+    return read_field(ctx, getattr(ctx, "nav_hierarchy_nodes", None), field)
 
 
 def bind_fresh_observation(ctx: Any, proxy: Any) -> None:

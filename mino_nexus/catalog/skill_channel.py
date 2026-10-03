@@ -108,6 +108,129 @@ SYSTEM_ONLY_IDS = frozenset({
 })
 
 
+def derive_caller(entry_id: str, *, kind: str = "", visible_to: list | None = None) -> str:
+    """目录还没写 caller 时，用 kind / visible_to / 程序白名单推出。"""
+    eid = canonical_cap(entry_id)
+    if str(kind or "") == "base" or eid in BASE_ENTRY_IDS:
+        return "base"
+    vis = {str(x).strip().lower() for x in (visible_to or []) if str(x).strip()}
+    if eid in PROGRAM_CAPS:
+        return "program"
+    if eid in SYSTEM_ONLY_IDS or vis == {"system"}:
+        return "system"
+    if "case" in vis:
+        return "case"
+    return "system"
+
+
+def derive_phases(entry_id: str, *, kind: str = "", caller: str = "") -> list[str]:
+    who = str(caller or "")
+    if who in ("base", "system"):
+        return []
+    eid = canonical_cap(entry_id)
+    if str(kind or "") == "check" or eid == "assert_visual":
+        return ["check"]
+    return ["prep", "do"]
+
+
+def is_program_caller(cap_id: str) -> bool:
+    """程序在看图之前派。目录 caller 优先，没有行时才回落到 PROGRAM_CAPS。"""
+    cap = canonical_cap(cap_id)
+    if not cap:
+        return False
+    from mino_nexus.catalog.registry import get_capability
+
+    row = get_capability(cap)
+    caller = str(getattr(row, "caller", "") or "") if row is not None else ""
+    if caller:
+        return caller == "program"
+    return cap in PROGRAM_CAPS
+
+
+def capability_enabled(cap_id: str) -> bool:
+    """未启用或已废弃的技能，模型和程序都不派。目录没有这一行时不拦（逻辑块特例仍走自己的函数）。"""
+    cap = canonical_cap(cap_id)
+    if not cap:
+        return False
+    from mino_nexus.catalog.registry import get_capability
+
+    row = get_capability(cap)
+    if row is None:
+        return True
+    if getattr(row, "enabled", True) is False:
+        return False
+    return str(getattr(row, "lifecycle", "") or "active") != "deprecated"
+
+
+def capability_ui_coverable(cap_id: str) -> bool:
+    """当前产品能否把这条事件计入 UI 自动化覆盖。目录没有这一行时不拦。"""
+    cap = canonical_cap(cap_id)
+    if not cap:
+        return False
+    from mino_nexus.catalog.registry import get_capability
+
+    row = get_capability(cap)
+    if row is None:
+        return True
+    return getattr(row, "ui_coverable", True) is not False
+
+
+_OBSERVE_VALUES = frozenset({"exec", "visual_each_run", "program"})
+
+
+def capability_observe(cap_id: str) -> str:
+    """编译 observe：目录 payload.observe，否则 program caller → program，其余 exec。"""
+    cap = canonical_cap(cap_id)
+    if not cap:
+        return "exec"
+    try:
+        from mino_nexus.catalog.registry import get_capability
+
+        row = get_capability(cap)
+    except Exception:  # noqa: BLE001
+        row = None
+    if row is not None:
+        obs = str(getattr(row, "observe", "") or "").strip().lower()
+        if obs in _OBSERVE_VALUES:
+            return obs
+    if is_program_caller(cap) or cap in ("wait_ms", "wait_screen_ready"):
+        return "program"
+    return "exec"
+
+
+def capability_dispatch_ok(cap_id: str) -> bool:
+    """派发前：不可用或当前不可覆盖都不派。"""
+    if str(cap_id or "").startswith(("human_", "signal_", "recover_")):
+        return True
+    return capability_enabled(cap_id) and capability_ui_coverable(cap_id)
+
+
+def phase_allows(cap_id: str, phase: str) -> bool:
+    """阶段只卡一次：目录 phases 不含本阶段就拒绝。没有 phases 的行不在这里拦。"""
+    cap = canonical_cap(cap_id)
+    if not cap or cap.startswith(("human_", "signal_", "recover_")):
+        return True
+    from mino_nexus.catalog.registry import get_capability
+
+    row = get_capability(cap)
+    phases = [str(x) for x in (getattr(row, "phases", None) or [])] if row is not None else []
+    if not phases:
+        return True
+    return str(phase or "").strip().lower() in phases
+
+
+def menu_caller_ok(cap: Any, phase: str) -> bool:
+    """模型菜单只收 caller=case，且 phases 含本阶段。"""
+    caller = str(getattr(cap, "caller", "") or "")
+    if caller != "case":
+        return False
+    phases = [str(x) for x in (getattr(cap, "phases", None) or [])]
+    p = str(phase or "").strip().lower()
+    if phases and p in ("prep", "do", "check") and p not in phases:
+        return False
+    return True
+
+
 def canonical_cap(cap_id: str) -> str:
     raw = str(cap_id or "").strip()
     return CAP_ALIASES.get(raw, raw)
@@ -123,17 +246,17 @@ def normalize_platform(platform: str) -> str:
 
 
 def channel_platforms_for(cap_id: str) -> frozenset[str] | None:
-    """有明确渠道限制时返回平台集合。全渠道返回 None。"""
+    """有明确渠道限制时返回平台集合。全渠道返回 None。以目录 platforms 为准。"""
     cap = canonical_cap(cap_id)
-    extra = CHANNEL_PLATFORMS.get(cap)
-    if extra:
-        return extra
     from mino_nexus.catalog.registry import get_capability
 
     row = get_capability(cap)
     plats = [normalize_platform(p) for p in (getattr(row, "platforms", None) or []) if str(p).strip()]
     if plats:
         return frozenset(plats)
+    extra = CHANNEL_PLATFORMS.get(cap)
+    if extra:
+        return extra
     return None
 
 
@@ -222,8 +345,12 @@ def milestone_caps_registered(
     allow_program: bool = False,
 ) -> bool:
     allowed = set(menu_ids)
-    if allow_program:
-        allowed |= PROGRAM_CAPS
+
+    def _cap_ok(cap: str) -> bool:
+        if cap in allowed:
+            return True
+        return bool(allow_program and is_program_caller(cap))
+
     primary: list[str] = []
     for key in ("hook_cap", "device_cap", "cap"):
         val = canonical_cap(str(raw.get(key) or ""))
@@ -234,10 +361,10 @@ def milestone_caps_registered(
         for item in (raw.get("exec_caps") or [])
         if str(item or "").strip()
     ] if isinstance(raw.get("exec_caps"), list) else []
-    if primary and not all(cap in allowed for cap in primary):
+    if primary and not all(_cap_ok(cap) for cap in primary):
         return False
     # exec_caps 是这一步可选的动作，渠道上有其中一个即可，不要因为 press_key 仅安卓就把整步丢掉。
-    if extras and not any(cap in allowed for cap in extras):
+    if extras and not any(_cap_ok(cap) for cap in extras):
         return False
     return True
 
@@ -293,8 +420,93 @@ def upgrade_skill_channel_layout() -> int:
                     n += 1
         n += _retire_prep_do_kinds(db)
         n += _rewrite_skill_tool_kinds(db)
+        n += _ensure_program_rows(db)
+        n += _stamp_dispatch_caller(db)
     catalog.reload()
     return 1 if n else 0
+
+
+def _ensure_program_rows(db: Any) -> int:
+    """程序要派、目录里还没有的能力先补行。没有行时里程碑会被当成未注册。"""
+    from mino_nexus.models.catalog import CatalogEntry
+
+    specs = (
+        (
+            "confirm_login_state",
+            "确认登录态",
+            "程序判断是否已离开登录表单。不进模型菜单。",
+            ["web"],
+        ),
+        (
+            "open_url",
+            "打开网址",
+            "程序打开给定网址。不进模型菜单。",
+            ["web"],
+        ),
+        (
+            "open_app",
+            "打开应用",
+            "程序打开给定应用。不进模型菜单。",
+            ["android", "ios"],
+        ),
+    )
+    n = 0
+    for eid, title, desc, platforms in specs:
+        if db.query(CatalogEntry).filter(CatalogEntry.id == eid).first():
+            continue
+        db.add(CatalogEntry(
+            kind="generic",
+            id=eid,
+            display_name=title,
+            description=desc,
+            enabled=True,
+            lifecycle="active",
+            platforms_json=list(platforms),
+            visible_to_json=["system"],
+            payload_json={
+                "caller": "program",
+                "phases": ["prep", "do"],
+                "event_kind": eid,
+            },
+        ))
+        n += 1
+    if n:
+        db.flush()
+    return n
+
+
+def _stamp_dispatch_caller(db: Any) -> int:
+    """把 caller / phases 写进 payload。不改 enabled / lifecycle。"""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from mino_nexus.models.catalog import CatalogEntry
+
+    n = 0
+    for row in db.query(CatalogEntry).all():
+        payload = dict(row.payload_json or {})
+        vis = list(row.visible_to_json or [])
+        caller = derive_caller(str(row.id or ""), kind=str(row.kind or ""), visible_to=vis)
+        phases = derive_phases(str(row.id or ""), kind=str(row.kind or ""), caller=caller)
+        changed = False
+        if str(payload.get("caller") or "") != caller:
+            payload["caller"] = caller
+            changed = True
+        if list(payload.get("phases") or []) != phases:
+            payload["phases"] = phases
+            changed = True
+        want_vis = ["case", "system"] if caller == "case" else ["system"]
+        if list(row.visible_to_json or []) != want_vis:
+            row.visible_to_json = want_vis
+            changed = True
+        extra_plats = CHANNEL_PLATFORMS.get(canonical_cap(str(row.id or "")))
+        if extra_plats and not list(row.platforms_json or []):
+            row.platforms_json = sorted(extra_plats)
+            changed = True
+        if changed:
+            row.payload_json = payload
+            flag_modified(row, "payload_json")
+            n += 1
+    return n
 
 
 def _retire_prep_do_kinds(db: Any) -> int:

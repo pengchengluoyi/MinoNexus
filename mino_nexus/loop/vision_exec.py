@@ -25,6 +25,7 @@ def run_vision_exec_turn(
     session_block: str = "",
     goal: str = "",
     send_image: bool = True,
+    exec_mode: str = "",
 ) -> AgentDecision:
     from mino_nexus.loop.vision_observation import apply_vision_observation_slots
 
@@ -54,17 +55,23 @@ def run_vision_exec_turn(
     if writer is not None:
         try:
             cap = str(getattr(getattr(decision, "action", None), "capability_id", "") or "")
-            writer.append(
-                "exec/vision",
-                {
-                    "phase": phase,
-                    "case_step": case_step,
-                    "capability_id": cap,
-                    "status": str(getattr(decision, "status", "") or ""),
-                    "thought": (str(getattr(decision, "thought", "") or ""))[:400],
-                    "parse_warnings": list(getattr(decision, "parse_warnings", None) or []),
-                },
-            )
+            mode = str(exec_mode or "").strip()
+            payload = {
+                "phase": phase,
+                "case_step": case_step,
+                "capability_id": cap,
+                "status": str(getattr(decision, "status", "") or ""),
+                "thought": (str(getattr(decision, "thought", "") or ""))[:400],
+                "prior_status": str(getattr(decision, "prior_status", "") or ""),
+                "parse_warnings": list(getattr(decision, "parse_warnings", None) or []),
+            }
+            if mode:
+                payload["exec_mode"] = mode
+            writer.append("exec/vision", payload)
+            if mode == "heal_skip":
+                writer.append("exec/heal_skip", dict(payload))
+            elif mode == "interrupt":
+                writer.append("exec/interrupt", dict(payload))
         except Exception:  # noqa: BLE001
             pass
     return decision

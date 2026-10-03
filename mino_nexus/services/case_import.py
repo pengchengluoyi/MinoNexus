@@ -290,6 +290,9 @@ def preview_import(
             step_key_validation = import_row_key_summary(row, app_id=app_id)
             if step_key_validation.get("issues"):
                 flags.append("step_key_issues")
+            ua = step_key_validation.get("ui_automation") if isinstance(step_key_validation, dict) else None
+            if isinstance(ua, dict) and ua.get("coverable") is False:
+                flags.append("ui_not_coverable")
         except Exception:
             step_key_validation = {}
         preview_rows.append({
@@ -303,7 +306,12 @@ def preview_import(
             "resource_claim_summary": claim_summary,
             "steps_preview": "\n".join(steps)[:240],
             "expected_preview": "\n".join(expected)[:240],
+            "steps_parsed": list(step_key_validation.get("steps_parsed") or []) if isinstance(step_key_validation, dict) else [],
+            "expected_parsed": list(step_key_validation.get("expected_parsed") or []) if isinstance(step_key_validation, dict) else [],
+            "remark": str(step_key_validation.get("remark") or "") if isinstance(step_key_validation, dict) else "",
             "step_key_validation": step_key_validation,
+            "ui_automation": (step_key_validation.get("ui_automation") if isinstance(step_key_validation, dict) else None)
+            or {"coverable": True, "blocked_by": []},
             "flags": flags,
             "selected_by_default": "likely_header" not in flags,
             "conflict": conflict,

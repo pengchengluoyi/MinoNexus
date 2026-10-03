@@ -58,7 +58,12 @@ def _slim_doc(doc: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(steps, list):
             continue
         for step in steps:
-            if isinstance(step, dict) and step.get("thumb"):
+            if not isinstance(step, dict):
+                continue
+            thumb = str(step.get("thumb") or "")
+            if thumb.startswith("/static/"):
+                continue
+            if thumb:
                 step["thumb"] = ""
     return doc
 

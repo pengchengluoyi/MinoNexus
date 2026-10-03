@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CATALOG_VERSION = 4
+CATALOG_VERSION = 7
 
 # Claim 落库：case.meta.resource_key（v1）；与 case_scene 合并时 case_scene 优先同名字段。
 CLAIM_STORAGE = {
@@ -102,6 +102,13 @@ def _entry(
     key_layer: str = "precondition",
     key_ref: str = "",
     expands_to: list[dict[str, Any]] | None = None,
+    kind: str = "",
+    block_id: str = "",
+    observe: str = "",
+    compile_patterns: list[dict[str, Any]] | None = None,
+    schemes: list[str] | None = None,
+    platforms: list[str] | None = None,
+    event_name: str = "",
 ) -> dict[str, Any]:
     row: dict[str, Any] = {
         "section": section,
@@ -118,6 +125,21 @@ def _entry(
         row["key_ref"] = key_ref
     if expands_to:
         row["expands_to"] = list(expands_to)
+    if kind:
+        row["kind"] = kind
+    if block_id:
+        row["block_id"] = block_id
+    obs = str(observe or "").strip().lower()
+    if obs in ("exec", "visual_each_run", "program"):
+        row["observe"] = obs
+    if compile_patterns:
+        row["compile_patterns"] = list(compile_patterns)
+    if schemes:
+        row["schemes"] = list(schemes)
+    if platforms:
+        row["platforms"] = list(platforms)
+    if event_name:
+        row["event_name"] = event_name
     return row
 
 
@@ -273,6 +295,28 @@ def _entries() -> list[dict[str, Any]]:
         ),
         _entry(
             section="operation",
+            write_category="登录流",
+            write_examples=[
+                "完成登录",
+                "登录成功",
+                "验证码登录",
+                "邮箱验证码",
+                "输入验证码并登录",
+                "手机号验证码登录",
+                "输入手机号或邮箱验证码",
+            ],
+            claim_path="case.meta.step_program_keys.{n}.operations[]",
+            resource="nav_flow_block_catalog",
+            config_keys=["fb.global.login"],
+            dsl="flow_block fb.global.login",
+            runtime="do_program_plan kind=flow_block",
+            key_layer="operation",
+            key_ref="operation.login_flow",
+            kind="flow_block",
+            block_id="fb.global.login",
+        ),
+        _entry(
+            section="operation",
             write_category="导航目标",
             write_examples=["【导航:screen_cart】", "进入购物车页"],
             claim_path="case.meta.step_program_keys.{n}.operations[]",
@@ -298,7 +342,19 @@ def _entries() -> list[dict[str, Any]]:
         _entry(
             section="operation",
             write_category="点击",
-            write_examples=["点击去结算", "点击提交", "点击登录"],
+            write_examples=["点击去结算", "点击提交", "点击登录", "点按"],
+            compile_patterns=[
+                {
+                    "priority": 20,
+                    "regex": r"(?<!可)(?<!不)点击|点按",
+                    "reject_if": r"不可点击|不可点|置灰",
+                    "element_role": "button",
+                    "event_name": "点击",
+                    "hook_cap": "tap_element",
+                }
+            ],
+            schemes=["visual", "dom"],
+            event_name="点击",
             claim_path="case.meta.step_program_keys.{n}.operations[]",
             resource="tap_element",
             config_keys=["tap_element"],
@@ -310,7 +366,7 @@ def _entries() -> list[dict[str, Any]]:
         _entry(
             section="operation",
             write_category="输入",
-            write_examples=["输入收货地址", "输入手机号", "输入验证码"],
+            write_examples=["输入", "填写", "输入收货地址", "输入手机号", "输入验证码"],
             claim_path="case.meta.step_program_keys.{n}.operations[]",
             resource="input_text",
             config_keys=["input_text"],
@@ -362,6 +418,21 @@ def _entries() -> list[dict[str, Any]]:
             runtime="internal / hook",
             key_layer="operation",
             key_ref="operation.wait_ready",
+            observe="program",
+        ),
+        _entry(
+            section="operation",
+            write_category="动态控件",
+            write_examples=["列表第N项", "搜索结果中的一项", "动态卡片", "每次看图定位"],
+            claim_path="case.meta.step_program_keys.{n}.operations[]",
+            resource="tap_element",
+            config_keys=["tap_element"],
+            dsl="hook tap_element observe=visual_each_run",
+            runtime="每轮看图执行，不写绑定缓存",
+            key_layer="operation",
+            key_ref="operation.dynamic_visual",
+            kind="hook",
+            observe="visual_each_run",
         ),
         _entry(
             section="operation",
@@ -380,9 +451,223 @@ def _entries() -> list[dict[str, Any]]:
             ],
         ),
         _entry(
+            section="operation",
+            write_category="勾选",
+            write_examples=["勾选「{label}」", "取消勾选「{label}」"],
+            claim_path="case.meta.step_program_keys.{n}.operations[]",
+            resource="tap_element",
+            config_keys=["tap_element"],
+            dsl="hook tap_element role=checkbox",
+            runtime="点击事件，元素为勾选框，文案在 rules.label",
+            key_layer="operation",
+            key_ref="operation.check_box",
+            kind="hook",
+            event_name="勾选",
+            schemes=["visual", "dom"],
+            compile_patterns=[
+                {
+                    "priority": 60,
+                    "regex": r"(?P<cancel>取消)?勾选[「『\"“](?P<label>[^」』\"”\n]+)",
+                    "element_role": "checkbox",
+                    "event_name": "勾选",
+                    "hook_cap": "tap_element",
+                    "rules_from": ["label"],
+                }
+            ],
+        ),
+        _entry(
+            section="operation",
+            write_category="刷新页面",
+            write_examples=["刷新页面", "刷新当前页"],
+            claim_path="case.meta.step_program_keys.{n}.operations[]",
+            resource="reload_page",
+            config_keys=["reload_page"],
+            dsl="hook reload_page",
+            runtime="仅 Web。看图任务也不改成点击刷新按钮",
+            key_layer="operation",
+            key_ref="operation.reload_page",
+            kind="hook",
+            event_name="刷新页面",
+            platforms=["web"],
+            schemes=["visual", "dom"],
+            compile_patterns=[
+                {
+                    "priority": 60,
+                    "regex": r"^(?:刷新(?:当前)?页面|刷新当前页|reload)$",
+                    "event_name": "刷新页面",
+                    "hook_cap": "reload_page",
+                    "element_role": "page",
+                }
+            ],
+        ),
+        _entry(
+            section="expected",
+            write_category="文案检查",
+            write_examples=["弹窗标题为「{title}」", "正文提示为「{body}」"],
+            claim_path="case.meta.step_program_keys.{n}.expected[]",
+            resource="agent-vision-assert / DOM 文本",
+            config_keys=["assert.mode=copy"],
+            dsl="ui_copy",
+            runtime="身份 expected.ui_copy；标题正文只在 rules",
+            key_layer="expected",
+            key_ref="expected.ui_copy",
+            event_name="文案检查",
+            schemes=["visual", "dom"],
+            compile_patterns=[
+                {
+                    "priority": 85,
+                    "regex": r"(?:弹窗)?标题(?:为|是)\s*[「『\"“](?P<title>[^」』\"”\n]+)",
+                    "element_role": "dialog",
+                    "event_name": "文案检查",
+                    "assert_mode": "copy",
+                    "rules_from": ["title"],
+                    "rules_const": {"match": "equals"},
+                },
+                {
+                    "priority": 84,
+                    "regex": r"正文(?:提示)?(?:为|是)\s*[「『\"“](?P<body>[^」』\"”\n]+)",
+                    "element_role": "dialog",
+                    "event_name": "文案检查",
+                    "assert_mode": "copy",
+                    "rules_from": ["body"],
+                    "rules_const": {"match": "contains"},
+                },
+            ],
+        ),
+        _entry(
+            section="expected",
+            write_category="UI样式检查",
+            write_examples=["按钮置灰不可点击", "按钮不可点", "按钮可点击"],
+            claim_path="case.meta.step_program_keys.{n}.expected[]",
+            resource="agent-vision-assert / DOM enabled",
+            config_keys=["assert.mode=style"],
+            dsl="ui_style",
+            runtime="看图在画面上判；DOM 读 enabled。两路线不互改",
+            key_layer="expected",
+            key_ref="expected.ui_style",
+            event_name="UI样式检查",
+            schemes=["visual", "dom"],
+            compile_patterns=[
+                {
+                    "priority": 80,
+                    "regex": r"(?:(?P<label>\S{1,12})按钮)?.{0,16}(?:置灰|不可点击|不可点|禁用)",
+                    "element_role": "button",
+                    "event_name": "UI样式检查",
+                    "assert_mode": "style",
+                    "rules_from": ["label"],
+                    "rules_const": {"style": "disabled"},
+                },
+                {
+                    "priority": 78,
+                    "regex": r"(?:(?P<label>\S{1,12})按钮)?.{0,8}可点击",
+                    "reject_if": r"不可点击|不可点",
+                    "element_role": "button",
+                    "event_name": "UI样式检查",
+                    "assert_mode": "style",
+                    "rules_from": ["label"],
+                    "rules_const": {"style": "enabled"},
+                },
+            ],
+        ),
+        _entry(
+            section="expected",
+            write_category="弹窗检查",
+            write_examples=["{name}弹窗自动弹出", "不展示其他弹窗", "仅显示当前弹窗"],
+            claim_path="case.meta.step_program_keys.{n}.expected[]",
+            resource="agent-vision-assert / DOM dialog",
+            config_keys=["assert.mode=dialog"],
+            dsl="dialog",
+            runtime="哪个弹窗与是否仅此一个在 rules；禁止拆成文案「其他」",
+            key_layer="expected",
+            key_ref="expected.dialog",
+            event_name="弹窗检查",
+            schemes=["visual", "dom"],
+            compile_patterns=[
+                {
+                    "priority": 100,
+                    "regex": r"不展示其他弹窗|没有其他弹窗|仅(?:显示|保留)?当前弹窗|只显示当前弹窗",
+                    "element_role": "dialog",
+                    "event_name": "弹窗检查",
+                    "assert_mode": "dialog",
+                    "rules_const": {"exclusive": True},
+                    "merge": "dialog_exclusive",
+                },
+                {
+                    "priority": 90,
+                    "regex": r"(?P<which>.+?)弹窗(?:自动)?弹出",
+                    "element_role": "dialog",
+                    "event_name": "弹窗检查",
+                    "assert_mode": "dialog",
+                    "rules_from": ["which"],
+                    "rules_const": {"present": True},
+                    "merge": "dialog_present",
+                },
+            ],
+        ),
+        _entry(
+            section="expected",
+            write_category="输入文案检查",
+            write_examples=["仅保留前{n}字符", "最多{n}字", "可输入特殊字符"],
+            claim_path="case.meta.step_program_keys.{n}.expected[]",
+            resource="agent-vision-assert / DOM value",
+            config_keys=["assert.mode=input_value"],
+            dsl="input_value",
+            runtime="与同一步输入 bind；看图不读 value 属性",
+            key_layer="expected",
+            key_ref="expected.input_value",
+            event_name="输入文案检查",
+            schemes=["visual", "dom"],
+            compile_patterns=[
+                {
+                    "priority": 75,
+                    "regex": r"(?:仅保留前|最多|不超过)\s*(?P<max_length>\d+)\s*(?:个)?(?:字符|字)",
+                    "element_role": "input",
+                    "event_name": "输入文案检查",
+                    "assert_mode": "input_value",
+                    "rules_from": ["max_length"],
+                    "rules_const": {"prefix_of_bound": True},
+                    "needs_bind": "input_text",
+                },
+                {
+                    "priority": 70,
+                    "regex": r"(?:特殊字符|emoji|表情).{0,16}(?:均可|可正常|无报错|正常输入)|(?:均可|可)(?:正常)?输入.{0,24}(?:特殊字符|emoji|表情)",
+                    "element_role": "input",
+                    "event_name": "输入文案检查",
+                    "assert_mode": "input_value",
+                    "rules_const": {"accepts_special": True},
+                    "needs_bind": "input_text",
+                    "flag_if": {"无报错": {"no_error_toast": True}},
+                },
+            ],
+        ),
+        _entry(
+            section="expected",
+            write_category="位置关系",
+            write_examples=["在{anchor}右侧有{subject}", "位于{anchor}下方"],
+            claim_path="case.meta.step_program_keys.{n}.expected[]",
+            resource="agent-vision-assert / DOM bounds",
+            config_keys=["assert.mode=spatial"],
+            dsl="spatial_relation",
+            runtime="看图判方位；DOM 比 bounds。不互相补刀",
+            key_layer="expected",
+            key_ref="expected.spatial_relation",
+            event_name="位置关系观察",
+            schemes=["visual", "dom"],
+            compile_patterns=[
+                {
+                    "priority": 65,
+                    "regex": r"在(?P<relative_to>.+?)的?(?P<relation_zh>右侧|左边|左侧|上方|下方|右边)(?:有|出现)(?P<subject>.+)",
+                    "element_role": "overlay",
+                    "event_name": "位置关系观察",
+                    "assert_mode": "spatial",
+                    "rules_from": ["relative_to", "subject", "relation_zh"],
+                }
+            ],
+        ),
+        _entry(
             section="expected",
             write_category="文案",
-            write_examples=["文案包含", "展示", "显示", "页面包含"],
+            write_examples=["文案包含", "页面包含"],
             claim_path="case.meta.step_program_keys.{n}.expected[]",
             resource="agent-vision-assert",
             config_keys=["assert.mode=vlm"],
@@ -402,6 +687,7 @@ def _entries() -> list[dict[str, Any]]:
             runtime="checkpoint + inspect",
             key_layer="expected",
             key_ref="expected.session_state",
+            observe="program",
         ),
         _entry(
             section="expected",

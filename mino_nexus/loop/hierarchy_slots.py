@@ -164,7 +164,10 @@ def capture(proxy: Any, *, turn_id: int, screenshot_turn_id: int | None = None) 
     """取一帧层级。**失败不抛** —— 拿不到层级只降级，不该让整个 turn 挂掉。
 
     `screenshot_turn_id` 给出时用于对齐：两个信号不同轮 → `stale`，本 turn 不评 effect_assert。
+    纯视觉（proxy.action_scheme=visual）不向 Scout 要层级。
     """
+    if str(getattr(proxy, "action_scheme", "") or "").strip().lower() == "visual":
+        return HierarchySnapshot(turn_id=turn_id, error="skipped:visual")
     try:
         shot = proxy.observe("hierarchy", force_fresh=True)
     except Exception as exc:  # noqa: BLE001 — 观察失败不能拖垮跑批

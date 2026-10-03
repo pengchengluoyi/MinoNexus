@@ -183,12 +183,18 @@ def fetch_otp_via_imap(
     subject_contains: str = "",
     poll_interval_ms: int = 3000,
     max_wait_ms: int = 90_000,
+    should_stop=None,
+    deadline_ts: Optional[float] = None,
 ) -> str:
     allow = [str(x).strip() for x in (from_allowlist or []) if str(x).strip()]
     interval = max(1.0, int(poll_interval_ms or 3000) / 1000.0)
     deadline = time.time() + max(5.0, int(max_wait_ms or 90_000) / 1000.0)
+    if deadline_ts:
+        deadline = min(deadline, float(deadline_ts))
     last_err: Optional[Exception] = None
     while time.time() < deadline:
+        if should_stop and should_stop():
+            raise GmailOtpError("任务已取消或已超过用例时间")
         try:
             code = _fetch_once(
                 inbox_address=inbox_address,
@@ -206,7 +212,15 @@ def fetch_otp_via_imap(
         except OSError as exc:
             last_err = exc
             raise GmailOtpError(f"无法连接 Gmail IMAP：{exc}") from exc
-        time.sleep(interval)
+        slept = 0.0
+        while slept < interval and time.time() < deadline:
+            if should_stop and should_stop():
+                raise GmailOtpError("任务已取消或已超过用例时间")
+            step = min(0.5, interval - slept)
+            time.sleep(step)
+            slept += step
+    if should_stop and should_stop():
+        raise GmailOtpError("任务已取消或已超过用例时间")
     if last_err:
         raise GmailOtpError("等待验证码邮件超时")
     raise GmailOtpError("等待验证码邮件超时（未在邮件正文中匹配到 4–8 位数字）")

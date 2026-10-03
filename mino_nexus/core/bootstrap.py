@@ -216,6 +216,7 @@ def bootstrap() -> None:
             upgrade_agent_vision_exec_to_v2,
             upgrade_agent_vision_exec_to_v3,
             upgrade_agent_vision_exec_to_v4,
+            upgrade_agent_vision_exec_to_v5,
             upgrade_vision_assert_language_neutral,
         )
 
@@ -292,6 +293,9 @@ def bootstrap() -> None:
         ve4 = upgrade_agent_vision_exec_to_v4()
         if ve4:
             SLog.i(TAG, "agent-vision-exec upgraded to prompt v4 in_progress focus")
+        ve5 = upgrade_agent_vision_exec_to_v5()
+        if ve5:
+            SLog.i(TAG, "agent-vision-exec upgraded to prompt v5 same-turn prior")
         nm = ensure_nav_atlas_morph_job()
         if nm:
             SLog.i(TAG, "nav-atlas-morph job seeded")

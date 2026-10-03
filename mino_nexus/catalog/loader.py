@@ -42,7 +42,16 @@ def _load_capability_row(
     payload: dict[str, Any],
 ) -> None:
     impls = [_strip_impl(x) for x in (payload.get("implementations") or []) if isinstance(x, dict)]
-    if not impls and row.id not in LOCAL_ORCH_IDS:
+    from mino_nexus.catalog.skill_channel import derive_caller, derive_phases
+
+    visible = _visible_to_list(row.visible_to_json)
+    caller = str(payload.get("caller") or "").strip() or derive_caller(
+        row.id, kind=kind, visible_to=visible
+    )
+    phases = [str(x) for x in (payload.get("phases") or []) if str(x).strip()]
+    if not phases:
+        phases = derive_phases(row.id, kind=kind, caller=caller)
+    if not impls and row.id not in LOCAL_ORCH_IDS and caller != "program":
         return
     try:
         store[row.id] = Capability(
@@ -55,11 +64,15 @@ def _load_capability_row(
             platforms=list(row.platforms_json or []),
             needs_vlm=bool(payload.get("needs_vlm")),
             implementations=impls,
-            visible_to=_visible_to_list(row.visible_to_json),
+            visible_to=visible,
+            caller=caller,
+            phases=phases,
             params=list(payload.get("params") or []),
             ui=payload.get("ui") or {},
             enabled=bool(row.enabled),
             lifecycle=str(row.lifecycle or "active"),
+            ui_coverable=getattr(row, "ui_coverable", True) is not False,
+            observe=str(payload.get("observe") or "").strip().lower(),
         )
     except Exception as exc:
         errors.append(LoadError(

@@ -1,4 +1,9 @@
-"""视觉步当回合只记已派发。下一回合用节点证据回看，通过才记 pass。"""
+"""看图的点击当回合记 pass，输入等下一张决策图确认。
+
+下一回合的同一次看图执行同时判断上一步有没有完成，并返回坐标。
+上一步没完成时不另开规划：把那条 pass 改回 in_progress，用这次返回的坐标直接做。
+DOM 仍用节点证据回看。
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -63,12 +68,139 @@ def defer_visual_pass(
         "landed_labels": _landed_at_dispatch(ctx, cap, kept, str(summary or "")),
     }
     setattr(cursor, "pending_visual_review", pending)
+    remember_visual_prior(
+        cursor,
+        milestone_id=mid,
+        capability_id=cap,
+        params=kept,
+        summary=pending["summary"],
+    )
     if writer:
         writer.append(
             "review/dispatched",
             {"milestone_id": mid, "capability_id": cap, "summary": pending["summary"]},
         )
     return True
+
+
+def remember_visual_prior(
+    cursor: Any,
+    *,
+    milestone_id: str,
+    capability_id: str,
+    params: dict[str, Any] | None,
+    summary: str,
+) -> None:
+    """下一张决策图要回看的上一步。只留能力、字段和摘要，不把输入正文再送进提示。"""
+    kept = params if isinstance(params, dict) else {}
+    setattr(
+        cursor,
+        "visual_prior",
+        {
+            "milestone_id": str(milestone_id or ""),
+            "capability_id": str(capability_id or ""),
+            "params": {"field": str(kept.get("field") or "")},
+            "summary": str(summary or "")[:400],
+        },
+    )
+
+
+def has_visual_prior(cursor: Any) -> bool:
+    prior = getattr(cursor, "visual_prior", None)
+    return isinstance(prior, dict) and bool(str(prior.get("milestone_id") or "").strip())
+
+
+def prior_action_payload(cursor: Any) -> dict[str, str] | None:
+    prior = getattr(cursor, "visual_prior", None)
+    if not isinstance(prior, dict):
+        return None
+    mid = str(prior.get("milestone_id") or "").strip()
+    if not mid:
+        return None
+    params = prior.get("params") if isinstance(prior.get("params"), dict) else {}
+    return {
+        "milestone_id": mid,
+        "capability_id": str(prior.get("capability_id") or ""),
+        "field": str(params.get("field") or ""),
+        "summary": str(prior.get("summary") or "")[:400],
+    }
+
+
+def apply_same_turn_prior(
+    cursor: Any,
+    ctx: Any,
+    decision: Any,
+    *,
+    writer: Any = None,
+    in_prep: bool = False,
+    in_check: bool = False,
+) -> str:
+    """同一张决策图上的回看。返回 redo / stop / settled / confirmed / none。
+
+    redo：上一步没完成，里程碑改回 in_progress，本回合用返回的坐标继续做。
+    stop：连续回看未通过。
+    settled：上一步已完成，这次返回的还是同一步，不再下发。
+    confirmed：上一步已完成，这次返回的是下一步。
+    """
+    from mino_nexus.action_space.scheme import action_scheme
+
+    if action_scheme(ctx) != "visual":
+        return "none"
+    prior = getattr(cursor, "visual_prior", None)
+    if not isinstance(prior, dict) or not str(prior.get("milestone_id") or "").strip():
+        return "none"
+    from mino_nexus.loop.milestones import read_state
+
+    mid = str(prior.get("milestone_id") or "")
+    if not _prior_still_current(read_state(cursor), mid):
+        setattr(cursor, "visual_prior", None)
+        setattr(cursor, "pending_visual_review", None)
+        return "none"
+    status = _normalize_prior_status(getattr(decision, "prior_status", ""))
+    if writer:
+        writer.append(
+            "review/same_turn",
+            {
+                "milestone_id": mid,
+                "capability_id": str(prior.get("capability_id") or ""),
+                "prior_status": status or "done",
+            },
+        )
+    if status == "pending":
+        _rewind(cursor, mid)
+        setattr(cursor, "pending_visual_review", None)
+        streak = _bump_streak(cursor, mid)
+        hint = _hint(cursor, mid, "画面上上一步还没完成")
+        setattr(cursor, "correction_hint", hint)
+        if writer:
+            writer.append(
+                "review/fail",
+                {"milestone_id": mid, "reason": "prior_pending", "streak": streak},
+            )
+        if streak >= 2:
+            setattr(cursor, "semantic_stop", f"{hint} 连续 {streak} 次回看未通过，已停止。")
+            setattr(cursor, "visual_prior", None)
+            return "stop"
+        return "redo"
+    _clear_streak(cursor, mid)
+    setattr(cursor, "semantic_stop", "")
+    repeated = _action_repeats(cursor, prior, decision)
+    _confirm_visual_prior(
+        cursor,
+        ctx,
+        mid,
+        writer=writer,
+        in_prep=in_prep,
+        in_check=in_check,
+    )
+    setattr(cursor, "visual_prior", None)
+    setattr(cursor, "pending_visual_review", None)
+    if writer:
+        writer.append(
+            "review/pass",
+            {"milestone_id": mid, "reason": "same_turn", "repeated": repeated},
+        )
+    return "settled" if repeated else "confirmed"
 
 
 def settle_pending_review(
@@ -333,6 +465,81 @@ def _clear_streak(cursor: Any, milestone_id: str) -> None:
     streaks = _streaks(cursor)
     streaks.pop(milestone_id, None)
     setattr(cursor, "semantic_reject_streak", streaks)
+
+
+def _normalize_prior_status(raw: Any) -> str:
+    text = str(raw or "").strip().lower()
+    if text in ("pending", "in_progress", "incomplete", "unfinished", "fail", "failed"):
+        return "pending"
+    return "done"
+
+
+def _prior_still_current(state: dict[str, Any], milestone_id: str) -> bool:
+    seen = False
+    for row in state.get("milestones") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("id") or "") == milestone_id:
+            seen = True
+            continue
+        if seen and str(row.get("status") or "").strip().lower() == "pass":
+            return False
+    return seen
+
+
+def _action_repeats(cursor: Any, prior: dict[str, Any], decision: Any) -> bool:
+    """上一步还没记 pass、这次又返回同一步时，确认后不再下发。已经 pass 的点击，下一次点击是下一步。"""
+    action = getattr(decision, "action", None)
+    cap = str(getattr(action, "capability_id", "") or "")
+    if cap != str(prior.get("capability_id") or ""):
+        return False
+    from mino_nexus.loop.milestones import read_state
+
+    row = _row_by_id(read_state(cursor), str(prior.get("milestone_id") or "")) or {}
+    if str(row.get("status") or "").strip().lower() == "pass":
+        return False
+    if cap != "input_text":
+        return True
+    params = getattr(action, "params", None)
+    field_now = str((params or {}).get("field") or "") if isinstance(params, dict) else ""
+    prior_params = prior.get("params") if isinstance(prior.get("params"), dict) else {}
+    return field_now == str(prior_params.get("field") or "")
+
+
+def _confirm_visual_prior(
+    cursor: Any,
+    ctx: Any,
+    milestone_id: str,
+    *,
+    writer: Any = None,
+    in_prep: bool = False,
+    in_check: bool = False,
+) -> None:
+    """看图确认上一步已完成。不读层级，避免空节点把已输入判成未写入。"""
+    from mino_nexus.loop.milestone_orchestrator import advance_in_progress_focus
+    from mino_nexus.loop.milestones import read_state, write_state
+
+    state = read_state(cursor)
+    ms = state.get("milestones") if isinstance(state.get("milestones"), list) else []
+    changed = False
+    for row in ms:
+        if not isinstance(row, dict) or str(row.get("id") or "") != milestone_id:
+            continue
+        if str(row.get("status") or "").strip().lower() in ("pass", "skipped", "failed"):
+            break
+        row["status"] = "pass"
+        row["evidence"] = "visual_same_turn"
+        changed = True
+        break
+    if changed:
+        state["milestones"] = ms
+        write_state(cursor, state)
+        advance_in_progress_focus(cursor, writer=writer)
+        from mino_nexus.loop.step_phase_fsm import try_transition_after_tool_pass
+
+        try_transition_after_tool_pass(
+            cursor, ctx, writer=writer, in_prep=in_prep, in_check=in_check
+        )
 
 
 def _hint(cursor: Any, milestone_id: str, label: str) -> str:

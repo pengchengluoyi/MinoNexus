@@ -110,3 +110,51 @@ def dom_intent_tap_decision(cursor: Any, ctx: Any, writer: Any = None) -> Option
         thought=f"树上只有一个「{phrase}」，按 {mid} 的可点表直接点",
         action=AgentAction(capability_id="tap_element", params=params),
     )
+
+
+def dom_checkbox_tap_decision(
+    cursor: Any, ctx: Any, writer: Any = None
+) -> tuple[bool, Optional[AgentDecision]]:
+    """勾选只在 DOM 路线按勾选框角色 + 文案唯一命中。不是勾选步时 applicable 为假。"""
+    row = in_progress_milestone(read_state(cursor))
+    if not isinstance(row, dict):
+        return False, None
+    params = row.get("params") if isinstance(row.get("params"), dict) else {}
+    element = params.get("element") if isinstance(params.get("element"), dict) else {}
+    rules = params.get("rules") if isinstance(params.get("rules"), dict) else {}
+    if str(element.get("role") or "") != "checkbox":
+        return False, None
+    label = str(rules.get("label") or "").strip()
+    nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
+    hits: list[dict[str, Any]] = []
+    for node in nodes:
+        cls = str(node.get("class") or "").lower()
+        role = str(node.get("role") or "").lower()
+        checkable = bool(node.get("checkable")) or "checkbox" in cls or role == "checkbox"
+        if not checkable:
+            continue
+        blob = f"{node.get('text') or ''} {node.get('content_desc') or ''}"
+        if label and label not in blob:
+            continue
+        hits.append(node)
+    mid = str(row.get("id") or "")
+    if len(hits) != 1:
+        if writer:
+            writer.append("semantic/miss", {"milestone_id": mid, "role": "checkbox", "count": len(hits)})
+        return True, None
+    node = hits[0]
+    from mino_nexus.loop.ui_consent import tap_params_for_control
+
+    tap = tap_params_for_control(node, nodes)
+    phrase = label or str(node.get("text") or node.get("content_desc") or "")
+    tap["selector_text"] = phrase
+    tap["text"] = phrase
+    tap["target"] = {"text": phrase, "content_desc": phrase}
+    tap["intent_dom"] = True
+    if writer:
+        writer.append("semantic/dom", {"milestone_id": mid, "label": phrase, "role": "checkbox"})
+    return True, AgentDecision(
+        status="continue",
+        thought=f"树上只有一个勾选框「{phrase}」",
+        action=AgentAction(capability_id="tap_element", params=tap),
+    )
