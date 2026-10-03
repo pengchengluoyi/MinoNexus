@@ -523,45 +523,33 @@ def sync_feishu_listener(_sess: dict = Depends(current_session)):
     raise HTTPException(status_code=400, detail=ps.FEISHU_LIVE_NOT_PORTED)
 
 
+_WECHAT_ON_NODE = "微信扫码已改到 Scout 节点的 Bot / 微信，服务器不再登录"
+
+
 @router.post("/plugins/wechat/login")
 def start_wechat_login(_sess: dict = Depends(current_session)):
-    from mino_nexus.services.wechat_ilink import start_qr_login
-
-    try:
-        return ok(start_qr_login())
-    except Exception as e:
-        http_error(e)
+    raise HTTPException(status_code=400, detail=_WECHAT_ON_NODE)
 
 
 @router.get("/plugins/wechat/login")
 def get_wechat_login(_sess: dict = Depends(current_session)):
-    from mino_nexus.services.wechat_ilink import login_status
-
-    return ok(login_status())
+    raise HTTPException(status_code=400, detail=_WECHAT_ON_NODE)
 
 
 @router.post("/plugins/wechat/login/verify")
 def verify_wechat_login(body: WechatVerifyBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.services.wechat_ilink import verify_qr_login
-
-    try:
-        return ok(verify_qr_login(body.verify_code))
-    except Exception as e:
-        http_error(e)
+    del body
+    raise HTTPException(status_code=400, detail=_WECHAT_ON_NODE)
 
 
 @router.post("/plugins/wechat/logout")
 def logout_wechat_plugin(_sess: dict = Depends(current_session)):
-    from mino_nexus.services.wechat_ilink import logout_wechat
-
-    return ok(logout_wechat())
+    raise HTTPException(status_code=400, detail=_WECHAT_ON_NODE)
 
 
 @router.post("/plugins/wechat/listener/sync")
 def sync_wechat_listener_api(_sess: dict = Depends(current_session)):
-    from mino_nexus.services.wechat_ilink import sync_wechat_listener
-
-    return ok(sync_wechat_listener())
+    raise HTTPException(status_code=400, detail=_WECHAT_ON_NODE)
 
 
 @router.post("/plugins/zentao/test")

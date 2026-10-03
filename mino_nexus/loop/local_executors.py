@@ -306,7 +306,7 @@ def dispatch_local(
             elapsed_ms=int((time.time() - t0) * 1000),
         )
     if cap == "get_otp":
-        return _get_otp(event, ctx=ctx, t0=t0)
+        return _get_otp(event, ctx=ctx, t0=t0, router=router)
     if cap == "accept_legal_consent":
         return _accept_legal_consent(event, ctx=ctx, router=router, t0=t0)
     if cap == "request_sms_code":
@@ -420,7 +420,9 @@ def _resolve_otp(ctx: Any) -> tuple[str, str]:
         return "", "hitl"
     if fixed and mode in ("fixed", "auto"):
         return fixed, "env_fixed"
-    if mode in ("gmail", "auto"):
+    if mode == "gmail":
+        return "", "gmail"
+    if mode == "auto":
         from mino_nexus.services.otp_resolve import gmail_inbox_address
 
         uid = str(getattr(ctx, "plugin_user_id", "") or "").strip() if ctx is not None else ""
@@ -441,53 +443,49 @@ def _lease_email_for_otp(ctx: Any) -> str:
     return ""
 
 
-def _fetch_gmail_otp(ctx: Any) -> str:
-    from mino_nexus.services import plugins_store
-    from mino_nexus.services.gmail_otp import GmailOtpError, fetch_otp_via_imap
-    from mino_nexus.services.otp_resolve import gmail_inbox_address
+def _fetch_gmail_otp(ctx: Any, router: Any) -> str:
+    from mino_nexus.core.schemas import PlanEvent
+    from mino_nexus.services.gmail_otp import GmailOtpError
 
-    env_doc, _secrets, otp = _otp_context(ctx)
-    uid = str(getattr(ctx, "plugin_user_id", "") or "").strip()
-    inbox = gmail_inbox_address(env_doc, plugin_user_id=uid)
-    app_password = plugins_store.get_gmail_app_password(uid)
-    if not inbox:
-        raise GmailOtpError(
-            "未配置 Gmail 收件箱：请在 Studio → 插件 → Gmail 收信 填写收件邮箱（与应用专用密码同一账号）"
-        )
-    if not app_password:
-        raise GmailOtpError("请在 Studio → 插件 → Gmail 收信 中配置应用专用密码")
+    hint = "请在这台 Scout 节点的「邮箱 / Gmail」里填写收件箱和应用专用密码"
+    if router is None:
+        raise GmailOtpError(hint)
+    _env_doc, _secrets, otp = _otp_context(ctx)
     since = float(getattr(ctx, "otp_sent_at", 0) or 0) or None
-
-    def _stop() -> bool:
-        deadline = float(getattr(ctx, "case_deadline_ts", 0) or 0)
-        if deadline and time.time() >= deadline:
-            return True
-        rid = str(getattr(ctx, "run_id", "") or "")
-        task = rid.split("::", 1)[0] if "::" in rid else rid
-        if not task:
-            return False
-        try:
-            from mino_nexus.services import run_store
-
-            return bool(run_store.task_cancelled(task))
-        except Exception:
-            return False
-
-    return fetch_otp_via_imap(
-        inbox_address=inbox,
-        app_password=app_password,
-        to_address=_lease_email_for_otp(ctx),
-        since_ts=since,
-        from_allowlist=list(otp.get("from_allowlist") or []),
-        subject_contains=str(otp.get("subject_contains") or ""),
-        poll_interval_ms=int(otp.get("poll_interval_ms") or 3000),
-        max_wait_ms=int(otp.get("max_wait_ms") or 90_000),
-        should_stop=_stop,
-        deadline_ts=float(getattr(ctx, "case_deadline_ts", 0) or 0) or None,
+    deadline = float(getattr(ctx, "case_deadline_ts", 0) or 0) or None
+    params = {
+        "to_address": _lease_email_for_otp(ctx),
+        "since_ts": since,
+        "from_allowlist": list(otp.get("from_allowlist") or []),
+        "subject_contains": str(otp.get("subject_contains") or ""),
+        "poll_interval_ms": int(otp.get("poll_interval_ms") or 3000),
+        "max_wait_ms": int(otp.get("max_wait_ms") or 90_000),
+        "deadline_ts": deadline,
+    }
+    event = PlanEvent(
+        seq=0,
+        capability_id="plugin.gmail.fetch_otp",
+        event_kind="plugin.gmail.fetch_otp",
+        params=params,
+        label="Gmail 取码",
     )
+    result = router.dispatch(
+        event,
+        run_id=str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "") if ctx else "",
+        step_idx=-1,
+        ctx=ctx,
+    )
+    status = result.status.value if hasattr(result.status, "value") else str(result.status)
+    raw = dict(getattr(result, "raw_response", None) or {})
+    if status not in ("pass", "done"):
+        raise GmailOtpError(str(getattr(result, "summary", "") or getattr(result, "error", "") or hint))
+    code = str(raw.get("code") or "").strip()
+    if not code:
+        raise GmailOtpError(hint)
+    return code
 
 
-def _get_otp(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
+def _get_otp(event: PlanEvent, *, ctx: Any, t0: float, router: Any = None) -> EventResult:
     code, source = _resolve_otp(ctx)
     if not code and source == "gmail":
         if float(getattr(ctx, "otp_sent_at", 0) or 0) <= 0:
@@ -502,7 +500,7 @@ def _get_otp(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
                 elapsed_ms=int((time.time() - t0) * 1000),
             )
         try:
-            code = _fetch_gmail_otp(ctx)
+            code = _fetch_gmail_otp(ctx, router)
             source = "gmail"
         except Exception as exc:
             from mino_nexus.services.gmail_otp import GmailOtpError
@@ -535,7 +533,7 @@ def _get_otp(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
         if source == "hitl":
             summary = "当前环境接码为人工（hitl），请 signal_ask_human 或填写账号 otp"
         else:
-            summary = "未配置验证码：请在账号 otp、环境固定码、或 Gmail 收信（插件+收件箱）中配置"
+            summary = "未配置验证码：请在账号 otp、环境固定码、或该 Scout 节点的邮箱 / Gmail 中配置"
         return _result(
             event,
             status=EventStatus.FAIL,

@@ -43,6 +43,89 @@ def _channel_connected(channels: Any) -> bool:
     return any(_channel_value(v) in _ONLINE_CHANNEL for v in channels.values())
 
 
+_PLUGIN_CLASSES = frozenset({"cli", "mcp", "bot", "mail"})
+
+
+def sanitize_plugins(raw: Any) -> list[dict[str, Any]] | None:
+    """只留状态。调用方传来的其它字段丢掉，避免密钥混进节点列表。"""
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        kind = str(row.get("class") or "").strip()
+        pid = str(row.get("id") or "").strip()
+        if kind not in _PLUGIN_CLASSES or not pid:
+            continue
+        out.append({
+            "class": kind,
+            "id": pid,
+            "installed": bool(row.get("installed")),
+            "configured": bool(row.get("configured")),
+        })
+    return out
+
+
+def _reply_wechat_message(payload: dict[str, str]) -> None:
+    """微信正文只用来生成回复，不写日志。"""
+    text = str(payload.get("text") or "").strip()
+    user_id = str(payload.get("from_user_id") or "").strip()
+    context = str(payload.get("context_token") or "").strip()
+    node_id = str(payload.get("node_id") or "").strip()
+    if not text or not user_id or not context or not node_id:
+        return
+    reply = ""
+    try:
+        from mino_nexus.ai.roles_catalog import chat_with_role
+
+        data = chat_with_role(
+            role_id="im-qa-assistant",
+            messages=[{"role": "user", "content": text}],
+        )
+        if isinstance(data, dict):
+            reply = str(data.get("reply") or data.get("content") or data.get("text") or "").strip()
+    except Exception as exc:
+        SLog.w(TAG, f"wechat reply failed: {type(exc).__name__}")
+        return
+    if not reply:
+        return
+    try:
+        from mino_nexus.services.node_plugin_call import call_plugin
+
+        call_plugin(
+            kind="bot",
+            plugin_id="wechat",
+            node_id=node_id,
+            capability_id="plugin.bot.wechat",
+            params={
+                "action": "send",
+                "to_user_id": user_id,
+                "context_token": context,
+                "text": reply[:2000],
+            },
+            timeout=30,
+        )
+    except Exception as exc:
+        SLog.w(TAG, f"wechat send failed: {type(exc).__name__}")
+
+
+def _public_plugin_job(raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "active": bool(raw.get("active")),
+        "stage": str(raw.get("stage") or ""),
+        "label": str(raw.get("label") or ""),
+        "percent": int(raw.get("percent") or 0),
+        "class": str(raw.get("class") or ""),
+        "id": str(raw.get("id") or ""),
+        "bytes_received": int(raw.get("bytes_received") or 0),
+        "bytes_total": int(raw.get("bytes_total") or 0),
+        "error": str(raw.get("error") or ""),
+    }
+
+
 @dataclass
 class NodeSession:
     node_id: str
@@ -61,6 +144,9 @@ class NodeSession:
     studio_id: str = ""
     owner_user_id: str = ""
     host: dict[str, Any] = field(default_factory=dict)
+    # None：这台 Scout 还没报插件状态。列表只含 class/id/installed/configured。
+    plugins: Optional[list[dict[str, Any]]] = None
+    plugin_job: dict[str, Any] = field(default_factory=dict)
     # 发一条消息并等应答；由 websocket/node.py 注入
     send: Optional[Callable[..., Any]] = None
 
@@ -116,6 +202,8 @@ class NodeSession:
             "last_seen_ago_sec": round(time.time() - self.last_seen, 1),
             "update_job": dict(self.update_job or {}),
             "host": dict(self.host or {}),
+            "plugins": None if self.plugins is None else [dict(row) for row in self.plugins],
+            "plugin_job": dict(self.plugin_job or {}),
         }
 
     def persist_snapshot(self) -> None:
@@ -196,6 +284,7 @@ class NodeRegistry:
                 hostname=hostname,
                 studio_id=studio_id,
                 owner_user_id=owner,
+                plugins=sanitize_plugins(getattr(reg, "plugins", None)),
             )
             self._nodes[reg.node_id] = session
             session.persist_snapshot()
@@ -302,6 +391,9 @@ class NodeRegistry:
             node.device_workload = list(hb.device_workload or [])
             host = getattr(hb, "host", None)
             node.host = dict(host) if isinstance(host, dict) else {}
+            reported = getattr(hb, "plugins", None)
+            if reported is not None:
+                node.plugins = sanitize_plugins(reported)
             ver = str(getattr(hb, "scout_version", "") or "").strip()
             if ver:
                 node.scout_version = ver
@@ -337,6 +429,15 @@ class NodeRegistry:
             node.host = host
             node.last_seen = time.time()
 
+    def note_plugins(self, node_id: str, plugins: Any) -> None:
+        nid = str(node_id or "").strip()
+        with self._lock:
+            node = self._nodes.get(nid)
+            if node is None:
+                return
+            node.plugins = sanitize_plugins(plugins)
+            node.last_seen = time.time()
+
     def node_event(self, req: P.Execute, *, node_id: str = "") -> list[str]:
         """处理 S→N 框架 EXECUTE（node.device_lost 等）。`shutting_down` 返回在途 run_id。"""
         params = dict(req.params or {})
@@ -346,6 +447,7 @@ class NodeRegistry:
         sn = str(req.sn or req.device_id or params.get("sn") or "").strip()
         detail = str(params.get("detail") or "")
         interrupted: list[str] = []
+        wechat_reply: dict[str, str] | None = None
         with self._lock:
             node = self._nodes.get(nid)
             if node is None:
@@ -387,10 +489,28 @@ class NodeRegistry:
                     }
                 if not node.update_job.get("active"):
                     node.update_job = dict(node.update_job)
+            elif event == "plugin_progress":
+                raw = params.get("progress")
+                if isinstance(raw, dict):
+                    node.plugin_job = _public_plugin_job(raw)
+            elif event == "plugin_wechat_message":
+                wechat_reply = {
+                    "node_id": nid,
+                    "text": str(params.get("text") or "")[:2000],
+                    "from_user_id": str(params.get("from_user_id") or ""),
+                    "context_token": str(params.get("context_token") or ""),
+                }
             self._purge_orphaned_legacy_web_slots()
             if node is not None:
                 node.persist_snapshot()
         SLog.i(TAG, f"EXECUTE {cap} node={nid} sn={sn} {detail}")
+        if wechat_reply and wechat_reply.get("text") and wechat_reply.get("context_token"):
+            threading.Thread(
+                target=_reply_wechat_message,
+                args=(wechat_reply,),
+                name="wechat-reply",
+                daemon=True,
+            ).start()
         return interrupted
 
     def disconnect(self, node_id: str) -> list[str]:

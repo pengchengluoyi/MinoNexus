@@ -40,6 +40,7 @@ UI **只**打 MinoNexus。没有公网域名时用内网名 `mino.local`：Nexus
 | `/settings/ai/providers` 写 | 403 | 允许 |
 | `/runtime/nodes/install-token` | 403 | 允许 |
 | `/runtime/nodes/{id}/command` | 403 | 允许 |
+| `/runtime/nodes/{id}/plugins/*` | 403 | 允许 |
 | `/project` `/app-automation` `/task` 写 | 403 | 允许 |
 | `/nav-fsm` 写 | 403 | 允许 |
 | `/case-runner` 写 | 403 | 允许 |
@@ -60,6 +61,9 @@ https://github.com/<owner>/MinoScout/releases/latest/download/manifest.json
 | POST | `/runtime/nodes/install-token` | 短 TTL 节点凭证。Studio 写入 Scout 配置 |
 | PATCH | `/runtime/nodes/{node_id}` | **Console 管理员**：改 `owner_user_id` / `studio_id`（离线节点也生效） |
 | POST | `/runtime/nodes/{node_id}/command` | Studio 对已连接节点下发 `stop` / `restart` / `update` / `sleep` / `wake`。离线 409。`start` 400（进程已退出时不能远程拉起） |
+| POST | `/runtime/nodes/{node_id}/plugins/config` | 把该节点的插件参数转到 Scout。body：`kind`、`plugin_id`、`values`、`clear`。Nexus 不落库。离线 409 |
+| POST | `/runtime/nodes/{node_id}/plugins/install` | 让 Scout 按发布清单安装 CLI / MCP。body：`kind`、`plugin_id` |
+| POST | `/runtime/nodes/{node_id}/plugins/remove` | 卸掉该节点上的插件并删除本机密钥 |
 | GET | `/runtime/nodes/{node_id}/workload` | 合并 Scout `device_workload` 与 Nexus 在途 run（按 sn） |
 | GET | `/runtime/nodes/{node_id}/logs?lines=` | `EXECUTE node.log_tail`（Scout ≥ 下一版含该指令） |
 | POST | `/device/{sn}/ime/system` | Android 设备恢复系统输入法（关闭 ADB Keyboard） |

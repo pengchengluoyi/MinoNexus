@@ -21,6 +21,7 @@ _CONSOLE_DENY: list[tuple[str, set[str]]] = [
     (r"^/task(/|$)", {"POST", "PUT", "DELETE"}),
     (r"^/runtime/nodes/install-token$", {"POST"}),
     (r"^/runtime/nodes/[^/]+/command$", {"POST"}),
+    (r"^/runtime/nodes/[^/]+/plugins(/|$)", {"POST"}),
 ]
 _STUDIO_DENY: list[tuple[str, set[str]]] = [
     (r"^/settings/ai/jobs(/|$)", {"PUT", "POST"}),

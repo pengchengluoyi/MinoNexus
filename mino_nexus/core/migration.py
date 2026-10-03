@@ -32,6 +32,27 @@ def _drop_table_if_exists(table: str) -> None:
     SLog.i(TAG, f"dropped table {table}")
 
 
+def _clear_user_plugin_secrets() -> None:
+    """插件密钥改存在 Scout。旧行里的 JSON 清掉，不读出来、不搬到节点。"""
+    insp = inspect(engine)
+    if "user_plugin_secrets" not in insp.get_table_names():
+        return
+    with engine.connect() as conn:
+        conn.execute(text("UPDATE user_plugin_secrets SET config = '{}'"))
+        conn.commit()
+    SLog.i(TAG, "cleared user_plugin_secrets")
+
+
+def _remove_nexus_wechat_account() -> None:
+    from mino_nexus.core.paths import data_dir
+
+    path = data_dir() / "wechat_ilink.json"
+    if not path.is_file():
+        return
+    path.unlink()
+    SLog.i(TAG, "removed nexus wechat account file")
+
+
 def run_auto_migration() -> None:
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
@@ -68,6 +89,8 @@ def run_auto_migration() -> None:
         from mino_nexus.services.doc_store import ensure_fts
 
         ensure_fts()
+        _clear_user_plugin_secrets()
+        _remove_nexus_wechat_account()
     except Exception as exc:
         SLog.w(TAG, f"migration skipped: {exc}")
     SLog.i(TAG, "schema ready")

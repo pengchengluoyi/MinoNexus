@@ -33,6 +33,23 @@ class NodePatchBody(BaseModel):
     studio_id: str | None = None
 
 
+class NodePluginConfigBody(BaseModel):
+    kind: str
+    plugin_id: str
+    values: dict[str, Any] = {}
+    clear: list[str] = []
+
+
+class NodePluginActionBody(BaseModel):
+    kind: str
+    plugin_id: str
+
+
+class NodePluginCallBody(BaseModel):
+    capability_id: str
+    params: dict[str, Any] = {}
+
+
 @router.get("/nodes")
 def list_nodes(
     studio_id: str = Query(default=""),
@@ -191,6 +208,176 @@ async def node_logs(
             detail=getattr(result, "error", "") or getattr(result, "summary", "") or "拉日志失败",
         )
     return ok({"node_id": nid, "logs": logs, "summary": getattr(result, "summary", "") or ""})
+
+
+def _require_live_node(node_id: str, sess: dict, studio_id: str):
+    snap = stored_node(node_id) or {"node_id": node_id}
+    live = get_registry().get_node(node_id)
+    row = {**(snap or {}), "node_id": node_id}
+    if live is not None:
+        row["studio_id"] = live.studio_id or row.get("studio_id") or ""
+        row["owner_user_id"] = live.owner_user_id or row.get("owner_user_id") or ""
+    if not node_visible(row, sess, studio_id=studio_id):
+        raise HTTPException(status_code=404, detail="没有这个节点")
+    if live is None or not live.alive or live.send is None:
+        raise HTTPException(status_code=409, detail="节点离线，无法下发")
+    return live
+
+
+async def _relay_plugin(
+    node_id: str,
+    live: Any,
+    *,
+    capability_id: str,
+    params: dict[str, Any],
+    timeout: float,
+) -> dict[str, Any]:
+    payload = P.Execute(
+        run_id="",
+        step_idx=-1,
+        sn="",
+        capability_id=capability_id,
+        params=params,
+        timeout_sec=timeout,
+    )
+    result = live.send(P.MsgType.EXECUTE, payload, timeout=timeout + 30.0)
+    if inspect.isawaitable(result):
+        result = await result
+    if result is None:
+        raise HTTPException(status_code=504, detail="节点未应答")
+    status = getattr(getattr(result, "status", None), "value", None) or getattr(result, "status", "")
+    summary = str(getattr(result, "summary", "") or "")
+    error = str(getattr(result, "error", "") or "")
+    data = dict(getattr(result, "data", None) or {})
+    extra = dict(getattr(result, "extra", None) or {})
+    plugins = data.get("plugins") if isinstance(data.get("plugins"), list) else extra.get("plugins")
+    if isinstance(plugins, list):
+        get_registry().note_plugins(node_id, plugins)
+    if str(status).lower() not in ("pass", "passed", "ok", "success"):
+        raise HTTPException(status_code=502, detail=error or summary or "节点拒绝了插件操作")
+    configured = data.get("configured")
+    if configured is None:
+        configured = extra.get("configured")
+    hidden = ("secret", "password", "webhook", "bot_token", "app_secret", "plugin_secret")
+    public: dict[str, Any] = {}
+    for key, value in {**extra, **data}.items():
+        name = str(key)
+        if name in ("plugins", "command") or any(flag in name for flag in hidden):
+            continue
+        public[name] = value
+    return {
+        "node_id": node_id,
+        "kind": str(params.get("class") or params.get("kind") or ""),
+        "plugin_id": str(params.get("id") or ""),
+        "status": status,
+        "summary": summary,
+        "configured": bool(configured),
+        "data": public,
+    }
+
+
+@router.post("/nodes/{node_id}/plugins/config")
+async def config_node_plugin(
+    node_id: str,
+    body: NodePluginConfigBody,
+    studio_id: str = Query(default=""),
+    sess: dict = Depends(current_session),
+):
+    kind = str(body.kind or "").strip()
+    plugin_id = str(body.plugin_id or "").strip()
+    if not kind or not plugin_id:
+        raise HTTPException(status_code=400, detail="缺少插件分类或 id")
+    live = _require_live_node(node_id, sess, studio_id)
+    values = {str(k): str(v) for k, v in (body.values or {}).items() if str(k).strip()}
+    cleared = [str(x).strip() for x in (body.clear or []) if str(x).strip()]
+    out = await _relay_plugin(
+        node_id,
+        live,
+        capability_id="node.plugin_config",
+        params={"class": kind, "id": plugin_id, "values": values, "clear": cleared},
+        timeout=30.0,
+    )
+    return ok(out)
+
+
+@router.post("/nodes/{node_id}/plugins/install")
+async def install_node_plugin(
+    node_id: str,
+    body: NodePluginActionBody,
+    studio_id: str = Query(default=""),
+    sess: dict = Depends(current_session),
+):
+    kind = str(body.kind or "").strip()
+    plugin_id = str(body.plugin_id or "").strip()
+    if kind not in ("cli", "mcp"):
+        raise HTTPException(status_code=400, detail="只有 CLI 和 MCP 需要安装")
+    live = _require_live_node(node_id, sess, studio_id)
+    out = await _relay_plugin(
+        node_id,
+        live,
+        capability_id="node.plugin_install",
+        params={"class": kind, "id": plugin_id},
+        timeout=600.0,
+    )
+    return ok(out)
+
+
+@router.post("/nodes/{node_id}/plugins/remove")
+async def remove_node_plugin(
+    node_id: str,
+    body: NodePluginActionBody,
+    studio_id: str = Query(default=""),
+    sess: dict = Depends(current_session),
+):
+    kind = str(body.kind or "").strip()
+    plugin_id = str(body.plugin_id or "").strip()
+    live = _require_live_node(node_id, sess, studio_id)
+    out = await _relay_plugin(
+        node_id,
+        live,
+        capability_id="node.plugin_remove",
+        params={"class": kind, "id": plugin_id},
+        timeout=120.0,
+    )
+    return ok(out)
+
+
+_PLUGIN_CALLS = frozenset({
+    "plugin.cli.feishu",
+    "plugin.cli.meego",
+    "plugin.bot.send",
+    "plugin.bot.wechat",
+})
+
+
+@router.post("/nodes/{node_id}/plugins/call")
+async def call_node_plugin(
+    node_id: str,
+    body: NodePluginCallBody,
+    studio_id: str = Query(default=""),
+    sess: dict = Depends(current_session),
+):
+    cap = str(body.capability_id or "").strip()
+    if cap not in _PLUGIN_CALLS:
+        raise HTTPException(status_code=400, detail="不支持的插件调用")
+    kind = "cli" if cap.startswith("plugin.cli.") else "bot"
+    plugin_id = cap.rsplit(".", 1)[-1]
+    if cap == "plugin.bot.send":
+        plugin_id = str((body.params or {}).get("kind") or "")
+    if cap == "plugin.bot.wechat":
+        plugin_id = "wechat"
+    live = _require_live_node(node_id, sess, studio_id)
+    params = dict(body.params or {})
+    timeout = 90.0 if cap == "plugin.cli.feishu" else 50.0
+    out = await _relay_plugin(
+        node_id,
+        live,
+        capability_id=cap,
+        params=params,
+        timeout=timeout,
+    )
+    data = dict(out)
+    return ok(data)
 
 
 @router.post("/nodes/{node_id}/command")

@@ -177,6 +177,8 @@ def _offline_row(snap: dict[str, Any]) -> dict[str, Any]:
         "last_seen_ago_sec": None,
         "status": "offline",
         "online": False,
+        "plugins": None,
+        "plugin_job": {},
     }
 
 

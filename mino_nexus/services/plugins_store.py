@@ -277,39 +277,14 @@ def _settings_root() -> dict[str, Any]:
 
 
 def _load_user(user_id: str = "") -> dict[str, Any]:
-    from mino_nexus.core.database import SessionLocal, ensure_db
-    from mino_nexus.models.plugin import UserPluginSecret
-
-    uid = str(user_id or "").strip()
-    if not uid:
-        return _empty_user_root()
-    try:
-        ss._require_user_id(uid)
-    except ValueError:
-        return _empty_user_root()
-    ensure_db()
-    db = SessionLocal()
-    try:
-        row = db.get(UserPluginSecret, uid)
-        return _normalize_user_root(row.config if row else {})
-    finally:
-        db.close()
+    """插件密钥不再从 `user_plugin_secrets` 读。旧行留在表里，等运维备份后清理。"""
+    del user_id
+    return _empty_user_root()
 
 
 def _save_user(user_id: str, root: dict[str, Any]) -> None:
-    from mino_nexus.core.database import session_scope
-    from mino_nexus.models.plugin import UserPluginSecret
-
-    uid = ss._require_user_id(user_id)
-    cfg = _normalize_user_root(root)
-    now = datetime.now(timezone.utc).isoformat()
-    with session_scope() as db:
-        row = db.get(UserPluginSecret, uid)
-        if row is None:
-            db.add(UserPluginSecret(user_id=uid, config=cfg, updated_at=now))
-        else:
-            row.config = cfg
-            row.updated_at = now
+    del user_id, root
+    raise ValueError("插件参数请在 Scout 节点页配置，服务器不再保存密钥")
 
 
 def _default_policy_row() -> dict[str, bool]:
@@ -705,24 +680,7 @@ def get_gmail_inbox_address(user_id: str = "") -> str:
 
 
 def first_configured_gmail_inbox() -> str:
-    """跑批开号兜底：任意已配 Gmail 插件的用户（单租户 Studio 常见）。"""
-    try:
-        from mino_nexus.core.database import SessionLocal, ensure_db
-        from mino_nexus.models.plugin import UserPluginSecret
-
-        ensure_db()
-        db = SessionLocal()
-        try:
-            rows = db.query(UserPluginSecret).limit(200).all()
-        finally:
-            db.close()
-        for row in rows or []:
-            uid = str(getattr(row, "id", "") or "")
-            inbox = get_gmail_inbox_address(uid)
-            if inbox and get_gmail_app_password(uid):
-                return inbox
-    except Exception:
-        pass
+    """不再扫描别的登录用户的收件箱。Gmail 参数在执行那台 Scout 上。"""
     return ""
 
 
@@ -938,6 +896,8 @@ def save_integration_plugin(plugin_id: str, body: dict[str, Any], user_id: str =
         raise ValueError(f"未知插件: {plugin_id}")
     uid = str(user_id or "").strip()
     incoming = body if isinstance(body, dict) else {}
+    if set(incoming.keys()) - {"enabled", "visible"}:
+        raise ValueError("插件参数请在 Scout 节点页配置，服务器不再保存密钥")
 
     if "enabled" in incoming:
         save_plugin_policy(plugin_id, enabled=bool(incoming.get("enabled")))

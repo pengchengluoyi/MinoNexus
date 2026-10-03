@@ -185,6 +185,11 @@ class RouterProxy:
             if str(getattr(event, "event_kind", "") or "") == raw_cap:
                 event.event_kind = mapped
 
+        if str(event.capability_id or "").startswith("plugin."):
+            return await self._dispatch_host_plugin(
+                event, started=started, t0=t0, run_id=run_id, step_idx=step_idx,
+            )
+
         if not capability_dispatch_ok(event.capability_id):
             return _fail(
                 event,
@@ -272,6 +277,48 @@ class RouterProxy:
             platform=_device_platform(self.sn, node),
         )
 
+        res = await self._send_with_retry(node, P.MsgType.EXECUTE, req, req.timeout_sec)
+        if res is None:
+            return _fail(
+                event, started, t0,
+                f"scout timeout（node={node.node_id}，重发一次仍无 RESULT）",
+                executor_used="router_proxy",
+            )
+        return _event_result_from(event, res, started)
+
+    async def _dispatch_host_plugin(
+        self,
+        event: PlanEvent,
+        *,
+        started: str,
+        t0: float,
+        run_id: str,
+        step_idx: int,
+    ) -> EventResult:
+        """具名插件能力。参数里没有密钥，密钥在执行节点自己的保险库。"""
+        node, why = get_registry().resolve(self.sn)
+        if node is None:
+            return _fail(event, started, t0, why, executor_used="router_proxy")
+        params = dict(event.params or {})
+        try:
+            wait_ms = int(params.get("max_wait_ms") or 30_000)
+        except (TypeError, ValueError):
+            wait_ms = 30_000
+        timeout = min(600.0, max(20.0, wait_ms / 1000.0 + 15.0))
+        req = P.Execute(
+            run_id=run_id or self.run_id,
+            step_idx=-1,
+            sn=self.sn,
+            capability_id=event.capability_id,
+            params=params,
+            executor_order=[],
+            low_level={},
+            selected_impl={},
+            device_hint={},
+            timeout_sec=timeout,
+            device_id=self.sn,
+            platform=_device_platform(self.sn, node),
+        )
         res = await self._send_with_retry(node, P.MsgType.EXECUTE, req, req.timeout_sec)
         if res is None:
             return _fail(

@@ -12,11 +12,10 @@ ENTRIES: list[dict[str, str]] = [
     {"id": "scout", "label": "Scout 节点", "group": "settings"},
     {"id": "keys", "label": "模型密钥", "group": "settings"},
     {"id": "dispatch", "label": "调用记录", "group": "settings"},
-    {"id": "plugins", "label": "插件配置", "group": "settings"},
 ]
 
-DEFAULT_ALLOWED = ("testing", "agent", "knowledge", "runtime", "scout", "keys", "dispatch", "plugins")
-_NAV_VERSION = 3
+DEFAULT_ALLOWED = ("testing", "agent", "knowledge", "runtime", "scout", "keys", "dispatch")
+_NAV_VERSION = 4
 
 
 def catalog() -> list[dict[str, str]]:
@@ -80,9 +79,7 @@ def get_allowed() -> list[str]:
         else:
             allowed.append("scout")
         version = 2
-        _persist(allowed, version)
-    if version < _NAV_VERSION and "plugins" in _known_ids() and "plugins" not in allowed:
-        allowed.append("plugins")
+    if version < _NAV_VERSION:
         _persist(allowed, _NAV_VERSION)
     return allowed
 

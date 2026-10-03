@@ -20,6 +20,7 @@ class FeishuSyncBody(BaseModel):
     project_id: str = ""
     bot_id: str = ""
     title: str = ""
+    node_id: str = ""
 
 
 class DocSyncSettingsBody(BaseModel):
@@ -103,6 +104,7 @@ def sync_feishu_doc(body: FeishuSyncBody, _sess: dict = Depends(current_session)
             project_id=str(body.project_id or "").strip(),
             bot_id=str(body.bot_id or "").strip(),
             title=str(body.title or "").strip(),
+            node_id=str(body.node_id or "").strip(),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

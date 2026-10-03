@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import ssl
 import urllib.error
 import urllib.request
 
@@ -16,6 +17,18 @@ router = APIRouter(prefix="/releases", tags=["Releases"])
 
 _FETCH_TIMEOUT = 15
 _DEFAULT_MANIFEST = "https://github.com/pengchengluoyi/MinoScout/releases/latest/download/manifest.json"
+
+
+def _ssl_context() -> ssl.SSLContext | None:
+    """框架自带的 Python 往往没有系统根证书，urllib 访问 GitHub 会直接 CERTIFICATE_VERIFY_FAILED。"""
+    try:
+        import certifi
+    except ImportError:
+        return None
+    return ssl.create_default_context(cafile=certifi.where())
+
+
+_SSL = _ssl_context()
 
 
 def _guess_installer(filename: str, os_name: str) -> str:
@@ -115,7 +128,7 @@ def _fetch_github_latest_version(repo: str) -> str:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT, context=_SSL) as resp:
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError:
         return ""
@@ -140,7 +153,7 @@ def _fetch_manifest(url: str) -> dict:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT, context=_SSL) as resp:
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
