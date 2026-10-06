@@ -33,7 +33,50 @@ def resolve_effective_secrets(
     return env_secrets(doc, env_key)
 
 
-def gmail_inbox_address(env_doc: dict | None, *, plugin_user_id: str = "") -> str:
+def _inbox_from_scout(*, node_id: str = "", sn: str = "") -> str:
+    """收件箱在执行那台 Scout 的插件清单里，不在服务器的插件表。"""
+    from mino_nexus.services.node_registry import get_registry
+
+    reg = get_registry()
+    nodes = []
+    nid = str(node_id or "").strip()
+    device = str(sn or "").strip()
+    if nid:
+        node = reg.get_node(nid)
+        if node is not None:
+            nodes = [node]
+    elif device:
+        node, _reason = reg.resolve(device)
+        if node is not None:
+            nodes = [node]
+    else:
+        nodes = list(reg.nodes())
+    found: list[str] = []
+    for node in nodes:
+        for row in node.plugins or []:
+            if str(row.get("class") or "") != "mail" or str(row.get("id") or "") != "gmail":
+                continue
+            values = row.get("values") if isinstance(row.get("values"), dict) else {}
+            inbox = str(values.get("inbox_address") or "").strip()
+            if "@" in inbox:
+                found.append(inbox)
+    unique = list(dict.fromkeys(found))
+    if len(unique) == 1:
+        return unique[0]
+    return ""
+
+
+def gmail_inbox_address(
+    env_doc: dict | None,
+    *,
+    plugin_user_id: str = "",
+    node_id: str = "",
+    sn: str = "",
+) -> str:
+    del env_doc
+    scout_inbox = _inbox_from_scout(node_id=node_id, sn=sn)
+    if scout_inbox:
+        return scout_inbox
     uid = str(plugin_user_id or "").strip()
     if uid:
         try:
@@ -61,7 +104,9 @@ def plugin_user_id_from_ctx(ctx: Any) -> str:
 
 def resolve_gmail_inbox(env_doc: dict | None, ctx: Any | None = None) -> str:
     uid = plugin_user_id_from_ctx(ctx) if ctx is not None else ""
-    return gmail_inbox_address(env_doc, plugin_user_id=uid)
+    node_id = str(getattr(ctx, "node_id", "") or "") if ctx is not None else ""
+    sn = str(getattr(ctx, "sn", "") or "") if ctx is not None else ""
+    return gmail_inbox_address(env_doc, plugin_user_id=uid, node_id=node_id, sn=sn)
 
 
 def login_kind_from_secrets(secrets: dict | None) -> str:

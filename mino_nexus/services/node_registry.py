@@ -44,10 +44,38 @@ def _channel_connected(channels: Any) -> bool:
 
 
 _PLUGIN_CLASSES = frozenset({"cli", "mcp", "bot", "mail"})
+_SECRET_MARKERS = ("secret", "password", "token", "webhook")
+
+
+def _plain_values(raw: Any) -> dict[str, str]:
+    """非密钥字段可以进节点列表，页面要回显。密钥值一律丢掉。"""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        name = str(key or "").strip()
+        if not name or any(flag in name.lower() for flag in _SECRET_MARKERS):
+            continue
+        text = str(value or "").strip()
+        if text:
+            out[name] = text[:500]
+    return out
+
+
+def _secret_names(raw: Any) -> list[str]:
+    """只留字段名，表示保险库里有这份密钥。"""
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        name = str(item or "").strip()
+        if name and len(name) <= 64 and name.replace("_", "").isalnum():
+            out.append(name)
+    return out
 
 
 def sanitize_plugins(raw: Any) -> list[dict[str, Any]] | None:
-    """只留状态。调用方传来的其它字段丢掉，避免密钥混进节点列表。"""
+    """状态加非密钥明文。密钥值不进节点列表。"""
     if raw is None:
         return None
     if not isinstance(raw, list):
@@ -60,12 +88,19 @@ def sanitize_plugins(raw: Any) -> list[dict[str, Any]] | None:
         pid = str(row.get("id") or "").strip()
         if kind not in _PLUGIN_CLASSES or not pid:
             continue
-        out.append({
+        item: dict[str, Any] = {
             "class": kind,
             "id": pid,
             "installed": bool(row.get("installed")),
             "configured": bool(row.get("configured")),
-        })
+        }
+        values = _plain_values(row.get("values"))
+        secrets = _secret_names(row.get("saved_secrets"))
+        if values:
+            item["values"] = values
+        if secrets:
+            item["saved_secrets"] = secrets
+        out.append(item)
     return out
 
 
