@@ -292,9 +292,13 @@ def build_prep_program_plan(
         steps_out.append(extra)
 
     da = claim.get("device_app") if isinstance(claim.get("device_app"), dict) else {}
+    for step in steps_out:
+        if isinstance(step, dict) and not step.get("ui_status"):
+            step["ui_status"] = "pending"
     return {
         "schema": "mino.prep_program_plan.v1",
         "steps": steps_out,
+        "spans": [],
         "flags": {
             "need_lease": need_lease,
             "need_clear_cache": need_clear,

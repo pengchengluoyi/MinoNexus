@@ -299,9 +299,57 @@ def _block_reason_zh(reason: str) -> str:
     return _BLOCK_REASON_ZH.get(raw, raw or "无法覆盖")
 
 
+_SLOT_ZH = {"credential": "凭证", "submit": "提交", "entry": "入口"}
+_ROLE_ZH = {
+    "button": "按钮",
+    "element": "元素",
+    "image": "图片",
+    "checkbox": "勾选框",
+    "switch": "开关",
+    "input": "输入框",
+    "page": "页面",
+    "dialog": "弹窗",
+}
+
+
+def _rules_zh(rules: dict[str, Any]) -> str:
+    parts: list[str] = []
+    if rules.get("present"):
+        parts.append("弹出")
+    if rules.get("exclusive"):
+        parts.append("不展示其他弹窗")
+    which = str(rules.get("which") or "").strip()
+    if which:
+        parts.append(which)
+    body = str(rules.get("body") or rules.get("text") or rules.get("title") or "").strip()
+    if body:
+        parts.append(f"「{body}」")
+    name = str(rules.get("name") or rules.get("label") or "").strip()
+    if name and name not in " ".join(parts):
+        parts.append(name)
+    return "，".join(parts)
+
+
 def _format_plan_line(step: dict[str, Any], *, case_step: int) -> str:
-    title = str(step.get("title") or step.get("source_clause") or step.get("source_line") or "").strip()
     ref = str(step.get("key_ref") or "").strip()
+    slots = step.get("slots") if isinstance(step.get("slots"), list) else []
+    if ref == "operation.login_flow" or (str(step.get("kind") or "") == "flow_block" and slots):
+        parts: list[str] = []
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            label = _SLOT_ZH.get(str(slot.get("id") or ""), str(slot.get("id") or "槽"))
+            text = str(slot.get("text") or "").strip()
+            target = slot.get("target") if isinstance(slot.get("target"), dict) else {}
+            role = _ROLE_ZH.get(str(target.get("role") or ""), str(target.get("role") or ""))
+            name = str(target.get("name") or "").strip()
+            extra = f" · {role}" if role else ""
+            if name and name not in text:
+                extra = f"{extra} {name}".rstrip()
+            parts.append(f"{label}「{text}」{extra}" if text else label)
+        body = "；".join(parts) if parts else "登录流"
+        return f"{int(case_step)}. 登录流 {body}"[:240]
+    title = str(step.get("title") or step.get("source_clause") or step.get("source_line") or "").strip()
     rules = {}
     assert_payload = step.get("assert") if isinstance(step.get("assert"), dict) else {}
     params = step.get("params") if isinstance(step.get("params"), dict) else {}
@@ -312,16 +360,18 @@ def _format_plan_line(step: dict[str, Any], *, case_step: int) -> str:
     element = assert_payload.get("element") if isinstance(assert_payload.get("element"), dict) else {}
     if not element and isinstance(params.get("element"), dict):
         element = params["element"]
-    bit = title or ref or "（空）"
-    role = str(element.get("role") or "").strip()
-    if role and role not in bit:
-        bit = f"{bit} · {role}"
-    if rules:
-        shown = "，".join(f"{k}={v}" for k, v in list(rules.items())[:4])
-        bit = f"{bit}（{shown}）"
-    elif ref and title and ref not in title:
-        bit = f"{bit} → {ref}"
-    return f"{int(case_step)}. {bit}"[:240]
+    target = params.get("target") if isinstance(params.get("target"), dict) else {}
+    event = title or ref or "（空）"
+    role = _ROLE_ZH.get(str(target.get("role") or element.get("role") or ""), str(target.get("role") or element.get("role") or ""))
+    name = str(target.get("name") or rules.get("name") or rules.get("target") or "").strip()
+    if role and role not in event:
+        event = f"{event} · {role}"
+    if name and name not in event:
+        event = f"{event} {name}"
+    shown = _rules_zh(rules)
+    if shown and shown not in event:
+        event = f"{event}（{shown}）"
+    return f"{int(case_step)}. {event}"[:240]
 
 
 def _format_block_line(item: dict[str, Any], *, case_step: int) -> str:

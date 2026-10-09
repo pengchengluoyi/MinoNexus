@@ -68,6 +68,14 @@ def find_dom_phone_field(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]
     return ranked[0][1]
 
 
+def _looks_like_otp_input(node: dict[str, Any]) -> bool:
+    label = _label_text(node)
+    blob = f"{node.get('class') or ''} {label}".lower()
+    if re.search(r"6[\s-]*digit|digit[\s-]*code|one-time|\botp\b", blob, re.I):
+        return True
+    return bool(_OTP_HINT_RE.search(label))
+
+
 def find_dom_email_field(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
     pool = [n for n in (nodes or []) if isinstance(n, dict)]
     if not pool:
@@ -84,6 +92,8 @@ def find_dom_email_field(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]
         score = min(40, w // 20)
         if _EMAIL_AT_RE.search(label):
             score += 100
+        if _looks_like_otp_input(node):
+            continue
         if _node_input_type_email(node):
             score += 60
         low = label.lower()

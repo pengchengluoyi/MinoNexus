@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CATALOG_VERSION = 7
+CATALOG_VERSION = 8
 
 # Claim 落库：case.meta.resource_key（v1）；与 case_scene 合并时 case_scene 优先同名字段。
 CLAIM_STORAGE = {
@@ -109,6 +109,8 @@ def _entry(
     schemes: list[str] | None = None,
     platforms: list[str] | None = None,
     event_name: str = "",
+    slots: list[dict[str, Any]] | None = None,
+    param_slots: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     row: dict[str, Any] = {
         "section": section,
@@ -140,6 +142,10 @@ def _entry(
         row["platforms"] = list(platforms)
     if event_name:
         row["event_name"] = event_name
+    if slots:
+        row["slots"] = list(slots)
+    if param_slots:
+        row["param_slots"] = list(param_slots)
     return row
 
 
@@ -314,6 +320,10 @@ def _entries() -> list[dict[str, Any]]:
             key_ref="operation.login_flow",
             kind="flow_block",
             block_id="fb.global.login",
+            slots=[
+                {"id": "credential", "label": "凭证", "required": True, "literals": ["输入手机号或邮箱验证码"]},
+                {"id": "submit", "label": "提交", "required": True, "literals": ["完成登录"]},
+            ],
         ),
         _entry(
             section="operation",
@@ -345,13 +355,49 @@ def _entries() -> list[dict[str, Any]]:
             write_examples=["点击去结算", "点击提交", "点击登录", "点按"],
             compile_patterns=[
                 {
+                    "priority": 28,
+                    "regex": r"点击(?P<name>[^，,。；;\n]{0,24}?图片)",
+                    "reject_if": r"不可点击|不可点|置灰",
+                    "element_role": "image",
+                    "event_name": "点击",
+                    "hook_cap": "tap_element",
+                    "rules_from": ["name"],
+                },
+                {
+                    "priority": 27,
+                    "regex": r"点击(?P<name>[^，,。；;\n]{0,24}?开关)",
+                    "reject_if": r"不可点击|不可点|置灰",
+                    "element_role": "switch",
+                    "event_name": "点击",
+                    "hook_cap": "tap_element",
+                    "rules_from": ["name"],
+                },
+                {
+                    "priority": 26,
+                    "regex": r"点击(?P<name>[^，,。；;\n]{0,24}?元素)",
+                    "reject_if": r"不可点击|不可点|置灰",
+                    "element_role": "element",
+                    "event_name": "点击",
+                    "hook_cap": "tap_element",
+                    "rules_from": ["name"],
+                },
+                {
                     "priority": 20,
-                    "regex": r"(?<!可)(?<!不)点击|点按",
+                    "regex": r"点击(?:右上角|左上角|右下角|左下角|底部|顶部)?(?P<name>[^，,。；;\n]{1,32})",
                     "reject_if": r"不可点击|不可点|置灰",
                     "element_role": "button",
                     "event_name": "点击",
                     "hook_cap": "tap_element",
-                }
+                    "rules_from": ["name"],
+                },
+            ],
+            param_slots=[
+                {
+                    "id": "target.role",
+                    "required": True,
+                    "enum": ["element", "button", "image", "checkbox", "switch"],
+                },
+                {"id": "target.name", "required": True},
             ],
             schemes=["visual", "dom"],
             event_name="点击",
@@ -367,6 +413,36 @@ def _entries() -> list[dict[str, Any]]:
             section="operation",
             write_category="输入",
             write_examples=["输入", "填写", "输入收货地址", "输入手机号", "输入验证码"],
+            compile_patterns=[
+                {
+                    "priority": 45,
+                    "regex": r"清空(?P<target>输入框)，依次输入(?P<text>.+)",
+                    "element_role": "input",
+                    "event_name": "输入",
+                    "hook_cap": "input_text",
+                    "rules_from": ["target", "text"],
+                },
+                {
+                    "priority": 40,
+                    "regex": r"在(?P<target>[^，,。；;\n]{1,40}?)(?:中|里)输入(?P<text>[^，,。；;\n]{1,80})",
+                    "element_role": "input",
+                    "event_name": "输入",
+                    "hook_cap": "input_text",
+                    "rules_from": ["target", "text"],
+                },
+                {
+                    "priority": 30,
+                    "regex": r"(?:清空输入框，)?输入(?P<text>[^，,。；;\n]{1,80})",
+                    "element_role": "input",
+                    "event_name": "输入",
+                    "hook_cap": "input_text",
+                    "rules_from": ["text"],
+                },
+            ],
+            param_slots=[
+                {"id": "target", "required": True},
+                {"id": "text", "required": False},
+            ],
             claim_path="case.meta.step_program_keys.{n}.operations[]",
             resource="input_text",
             config_keys=["input_text"],
@@ -467,7 +543,7 @@ def _entries() -> list[dict[str, Any]]:
             compile_patterns=[
                 {
                     "priority": 60,
-                    "regex": r"(?P<cancel>取消)?勾选[「『\"“](?P<label>[^」』\"”\n]+)",
+                    "regex": r"(?P<cancel>取消)?勾选[「『\"“](?P<label>[^」』\"”\n]+)[」』\"”]?[^，,。；;\n]*",
                     "element_role": "checkbox",
                     "event_name": "勾选",
                     "hook_cap": "tap_element",
@@ -493,11 +569,15 @@ def _entries() -> list[dict[str, Any]]:
             compile_patterns=[
                 {
                     "priority": 60,
-                    "regex": r"^(?:刷新(?:当前)?页面|刷新当前页|reload)$",
+                    "regex": r"刷新(?:当前)?页(?:面)?(?:[，,]\s*等待\s*(?P<wait_ms>\d+)\s*(?P<wait_unit>毫秒|ms|秒|s)?)?",
                     "event_name": "刷新页面",
                     "hook_cap": "reload_page",
                     "element_role": "page",
+                    "rules_from": ["wait_ms", "wait_unit"],
                 }
+            ],
+            param_slots=[
+                {"id": "wait_ms", "required": False},
             ],
         ),
         _entry(
@@ -516,7 +596,7 @@ def _entries() -> list[dict[str, Any]]:
             compile_patterns=[
                 {
                     "priority": 85,
-                    "regex": r"(?:弹窗)?标题(?:为|是)\s*[「『\"“](?P<title>[^」』\"”\n]+)",
+                    "regex": r"(?:弹窗)?标题(?:为|是)\s*[「『\"“](?P<title>[^」』\"”\n]+)[」』\"”]?",
                     "element_role": "dialog",
                     "event_name": "文案检查",
                     "assert_mode": "copy",
@@ -525,7 +605,7 @@ def _entries() -> list[dict[str, Any]]:
                 },
                 {
                     "priority": 84,
-                    "regex": r"正文(?:提示)?(?:为|是)\s*[「『\"“](?P<body>[^」』\"”\n]+)",
+                    "regex": r"正文(?:提示)?(?:为|是)\s*[「『\"“](?P<body>[^」』\"”\n]+)[」』\"”]?",
                     "element_role": "dialog",
                     "event_name": "文案检查",
                     "assert_mode": "copy",
@@ -550,12 +630,37 @@ def _entries() -> list[dict[str, Any]]:
             compile_patterns=[
                 {
                     "priority": 80,
-                    "regex": r"(?:(?P<label>\S{1,12})按钮)?.{0,16}(?:置灰|不可点击|不可点|禁用)",
+                    "regex": r"(?:(?P<label>\S{1,12})按钮)?.{0,16}(?:置灰|不可点击|不可点|禁用|弱化样式(?:展示)?)",
                     "element_role": "button",
                     "event_name": "UI样式检查",
                     "assert_mode": "style",
                     "rules_from": ["label"],
                     "rules_const": {"style": "disabled"},
+                },
+                {
+                    "priority": 72,
+                    "regex": r".*展示(?P<label>.{1,40}输入框)",
+                    "element_role": "input",
+                    "event_name": "UI样式检查",
+                    "assert_mode": "style",
+                    "rules_from": ["label"],
+                    "rules_const": {"style": "visible"},
+                },
+                {
+                    "priority": 71,
+                    "regex": r"弹窗.*居中展示",
+                    "element_role": "dialog",
+                    "event_name": "UI样式检查",
+                    "assert_mode": "style",
+                    "rules_const": {"style": "centered"},
+                },
+                {
+                    "priority": 70,
+                    "regex": r".*全部正常展示",
+                    "element_role": "list",
+                    "event_name": "UI样式检查",
+                    "assert_mode": "style",
+                    "rules_const": {"style": "visible"},
                 },
                 {
                     "priority": 78,
@@ -572,7 +677,7 @@ def _entries() -> list[dict[str, Any]]:
         _entry(
             section="expected",
             write_category="弹窗检查",
-            write_examples=["{name}弹窗自动弹出", "不展示其他弹窗", "仅显示当前弹窗"],
+            write_examples=["{name}弹窗自动弹出", "弹窗正常展示", "不展示其他弹窗", "仅显示当前弹窗"],
             claim_path="case.meta.step_program_keys.{n}.expected[]",
             resource="agent-vision-assert / DOM dialog",
             config_keys=["assert.mode=dialog"],
@@ -591,6 +696,15 @@ def _entries() -> list[dict[str, Any]]:
                     "assert_mode": "dialog",
                     "rules_const": {"exclusive": True},
                     "merge": "dialog_exclusive",
+                },
+                {
+                    "priority": 85,
+                    "regex": r"弹窗正常展示|弹窗展示正常|正常展示弹窗",
+                    "element_role": "dialog",
+                    "event_name": "弹窗检查",
+                    "assert_mode": "dialog",
+                    "rules_const": {"present": True},
+                    "merge": "dialog_present",
                 },
                 {
                     "priority": 90,
@@ -620,6 +734,16 @@ def _entries() -> list[dict[str, Any]]:
             compile_patterns=[
                 {
                     "priority": 75,
+                    "regex": r"输入超过\s*\d+\s*字符.*仅保留前\s*(?P<max_length>\d+)\s*(?:个)?(?:字符|字)",
+                    "element_role": "input",
+                    "event_name": "输入文案检查",
+                    "assert_mode": "input_value",
+                    "rules_from": ["max_length"],
+                    "rules_const": {"prefix_of_bound": True},
+                    "needs_bind": "input_text",
+                },
+                {
+                    "priority": 74,
                     "regex": r"(?:仅保留前|最多|不超过)\s*(?P<max_length>\d+)\s*(?:个)?(?:字符|字)",
                     "element_role": "input",
                     "event_name": "输入文案检查",
@@ -630,7 +754,7 @@ def _entries() -> list[dict[str, Any]]:
                 },
                 {
                     "priority": 70,
-                    "regex": r"(?:特殊字符|emoji|表情).{0,16}(?:均可|可正常|无报错|正常输入)|(?:均可|可)(?:正常)?输入.{0,24}(?:特殊字符|emoji|表情)",
+                    "regex": r".*(?:特殊字符|emoji|表情).*(?:无报错|正常输入|均可正常).*",
                     "element_role": "input",
                     "event_name": "输入文案检查",
                     "assert_mode": "input_value",

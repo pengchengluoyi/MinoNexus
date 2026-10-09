@@ -116,11 +116,15 @@ def device_input_text_exit(
             return "pass", "sms_field_input"
         return "inconclusive", "sms_summary_unverified"
     if fld in ("email", "login_email"):
-        if not summ:
-            return "inconclusive", "empty_summary"
-        if "@" in summ or "email" in summ.lower():
-            return "pass", "email_field_input"
-        return "inconclusive", "email_summary_unverified"
+        # 回执形如 输入(email)@(x,y)，坐标里的 @ 和字段名不能当成已经写入邮箱框。
+        if field_value is None or not str(field_value).strip():
+            return "fail", "field_value_unread"
+        got = str(field_value).strip()
+        if exp and exp not in got and got not in exp:
+            return "fail", "field_value_mismatch"
+        if "@" not in got:
+            return "fail", "email_value_missing_at"
+        return "pass", "field_value_readback"
     if not summ:
         return "inconclusive", "empty_summary"
     return "pass", "generic_input"

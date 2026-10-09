@@ -745,6 +745,7 @@ def note_tool_pass_milestone(
                         capability_id="input_text",
                         field=fld,
                         summary=str(tool_summary or ""),
+                        params=p if isinstance(p, dict) else None,
                     )
                     log_milestone_exit_eval(
                         writer,

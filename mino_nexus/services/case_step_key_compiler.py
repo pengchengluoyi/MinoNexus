@@ -12,7 +12,6 @@ _BLOCK_RE = re.compile(r"【块[:：]\s*([^】]+)】")
 _NAV_RE = re.compile(r"【导航[:：]\s*([^】]+)】")
 _CAP_RE = re.compile(r"【cap[:：]\s*([^】]+)】", re.I)
 _KEY_REF_RE = re.compile(r"\b((?:operation|expected)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)\b", re.I)
-_COMPOUND_SPLIT = re.compile(r"[；;。，,]|(?:\s+然后\s+)|(?:\s+并\s+)")
 _SLUG_BAD = re.compile(r"[^\w]+", re.UNICODE)
 _SPATIAL_HINTS: tuple[tuple[str, str], ...] = (
     ("右上", "top_right"),
@@ -132,13 +131,7 @@ def split_clauses(text: str) -> list[str]:
             b = str(it.get("text") or "").strip()
             if b:
                 bodies.append(_strip_op_prefix(b))
-    out: list[str] = []
-    for body in bodies:
-        for part in _COMPOUND_SPLIT.split(body):
-            p = part.strip()
-            if len(p) >= 2:
-                out.append(p)
-    return out or ([_strip_op_prefix(raw)] if raw else [])
+    return [b for b in bodies if len(b) >= 2] or ([_strip_op_prefix(raw)] if raw else [])
 
 
 def _strip_op_prefix(text: str) -> str:
@@ -370,7 +363,7 @@ def _step_from_hit(hit: dict[str, Any], *, case_step: int, sub_idx: int) -> dict
         }
         if hit.get("bind"):
             assert_payload["bind"] = hit["bind"]
-        return {
+        row = {
             "id": f"ck_s{case_step}_{sub_idx}"[:64],
             "key_ref": str(hit.get("key_ref") or ""),
             "title": str(hit.get("event_name") or hit.get("key_ref") or clause)[:240],
@@ -383,33 +376,58 @@ def _step_from_hit(hit: dict[str, Any], *, case_step: int, sub_idx: int) -> dict
             "source_clauses": list(hit.get("source_clauses") or [clause]),
             "subclause_index": sub_idx,
             "observe": "exec",
+            "ui_status": "pending",
         }
+        if "start" in hit and "end" in hit:
+            row["start"] = int(hit["start"])
+            row["end"] = int(hit["end"])
+        return row
     params: dict[str, Any] = {}
     if element:
         params["element"] = element
     if rules:
         params["rules"] = rules
+    target = hit.get("target") if isinstance(hit.get("target"), dict) else {}
+    if target:
+        params["target"] = {k: v for k, v in target.items() if v}
+    if rules.get("wait_ms"):
+        try:
+            params["wait_ms"] = int(rules["wait_ms"])
+        except (TypeError, ValueError):
+            pass
     hint = _spatial_hint(clause)
     if hint:
         params["spatial_hint"] = hint
+    kind = str(hit.get("kind") or "hook")
+    if kind not in ("hook", "flow_block", "checkpoint"):
+        kind = "hook"
     row = {
-        "id": f"do_s{case_step}_{sub_idx}_hook"[:64],
+        "id": f"do_s{case_step}_{sub_idx}_{kind}"[:64],
         "key_ref": str(hit.get("key_ref") or ""),
         "title": clause[:240],
-        "kind": "hook",
-        "hook_cap": str(hit.get("hook_cap") or "tap_element"),
+        "kind": kind,
+        "hook_cap": "" if kind == "flow_block" else str(hit.get("hook_cap") or "tap_element"),
         "schemes": schemes,
         "optional": False,
         "source_line": clause[:240],
         "source_clause": clause[:240],
         "subclause_index": sub_idx,
         "observe": "exec",
+        "ui_status": "pending",
     }
+    if "start" in hit and "end" in hit:
+        row["start"] = int(hit["start"])
+        row["end"] = int(hit["end"])
+    if hit.get("slots"):
+        row["slots"] = list(hit["slots"])
+    if hit.get("block_id"):
+        row["block_id"] = str(hit["block_id"])
     if params:
         row["params"] = params
-    reason = _cap_block_reason(str(row["hook_cap"]))
-    if reason:
-        row["_block_reason"] = reason
+    if kind != "flow_block":
+        reason = _cap_block_reason(str(row["hook_cap"]))
+        if reason:
+            row["_block_reason"] = reason
     return row
 
 
@@ -500,14 +518,50 @@ def compile_operation_text(
     platform: str = "",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     """返回 (plan_steps, warnings, key_refs)。"""
-    from mino_nexus.services.case_clause_events import classify_clause, user_message
+    from mino_nexus.services.case_clause_events import compile_text_spans, user_message
 
     warnings: list[dict[str, Any]] = []
     key_refs: list[str] = []
     plan_steps: list[dict[str, Any]] = []
-    clauses = split_clauses(instruction)
-    for idx, clause in enumerate(clauses):
-        hit = classify_clause(clause)
+    units: list[tuple[str, dict[str, Any] | None]] = []
+    for body in split_clauses(instruction):
+        hits, uncovered = compile_text_spans(body, "operation")
+        if uncovered:
+            units.append((body, {"_block": "uncovered", "detail": uncovered}))
+            continue
+        if not hits:
+            units.append((body, None))
+            continue
+        for hit in hits:
+            if hit.get("missing_slots"):
+                units.append((str(hit.get("clause") or body), {"_block": "missing_slot", "detail": "、".join(hit["missing_slots"]), "hit": hit}))
+            else:
+                units.append((str(hit.get("clause") or body), hit))
+    for idx, (clause, hit) in enumerate(units):
+        if isinstance(hit, dict) and hit.get("_block"):
+            reason = str(hit.get("_block") or "")
+            warnings.append(
+                {
+                    "case_step": case_step,
+                    "layer": "operation",
+                    "line": clause,
+                    "raw_text": clause,
+                    "blocked": _blocked_item(
+                        phase="do",
+                        case_step=case_step,
+                        clause=clause,
+                        reason=reason,
+                        user_message=user_message(
+                            case_step=case_step,
+                            layer="operation",
+                            clause=clause,
+                            reason=reason,
+                            detail=str(hit.get("detail") or ""),
+                        ),
+                    ),
+                }
+            )
+            continue
         if hit is not None:
             blocked = _classify_block(hit, case_step=case_step, author_layer="operation", platform=platform)
             if blocked:
@@ -646,7 +700,7 @@ def compile_expected_text(
     do_steps: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     from mino_nexus.services.case_clause_events import (
-        classify_clause,
+        compile_text_spans,
         incomplete_reason,
         merge_dialog_checks,
         user_message,
@@ -660,8 +714,38 @@ def compile_expected_text(
         clauses = [str(expected).strip()]
     pending: list[dict[str, Any]] = []
     catalog_left: list[tuple[int, str]] = []
-    for idx, clause in enumerate(clauses):
-        hit = classify_clause(clause)
+    expanded: list[tuple[int, str, dict[str, Any] | None]] = []
+    cursor = 0
+    for body in clauses:
+        hits, uncovered = compile_text_spans(body, "expected")
+        if uncovered or not hits:
+            reason = "uncovered" if uncovered else "unmapped"
+            warnings.append(
+                {
+                    "case_step": case_step,
+                    "layer": "expected",
+                    "line": body,
+                    "raw_text": body,
+                    "blocked": _blocked_item(
+                        phase="check",
+                        case_step=case_step,
+                        clause=body,
+                        reason=reason,
+                        user_message=user_message(
+                            case_step=case_step,
+                            layer="expected",
+                            clause=body,
+                            reason=reason,
+                            detail=uncovered,
+                        ),
+                    ),
+                }
+            )
+            continue
+        for hit in hits:
+            expanded.append((cursor, str(hit.get("clause") or body), hit))
+            cursor += 1
+    for idx, clause, hit in expanded:
         if hit is not None:
             blocked = _classify_block(hit, case_step=case_step, author_layer="expected", platform=platform)
             if blocked:
@@ -757,6 +841,24 @@ def compile_expected_text(
     return checkpoints, warnings, key_refs
 
 
+def _spans_from_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for step in steps:
+        if not isinstance(step, dict) or "start" not in step:
+            continue
+        out.append(
+            {
+                "start": int(step.get("start") or 0),
+                "end": int(step.get("end") or 0),
+                "key_ref": str(step.get("key_ref") or ""),
+                "block_id": str(step.get("block_id") or ""),
+                "slots": list(step.get("slots") or []),
+                "ui_status": str(step.get("ui_status") or "pending"),
+            }
+        )
+    return out
+
+
 def build_do_program_plan_for_step(
     case_step: int,
     instruction: str,
@@ -770,6 +872,7 @@ def build_do_program_plan_for_step(
         "schema": "mino.do_program_plan.v1",
         "case_step": int(case_step),
         "steps": steps,
+        "spans": _spans_from_steps(steps),
         "key_refs": key_refs,
         "fallback_lines": [w for w in warnings if w.get("fallback") or w.get("unmapped") or w.get("blocked")],
         "compile_warnings": warnings,
@@ -795,6 +898,7 @@ def build_check_program_plan_for_step(
         "case_step": int(case_step),
         "instruction_hint": str(instruction or "")[:200],
         "checkpoints": checkpoints,
+        "spans": _spans_from_steps(checkpoints),
         "key_refs": key_refs,
         "fallback_lines": [w for w in warnings if w.get("fallback") or w.get("unmapped") or w.get("blocked")],
         "compile_warnings": warnings,

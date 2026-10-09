@@ -280,6 +280,62 @@ def _same_sent_point(ax: Any, ay: Any, bx: Any, by: Any, ctx: Any, *, tol_px: in
 _SMS_FIELDS = ("sms_code", "验证码", "otp")
 
 
+def email_tap_lands_on_otp(ctx: Any | None, params: dict[str, Any] | None) -> bool:
+    """看图点下去的落点是不是验证码框。"""
+    if ctx is None or not isinstance(params, dict):
+        return False
+    if params.get("x") is None or params.get("y") is None:
+        return False
+    pool = _tap_node_pool(ctx, None)
+    if not pool:
+        return False
+    from mino_nexus.loop.ui_consent import tap_params_for_control
+    from mino_nexus.loop.ui_dom import find_dom_otp_field
+
+    otp = find_dom_otp_field(pool)
+    if otp is None:
+        return False
+    otp_xy = tap_params_for_control(otp, pool)
+    return _same_sent_point(
+        params.get("x"), params.get("y"), otp_xy.get("x"), otp_xy.get("y"), ctx, tol_px=36
+    )
+
+
+def _steer_email_off_otp(out: dict[str, Any], ctx: Any | None, field: str) -> dict[str, Any]:
+    """邮箱输入不要沿用落在验证码框上的点击。能找到邮箱框就改点那里。"""
+    if ctx is None or field not in ("email", "login_email"):
+        return out
+    if out.get("x") is None or out.get("y") is None:
+        return out
+    pool = _tap_node_pool(ctx, None)
+    if not pool:
+        return out
+    from mino_nexus.loop.ui_consent import tap_params_for_control
+    from mino_nexus.loop.ui_dom import find_dom_email_field, find_dom_otp_field
+
+    otp = find_dom_otp_field(pool)
+    if otp is None:
+        return out
+    otp_xy = tap_params_for_control(otp, pool)
+    if not _same_sent_point(out.get("x"), out.get("y"), otp_xy.get("x"), otp_xy.get("y"), ctx, tol_px=36):
+        return out
+    email = find_dom_email_field(pool)
+    if email is None:
+        out.pop("x", None)
+        out.pop("y", None)
+        out.pop("email_coords_from_prior_tap_only", None)
+        setattr(ctx, "web_email_tap_milli", None)
+        return out
+    email_xy = tap_params_for_control(email, pool)
+    if email_xy.get("x") is None:
+        return out
+    out["x"] = email_xy["x"]
+    out["y"] = email_xy["y"]
+    out.pop("email_coords_from_prior_tap_only", None)
+    setattr(ctx, "web_email_tap_milli", (int(out["x"]), int(out["y"])))
+    return out
+
+
 def enrich_web_input_text_params(params: dict[str, Any], ctx: Any | None = None) -> dict[str, Any]:
     """Web 输入：补 field 元数据 + VLM/hierarchy 坐标（Scout 仅坐标点击后键入）。"""
     out = dict(params or {})
@@ -397,4 +453,4 @@ def enrich_web_input_text_params(params: dict[str, Any], ctx: Any | None = None)
         and not out.get("otp_coords_from_prior_tap_only")
     ):
         setattr(ctx, "web_sms_code_tap_milli", (int(out["x"]), int(out["y"])))
-    return out
+    return _steer_email_off_otp(out, ctx, field)

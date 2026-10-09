@@ -388,6 +388,7 @@ def to_task_json(doc: dict[str, Any] | None, *, include_cases: bool = True) -> d
 
 _CASE_BRIEF_KEYS = (
     "case_id", "name", "sn", "status", "summary", "report_run_id",
+    "session_id", "duration_ms",
     "elapsed_ms", "module", "platform", "hitl",
 )
 
@@ -396,6 +397,9 @@ def _case_brief(case: dict[str, Any]) -> dict[str, Any]:
     out = {k: case.get(k) for k in _CASE_BRIEF_KEYS}
     out["elapsed_ms"] = int(case.get("elapsed_ms") or 0)
     out["hitl"] = bool(case.get("hitl"))
+    duration = case.get("duration_ms")
+    out["duration_ms"] = int(duration) if isinstance(duration, int) else None
+    out["session_id"] = str(case.get("session_id") or "") or None
     return out
 
 

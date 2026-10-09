@@ -361,6 +361,34 @@ def project_turns(session_id: str) -> dict[str, Any] | None:
     }
 
 
+def _ui_status_from_raw(status: str) -> str:
+    raw = str(status or "").strip().lower()
+    if raw in ("pass", "passed", "ok", "success", "done"):
+        return "pass"
+    if raw in ("skip", "skipped", "guard_skip"):
+        return "skip"
+    if raw in ("retry", "retried"):
+        return "retry"
+    if raw in ("fail", "failed", "give_up", "declined", "error", "blocked"):
+        return "fail"
+    return "pending"
+
+
+def _stamp_ui_status(events: list[dict[str, Any]]) -> None:
+    """同一 step_id 出现第二次起，这一步记为 retry，即使最后一次通过。"""
+    counts: dict[str, int] = {}
+    for row in events:
+        sid = str(row.get("step_id") or row.get("milestone_id") or "").strip()
+        if sid:
+            counts[sid] = counts.get(sid, 0) + 1
+    for row in events:
+        sid = str(row.get("step_id") or row.get("milestone_id") or "").strip()
+        if sid and counts.get(sid, 0) > 1:
+            row["ui_status"] = "retry"
+        elif not row.get("ui_status"):
+            row["ui_status"] = _ui_status_from_raw(str(row.get("status") or ""))
+
+
 def project_trajectory(session_id: str) -> dict[str, Any] | None:
     """投影为 agent_stream 兼容形状；优先用于 Studio 回放。"""
     sid = resolve_session_id(session_id)
@@ -430,6 +458,7 @@ def project_trajectory(session_id: str) -> dict[str, Any] | None:
 
     ui_events = _merge_resource_transition_events(events, ui_events)
     ui_events = _enrich_stream_outcomes(events, ui_events)
+    _stamp_ui_status(ui_events)
 
     return {
         "run_id": sid,

@@ -85,12 +85,22 @@ def merge_program_vision_fallback_slots(cursor: Any, inspect_slots: dict[str, An
     cap = str(fb.get("capability_id") or "input_text")
     field = str(params.get("field") or "")
     text = str(params.get("text") or "")
-    line = (
-        "【程序链→看图兜底】须在本轮 vision 执行 "
-        f"{cap}(field={field or '?'})"
-        + (f"，text 已备好" if text else "")
-        + "；params 必须含有效 x/y。"
-    )
+    from mino_nexus.loop.visual_review import has_visual_prior
+
+    if has_visual_prior(cursor):
+        line = (
+            "【程序链→看图兜底】上一步还在等这张图裁定。"
+            "画面还在加载时只调用 wait_screen_ready，不要填 prior_status。"
+            "画面已经稳定时必须填 prior_status：pass 或 fail。"
+            f"fail 时本回合用 {cap} 重做上一步，params 含有效 x/y。"
+        )
+    else:
+        line = (
+            "【程序链→看图兜底】须在本轮 vision 执行 "
+            f"{cap}(field={field or '?'})"
+            + (f"，text 已备好" if text else "")
+            + "；params 必须含有效 x/y。"
+        )
     assist = str(inspect_slots.get("nav_assist") or "").strip()
     inspect_slots["nav_assist"] = f"{assist}\n{line}".strip() if assist else line
 

@@ -195,6 +195,224 @@ def incomplete_reason(row: dict[str, Any]) -> str:
     return ""
 
 
+_GLUE = set(" \t\r\n，,。；;、")
+
+
+def _layer_entries(layer: str) -> list[dict[str, Any]]:
+    from mino_nexus.services.case_resource_key_catalog import catalog_payload
+
+    return [
+        e
+        for e in (catalog_payload().get("entries") or [])
+        if isinstance(e, dict) and str(e.get("key_layer") or "") == layer
+    ]
+
+
+def _ranges_overlap(a0: int, a1: int, b0: int, b1: int) -> bool:
+    return a0 < b1 and b0 < a1
+
+
+def _login_span(text: str, entries: list[dict[str, Any]]) -> dict[str, Any] | None:
+    entry = next((e for e in entries if str(e.get("key_ref") or "") == "operation.login_flow"), None)
+    if not entry:
+        return None
+    found: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for slot in entry.get("slots") or []:
+        if not isinstance(slot, dict):
+            continue
+        hit = None
+        for lit in slot.get("literals") or []:
+            token = str(lit or "")
+            if not token:
+                continue
+            at = text.find(token)
+            if at >= 0:
+                hit = {
+                    "id": str(slot.get("id") or ""),
+                    "start": at,
+                    "end": at + len(token),
+                    "text": token,
+                }
+                break
+        if hit:
+            found.append(hit)
+        elif slot.get("required"):
+            missing.append(str(slot.get("id") or "slot"))
+    if not found:
+        return None
+    start = min(int(s["start"]) for s in found)
+    end = max(int(s["end"]) for s in found)
+    return {
+        "layer": "operation",
+        "key_ref": "operation.login_flow",
+        "event_name": str(entry.get("event_name") or entry.get("write_category") or "登录流"),
+        "hook_cap": "",
+        "kind": "flow_block",
+        "block_id": str(entry.get("block_id") or "fb.global.login"),
+        "element": {},
+        "rules": {},
+        "platforms": list(entry.get("platforms") or []),
+        "schemes": list(entry.get("schemes") or ["visual", "dom"]),
+        "priority": 100,
+        "start": start,
+        "end": end,
+        "clause": text[start:end],
+        "slots": found,
+        "missing_slots": missing,
+        "param_slots": list(entry.get("param_slots") or []),
+    }
+
+
+def _target_from_hit(hit: dict[str, Any]) -> dict[str, str]:
+    rules = hit.get("rules") if isinstance(hit.get("rules"), dict) else {}
+    role = str((hit.get("element") or {}).get("role") or "")
+    if role == "checkbox":
+        role = "checkbox"
+    name = str(rules.get("name") or rules.get("label") or rules.get("target") or "").strip()
+    out: dict[str, str] = {}
+    if role:
+        out["role"] = role
+    if name:
+        out["name"] = name
+    return out
+
+
+def _missing_param_slots(hit: dict[str, Any]) -> list[str]:
+    missing = [str(x) for x in (hit.get("missing_slots") or []) if str(x)]
+    target = hit.get("target") if isinstance(hit.get("target"), dict) else {}
+    rules = hit.get("rules") if isinstance(hit.get("rules"), dict) else {}
+    for slot in hit.get("param_slots") or []:
+        if not isinstance(slot, dict) or not slot.get("required"):
+            continue
+        sid = str(slot.get("id") or "")
+        if sid == "target.role" and not str(target.get("role") or ""):
+            missing.append("target.role")
+        elif sid == "target.name" and not str(target.get("name") or ""):
+            missing.append("target.name")
+        elif sid == "target" and not str(target.get("name") or rules.get("target") or ""):
+            missing.append("target")
+        elif sid not in ("target.role", "target.name", "target") and not str(rules.get(sid) or target.get(sid) or ""):
+            missing.append(sid)
+    enum = []
+    for slot in hit.get("param_slots") or []:
+        if isinstance(slot, dict) and str(slot.get("id") or "") == "target.role":
+            enum = [str(x) for x in (slot.get("enum") or [])]
+    role = str(target.get("role") or "")
+    if role and enum and role not in enum:
+        missing.append("target.role")
+    return list(dict.fromkeys(missing))
+
+
+def compile_text_spans(text: str, layer: str) -> tuple[list[dict[str, Any]], str]:
+    """一整段编号步上的跨度。下标来自目录句式，不再按标点切开。"""
+    raw = str(text or "")
+    entries = _layer_entries(layer)
+    reserved: list[tuple[int, int]] = []
+    chosen: list[dict[str, Any]] = []
+    if layer == "operation":
+        login = _login_span(raw, entries)
+        if login is not None:
+            chosen.append(login)
+            reserved.append((int(login["start"]), int(login["end"])))
+    candidates: list[dict[str, Any]] = []
+    for pat in _patterns():
+        if str(pat.get("layer") or "") != layer:
+            continue
+        if str(pat.get("key_ref") or "") == "operation.login_flow":
+            continue
+        reject = str(pat.get("reject_if") or "")
+        try:
+            found_iter = list(re.finditer(str(pat["regex"]), raw, flags=re.I))
+        except re.error:
+            continue
+        for found in found_iter:
+            if reject and re.search(reject, found.group(0)):
+                continue
+            start, end = found.span()
+            if any(_ranges_overlap(start, end, a, b) for a, b in reserved):
+                continue
+            rules = _rules_from_match(pat, found, found.group(0))
+            unit = str(rules.get("wait_unit") or "")
+            if rules.get("wait_ms") and unit in ("秒", "s"):
+                try:
+                    rules["wait_ms"] = int(rules["wait_ms"]) * 1000
+                except (TypeError, ValueError):
+                    pass
+                rules.pop("wait_unit", None)
+            role = str(pat.get("element_role") or "")
+            hit = {
+                "layer": layer,
+                "key_ref": str(pat.get("key_ref") or ""),
+                "event_name": str(pat.get("event_name") or ""),
+                "hook_cap": str(pat.get("hook_cap") or ""),
+                "assert_mode": str(pat.get("assert_mode") or ""),
+                "element": {"role": role} if role else {},
+                "rules": rules,
+                "platforms": list(pat.get("platforms") or []),
+                "schemes": list(pat.get("schemes") or ["visual", "dom"]),
+                "merge": str(pat.get("merge") or ""),
+                "needs_bind": str(pat.get("needs_bind") or ""),
+                "priority": int(pat.get("priority") or 0),
+                "start": start,
+                "end": end,
+                "clause": found.group(0),
+                "param_slots": [],
+            }
+            ent = next((e for e in entries if str(e.get("key_ref") or "") == hit["key_ref"]), None)
+            if isinstance(ent, dict):
+                hit["param_slots"] = list(ent.get("param_slots") or [])
+                hit["kind"] = str(ent.get("kind") or "")
+                if ent.get("block_id"):
+                    hit["block_id"] = ent.get("block_id")
+            hit["target"] = _target_from_hit(hit)
+            if hit["target"].get("role") == "input" and not hit["target"].get("name"):
+                named = str(rules.get("target") or "").strip()
+                if named:
+                    hit["target"]["name"] = named
+            hit["missing_slots"] = _missing_param_slots(hit)
+            candidates.append(hit)
+    candidates.sort(key=lambda h: (-int(h.get("priority") or 0), int(h["start"]), -(int(h["end"]) - int(h["start"]))))
+    for hit in candidates:
+        start, end = int(hit["start"]), int(hit["end"])
+        if any(_ranges_overlap(start, end, int(k["start"]), int(k["end"])) for k in chosen):
+            continue
+        chosen.append(hit)
+    chosen.sort(key=lambda h: int(h["start"]))
+    login = next(
+        (
+            h for h in chosen
+            if h.get("key_ref") == "operation.login_flow" and not h.get("missing_slots")
+        ),
+        None,
+    )
+    if login is not None:
+        slots = list(login.get("slots") or [])
+        for h in chosen:
+            if h is login:
+                continue
+            slots.append({
+                "id": "entry",
+                "start": int(h["start"]),
+                "end": int(h["end"]),
+                "text": str(h.get("clause") or "")[:80],
+                "target": dict(h.get("target") or {}),
+            })
+        login["slots"] = slots
+        login["start"] = 0
+        login["end"] = len(raw)
+        login["clause"] = raw.strip()
+        chosen = [login]
+    uncovered: list[str] = []
+    for i, ch in enumerate(raw):
+        if ch in _GLUE:
+            continue
+        if any(int(h["start"]) <= i < int(h["end"]) for h in chosen):
+            continue
+        uncovered.append(ch)
+    return chosen, "".join(uncovered)[:80]
+
+
 def platform_block(row: dict[str, Any], platform: str) -> bool:
     allowed = [str(x).strip().lower() for x in (row.get("platforms") or []) if str(x).strip()]
     plat = str(platform or "").strip().lower()
@@ -234,6 +452,10 @@ def user_message(
         return f"{head}无法执行：当前任务是{got}，{event_name or '该事件'}只实现了{other_scheme or '另一路线'}。"
     if reason == "params_incomplete":
         return f"{head}无法验证：{event_name or '该检查'}缺少{detail or '必要参数'}。"
+    if reason == "missing_slot":
+        return f"{head}无法执行：缺少{detail or '必填槽'}。"
+    if reason == "uncovered":
+        return f"{head}无法执行：这几个字没有落进任何事件：{detail}。"
     if reason == "unmapped":
         return f"{head}无法执行：当前目录没有对应事件。"
     if reason in ("unavailable_cap", "capability_disabled"):

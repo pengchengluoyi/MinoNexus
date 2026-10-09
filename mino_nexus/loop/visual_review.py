@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from typing import Any
 
-_REVIEW_CAPS = frozenset({"tap_element", "input_text"})
+_REVIEW_CAPS = frozenset({
+    "tap_element",
+    "input_text",
+    "swipe_direction",
+    "reload_page",
+})
 _INTERNAL_CAPS = frozenset({
     "lease_account",
     "get_otp",
@@ -20,6 +25,43 @@ _INTERNAL_CAPS = frozenset({
     "release_account",
     "relogin",
 })
+
+
+def _check_sheet(
+    capability_id: str,
+    params: dict[str, Any],
+    summary: str,
+    *,
+    milestone_title: str = "",
+) -> dict[str, str]:
+    target = params.get("target") if isinstance(params.get("target"), dict) else {}
+    field = str(params.get("field") or "").strip()
+    role = str(target.get("role") or "").strip()
+    if not role:
+        if field in ("email", "login_email", "sms_code", "验证码", "otp", "phone", "password"):
+            role = "input"
+        elif capability_id == "tap_element":
+            role = "button"
+    title = str(milestone_title or "").strip()
+    expected = str(params.get("text") or "").strip()
+    if not expected:
+        if capability_id == "input_text":
+            expected = "框内看得到本次填写的内容"
+        elif capability_id == "tap_element":
+            expected = f"{title}已完成" if title else "该位置附近出现了这一步要的变化"
+        elif capability_id == "swipe_direction":
+            expected = f"{title}已完成" if title else "画面相对点击前发生了位移"
+        elif capability_id == "reload_page":
+            expected = f"{title}已完成" if title else "页面已换成刷新后的画面"
+        else:
+            expected = title or str(summary or "")[:80]
+    return {
+        "x": str(params.get("x") if params.get("x") is not None else ""),
+        "y": str(params.get("y") if params.get("y") is not None else ""),
+        "role": role,
+        "field": field,
+        "expected": expected[:200],
+    }
 
 
 def _row_caps(row: dict[str, Any]) -> set[str]:
@@ -40,14 +82,13 @@ def defer_visual_pass(
     writer: Any = None,
     ctx: Any = None,
 ) -> bool:
-    """看图的点击本回合即成功。看图的输入仍等下一回合读回框内文字。DOM 以本次节点命中为准。"""
+    """看图的点击、输入、滑动、刷新都等下一回合看图裁定。DOM 仍当回合收口。"""
     cap = str(capability_id or "").strip()
     if cap in _INTERNAL_CAPS or cap not in _REVIEW_CAPS:
         return False
     from mino_nexus.action_space.scheme import action_scheme
 
-    scheme = action_scheme(ctx)
-    if cap == "tap_element" or scheme == "dom":
+    if action_scheme(ctx) != "visual":
         return False
     from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
     from mino_nexus.loop.milestones import read_state
@@ -76,11 +117,29 @@ def defer_visual_pass(
         summary=pending["summary"],
     )
     if writer:
+        sheet = getattr(cursor, "visual_prior", None)
+        sheet = sheet if isinstance(sheet, dict) else {}
         writer.append(
             "review/dispatched",
-            {"milestone_id": mid, "capability_id": cap, "summary": pending["summary"]},
+            {
+                "milestone_id": mid,
+                "capability_id": cap,
+                "summary": pending["summary"],
+                "x": str(sheet.get("x") or ""),
+                "y": str(sheet.get("y") or ""),
+                "role": str(sheet.get("role") or ""),
+                "field": str(sheet.get("field") or ""),
+                "expected": str(sheet.get("expected") or "")[:200],
+            },
         )
     return True
+
+
+def _milestone_title(cursor: Any, milestone_id: str) -> str:
+    from mino_nexus.loop.milestones import read_state
+
+    row = _row_by_id(read_state(cursor), milestone_id) or {}
+    return str(row.get("title") or "").strip()
 
 
 def remember_visual_prior(
@@ -91,16 +150,24 @@ def remember_visual_prior(
     params: dict[str, Any] | None,
     summary: str,
 ) -> None:
-    """下一张决策图要回看的上一步。只留能力、字段和摘要，不把输入正文再送进提示。"""
+    """下一张决策图要回看的上一步。带落点、元素类型、字段和预期。"""
     kept = params if isinstance(params, dict) else {}
+    title = _milestone_title(cursor, str(milestone_id or ""))
+    sheet = _check_sheet(
+        str(capability_id or ""),
+        kept,
+        str(summary or ""),
+        milestone_title=title,
+    )
     setattr(
         cursor,
         "visual_prior",
         {
             "milestone_id": str(milestone_id or ""),
             "capability_id": str(capability_id or ""),
-            "params": {"field": str(kept.get("field") or "")},
+            "params": kept,
             "summary": str(summary or "")[:400],
+            **sheet,
         },
     )
 
@@ -117,11 +184,14 @@ def prior_action_payload(cursor: Any) -> dict[str, str] | None:
     mid = str(prior.get("milestone_id") or "").strip()
     if not mid:
         return None
-    params = prior.get("params") if isinstance(prior.get("params"), dict) else {}
     return {
         "milestone_id": mid,
         "capability_id": str(prior.get("capability_id") or ""),
-        "field": str(params.get("field") or ""),
+        "x": str(prior.get("x") or ""),
+        "y": str(prior.get("y") or ""),
+        "role": str(prior.get("role") or ""),
+        "field": str(prior.get("field") or ""),
+        "expected": str(prior.get("expected") or "")[:200],
         "summary": str(prior.get("summary") or "")[:400],
     }
 
@@ -156,17 +226,34 @@ def apply_same_turn_prior(
         setattr(cursor, "visual_prior", None)
         setattr(cursor, "pending_visual_review", None)
         return "none"
-    status = _normalize_prior_status(getattr(decision, "prior_status", ""))
+    action = getattr(decision, "action", None)
+    action_cap = str(getattr(action, "capability_id", "") or "")
+    raw_status = str(getattr(decision, "prior_status", "") or "").strip()
+    if action_cap in ("wait_screen_ready", "wait_ms"):
+        # 加载中的等待不是裁定。检查单留着，下一张稳定画面再给 pass 或 fail。
+        if writer:
+            writer.append(
+                "review/hold",
+                {
+                    "milestone_id": mid,
+                    "capability_id": str(prior.get("capability_id") or ""),
+                    "reason": "screen_not_ready",
+                    "wait_cap": action_cap,
+                    "prior_status": raw_status,
+                },
+            )
+        return "none"
+    status = _normalize_prior_status(raw_status)
     if writer:
         writer.append(
             "review/same_turn",
             {
                 "milestone_id": mid,
                 "capability_id": str(prior.get("capability_id") or ""),
-                "prior_status": status or "done",
+                "prior_status": status,
             },
         )
-    if status == "pending":
+    if status != "pass":
         _rewind(cursor, mid)
         setattr(cursor, "pending_visual_review", None)
         streak = _bump_streak(cursor, mid)
@@ -175,7 +262,7 @@ def apply_same_turn_prior(
         if writer:
             writer.append(
                 "review/fail",
-                {"milestone_id": mid, "reason": "prior_pending", "streak": streak},
+                {"milestone_id": mid, "reason": "prior_fail", "streak": streak},
             )
         if streak >= 2:
             setattr(cursor, "semantic_stop", f"{hint} 连续 {streak} 次回看未通过，已停止。")
@@ -468,10 +555,11 @@ def _clear_streak(cursor: Any, milestone_id: str) -> None:
 
 
 def _normalize_prior_status(raw: Any) -> str:
+    """上一回合只有通过或失败。没填、或旧的 done/pending，都收成这两个。"""
     text = str(raw or "").strip().lower()
-    if text in ("pending", "in_progress", "incomplete", "unfinished", "fail", "failed"):
-        return "pending"
-    return "done"
+    if text in ("pass", "done", "complete", "completed", "ok", "true"):
+        return "pass"
+    return "fail"
 
 
 def _prior_still_current(state: dict[str, Any], milestone_id: str) -> bool:

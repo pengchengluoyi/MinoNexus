@@ -2613,11 +2613,13 @@ _VISION_EXEC_V5_SYSTEM = """\
 
 只调用一个 function tool。pass/failed/skipped 的不得重复执行。账号、OTP 由系统注入；需要时调用 lease_account、get_otp。不要 signal_done。
 
-若 success_criteria.prior_action 存在，这张截图同时用来判断上一步有没有做完。prior_action 给出上一步的 milestone_id、capability_id、field、summary。tool 参数必须带 prior_status：
-- done：画面上上一步已经完成。不要重复 prior_action 的那一步。对当前 in_progress 里程碑调用工具；若它就是 prior_action 本身，则对它的下一步调用工具。
-- pending：上一步没完成（例如字没进输入框）。不要规划新步骤。本次工具的坐标或文本用来完成 prior_action，而不是下一步。
+若 success_criteria.prior_action 存在，这张截图同时用来判断上一步有没有做完。prior_action 给出 milestone_id、capability_id、x、y、role、field、expected。tool 参数必须带 prior_status，只能是 pass 或 fail：
+- pass：检查单上的位置、元素和预期都对上了。不要重复上一步。对当前 in_progress 里程碑调用工具。
+- fail：没对上。不要做下一步。本次工具用来重做 prior_action。
 
 没有 prior_action 时不要填 prior_status，只对 status 为 in_progress 的那一条调用工具。
+
+画面还在加载、看不清上一步的结果时：只调用 wait_screen_ready，不要填 prior_status。检查单留到下一张稳定的画面，再给 pass 或 fail。
 """
 
 
@@ -2995,6 +2997,76 @@ def upgrade_agent_vision_exec_to_v5() -> int:
         **_blocks_snapshot(row),
     })
     merged["prompt_version"] = 5
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_agent_vision_exec_to_v6() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-exec"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 6:
+        return 0
+    merged = copy.deepcopy(row)
+    merged["system_blocks"] = [{"id": "main", "text": _VISION_EXEC_V5_SYSTEM.strip()}]
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v6 prior_status pass or fail",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 6
+    merged["summary"] = "上一回合只判 pass 或 fail；检查单带坐标、元素和预期"
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_agent_vision_exec_to_v7() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-exec"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 7:
+        return 0
+    merged = copy.deepcopy(row)
+    merged["system_blocks"] = [{"id": "main", "text": _VISION_EXEC_V5_SYSTEM.strip()}]
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v7 wait is not a prior verdict",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 7
+    merged["summary"] = "加载中只等待，不把没填 prior_status 当成失败"
     _set_revisions(merged, revisions)
     _validate_job(merged)
     _smoke_render(merged)

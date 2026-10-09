@@ -523,11 +523,13 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
                 ms_rows.append(dict(item))
     step_outcome = str(raw.get("step_outcome") or "").strip().lower()
     prior_status = str(raw.get("prior_status") or "").strip().lower()
-    if prior_status in ("in_progress", "incomplete", "unfinished", "fail", "failed"):
-        prior_status = "pending"
-    elif prior_status in ("pass", "complete", "completed", "ok", "true"):
-        prior_status = "done"
-    elif prior_status not in ("pending", "done", ""):
+    if prior_status in ("pass", "done", "complete", "completed", "ok", "true"):
+        prior_status = "pass"
+    elif prior_status in ("fail", "failed", "pending", "in_progress", "incomplete", "unfinished"):
+        prior_status = "fail"
+    elif prior_status:
+        prior_status = "fail"
+    else:
         prior_status = ""
     return AgentDecision(
         thought=str(raw.get("thought") or "").strip(),

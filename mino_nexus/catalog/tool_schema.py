@@ -271,11 +271,12 @@ _TOOL_META_SLIM: dict[str, Any] = {
     "thought": _TOOL_META_PROPS["thought"],
     "prior_status": {
         "type": "string",
-        "enum": ["done", "pending"],
+        "enum": ["pass", "fail"],
         "description": (
-            "仅当 success_criteria.prior_action 存在时填写。"
-            "done：上一步已在画面上完成，本次工具做当前焦点的下一步，不要重复上一步。"
-            "pending：上一步没完成（例如字没进输入框）。本次工具的坐标或文本用来完成上一步，不要做下一步。"
+            "仅当 success_criteria.prior_action 存在、且画面已经稳定时填写，只能是 pass 或 fail。"
+            "画面还在加载时不要填，改为调用 wait_screen_ready。"
+            "pass：检查单上的位置、元素和预期都对上了。本次工具做下一步，不要重复上一步。"
+            "fail：没对上。本次工具用来重做 prior_action，不要做下一步。"
         ),
     },
 }

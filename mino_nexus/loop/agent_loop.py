@@ -299,6 +299,9 @@ def _log_context_slots(
 def _finish(emit, *, status: str, summary: str, steps: list, t0: float, pack=None) -> dict[str, Any]:
     extra = pack(status=status, summary=summary) if callable(pack) else {}
     emit("done", overall=status, status=status, summary=summary)
+    from mino_nexus.loop.observe.session_project import _stamp_ui_status
+
+    _stamp_ui_status(steps)
     out = {"status": status, "summary": summary, "steps": steps, "elapsed_ms": _elapsed(t0)}
     if extra:
         out.update({k: extra[k] for k in ("skill_id", "view_id", "slots") if k in extra})
@@ -4393,6 +4396,16 @@ def _run_loop(
                         cursor.step_intents_done.add("nav_tab")
                         cursor.refresh_do_subphase()
 
+        if status_val == "pass" and cap_id == "tap_element" and isinstance(params, dict):
+            from mino_nexus.loop.device_execute_params import email_tap_lands_on_otp
+            from mino_nexus.loop.login_verification import is_web_email_login
+
+            if is_web_email_login(ctx) and email_tap_lands_on_otp(ctx, params):
+                status_val = "fail"
+                error = "点在了验证码框上。请改点邮箱输入框，再填写邮箱。"
+                summary = error
+                if isinstance(cursor, StepCursor):
+                    cursor.correction_hint = error
         if writer:
             payload = {
                 "capability_id": cap_id,
@@ -4552,7 +4565,9 @@ def _run_loop(
             visual_now = _scheme_now(ctx) == "visual"
             if redo_turn:
                 focus_id = in_progress_milestone_id(cursor)
-                if visual_now and focus_id and cap_id in ("tap_element", "input_text"):
+                if visual_now and focus_id and cap_id in (
+                    "tap_element", "input_text", "swipe_direction", "reload_page",
+                ):
                     remember_visual_prior(
                         cursor,
                         milestone_id=focus_id,

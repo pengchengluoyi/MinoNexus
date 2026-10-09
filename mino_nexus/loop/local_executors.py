@@ -1388,6 +1388,22 @@ def _wait_screen_ready(
     need_recovery = facts.get("capture_ok") == "no" or facts.get("capture_black") == "yes"
 
     if not need_recovery:
+        cur = getattr(ctx, "cursor", None)
+        pending = False
+        if cur is not None:
+            from mino_nexus.loop.visual_review import has_visual_prior
+
+            pending = has_visual_prior(cur)
+        if pending and router is not None and hasattr(router, "observe"):
+            time.sleep(1.5)
+            fresh = router.observe("screenshot", force_fresh=True)
+            if shot_usable(fresh):
+                return _result(
+                    event,
+                    status=EventStatus.PASS,
+                    summary="等待加载后再看画面",
+                    elapsed_ms=elapsed(),
+                )
         return _result(
             event,
             status=EventStatus.PASS,

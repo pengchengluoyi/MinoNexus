@@ -909,17 +909,24 @@ def get_resource_transition_rules(_sess: dict = Depends(current_session)):
             .order_by(ResourceTransitionRule.trigger_id, ResourceTransitionRule.rule_id)
             .all()
         )
-        payload = [
-            {
+        payload = []
+        for r in rows:
+            effects = list(r.effects_json or [])
+            key_refs = []
+            for eff in effects:
+                if isinstance(eff, dict):
+                    ref = str(eff.get("key_ref") or "").strip()
+                    if ref:
+                        key_refs.append(ref)
+            payload.append({
                 "rule_id": r.rule_id,
                 "trigger_id": r.trigger_id,
                 "platform": r.platform,
                 "label": r.label,
-                "effects": list(r.effects_json or []),
+                "effects": effects,
+                "key_refs": key_refs,
                 "enabled": bool(r.enabled),
-            }
-            for r in rows
-        ]
+            })
     finally:
         db.close()
     return ok({"rules": payload})

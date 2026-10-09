@@ -40,6 +40,30 @@ class FlowBlockCatalogWriteBody(BaseModel):
     key_ref: str = ""
 
 
+@router.get("")
+def list_flow_blocks(_sess: dict = Depends(current_session)):
+    """只读列表。槽位与事件目录里同一个 block_id 对齐。"""
+    from mino_nexus.services.case_resource_key_catalog import catalog_payload
+
+    slots_by_block: dict[str, list[dict[str, Any]]] = {}
+    for ent in catalog_payload().get("entries") or []:
+        if not isinstance(ent, dict):
+            continue
+        bid = str(ent.get("block_id") or "").strip()
+        if bid and isinstance(ent.get("slots"), list):
+            slots_by_block[bid] = list(ent["slots"])
+    items = []
+    for row in list_catalog():
+        bid = str(row.get("block_id") or "")
+        items.append({
+            "id": bid,
+            "name": str(row.get("display_name") or bid),
+            "enabled": bool(row.get("enabled", True)),
+            "slots": slots_by_block.get(bid) or [],
+        })
+    return ok({"items": items})
+
+
 @router.get("/catalog")
 def get_flow_block_catalog(
     channel: str = "",

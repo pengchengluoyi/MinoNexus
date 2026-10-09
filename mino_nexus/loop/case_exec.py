@@ -18,6 +18,35 @@ def _task_still_running(run_id: str) -> bool:
     return run_store.task_is_live(doc)
 
 
+def _case_trace_fields(run_id: str, case: dict[str, Any]) -> dict[str, Any]:
+    """日志用真实 session_id。耗时只在有起止时间时给出，不用 0 充数。"""
+    from datetime import datetime
+
+    from mino_nexus.services.session_store import get_meta, resolve_session_id
+
+    cid = str(case.get("case_id") or "")
+    sid = str(case.get("report_run_id") or "").strip() or run_store.report_run_id(
+        run_id, cid, sn=str(case.get("sn") or ""), coverage=str(case.get("coverage") or "")
+    )
+    resolved = resolve_session_id(sid, case_id=cid) or resolve_session_id(run_id, case_id=cid)
+    meta = get_meta(resolved) if resolved else None
+    if not meta:
+        return {}
+    out: dict[str, Any] = {"session_id": str(meta.get("session_id") or resolved)}
+    start = str(meta.get("started_at") or "")
+    end = str(meta.get("finished_at") or "")
+    if start and end:
+        try:
+            a = datetime.fromisoformat(start)
+            b = datetime.fromisoformat(end)
+            ms = int((b - a).total_seconds() * 1000)
+            if ms >= 0:
+                out["duration_ms"] = ms
+        except ValueError:
+            pass
+    return out
+
+
 def _record_case_preflight_fail(
     *,
     run_id: str,
@@ -125,7 +154,7 @@ def _run_case_list(
                 sn=sn,
                 provider_id=str(doc.get("provider_id") or ""),
             )
-            run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason)
+            run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
             emit_testing_task({
                 "event": "case_finished",
                 "run_id": run_id,
@@ -152,7 +181,7 @@ def _run_case_list(
                 sn=sn,
                 provider_id=str(doc.get("provider_id") or ""),
             )
-            run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason)
+            run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
             emit_testing_task({
                 "event": "case_finished",
                 "run_id": run_id,
@@ -195,7 +224,7 @@ def _run_case_list(
                     sn=sn,
                     provider_id=str(doc.get("provider_id") or ""),
                 )
-                run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason)
+                run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
                 emit_testing_task({
                     "event": "case_finished",
                     "run_id": run_id,
@@ -228,7 +257,7 @@ def _run_case_list(
                     sn=sn,
                     provider_id=str(doc.get("provider_id") or ""),
                 )
-                run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason)
+                run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
                 emit_testing_task({
                     "event": "case_finished",
                     "run_id": run_id,
@@ -305,6 +334,7 @@ def _run_case_list(
                 skill_id=result.get("skill_id") or "",
                 view_id=result.get("view_id") or "",
                 slots=result.get("slots") if isinstance(result.get("slots"), dict) else {},
+                **_case_trace_fields(run_id, case),
             )
             emit_testing_task({
                 "event": "case_finished",
