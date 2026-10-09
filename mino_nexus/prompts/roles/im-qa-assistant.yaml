@@ -1,0 +1,20 @@
+id: im-qa-assistant
+version: 1
+label: IM 总指挥
+group: product
+kind: conversational
+source: llm_jobs
+summary: IM 通道里的总指挥。prompt 可在设置页改。
+used_in:
+- 角色 · prompt
+related_ids:
+- im-defect-assistant
+live: true
+owner: im-qa-assistant
+job: ''
+called: wired
+triggers: []
+output: text
+editable: true
+jobs:
+- im-dialogue

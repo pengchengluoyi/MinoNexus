@@ -1,0 +1,23 @@
+id: case-writer
+version: 1
+label: 测试用例编写
+group: product
+kind: json
+source: llm_jobs
+summary: 按测试点展开用例草稿。
+used_in:
+- draft_cases
+related_ids:
+- req-analyst
+- mindmap-writer
+live: true
+owner: case-writer
+job: draft_cases
+called: wired
+triggers:
+- 测试点缺用例
+- 流程 tick
+output: json
+editable: false
+jobs:
+- draft_cases

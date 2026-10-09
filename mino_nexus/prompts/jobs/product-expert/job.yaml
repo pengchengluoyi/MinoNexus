@@ -1,0 +1,25 @@
+id: product-expert
+version: 1
+label: 应用简报
+summary: 产品专家
+engine: text_chat
+role: product-expert
+output_schema: chat_reply
+enabled: true
+sort_order: 71
+flags: []
+slots:
+- name: user_payload
+  kind: text
+  required: false
+call:
+  temperature: 0.4
+  max_tokens: 2048
+  timeout_sec: 90
+  json_mode: false
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+  enabled: true
+user: []

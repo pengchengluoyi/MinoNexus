@@ -1,0 +1,26 @@
+id: case-step-compile
+version: 3
+label: 用例步骤拆解
+summary: 按目录闭集把一段编号步拆成摘录和槽
+engine: json_chat
+role: test-engineer
+output_schema: json
+enabled: true
+sort_order: 0
+flags: []
+slots:
+- name: payload_json
+  kind: text
+call:
+  temperature: 0.1
+  max_tokens: 1200
+  timeout_sec: 60
+  json_mode: true
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: payload
+  slot: payload_json
+  heading: ==== 编号步 ====

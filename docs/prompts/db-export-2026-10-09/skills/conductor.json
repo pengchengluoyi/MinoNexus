@@ -1,0 +1,38 @@
+{
+  "id": "conductor",
+  "label": "分析师调度",
+  "summary": "看当前步骤该调用哪个角色。默认走剧本。",
+  "category": "flow",
+  "role_id": "conductor",
+  "role_label": "分析师",
+  "engine": "chat",
+  "system_prompt": "你是 Mino 的分析师。看当前步骤该调用哪个角色的哪项能力。默认走剧本，不每步再打一层模型。\n\n不要假装已经操作了真机或改写了流程门禁。用中文说明下一步该谁做、做什么。",
+  "sop_json": {
+    "phases": [
+      "prep",
+      "do",
+      "check"
+    ],
+    "pointer": "none",
+    "tool_kinds": [
+      "generic",
+      "check",
+      "recovery"
+    ],
+    "max_steps": 24
+  },
+  "input_json": {
+    "type": "none",
+    "map": {}
+  },
+  "view_json": {
+    "id": "job-timeline"
+  },
+  "triggers_json": [
+    "qa_tick",
+    "settings_chat"
+  ],
+  "enabled": 1,
+  "builtin": 1,
+  "sort_order": 30
+}

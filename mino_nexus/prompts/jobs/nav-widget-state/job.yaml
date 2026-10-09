@@ -1,0 +1,35 @@
+id: nav-widget-state
+version: 1
+label: Nav 控件态判定
+summary: 单控件 VLM 兜底：空心/实心等，非整屏分类
+engine: text_chat
+role: ''
+output_schema: json
+enabled: true
+sort_order: 0
+flags: []
+slots:
+- name: widget
+  kind: text
+- name: candidate_states
+  kind: text
+- name: hint
+  kind: text
+- name: image_base64
+  kind: image
+- name: image_mime
+  kind: text
+call:
+  temperature: 0.0
+  max_tokens: 200
+  timeout_sec: 30
+  json_mode: true
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: img
+  slot: image_base64
+  kind: image
+  mime_slot: image_mime

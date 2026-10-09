@@ -1,0 +1,29 @@
+id: conductor
+version: 1
+label: 分析师调度
+summary: 看当前步骤该调用哪个角色。默认走剧本。
+category: flow
+role: conductor
+role_label: 分析师
+engine: chat
+sop:
+  phases:
+  - prep
+  - do
+  - check
+  pointer: none
+  tool_kinds:
+  - generic
+  - check
+  - recovery
+  max_steps: 24
+input:
+  type: none
+  map: {}
+view:
+  id: job-timeline
+triggers:
+- qa_tick
+- settings_chat
+enabled: true
+sort_order: 30

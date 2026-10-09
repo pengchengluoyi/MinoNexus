@@ -1,0 +1,25 @@
+id: version-qa-bm
+version: 1
+label: 版本发版 BM
+summary: 发版评审
+engine: text_chat
+role: version-qa-bm
+output_schema: chat_reply
+enabled: true
+sort_order: 51
+flags: []
+slots:
+- name: user_payload
+  kind: text
+  required: false
+call:
+  temperature: 0.4
+  max_tokens: 2048
+  timeout_sec: 90
+  json_mode: false
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+  enabled: true
+user: []

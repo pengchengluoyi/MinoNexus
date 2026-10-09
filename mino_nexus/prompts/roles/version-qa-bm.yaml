@@ -1,0 +1,22 @@
+id: version-qa-bm
+version: 1
+label: 版本QA BM
+group: product
+kind: conversational
+source: llm_jobs
+summary: 这版带哪些需求出门、历史回归与发版评审。
+used_in:
+- pick_regression
+- draft_gate
+related_ids:
+- req-qa-bm
+live: true
+owner: version-qa-bm
+job: draft_gate
+called: wired
+triggers: []
+output: text
+editable: false
+jobs:
+- version-qa-bm
+- draft_gate

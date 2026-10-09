@@ -1,0 +1,31 @@
+id: test-engineer
+version: 1
+label: 测试工程师
+group: product
+kind: conversational
+source: llm_jobs
+summary: 在设备上执行用例并给出屏幕证据。
+used_in:
+- 用例执行
+- Agent
+related_ids:
+- agent-decide
+live: true
+owner: test-engineer
+job: ''
+called: wired
+triggers:
+- 下发任务
+- Case Runner
+output: text
+editable: false
+jobs:
+- test-engineer-chat
+- account-facet-commit
+- agent-vision-plan
+- case-step-compile
+- agent-decide
+- agent-vision-exec
+- agent-vision-assert
+- assert-vision
+- inspect-session

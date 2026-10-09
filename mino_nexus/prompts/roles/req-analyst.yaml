@@ -1,0 +1,26 @@
+id: req-analyst
+version: 1
+label: 需求分析师
+group: product
+kind: json
+source: llm_jobs
+summary: 读需求原文，拆验收标准和测试点。
+used_in:
+- analyze_req
+- propose_atlas
+related_ids:
+- mindmap-writer
+- case-writer
+- req-qa-bm
+live: true
+owner: req-analyst
+job: analyze_req
+called: wired
+triggers:
+- 新建需求
+- 流程 tick
+output: json
+editable: false
+jobs:
+- analyze_req
+- propose_atlas

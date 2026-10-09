@@ -1,0 +1,19 @@
+id: propose_atlas
+version: 1
+label: 影响范围与骨架变更
+group: runtime
+kind: json
+source: llm_jobs
+summary: 判断需求影响哪些模块/功能。只出品变更，等人确认。
+used_in:
+- propose_atlas
+related_ids: []
+live: true
+owner: req-analyst
+job: propose_atlas
+called: wired
+triggers: []
+output: json
+editable: false
+jobs:
+- propose_atlas

@@ -1,0 +1,457 @@
+{
+  "role_job_map": {
+    "conductor": "conductor",
+    "req-analyst": "analyze_req",
+    "mindmap-writer": "draft_mindmap",
+    "case-writer": "draft_cases",
+    "req-qa-bm": "req-qa-bm",
+    "version-qa-bm": "version-qa-bm",
+    "test-engineer": "test-engineer-chat",
+    "report-writer": "report-writer",
+    "doc-keeper": "doc-keeper",
+    "im-qa-assistant": "im-dialogue",
+    "im-defect-assistant": "im-defect",
+    "knowledge-reviewer": "knowledge-reviewer",
+    "product-expert": "product-expert",
+    "propose_atlas": "propose_atlas",
+    "agent-decide": "agent-decide"
+  },
+  "product": [
+    {
+      "id": "conductor",
+      "label": "分析师",
+      "group": "abstract",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "route",
+        "qa_tick",
+        "case_exec_agent"
+      ],
+      "summary": "抽象调度：看当前步骤该调用哪个角色的哪项能力。",
+      "related_ids": [
+        "req-analyst",
+        "test-engineer",
+        "req-qa-bm"
+      ],
+      "live": true,
+      "owner": "conductor",
+      "job": "route",
+      "called": "wired",
+      "triggers": [
+        "流程 tick 选下一步",
+        "设置页问「这一步该调谁」"
+      ],
+      "output": "json",
+      "editable": false
+    },
+    {
+      "id": "req-analyst",
+      "label": "需求分析师",
+      "group": "product",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "analyze_req",
+        "propose_atlas"
+      ],
+      "summary": "读需求原文，拆验收标准和测试点。",
+      "related_ids": [
+        "mindmap-writer",
+        "case-writer",
+        "req-qa-bm"
+      ],
+      "live": true,
+      "owner": "req-analyst",
+      "job": "analyze_req",
+      "called": "wired",
+      "triggers": [
+        "新建需求",
+        "流程 tick"
+      ],
+      "output": "json",
+      "editable": false
+    },
+    {
+      "id": "mindmap-writer",
+      "label": "测试脑图编写",
+      "group": "product",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "draft_mindmap"
+      ],
+      "summary": "沿入口和端铺覆盖脑图。",
+      "related_ids": [
+        "req-analyst",
+        "case-writer"
+      ],
+      "live": true,
+      "owner": "mindmap-writer",
+      "job": "draft_mindmap",
+      "called": "wired",
+      "triggers": [
+        "需求分析完成",
+        "流程 tick"
+      ],
+      "output": "json",
+      "editable": false
+    },
+    {
+      "id": "case-writer",
+      "label": "测试用例编写",
+      "group": "product",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "draft_cases"
+      ],
+      "summary": "按测试点展开用例草稿。",
+      "related_ids": [
+        "req-analyst",
+        "mindmap-writer"
+      ],
+      "live": true,
+      "owner": "case-writer",
+      "job": "draft_cases",
+      "called": "wired",
+      "triggers": [
+        "测试点缺用例",
+        "流程 tick"
+      ],
+      "output": "json",
+      "editable": false
+    },
+    {
+      "id": "req-qa-bm",
+      "label": "需求QA BM",
+      "group": "product",
+      "kind": "conversational",
+      "source": "llm_jobs",
+      "used_in": [
+        "map_cases",
+        "classify_fail",
+        "draft_sign"
+      ],
+      "summary": "一条需求从覆盖到验收。结论必须人审。",
+      "related_ids": [
+        "req-analyst",
+        "case-writer"
+      ],
+      "live": true,
+      "owner": "req-qa-bm",
+      "job": "draft_sign",
+      "called": "wired",
+      "triggers": [],
+      "output": "text",
+      "editable": false
+    },
+    {
+      "id": "version-qa-bm",
+      "label": "版本QA BM",
+      "group": "product",
+      "kind": "conversational",
+      "source": "llm_jobs",
+      "used_in": [
+        "pick_regression",
+        "draft_gate"
+      ],
+      "summary": "这版带哪些需求出门、历史回归与发版评审。",
+      "related_ids": [
+        "req-qa-bm"
+      ],
+      "live": true,
+      "owner": "version-qa-bm",
+      "job": "draft_gate",
+      "called": "wired",
+      "triggers": [],
+      "output": "text",
+      "editable": false
+    },
+    {
+      "id": "test-engineer",
+      "label": "测试工程师",
+      "group": "product",
+      "kind": "conversational",
+      "source": "llm_jobs",
+      "used_in": [
+        "用例执行",
+        "Agent"
+      ],
+      "summary": "在设备上执行用例并给出屏幕证据。",
+      "related_ids": [
+        "agent-decide"
+      ],
+      "live": true,
+      "owner": "test-engineer",
+      "job": "",
+      "called": "wired",
+      "triggers": [
+        "下发任务",
+        "Case Runner"
+      ],
+      "output": "text",
+      "editable": false
+    },
+    {
+      "id": "report-writer",
+      "label": "报告编写",
+      "group": "product",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "测试报告"
+      ],
+      "summary": "按流程事实写报告草稿。",
+      "related_ids": [
+        "req-qa-bm",
+        "doc-keeper"
+      ],
+      "live": true,
+      "owner": "report-writer",
+      "job": "draft_test_report",
+      "called": "sandbox",
+      "triggers": [],
+      "output": "json",
+      "editable": false
+    },
+    {
+      "id": "doc-keeper",
+      "label": "文档维护",
+      "group": "product",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "文档插件"
+      ],
+      "summary": "把人确认过的内容同步到外部文档。",
+      "related_ids": [
+        "report-writer"
+      ],
+      "live": true,
+      "owner": "doc-keeper",
+      "job": "publish_wiki",
+      "called": "sandbox",
+      "triggers": [],
+      "output": "json",
+      "editable": false
+    },
+    {
+      "id": "im-qa-assistant",
+      "label": "IM 总指挥",
+      "group": "product",
+      "kind": "conversational",
+      "source": "llm_jobs",
+      "used_in": [
+        "角色 · prompt"
+      ],
+      "summary": "IM 通道里的总指挥。prompt 可在设置页改。",
+      "related_ids": [
+        "im-defect-assistant"
+      ],
+      "live": true,
+      "owner": "im-qa-assistant",
+      "job": "",
+      "called": "wired",
+      "triggers": [],
+      "output": "text",
+      "editable": true
+    },
+    {
+      "id": "im-defect-assistant",
+      "label": "IM 缺陷助手",
+      "group": "product",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "IM 提缺陷"
+      ],
+      "summary": "把缺陷整理成 JSON。prompt 可在设置页改。",
+      "related_ids": [
+        "im-qa-assistant"
+      ],
+      "live": true,
+      "owner": "im-defect-assistant",
+      "job": "",
+      "called": "wired",
+      "triggers": [],
+      "output": "json",
+      "editable": true
+    },
+    {
+      "id": "knowledge-reviewer",
+      "label": "知识审核员",
+      "group": "product",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "知识库机审"
+      ],
+      "summary": "审执行沉淀的知识草稿。",
+      "related_ids": [
+        "product-expert"
+      ],
+      "live": true,
+      "owner": "knowledge-reviewer",
+      "job": "review_knowledge",
+      "called": "wired",
+      "triggers": [],
+      "output": "json",
+      "editable": false
+    },
+    {
+      "id": "product-expert",
+      "label": "产品专家",
+      "group": "product",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "应用简报"
+      ],
+      "summary": "了解被测应用的图谱、功能和需求。",
+      "related_ids": [
+        "knowledge-reviewer",
+        "req-analyst"
+      ],
+      "live": true,
+      "owner": "product-expert",
+      "job": "brief_knowledge",
+      "called": "wired",
+      "triggers": [],
+      "output": "json",
+      "editable": false
+    }
+  ],
+  "runtime": [
+    {
+      "id": "propose_atlas",
+      "label": "影响范围与骨架变更",
+      "group": "runtime",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "propose_atlas"
+      ],
+      "summary": "判断需求影响哪些模块/功能。只出品变更，等人确认。",
+      "related_ids": [],
+      "live": true,
+      "owner": "req-analyst",
+      "job": "propose_atlas",
+      "called": "wired",
+      "triggers": [],
+      "output": "json",
+      "editable": false
+    },
+    {
+      "id": "agent-decide",
+      "label": "看图决策",
+      "group": "runtime",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "Agent 逐步执行"
+      ],
+      "summary": "每一步看截图决定下一个动作。",
+      "related_ids": [],
+      "live": true,
+      "owner": "test-engineer",
+      "job": "agent-decide",
+      "called": "wired",
+      "triggers": [],
+      "output": "json",
+      "editable": false
+    },
+    {
+      "id": "agent-vision-plan",
+      "label": "看图规划",
+      "group": "runtime",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "Agent 逐步执行"
+      ],
+      "summary": "规划子里程碑与逻辑块；不直接下发设备操作。",
+      "related_ids": [],
+      "live": true,
+      "owner": "test-engineer",
+      "job": "agent-vision-plan",
+      "called": "wired",
+      "triggers": [],
+      "output": "json",
+      "editable": false
+    },
+    {
+      "id": "agent-vision-exec",
+      "label": "看图执行",
+      "group": "runtime",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "Agent 逐步执行"
+      ],
+      "summary": "按 plan_digest 输出单步 capability。",
+      "related_ids": [],
+      "live": true,
+      "owner": "test-engineer",
+      "job": "agent-vision-exec",
+      "called": "wired",
+      "triggers": [],
+      "output": "json",
+      "editable": false
+    },
+    {
+      "id": "agent-vision-assert",
+      "label": "看图校验",
+      "group": "runtime",
+      "kind": "json",
+      "source": "llm_jobs",
+      "used_in": [
+        "Agent 逐步执行"
+      ],
+      "summary": "check 阶段批量视觉校验点。",
+      "related_ids": [],
+      "live": true,
+      "owner": "test-engineer",
+      "job": "agent-vision-assert",
+      "called": "wired",
+      "triggers": [],
+      "output": "json",
+      "editable": false
+    }
+  ],
+  "playbooks": [
+    {
+      "id": "qa_tick",
+      "label": "继续分析",
+      "steps": [
+        {
+          "role": "req-analyst",
+          "skill": "analyze_req"
+        },
+        {
+          "role": "mindmap-writer",
+          "skill": "draft_mindmap"
+        },
+        {
+          "role": "case-writer",
+          "skill": "draft_cases"
+        }
+      ]
+    },
+    {
+      "id": "case_exec_agent",
+      "label": "跑用例",
+      "steps": [
+        {
+          "role": "test-engineer",
+          "skill": "agent-decide"
+        }
+      ]
+    },
+    {
+      "id": "settings_chat",
+      "label": "设置页对话",
+      "steps": []
+    }
+  ]
+}

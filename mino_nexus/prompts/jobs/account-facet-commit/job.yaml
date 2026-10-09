@@ -1,0 +1,26 @@
+id: account-facet-commit
+version: 1
+label: 账号 Facet 写回分析
+summary: 读用例 timeline，判断号池 facet 应更新哪些字段
+engine: json_chat
+role: test-engineer
+output_schema: json
+enabled: true
+sort_order: 0
+flags: []
+slots:
+- name: payload_json
+  kind: text
+call:
+  temperature: 0.1
+  max_tokens: 700
+  timeout_sec: 45
+  json_mode: true
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: payload
+  slot: payload_json
+  heading: ==== 用例与轨迹 ====

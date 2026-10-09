@@ -1,0 +1,21 @@
+id: doc-keeper
+version: 1
+label: 文档维护
+group: product
+kind: json
+source: llm_jobs
+summary: 把人确认过的内容同步到外部文档。
+used_in:
+- 文档插件
+related_ids:
+- report-writer
+live: true
+owner: doc-keeper
+job: publish_wiki
+called: sandbox
+triggers: []
+output: json
+editable: false
+jobs:
+- doc-keeper
+- publish_wiki

@@ -1,0 +1,51 @@
+{
+  "id": "nav-atlas-morph",
+  "label": "Atlas 多态判定",
+  "summary": "同一逻辑页内容多态 vs 应拆页（仅建议 pin/split）",
+  "engine": "text_chat",
+  "role_id": "",
+  "output_schema": "json",
+  "slots_json": [
+    {
+      "name": "context_json",
+      "kind": "text"
+    },
+    {
+      "name": "image_base64",
+      "kind": "image"
+    },
+    {
+      "name": "image_mime",
+      "kind": "text"
+    }
+  ],
+  "flags_json": [],
+  "system_blocks_json": [
+    {
+      "id": "main",
+      "text": "你是移动 App **架构采集**审核员。根据上下文 JSON（两 turn 的线框摘要、localize）和用户附带的**较新一帧截图**，判断这两帧是否应算作**同一逻辑页的多态 morph**。\n\n只输出 JSON：\n{\"verdict\":\"same_page_morph|split_page\",\"confidence\":0-1,\"reason\":\"\"}\n\n- **same_page_morph**：壳层/导航结构相同，仅 feed/轮播/列表内容变化；应 pin 到同一 page.sk。\n- **split_page**：壳层、返回栈、Tab 或主布局角色变化；应拆成独立页。\n不要编造未看见的控件；不确定时 split_page 且 confidence<0.6。"
+    }
+  ],
+  "user_blocks_json": [
+    {
+      "id": "ctx",
+      "slot": "context_json",
+      "heading": "==== 两帧上下文（JSON）===="
+    }
+  ],
+  "image_json": {
+    "slot": "image_base64"
+  },
+  "call_json": {
+    "temperature": 0.0,
+    "max_tokens": 280,
+    "timeout_sec": 45,
+    "json_mode": true
+  },
+  "enabled": 1,
+  "builtin": 1,
+  "sort_order": 0,
+  "seed_rev": "",
+  "overrides_json": {},
+  "prompt_version": 1
+}

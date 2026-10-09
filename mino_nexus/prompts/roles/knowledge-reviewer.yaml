@@ -1,0 +1,21 @@
+id: knowledge-reviewer
+version: 1
+label: 知识审核员
+group: product
+kind: json
+source: llm_jobs
+summary: 审执行沉淀的知识草稿。
+used_in:
+- 知识库机审
+related_ids:
+- product-expert
+live: true
+owner: knowledge-reviewer
+job: review_knowledge
+called: wired
+triggers: []
+output: json
+editable: false
+jobs:
+- knowledge-reviewer
+- review_knowledge

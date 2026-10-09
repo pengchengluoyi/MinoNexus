@@ -1,0 +1,53 @@
+id: assert-vision
+version: 4
+label: assert-vision
+summary: ''
+engine: vision_assert
+role: test-engineer
+output_schema: assert_result
+enabled: true
+sort_order: 11
+flags: []
+slots:
+- name: expectation
+  kind: text
+  required: true
+- name: hint_block
+  kind: text
+  required: false
+- name: context_block
+  kind: text
+  required: false
+- name: image_base64
+  kind: image
+  required: true
+- name: image_mime
+  kind: text
+  required: false
+call:
+  temperature: 0.0
+  max_tokens: 320
+  timeout_sec: 60
+  json_mode: true
+image:
+  slot: image_base64
+  position: after_text
+  required: true
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: body
+  slot: expectation
+  heading: |-
+    请根据附图判断下面这条预期是否成立。
+
+    ==== 预期描述 ====
+- id: hint
+  slot: hint_block
+  skip_if_empty: true
+- id: ctx
+  slot: context_block
+  skip_if_empty: true
+- id: nag
+  file: user/10-nag.md

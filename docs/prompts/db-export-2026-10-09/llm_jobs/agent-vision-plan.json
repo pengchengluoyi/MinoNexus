@@ -1,0 +1,1648 @@
+{
+  "id": "agent-vision-plan",
+  "label": "看图规划",
+  "summary": "本回合里程碑与逻辑块编排；不输出 tap/input",
+  "engine": "json_chat",
+  "role_id": "test-engineer",
+  "output_schema": "json",
+  "slots_json": [
+    {
+      "name": "image_base64",
+      "kind": "image"
+    },
+    {
+      "name": "image_mime",
+      "kind": "text"
+    },
+    {
+      "name": "case_execution_context_json",
+      "kind": "text"
+    },
+    {
+      "name": "check_program_plan",
+      "kind": "text"
+    },
+    {
+      "name": "do_program_plan",
+      "kind": "text"
+    },
+    {
+      "name": "doc_context",
+      "kind": "text"
+    },
+    {
+      "name": "hierarchy_text",
+      "kind": "text"
+    },
+    {
+      "name": "knowledge_body",
+      "kind": "text"
+    },
+    {
+      "name": "knowledge_hint",
+      "kind": "text"
+    },
+    {
+      "name": "nav_assist",
+      "kind": "text"
+    },
+    {
+      "name": "phase",
+      "kind": "text"
+    },
+    {
+      "name": "phase_step_text",
+      "kind": "text"
+    },
+    {
+      "name": "prep_program_plan",
+      "kind": "text"
+    },
+    {
+      "name": "review_program_fail",
+      "kind": "text"
+    },
+    {
+      "name": "screen_size_block",
+      "kind": "text"
+    },
+    {
+      "name": "session_json",
+      "kind": "text"
+    },
+    {
+      "name": "success_criteria",
+      "kind": "text"
+    },
+    {
+      "name": "target_app",
+      "kind": "text"
+    },
+    {
+      "name": "task_context_json",
+      "kind": "text"
+    },
+    {
+      "name": "resource_claim_json",
+      "kind": "text"
+    }
+  ],
+  "flags_json": [],
+  "system_blocks_json": [
+    {
+      "id": "main",
+      "text": "你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。\n\n职责：只追加本阶段正文里还没有的里程碑，并判断能否离开本阶段。每条里程碑的 pass/failed/skipped 由程序根据工具结果写回，你不要改已有条的 status。\n\n输出 JSON：\n{\"thought\":\"…\",\"milestones_append\":[{\"id\":\"…\",\"title\":\"…\",\"kind\":\"hook|visual_action|checkpoint\",\"hook_cap\":\"…\",\"optional\":false}],\"insert_before\":false,\"exit_allowed\":false,\"failure_verdict\":{}}\n\n规则：\n- 不得删除或重排已有 id；不要输出 milestone_updates。\n- 已有里程碑已经覆盖本阶段要求时，milestones_append 必须为空。全部非 optional 条目已是 pass、failed 或 skipped 时，exit_allowed 设为 true，不要再追加。\n- 只有本阶段正文写了、列表里还没有对应条目时才追加。不要因为画面上有分类、卡片或按钮，就追加进入后续测试阶段的点击。前置阶段不要追加操作步骤或校验步骤的点击。\n- 逻辑块里的点击已经在里程碑列表里，由程序按条执行。不要在这些条目之外再追加一次点击。\n- 当前 in_progress 这一步现在做不了、必须先做别的事时：insert_before 设为 true，把这几条放进 milestones_append。程序会把当前行改回 pending，新的第一条成为 in_progress，并结束本回合。不要在同一回合执行原来的那条。\n- 只是在当前步后面补步骤时，insert_before 保持 false。新行是 pending，当前行继续 in_progress。\n- success_criteria.recovery 非空时，按这段恢复方案追加下一步，不要再派其中点名不要派的能力。\n- exit_allowed 默认 false。执行完当前列表的剩余步骤就能离开本阶段时设为 true，且不要再 append。false 表示本轮不改准出。还有 pending 时不要 exit_allowed。\n- 程序只在最后一条里程碑终态之后才读 exit_allowed。列表中途即便为 true，剩余步骤仍会执行，不会提前跳步。\n- hook_cap 只能从 success_criteria.allowed_capability_ids 里选。页面是否加载完用 wait_screen_ready。不要发明目录里没有的能力名。\n- thought 只说明本阶段还缺什么，或为什么可以离开。不要写「虽然用例表面只需…但是不做…就无法完成…」，不要用这个句式编造额外步骤。\n- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。"
+    }
+  ],
+  "user_blocks_json": [
+    {
+      "id": "sc",
+      "slot": "success_criteria",
+      "heading": "success_criteria"
+    },
+    {
+      "id": "know",
+      "slot": "knowledge_body",
+      "heading": "knowledge",
+      "skip_if_empty": true
+    },
+    {
+      "id": "nav",
+      "slot": "nav_assist",
+      "heading": "nav",
+      "skip_if_empty": true
+    },
+    {
+      "id": "doc",
+      "slot": "doc_context",
+      "heading": "doc",
+      "skip_if_empty": true
+    },
+    {
+      "id": "hier",
+      "slot": "hierarchy_text",
+      "heading": "hierarchy",
+      "skip_if_empty": true
+    },
+    {
+      "id": "rev",
+      "slot": "review_program_fail",
+      "heading": "program_fail_review",
+      "skip_if_empty": true
+    },
+    {
+      "id": "img",
+      "kind": "image",
+      "slot": "image_base64",
+      "mime_slot": "image_mime"
+    }
+  ],
+  "image_json": {},
+  "call_json": {
+    "temperature": 0.15,
+    "max_tokens": 2400,
+    "timeout_sec": 90,
+    "json_mode": true
+  },
+  "enabled": 1,
+  "builtin": 1,
+  "sort_order": 0,
+  "seed_rev": "",
+  "overrides_json": {
+    "revisions": [
+      {
+        "version": 6,
+        "at": "2026-09-25T15:14:23+08:00",
+        "note": "before v4 success_criteria-only context",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。\n\n职责：维护 milestones。执行器只处理 status=in_progress 的一条；你负责追加事件、更新状态、判断本步是否已满足要求。\n\n输出 JSON：\n{\"thought\":\"…\",\"milestone_updates\":[{\"id\":\"…\",\"status\":\"skipped|pass|failed\",\"evidence\":\"\"}],\"milestones_append\":[{\"id\":\"…\",\"title\":\"…\",\"kind\":\"hook|visual_action|checkpoint\",\"hook_cap\":\"…\",\"optional\":false}],\"step_requirements_complete\":false,\"failure_verdict\":{}}\n\n规则：\n- 已有 id 不得删除或重排；仅 milestone_updates 改状态。\n- 列表不足以完成本 phase/本步时，用 milestones_append 在末尾追加。\n- 追加时 thought 须写清：虽然用例表面只需 …，但是不做 … 就无法完成 …。\n- 用 milestone_updates 标 pass/failed/skipped 时，thought 须写清：因为 …，所以 … 可标为 …。\n- step_requirements_complete：当且仅当「当前列表全部终态且已满足本 phase/本步产品要求」时为 true；为 true 时勿再 append。\n- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。\n\n### 前置 prep（v2）\n\n- `prep_program_plan` 与 `success_criteria.milestones` 已由 **程序从用例密钥 Claim 种子**，顺序固定：筛选账号 → 筛选设备 → 环境清理（按需）→ 打开应用。\n- **禁止**输出或改写 `milestones[]`；只允许 `plan_digest`（当前屏观察、风险、下一 hook 参数提示）、`hook_calls`、`flow_block_ops`。\n- 登录 UI 步骤不属于 prep 里程碑；勿用 Google/邮箱登录链凑前置。\n- 收工由程序按子里程碑聚合，勿 `signal_done`。\n\n(agent-vision-plan v2 (prep program plan; no free milestones))\n\n### do / check（v3）\n\n- **do**：`do_program_plan` 与子里程碑已由程序从 **操作层密钥** 种子；禁止改写 `milestones[]` 顺序与 id，只输出 `plan_digest`、`flow_block_ops`、`hook_calls`。\n- **check**：只读 `check_program_plan` 与 **expected** 校验点；只输出 `checkpoints_plan`（对齐已有 checkpoint id）与 `plan_digest`（观察摘要）。**禁止**引用 do 阶段 `plan_digest` 或操作里程碑。\n- 一行操作可对应多步：以 `do_program_plan.steps` 为准，勿合并为单步。\n- 无密钥匹配的行已在 `key_compile/fallback` 标红；勿用自由 milestones 替代 catalog 骨架。\n\n(agent-vision-plan v3 (do/check program plan; check isolated from do digest))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "success_criteria"
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "knowledge",
+            "skip_if_empty": true
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "nav",
+            "skip_if_empty": true
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "claim",
+            "slot": "resource_claim_json",
+            "heading": "==== resource_claim（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "doc",
+            "skip_if_empty": true
+          },
+          {
+            "id": "hier",
+            "slot": "hierarchy_text",
+            "heading": "hierarchy",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "program_fail_review",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          },
+          {
+            "id": "do_plan",
+            "slot": "do_program_plan",
+            "heading": "==== do_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "check_plan",
+            "slot": "check_program_plan",
+            "heading": "==== check_program_plan（只读） ====",
+            "skip_if_empty": true
+          }
+        ]
+      },
+      {
+        "version": 6,
+        "at": "2026-09-25T15:14:23+08:00",
+        "note": "v7 no milestone_updates on plan",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行**规划器**（agent-vision-plan）。根据截图与 JSON 上下文，为本回合写观察摘要与可执行提示。\n\n阶段 phase={{phase}}\n\n铁律：\n- **进度真源**只有 `success_criteria`（含程序种子的 milestones）与各 phase 的 `*_program_plan`；不要依赖 history/checkpoints。\n- **禁止**输出 `milestones[]`、`milestone_updates`、`step_outcome`；里程碑 pass/fail 由程序根据工具结果写回。\n- prep/do：可输出 `plan_digest`、`hook_calls`、`flow_block_ops`（参数提示，不是设备 tap）。\n- check：只输出 `checkpoints_plan` 与 `plan_digest`；不得引用 do 阶段 plan_digest。\n- 若 `review_program_fail` 非空：输出 `failure_verdict`。\n- 设备渠道、租号结果由 Nexus 处理，不要在规划里编排 pick_device / 账号明细。\n\n只输出 JSON：\n{\"thought\":\"\",\"flow_block_ops\":[],\"hook_calls\":[],\"checkpoints_plan\":[],\"plan_digest\":{},\"failure_verdict\":{}}\n\n(agent-vision-plan v4 (success_criteria only; task+case context))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "task",
+            "slot": "task_context_json",
+            "heading": "==== task_context ===="
+          },
+          {
+            "id": "case",
+            "slot": "case_execution_context_json",
+            "heading": "==== case_execution ===="
+          },
+          {
+            "id": "phase_txt",
+            "slot": "phase_step_text",
+            "heading": "==== phase_step_text ===="
+          },
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "==== success_criteria ===="
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "do_plan",
+            "slot": "do_program_plan",
+            "heading": "==== do_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "check_plan",
+            "slot": "check_program_plan",
+            "heading": "==== check_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "sess",
+            "slot": "session_json",
+            "heading": "==== session（登录态摘要） ===="
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "==== nav ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "==== knowledge ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "==== doc ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "==== program_fail_review ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 7,
+        "at": "2026-09-25T16:39:03+08:00",
+        "note": "before program upgrade to v2 prep program plan slots",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。\n\n职责：只追加里程碑、判断本步是否已满足要求。每条里程碑的 pass/failed/skipped 由程序根据工具执行结果写回，你不要改已有条的 status。\n\n输出 JSON：\n{\"thought\":\"…\",\"milestones_append\":[{\"id\":\"…\",\"title\":\"…\",\"kind\":\"hook|visual_action|checkpoint\",\"hook_cap\":\"…\",\"optional\":false}],\"step_requirements_complete\":false,\"failure_verdict\":{}}\n\n规则：\n- 不得删除或重排已有 id；不要输出 milestone_updates。\n- 列表不足以完成本 phase/本步时，用 milestones_append 在末尾追加；追加时 thought 须写清：虽然用例表面只需 …，但是不做 … 就无法完成 …。\n- step_requirements_complete：当且仅当「当前列表将全部由执行器跑完且已满足本 phase/本步产品要求」时为 true；为 true 时勿再 append。\n- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "success_criteria"
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "knowledge",
+            "skip_if_empty": true
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "nav",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "doc",
+            "skip_if_empty": true
+          },
+          {
+            "id": "hier",
+            "slot": "hierarchy_text",
+            "heading": "hierarchy",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "program_fail_review",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 7,
+        "at": "2026-09-25T16:39:03+08:00",
+        "note": "before program upgrade to v3 do/check program plan",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。\n\n职责：只追加里程碑、判断本步是否已满足要求。每条里程碑的 pass/failed/skipped 由程序根据工具执行结果写回，你不要改已有条的 status。\n\n输出 JSON：\n{\"thought\":\"…\",\"milestones_append\":[{\"id\":\"…\",\"title\":\"…\",\"kind\":\"hook|visual_action|checkpoint\",\"hook_cap\":\"…\",\"optional\":false}],\"step_requirements_complete\":false,\"failure_verdict\":{}}\n\n规则：\n- 不得删除或重排已有 id；不要输出 milestone_updates。\n- 列表不足以完成本 phase/本步时，用 milestones_append 在末尾追加；追加时 thought 须写清：虽然用例表面只需 …，但是不做 … 就无法完成 …。\n- step_requirements_complete：当且仅当「当前列表将全部由执行器跑完且已满足本 phase/本步产品要求」时为 true；为 true 时勿再 append。\n- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。\n\n### 前置 prep（v2）\n\n- `prep_program_plan` 与 `success_criteria.milestones` 已由 **程序从用例密钥 Claim 种子**，顺序固定：筛选账号 → 筛选设备 → 环境清理（按需）→ 打开应用。\n- **禁止**输出或改写 `milestones[]`；只允许 `plan_digest`（当前屏观察、风险、下一 hook 参数提示）、`hook_calls`、`flow_block_ops`。\n- 登录 UI 步骤不属于 prep 里程碑；勿用 Google/邮箱登录链凑前置。\n- 收工由程序按子里程碑聚合，勿 `signal_done`。\n\n(agent-vision-plan v2 (prep program plan; no free milestones))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "success_criteria"
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "knowledge",
+            "skip_if_empty": true
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "nav",
+            "skip_if_empty": true
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "claim",
+            "slot": "resource_claim_json",
+            "heading": "==== resource_claim（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "doc",
+            "skip_if_empty": true
+          },
+          {
+            "id": "hier",
+            "slot": "hierarchy_text",
+            "heading": "hierarchy",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "program_fail_review",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 7,
+        "at": "2026-09-25T16:39:03+08:00",
+        "note": "before v4 success_criteria-only context",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。\n\n职责：只追加里程碑、判断本步是否已满足要求。每条里程碑的 pass/failed/skipped 由程序根据工具执行结果写回，你不要改已有条的 status。\n\n输出 JSON：\n{\"thought\":\"…\",\"milestones_append\":[{\"id\":\"…\",\"title\":\"…\",\"kind\":\"hook|visual_action|checkpoint\",\"hook_cap\":\"…\",\"optional\":false}],\"step_requirements_complete\":false,\"failure_verdict\":{}}\n\n规则：\n- 不得删除或重排已有 id；不要输出 milestone_updates。\n- 列表不足以完成本 phase/本步时，用 milestones_append 在末尾追加；追加时 thought 须写清：虽然用例表面只需 …，但是不做 … 就无法完成 …。\n- step_requirements_complete：当且仅当「当前列表将全部由执行器跑完且已满足本 phase/本步产品要求」时为 true；为 true 时勿再 append。\n- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。\n\n### 前置 prep（v2）\n\n- `prep_program_plan` 与 `success_criteria.milestones` 已由 **程序从用例密钥 Claim 种子**，顺序固定：筛选账号 → 筛选设备 → 环境清理（按需）→ 打开应用。\n- **禁止**输出或改写 `milestones[]`；只允许 `plan_digest`（当前屏观察、风险、下一 hook 参数提示）、`hook_calls`、`flow_block_ops`。\n- 登录 UI 步骤不属于 prep 里程碑；勿用 Google/邮箱登录链凑前置。\n- 收工由程序按子里程碑聚合，勿 `signal_done`。\n\n(agent-vision-plan v2 (prep program plan; no free milestones))\n\n### do / check（v3）\n\n- **do**：`do_program_plan` 与子里程碑已由程序从 **操作层密钥** 种子；禁止改写 `milestones[]` 顺序与 id，只输出 `plan_digest`、`flow_block_ops`、`hook_calls`。\n- **check**：只读 `check_program_plan` 与 **expected** 校验点；只输出 `checkpoints_plan`（对齐已有 checkpoint id）与 `plan_digest`（观察摘要）。**禁止**引用 do 阶段 `plan_digest` 或操作里程碑。\n- 一行操作可对应多步：以 `do_program_plan.steps` 为准，勿合并为单步。\n- 无密钥匹配的行已在 `key_compile/fallback` 标红；勿用自由 milestones 替代 catalog 骨架。\n\n(agent-vision-plan v3 (do/check program plan; check isolated from do digest))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "success_criteria"
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "knowledge",
+            "skip_if_empty": true
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "nav",
+            "skip_if_empty": true
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "claim",
+            "slot": "resource_claim_json",
+            "heading": "==== resource_claim（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "doc",
+            "skip_if_empty": true
+          },
+          {
+            "id": "hier",
+            "slot": "hierarchy_text",
+            "heading": "hierarchy",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "program_fail_review",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          },
+          {
+            "id": "do_plan",
+            "slot": "do_program_plan",
+            "heading": "==== do_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "check_plan",
+            "slot": "check_program_plan",
+            "heading": "==== check_program_plan（只读） ====",
+            "skip_if_empty": true
+          }
+        ]
+      },
+      {
+        "version": 7,
+        "at": "2026-09-25T16:41:37+08:00",
+        "note": "before program upgrade to v2 prep program plan slots",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行**规划器**（agent-vision-plan）。根据截图与 JSON 上下文，为本回合写观察摘要与可执行提示。\n\n阶段 phase={{phase}}\n\n铁律：\n- **进度真源**只有 `success_criteria`（含程序种子的 milestones）与各 phase 的 `*_program_plan`；不要依赖 history/checkpoints。\n- **禁止**输出 `milestones[]`、`milestone_updates`、`step_outcome`；里程碑 pass/fail 由程序根据工具结果写回。\n- prep/do：可输出 `plan_digest`、`hook_calls`、`flow_block_ops`（参数提示，不是设备 tap）。\n- check：只输出 `checkpoints_plan` 与 `plan_digest`；不得引用 do 阶段 plan_digest。\n- 若 `review_program_fail` 非空：输出 `failure_verdict`。\n- 设备渠道、租号结果由 Nexus 处理，不要在规划里编排 pick_device / 账号明细。\n\n只输出 JSON：\n{\"thought\":\"\",\"flow_block_ops\":[],\"hook_calls\":[],\"checkpoints_plan\":[],\"plan_digest\":{},\"failure_verdict\":{}}\n\n(agent-vision-plan v4 (success_criteria only; task+case context))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "task",
+            "slot": "task_context_json",
+            "heading": "==== task_context ===="
+          },
+          {
+            "id": "case",
+            "slot": "case_execution_context_json",
+            "heading": "==== case_execution ===="
+          },
+          {
+            "id": "phase_txt",
+            "slot": "phase_step_text",
+            "heading": "==== phase_step_text ===="
+          },
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "==== success_criteria ===="
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "do_plan",
+            "slot": "do_program_plan",
+            "heading": "==== do_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "check_plan",
+            "slot": "check_program_plan",
+            "heading": "==== check_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "sess",
+            "slot": "session_json",
+            "heading": "==== session（登录态摘要） ===="
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "==== nav ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "==== knowledge ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "==== doc ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "==== program_fail_review ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 7,
+        "at": "2026-09-25T16:41:37+08:00",
+        "note": "before program upgrade to v3 do/check program plan",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行**规划器**（agent-vision-plan）。根据截图与 JSON 上下文，为本回合写观察摘要与可执行提示。\n\n阶段 phase={{phase}}\n\n铁律：\n- **进度真源**只有 `success_criteria`（含程序种子的 milestones）与各 phase 的 `*_program_plan`；不要依赖 history/checkpoints。\n- **禁止**输出 `milestones[]`、`milestone_updates`、`step_outcome`；里程碑 pass/fail 由程序根据工具结果写回。\n- prep/do：可输出 `plan_digest`、`hook_calls`、`flow_block_ops`（参数提示，不是设备 tap）。\n- check：只输出 `checkpoints_plan` 与 `plan_digest`；不得引用 do 阶段 plan_digest。\n- 若 `review_program_fail` 非空：输出 `failure_verdict`。\n- 设备渠道、租号结果由 Nexus 处理，不要在规划里编排 pick_device / 账号明细。\n\n只输出 JSON：\n{\"thought\":\"\",\"flow_block_ops\":[],\"hook_calls\":[],\"checkpoints_plan\":[],\"plan_digest\":{},\"failure_verdict\":{}}\n\n(agent-vision-plan v4 (success_criteria only; task+case context))\n\n### 前置 prep（v2）\n\n- `prep_program_plan` 与 `success_criteria.milestones` 已由 **程序从用例密钥 Claim 种子**，顺序固定：筛选账号 → 筛选设备 → 环境清理（按需）→ 打开应用。\n- **禁止**输出或改写 `milestones[]`；只允许 `plan_digest`（当前屏观察、风险、下一 hook 参数提示）、`hook_calls`、`flow_block_ops`。\n- 登录 UI 步骤不属于 prep 里程碑；勿用 Google/邮箱登录链凑前置。\n- 收工由程序按子里程碑聚合，勿 `signal_done`。\n\n(agent-vision-plan v2 (prep program plan; no free milestones))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "task",
+            "slot": "task_context_json",
+            "heading": "==== task_context ===="
+          },
+          {
+            "id": "case",
+            "slot": "case_execution_context_json",
+            "heading": "==== case_execution ===="
+          },
+          {
+            "id": "phase_txt",
+            "slot": "phase_step_text",
+            "heading": "==== phase_step_text ===="
+          },
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "==== success_criteria ===="
+          },
+          {
+            "id": "claim",
+            "slot": "resource_claim_json",
+            "heading": "==== resource_claim（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "do_plan",
+            "slot": "do_program_plan",
+            "heading": "==== do_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "check_plan",
+            "slot": "check_program_plan",
+            "heading": "==== check_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "sess",
+            "slot": "session_json",
+            "heading": "==== session（登录态摘要） ===="
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "==== nav ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "==== knowledge ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "==== doc ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "==== program_fail_review ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 7,
+        "at": "2026-09-29T10:39:46+08:00",
+        "note": "v8 exit_allowed latch",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行**规划器**（agent-vision-plan）。根据截图与 JSON 上下文，为本回合写观察摘要与可执行提示。\n\n阶段 phase={{phase}}\n\n铁律：\n- **进度真源**只有 `success_criteria`（含程序种子的 milestones）与各 phase 的 `*_program_plan`；不要依赖 history/checkpoints。\n- **禁止**输出 `milestones[]`、`milestone_updates`、`step_outcome`；里程碑 pass/fail 由程序根据工具结果写回。\n- prep/do：可输出 `plan_digest`、`hook_calls`、`flow_block_ops`（参数提示，不是设备 tap）。\n- check：只输出 `checkpoints_plan` 与 `plan_digest`；不得引用 do 阶段 plan_digest。\n- 若 `review_program_fail` 非空：输出 `failure_verdict`。\n- 设备渠道、租号结果由 Nexus 处理，不要在规划里编排 pick_device / 账号明细。\n\n只输出 JSON：\n{\"thought\":\"\",\"flow_block_ops\":[],\"hook_calls\":[],\"checkpoints_plan\":[],\"plan_digest\":{},\"failure_verdict\":{}}\n\n(agent-vision-plan v4 (success_criteria only; task+case context))\n\n### 前置 prep（v2）\n\n- `prep_program_plan` 与 `success_criteria.milestones` 已由 **程序从用例密钥 Claim 种子**，顺序固定：筛选账号 → 筛选设备 → 环境清理（按需）→ 打开应用。\n- **禁止**输出或改写 `milestones[]`；只允许 `plan_digest`（当前屏观察、风险、下一 hook 参数提示）、`hook_calls`、`flow_block_ops`。\n- 登录 UI 步骤不属于 prep 里程碑；勿用 Google/邮箱登录链凑前置。\n- 收工由程序按子里程碑聚合，勿 `signal_done`。\n\n(agent-vision-plan v2 (prep program plan; no free milestones))\n\n### do / check（v3）\n\n- **do**：`do_program_plan` 与子里程碑已由程序从 **操作层密钥** 种子；禁止改写 `milestones[]` 顺序与 id，只输出 `plan_digest`、`flow_block_ops`、`hook_calls`。\n- **check**：只读 `check_program_plan` 与 **expected** 校验点；只输出 `checkpoints_plan`（对齐已有 checkpoint id）与 `plan_digest`（观察摘要）。**禁止**引用 do 阶段 `plan_digest` 或操作里程碑。\n- 一行操作可对应多步：以 `do_program_plan.steps` 为准，勿合并为单步。\n- 无密钥匹配的行已在 `key_compile/fallback` 标红；勿用自由 milestones 替代 catalog 骨架。\n\n(agent-vision-plan v3 (do/check program plan; check isolated from do digest))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "task",
+            "slot": "task_context_json",
+            "heading": "==== task_context ===="
+          },
+          {
+            "id": "case",
+            "slot": "case_execution_context_json",
+            "heading": "==== case_execution ===="
+          },
+          {
+            "id": "phase_txt",
+            "slot": "phase_step_text",
+            "heading": "==== phase_step_text ===="
+          },
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "==== success_criteria ===="
+          },
+          {
+            "id": "claim",
+            "slot": "resource_claim_json",
+            "heading": "==== resource_claim（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "do_plan",
+            "slot": "do_program_plan",
+            "heading": "==== do_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "check_plan",
+            "slot": "check_program_plan",
+            "heading": "==== check_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "sess",
+            "slot": "session_json",
+            "heading": "==== session（登录态摘要） ===="
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "==== nav ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "==== knowledge ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "==== doc ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "==== program_fail_review ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 8,
+        "at": "2026-09-29T11:49:16+08:00",
+        "note": "before program upgrade to v2 prep program plan slots",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。\n\n职责：只追加里程碑、判断本步是否已满足要求。每条里程碑的 pass/failed/skipped 由程序根据工具执行结果写回，你不要改已有条的 status。\n\n输出 JSON：\n{\"thought\":\"…\",\"milestones_append\":[{\"id\":\"…\",\"title\":\"…\",\"kind\":\"hook|visual_action|checkpoint\",\"hook_cap\":\"…\",\"optional\":false}],\"exit_allowed\":false,\"failure_verdict\":{}}\n\n规则：\n- 不得删除或重排已有 id；不要输出 milestone_updates。\n- 列表不足以完成本 phase/本步时，用 milestones_append 在末尾追加；追加时 thought 须写清：虽然用例表面只需 …，但是不做 … 就无法完成 …。\n- exit_allowed 是准出，默认 false。每一轮都判断要不要改它：若执行完当前列表的剩余步骤就能离开本 phase/本步，设为 true，且不要再 append。false 表示本轮不改准出。\n- 程序只在最后一条里程碑终态之后才读 exit_allowed。列表中途即便为 true，剩余步骤仍会执行，不会提前跳步。\n- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "success_criteria"
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "knowledge",
+            "skip_if_empty": true
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "nav",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "doc",
+            "skip_if_empty": true
+          },
+          {
+            "id": "hier",
+            "slot": "hierarchy_text",
+            "heading": "hierarchy",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "program_fail_review",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 8,
+        "at": "2026-09-29T11:49:16+08:00",
+        "note": "before program upgrade to v3 do/check program plan",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。\n\n职责：只追加里程碑、判断本步是否已满足要求。每条里程碑的 pass/failed/skipped 由程序根据工具执行结果写回，你不要改已有条的 status。\n\n输出 JSON：\n{\"thought\":\"…\",\"milestones_append\":[{\"id\":\"…\",\"title\":\"…\",\"kind\":\"hook|visual_action|checkpoint\",\"hook_cap\":\"…\",\"optional\":false}],\"exit_allowed\":false,\"failure_verdict\":{}}\n\n规则：\n- 不得删除或重排已有 id；不要输出 milestone_updates。\n- 列表不足以完成本 phase/本步时，用 milestones_append 在末尾追加；追加时 thought 须写清：虽然用例表面只需 …，但是不做 … 就无法完成 …。\n- exit_allowed 是准出，默认 false。每一轮都判断要不要改它：若执行完当前列表的剩余步骤就能离开本 phase/本步，设为 true，且不要再 append。false 表示本轮不改准出。\n- 程序只在最后一条里程碑终态之后才读 exit_allowed。列表中途即便为 true，剩余步骤仍会执行，不会提前跳步。\n- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。\n\n### 前置 prep（v2）\n\n- `prep_program_plan` 与 `success_criteria.milestones` 已由 **程序从用例密钥 Claim 种子**，顺序固定：筛选账号 → 筛选设备 → 环境清理（按需）→ 打开应用。\n- **禁止**输出或改写 `milestones[]`；只允许 `plan_digest`（当前屏观察、风险、下一 hook 参数提示）、`hook_calls`、`flow_block_ops`。\n- 登录 UI 步骤不属于 prep 里程碑；勿用 Google/邮箱登录链凑前置。\n- 收工由程序按子里程碑聚合，勿 `signal_done`。\n\n(agent-vision-plan v2 (prep program plan; no free milestones))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "success_criteria"
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "knowledge",
+            "skip_if_empty": true
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "nav",
+            "skip_if_empty": true
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "claim",
+            "slot": "resource_claim_json",
+            "heading": "==== resource_claim（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "doc",
+            "skip_if_empty": true
+          },
+          {
+            "id": "hier",
+            "slot": "hierarchy_text",
+            "heading": "hierarchy",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "program_fail_review",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 8,
+        "at": "2026-09-29T11:49:16+08:00",
+        "note": "before v4 success_criteria-only context",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。\n\n职责：只追加里程碑、判断本步是否已满足要求。每条里程碑的 pass/failed/skipped 由程序根据工具执行结果写回，你不要改已有条的 status。\n\n输出 JSON：\n{\"thought\":\"…\",\"milestones_append\":[{\"id\":\"…\",\"title\":\"…\",\"kind\":\"hook|visual_action|checkpoint\",\"hook_cap\":\"…\",\"optional\":false}],\"exit_allowed\":false,\"failure_verdict\":{}}\n\n规则：\n- 不得删除或重排已有 id；不要输出 milestone_updates。\n- 列表不足以完成本 phase/本步时，用 milestones_append 在末尾追加；追加时 thought 须写清：虽然用例表面只需 …，但是不做 … 就无法完成 …。\n- exit_allowed 是准出，默认 false。每一轮都判断要不要改它：若执行完当前列表的剩余步骤就能离开本 phase/本步，设为 true，且不要再 append。false 表示本轮不改准出。\n- 程序只在最后一条里程碑终态之后才读 exit_allowed。列表中途即便为 true，剩余步骤仍会执行，不会提前跳步。\n- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。\n\n### 前置 prep（v2）\n\n- `prep_program_plan` 与 `success_criteria.milestones` 已由 **程序从用例密钥 Claim 种子**，顺序固定：筛选账号 → 筛选设备 → 环境清理（按需）→ 打开应用。\n- **禁止**输出或改写 `milestones[]`；只允许 `plan_digest`（当前屏观察、风险、下一 hook 参数提示）、`hook_calls`、`flow_block_ops`。\n- 登录 UI 步骤不属于 prep 里程碑；勿用 Google/邮箱登录链凑前置。\n- 收工由程序按子里程碑聚合，勿 `signal_done`。\n\n(agent-vision-plan v2 (prep program plan; no free milestones))\n\n### do / check（v3）\n\n- **do**：`do_program_plan` 与子里程碑已由程序从 **操作层密钥** 种子；禁止改写 `milestones[]` 顺序与 id，只输出 `plan_digest`、`flow_block_ops`、`hook_calls`。\n- **check**：只读 `check_program_plan` 与 **expected** 校验点；只输出 `checkpoints_plan`（对齐已有 checkpoint id）与 `plan_digest`（观察摘要）。**禁止**引用 do 阶段 `plan_digest` 或操作里程碑。\n- 一行操作可对应多步：以 `do_program_plan.steps` 为准，勿合并为单步。\n- 无密钥匹配的行已在 `key_compile/fallback` 标红；勿用自由 milestones 替代 catalog 骨架。\n\n(agent-vision-plan v3 (do/check program plan; check isolated from do digest))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "success_criteria"
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "knowledge",
+            "skip_if_empty": true
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "nav",
+            "skip_if_empty": true
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "claim",
+            "slot": "resource_claim_json",
+            "heading": "==== resource_claim（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "doc",
+            "skip_if_empty": true
+          },
+          {
+            "id": "hier",
+            "slot": "hierarchy_text",
+            "heading": "hierarchy",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "program_fail_review",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          },
+          {
+            "id": "do_plan",
+            "slot": "do_program_plan",
+            "heading": "==== do_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "check_plan",
+            "slot": "check_program_plan",
+            "heading": "==== check_program_plan（只读） ====",
+            "skip_if_empty": true
+          }
+        ]
+      },
+      {
+        "version": 8,
+        "at": "2026-09-29T11:49:16+08:00",
+        "note": "v9 hook_cap must be registered",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行**规划器**（agent-vision-plan）。根据截图与 JSON 上下文，为本回合写观察摘要与可执行提示。\n\n阶段 phase={{phase}}\n\n铁律：\n- **进度真源**只有 `success_criteria`（含程序种子的 milestones）与各 phase 的 `*_program_plan`；不要依赖 history/checkpoints。\n- **禁止**输出 `milestones[]`、`milestone_updates`、`step_outcome`；里程碑 pass/fail 由程序根据工具结果写回。\n- prep/do：可输出 `plan_digest`、`hook_calls`、`flow_block_ops`（参数提示，不是设备 tap）。\n- check：只输出 `checkpoints_plan` 与 `plan_digest`；不得引用 do 阶段 plan_digest。\n- 若 `review_program_fail` 非空：输出 `failure_verdict`。\n- 设备渠道、租号结果由 Nexus 处理，不要在规划里编排 pick_device / 账号明细。\n\n只输出 JSON：\n{\"thought\":\"\",\"flow_block_ops\":[],\"hook_calls\":[],\"checkpoints_plan\":[],\"plan_digest\":{},\"failure_verdict\":{}}\n\n(agent-vision-plan v4 (success_criteria only; task+case context))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "task",
+            "slot": "task_context_json",
+            "heading": "==== task_context ===="
+          },
+          {
+            "id": "case",
+            "slot": "case_execution_context_json",
+            "heading": "==== case_execution ===="
+          },
+          {
+            "id": "phase_txt",
+            "slot": "phase_step_text",
+            "heading": "==== phase_step_text ===="
+          },
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "==== success_criteria ===="
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "do_plan",
+            "slot": "do_program_plan",
+            "heading": "==== do_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "check_plan",
+            "slot": "check_program_plan",
+            "heading": "==== check_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "sess",
+            "slot": "session_json",
+            "heading": "==== session（登录态摘要） ===="
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "==== nav ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "==== knowledge ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "==== doc ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "==== program_fail_review ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 9,
+        "at": "2026-09-29T12:04:35+08:00",
+        "note": "before program upgrade to v2 prep program plan slots",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。\n\n职责：只追加里程碑、判断本步是否已满足要求。每条里程碑的 pass/failed/skipped 由程序根据工具执行结果写回，你不要改已有条的 status。\n\n输出 JSON：\n{\"thought\":\"…\",\"milestones_append\":[{\"id\":\"…\",\"title\":\"…\",\"kind\":\"hook|visual_action|checkpoint\",\"hook_cap\":\"…\",\"optional\":false}],\"exit_allowed\":false,\"failure_verdict\":{}}\n\n规则：\n- 不得删除或重排已有 id；不要输出 milestone_updates。\n- 列表不足以完成本 phase/本步时，用 milestones_append 在末尾追加；追加时 thought 须写清：虽然用例表面只需 …，但是不做 … 就无法完成 …。\n- exit_allowed 是准出，默认 false。每一轮都判断要不要改它：若执行完当前列表的剩余步骤就能离开本 phase/本步，设为 true，且不要再 append。false 表示本轮不改准出。\n- 程序只在最后一条里程碑终态之后才读 exit_allowed。列表中途即便为 true，剩余步骤仍会执行，不会提前跳步。\n- hook_cap 只能从 success_criteria.allowed_capability_ids 里选。页面是否加载完用 wait_screen_ready。不要发明目录里没有的能力名。\n- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "success_criteria"
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "knowledge",
+            "skip_if_empty": true
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "nav",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "doc",
+            "skip_if_empty": true
+          },
+          {
+            "id": "hier",
+            "slot": "hierarchy_text",
+            "heading": "hierarchy",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "program_fail_review",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 9,
+        "at": "2026-09-29T12:04:35+08:00",
+        "note": "before program upgrade to v3 do/check program plan",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。\n\n职责：只追加里程碑、判断本步是否已满足要求。每条里程碑的 pass/failed/skipped 由程序根据工具执行结果写回，你不要改已有条的 status。\n\n输出 JSON：\n{\"thought\":\"…\",\"milestones_append\":[{\"id\":\"…\",\"title\":\"…\",\"kind\":\"hook|visual_action|checkpoint\",\"hook_cap\":\"…\",\"optional\":false}],\"exit_allowed\":false,\"failure_verdict\":{}}\n\n规则：\n- 不得删除或重排已有 id；不要输出 milestone_updates。\n- 列表不足以完成本 phase/本步时，用 milestones_append 在末尾追加；追加时 thought 须写清：虽然用例表面只需 …，但是不做 … 就无法完成 …。\n- exit_allowed 是准出，默认 false。每一轮都判断要不要改它：若执行完当前列表的剩余步骤就能离开本 phase/本步，设为 true，且不要再 append。false 表示本轮不改准出。\n- 程序只在最后一条里程碑终态之后才读 exit_allowed。列表中途即便为 true，剩余步骤仍会执行，不会提前跳步。\n- hook_cap 只能从 success_criteria.allowed_capability_ids 里选。页面是否加载完用 wait_screen_ready。不要发明目录里没有的能力名。\n- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。\n\n### 前置 prep（v2）\n\n- `prep_program_plan` 与 `success_criteria.milestones` 已由 **程序从用例密钥 Claim 种子**，顺序固定：筛选账号 → 筛选设备 → 环境清理（按需）→ 打开应用。\n- **禁止**输出或改写 `milestones[]`；只允许 `plan_digest`（当前屏观察、风险、下一 hook 参数提示）、`hook_calls`、`flow_block_ops`。\n- 登录 UI 步骤不属于 prep 里程碑；勿用 Google/邮箱登录链凑前置。\n- 收工由程序按子里程碑聚合，勿 `signal_done`。\n\n(agent-vision-plan v2 (prep program plan; no free milestones))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "success_criteria"
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "knowledge",
+            "skip_if_empty": true
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "nav",
+            "skip_if_empty": true
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "claim",
+            "slot": "resource_claim_json",
+            "heading": "==== resource_claim（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "doc",
+            "skip_if_empty": true
+          },
+          {
+            "id": "hier",
+            "slot": "hierarchy_text",
+            "heading": "hierarchy",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "program_fail_review",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 9,
+        "at": "2026-09-29T12:04:35+08:00",
+        "note": "before v4 success_criteria-only context",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。\n\n职责：只追加里程碑、判断本步是否已满足要求。每条里程碑的 pass/failed/skipped 由程序根据工具执行结果写回，你不要改已有条的 status。\n\n输出 JSON：\n{\"thought\":\"…\",\"milestones_append\":[{\"id\":\"…\",\"title\":\"…\",\"kind\":\"hook|visual_action|checkpoint\",\"hook_cap\":\"…\",\"optional\":false}],\"exit_allowed\":false,\"failure_verdict\":{}}\n\n规则：\n- 不得删除或重排已有 id；不要输出 milestone_updates。\n- 列表不足以完成本 phase/本步时，用 milestones_append 在末尾追加；追加时 thought 须写清：虽然用例表面只需 …，但是不做 … 就无法完成 …。\n- exit_allowed 是准出，默认 false。每一轮都判断要不要改它：若执行完当前列表的剩余步骤就能离开本 phase/本步，设为 true，且不要再 append。false 表示本轮不改准出。\n- 程序只在最后一条里程碑终态之后才读 exit_allowed。列表中途即便为 true，剩余步骤仍会执行，不会提前跳步。\n- hook_cap 只能从 success_criteria.allowed_capability_ids 里选。页面是否加载完用 wait_screen_ready。不要发明目录里没有的能力名。\n- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。\n\n### 前置 prep（v2）\n\n- `prep_program_plan` 与 `success_criteria.milestones` 已由 **程序从用例密钥 Claim 种子**，顺序固定：筛选账号 → 筛选设备 → 环境清理（按需）→ 打开应用。\n- **禁止**输出或改写 `milestones[]`；只允许 `plan_digest`（当前屏观察、风险、下一 hook 参数提示）、`hook_calls`、`flow_block_ops`。\n- 登录 UI 步骤不属于 prep 里程碑；勿用 Google/邮箱登录链凑前置。\n- 收工由程序按子里程碑聚合，勿 `signal_done`。\n\n(agent-vision-plan v2 (prep program plan; no free milestones))\n\n### do / check（v3）\n\n- **do**：`do_program_plan` 与子里程碑已由程序从 **操作层密钥** 种子；禁止改写 `milestones[]` 顺序与 id，只输出 `plan_digest`、`flow_block_ops`、`hook_calls`。\n- **check**：只读 `check_program_plan` 与 **expected** 校验点；只输出 `checkpoints_plan`（对齐已有 checkpoint id）与 `plan_digest`（观察摘要）。**禁止**引用 do 阶段 `plan_digest` 或操作里程碑。\n- 一行操作可对应多步：以 `do_program_plan.steps` 为准，勿合并为单步。\n- 无密钥匹配的行已在 `key_compile/fallback` 标红；勿用自由 milestones 替代 catalog 骨架。\n\n(agent-vision-plan v3 (do/check program plan; check isolated from do digest))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "success_criteria"
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "knowledge",
+            "skip_if_empty": true
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "nav",
+            "skip_if_empty": true
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "claim",
+            "slot": "resource_claim_json",
+            "heading": "==== resource_claim（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "doc",
+            "skip_if_empty": true
+          },
+          {
+            "id": "hier",
+            "slot": "hierarchy_text",
+            "heading": "hierarchy",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "program_fail_review",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          },
+          {
+            "id": "do_plan",
+            "slot": "do_program_plan",
+            "heading": "==== do_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "check_plan",
+            "slot": "check_program_plan",
+            "heading": "==== check_program_plan（只读） ====",
+            "skip_if_empty": true
+          }
+        ]
+      },
+      {
+        "version": 9,
+        "at": "2026-09-29T12:48:07+08:00",
+        "note": "before program upgrade to v2 prep program plan slots",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行**规划器**（agent-vision-plan）。根据截图与 JSON 上下文，为本回合写观察摘要与可执行提示。\n\n阶段 phase={{phase}}\n\n铁律：\n- **进度真源**只有 `success_criteria`（含程序种子的 milestones）与各 phase 的 `*_program_plan`；不要依赖 history/checkpoints。\n- **禁止**输出 `milestones[]`、`milestone_updates`、`step_outcome`；里程碑 pass/fail 由程序根据工具结果写回。\n- prep/do：可输出 `plan_digest`、`hook_calls`、`flow_block_ops`（参数提示，不是设备 tap）。\n- check：只输出 `checkpoints_plan` 与 `plan_digest`；不得引用 do 阶段 plan_digest。\n- 若 `review_program_fail` 非空：输出 `failure_verdict`。\n- 设备渠道、租号结果由 Nexus 处理，不要在规划里编排 pick_device / 账号明细。\n\n只输出 JSON：\n{\"thought\":\"\",\"flow_block_ops\":[],\"hook_calls\":[],\"checkpoints_plan\":[],\"plan_digest\":{},\"failure_verdict\":{}}\n\n(agent-vision-plan v4 (success_criteria only; task+case context))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "task",
+            "slot": "task_context_json",
+            "heading": "==== task_context ===="
+          },
+          {
+            "id": "case",
+            "slot": "case_execution_context_json",
+            "heading": "==== case_execution ===="
+          },
+          {
+            "id": "phase_txt",
+            "slot": "phase_step_text",
+            "heading": "==== phase_step_text ===="
+          },
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "==== success_criteria ===="
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "do_plan",
+            "slot": "do_program_plan",
+            "heading": "==== do_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "check_plan",
+            "slot": "check_program_plan",
+            "heading": "==== check_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "sess",
+            "slot": "session_json",
+            "heading": "==== session（登录态摘要） ===="
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "==== nav ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "==== knowledge ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "==== doc ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "==== program_fail_review ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 9,
+        "at": "2026-09-29T12:48:07+08:00",
+        "note": "before program upgrade to v3 do/check program plan",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行**规划器**（agent-vision-plan）。根据截图与 JSON 上下文，为本回合写观察摘要与可执行提示。\n\n阶段 phase={{phase}}\n\n铁律：\n- **进度真源**只有 `success_criteria`（含程序种子的 milestones）与各 phase 的 `*_program_plan`；不要依赖 history/checkpoints。\n- **禁止**输出 `milestones[]`、`milestone_updates`、`step_outcome`；里程碑 pass/fail 由程序根据工具结果写回。\n- prep/do：可输出 `plan_digest`、`hook_calls`、`flow_block_ops`（参数提示，不是设备 tap）。\n- check：只输出 `checkpoints_plan` 与 `plan_digest`；不得引用 do 阶段 plan_digest。\n- 若 `review_program_fail` 非空：输出 `failure_verdict`。\n- 设备渠道、租号结果由 Nexus 处理，不要在规划里编排 pick_device / 账号明细。\n\n只输出 JSON：\n{\"thought\":\"\",\"flow_block_ops\":[],\"hook_calls\":[],\"checkpoints_plan\":[],\"plan_digest\":{},\"failure_verdict\":{}}\n\n(agent-vision-plan v4 (success_criteria only; task+case context))\n\n### 前置 prep（v2）\n\n- `prep_program_plan` 与 `success_criteria.milestones` 已由 **程序从用例密钥 Claim 种子**，顺序固定：筛选账号 → 筛选设备 → 环境清理（按需）→ 打开应用。\n- **禁止**输出或改写 `milestones[]`；只允许 `plan_digest`（当前屏观察、风险、下一 hook 参数提示）、`hook_calls`、`flow_block_ops`。\n- 登录 UI 步骤不属于 prep 里程碑；勿用 Google/邮箱登录链凑前置。\n- 收工由程序按子里程碑聚合，勿 `signal_done`。\n\n(agent-vision-plan v2 (prep program plan; no free milestones))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "task",
+            "slot": "task_context_json",
+            "heading": "==== task_context ===="
+          },
+          {
+            "id": "case",
+            "slot": "case_execution_context_json",
+            "heading": "==== case_execution ===="
+          },
+          {
+            "id": "phase_txt",
+            "slot": "phase_step_text",
+            "heading": "==== phase_step_text ===="
+          },
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "==== success_criteria ===="
+          },
+          {
+            "id": "claim",
+            "slot": "resource_claim_json",
+            "heading": "==== resource_claim（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "do_plan",
+            "slot": "do_program_plan",
+            "heading": "==== do_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "check_plan",
+            "slot": "check_program_plan",
+            "heading": "==== check_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "sess",
+            "slot": "session_json",
+            "heading": "==== session（登录态摘要） ===="
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "==== nav ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "==== knowledge ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "==== doc ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "==== program_fail_review ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 9,
+        "at": "2026-09-29T13:26:07+08:00",
+        "note": "v10 restore exit_allowed after v4 clobber",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行**规划器**（agent-vision-plan）。根据截图与 JSON 上下文，为本回合写观察摘要与可执行提示。\n\n阶段 phase={{phase}}\n\n铁律：\n- **进度真源**只有 `success_criteria`（含程序种子的 milestones）与各 phase 的 `*_program_plan`；不要依赖 history/checkpoints。\n- **禁止**输出 `milestones[]`、`milestone_updates`、`step_outcome`；里程碑 pass/fail 由程序根据工具结果写回。\n- prep/do：可输出 `plan_digest`、`hook_calls`、`flow_block_ops`（参数提示，不是设备 tap）。\n- check：只输出 `checkpoints_plan` 与 `plan_digest`；不得引用 do 阶段 plan_digest。\n- 若 `review_program_fail` 非空：输出 `failure_verdict`。\n- 设备渠道、租号结果由 Nexus 处理，不要在规划里编排 pick_device / 账号明细。\n\n只输出 JSON：\n{\"thought\":\"\",\"flow_block_ops\":[],\"hook_calls\":[],\"checkpoints_plan\":[],\"plan_digest\":{},\"failure_verdict\":{}}\n\n(agent-vision-plan v4 (success_criteria only; task+case context))\n\n### 前置 prep（v2）\n\n- `prep_program_plan` 与 `success_criteria.milestones` 已由 **程序从用例密钥 Claim 种子**，顺序固定：筛选账号 → 筛选设备 → 环境清理（按需）→ 打开应用。\n- **禁止**输出或改写 `milestones[]`；只允许 `plan_digest`（当前屏观察、风险、下一 hook 参数提示）、`hook_calls`、`flow_block_ops`。\n- 登录 UI 步骤不属于 prep 里程碑；勿用 Google/邮箱登录链凑前置。\n- 收工由程序按子里程碑聚合，勿 `signal_done`。\n\n(agent-vision-plan v2 (prep program plan; no free milestones))\n\n### do / check（v3）\n\n- **do**：`do_program_plan` 与子里程碑已由程序从 **操作层密钥** 种子；禁止改写 `milestones[]` 顺序与 id，只输出 `plan_digest`、`flow_block_ops`、`hook_calls`。\n- **check**：只读 `check_program_plan` 与 **expected** 校验点；只输出 `checkpoints_plan`（对齐已有 checkpoint id）与 `plan_digest`（观察摘要）。**禁止**引用 do 阶段 `plan_digest` 或操作里程碑。\n- 一行操作可对应多步：以 `do_program_plan.steps` 为准，勿合并为单步。\n- 无密钥匹配的行已在 `key_compile/fallback` 标红；勿用自由 milestones 替代 catalog 骨架。\n\n(agent-vision-plan v3 (do/check program plan; check isolated from do digest))\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "task",
+            "slot": "task_context_json",
+            "heading": "==== task_context ===="
+          },
+          {
+            "id": "case",
+            "slot": "case_execution_context_json",
+            "heading": "==== case_execution ===="
+          },
+          {
+            "id": "phase_txt",
+            "slot": "phase_step_text",
+            "heading": "==== phase_step_text ===="
+          },
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "==== success_criteria ===="
+          },
+          {
+            "id": "claim",
+            "slot": "resource_claim_json",
+            "heading": "==== resource_claim（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "prep_plan",
+            "slot": "prep_program_plan",
+            "heading": "==== prep_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "do_plan",
+            "slot": "do_program_plan",
+            "heading": "==== do_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "check_plan",
+            "slot": "check_program_plan",
+            "heading": "==== check_program_plan（只读） ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "sess",
+            "slot": "session_json",
+            "heading": "==== session（登录态摘要） ===="
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "==== nav ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "==== knowledge ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "==== doc ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "==== program_fail_review ====",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 10,
+        "at": "2026-09-29T18:13:35+08:00",
+        "note": "v11 do not invent clicks after program list is done",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。\n\n职责：只追加里程碑、判断本步是否已满足要求。每条里程碑的 pass/failed/skipped 由程序根据工具执行结果写回，你不要改已有条的 status。\n\n输出 JSON：\n{\"thought\":\"…\",\"milestones_append\":[{\"id\":\"…\",\"title\":\"…\",\"kind\":\"hook|visual_action|checkpoint\",\"hook_cap\":\"…\",\"optional\":false}],\"exit_allowed\":false,\"failure_verdict\":{}}\n\n规则：\n- 不得删除或重排已有 id；不要输出 milestone_updates。\n- 列表不足以完成本 phase/本步时，用 milestones_append 在末尾追加；追加时 thought 须写清：虽然用例表面只需 …，但是不做 … 就无法完成 …。\n- exit_allowed 是准出，默认 false。每一轮都判断要不要改它：若执行完当前列表的剩余步骤就能离开本 phase/本步，设为 true，且不要再 append。false 表示本轮不改准出。\n- 程序只在最后一条里程碑终态之后才读 exit_allowed。列表中途即便为 true，剩余步骤仍会执行，不会提前跳步。\n- hook_cap 只能从 success_criteria.allowed_capability_ids 里选。页面是否加载完用 wait_screen_ready。不要发明目录里没有的能力名。\n- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "success_criteria"
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "knowledge",
+            "skip_if_empty": true
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "nav",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "doc",
+            "skip_if_empty": true
+          },
+          {
+            "id": "hier",
+            "slot": "hierarchy_text",
+            "heading": "hierarchy",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "program_fail_review",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      },
+      {
+        "version": 11,
+        "at": "2026-09-30T11:03:24+08:00",
+        "note": "v12 insert_before ends the turn",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你是测试执行规划器。输入为 success_criteria（milestones：id、title、kind、status、hook_cap）和截图；可选知识、导航、文档。\n\n职责：只追加本阶段正文里还没有的里程碑，并判断能否离开本阶段。每条里程碑的 pass/failed/skipped 由程序根据工具结果写回，你不要改已有条的 status。\n\n输出 JSON：\n{\"thought\":\"…\",\"milestones_append\":[{\"id\":\"…\",\"title\":\"…\",\"kind\":\"hook|visual_action|checkpoint\",\"hook_cap\":\"…\",\"optional\":false}],\"exit_allowed\":false,\"failure_verdict\":{}}\n\n规则：\n- 不得删除或重排已有 id；不要输出 milestone_updates。\n- 已有里程碑已经覆盖本阶段要求时，milestones_append 必须为空。全部非 optional 条目已是 pass、failed 或 skipped 时，exit_allowed 设为 true，不要再追加。\n- 只有本阶段正文写了、列表里还没有对应条目时才追加。不要因为画面上有分类、卡片或按钮，就追加进入后续测试阶段的点击。前置阶段不要追加操作步骤或校验步骤的点击。\n- 逻辑块里的点击已经在里程碑列表里，由程序按条执行。不要在这些条目之外再追加一次点击。\n- exit_allowed 默认 false。执行完当前列表的剩余步骤就能离开本阶段时设为 true，且不要再 append。false 表示本轮不改准出。\n- 程序只在最后一条里程碑终态之后才读 exit_allowed。列表中途即便为 true，剩余步骤仍会执行，不会提前跳步。\n- hook_cap 只能从 success_criteria.allowed_capability_ids 里选。页面是否加载完用 wait_screen_ready。不要发明目录里没有的能力名。\n- thought 只说明本阶段还缺什么，或为什么可以离开。不要写「虽然用例表面只需…但是不做…就无法完成…」，不要用这个句式编造额外步骤。\n- 不要输出 hook_calls、plan_digest、history、账号或设备派单字段。"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "sc",
+            "slot": "success_criteria",
+            "heading": "success_criteria"
+          },
+          {
+            "id": "know",
+            "slot": "knowledge_body",
+            "heading": "knowledge",
+            "skip_if_empty": true
+          },
+          {
+            "id": "nav",
+            "slot": "nav_assist",
+            "heading": "nav",
+            "skip_if_empty": true
+          },
+          {
+            "id": "doc",
+            "slot": "doc_context",
+            "heading": "doc",
+            "skip_if_empty": true
+          },
+          {
+            "id": "hier",
+            "slot": "hierarchy_text",
+            "heading": "hierarchy",
+            "skip_if_empty": true
+          },
+          {
+            "id": "rev",
+            "slot": "review_program_fail",
+            "heading": "program_fail_review",
+            "skip_if_empty": true
+          },
+          {
+            "id": "img",
+            "kind": "image",
+            "slot": "image_base64",
+            "mime_slot": "image_mime"
+          }
+        ]
+      }
+    ]
+  },
+  "prompt_version": 12
+}

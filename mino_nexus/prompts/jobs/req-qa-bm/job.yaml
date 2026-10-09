@@ -1,0 +1,25 @@
+id: req-qa-bm
+version: 1
+label: 需求验收 BM
+summary: 需求验收把关
+engine: text_chat
+role: req-qa-bm
+output_schema: chat_reply
+enabled: true
+sort_order: 50
+flags: []
+slots:
+- name: user_payload
+  kind: text
+  required: false
+call:
+  temperature: 0.4
+  max_tokens: 2048
+  timeout_sec: 90
+  json_mode: false
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+  enabled: true
+user: []

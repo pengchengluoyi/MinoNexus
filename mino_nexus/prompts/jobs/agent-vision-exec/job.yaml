@@ -1,0 +1,102 @@
+id: agent-vision-exec
+version: 8
+label: 看图执行
+summary: 按 plan_digest 输出单步 capability；里程碑由 agent-vision-plan 维护
+engine: vision_decide
+role: test-engineer
+output_schema: agent_decision
+enabled: true
+sort_order: 10
+flags: []
+slots:
+- name: image_base64
+  kind: image
+- name: image_mime
+  kind: text
+- name: active_milestone
+  kind: text
+- name: case_execution_context_json
+  kind: text
+- name: doc_context
+  kind: text
+- name: goal
+  kind: text
+- name: hierarchy_text
+  kind: text
+- name: knowledge_body
+  kind: text
+- name: knowledge_hint
+  kind: text
+- name: menu_json
+  kind: text
+- name: nav_assist
+  kind: text
+- name: phase
+  kind: text
+- name: plan_digest
+  kind: text
+- name: screen_size_block
+  kind: text
+- name: session_json
+  kind: text
+- name: success_criteria
+  kind: text
+- name: target_app
+  kind: text
+- name: task_context_json
+  kind: text
+call:
+  temperature: 0.1
+  max_tokens: 768
+  timeout_sec: 90
+  json_mode: false
+  require_tool_calls: true
+image:
+  slot: image_base64
+  position: after_text
+  required: true
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: task
+  slot: task_context_json
+  heading: ==== task_context ====
+- id: case
+  slot: case_execution_context_json
+  heading: ==== case_execution ====
+- id: plan
+  slot: plan_digest
+  heading: ==== plan_digest ====
+- id: am
+  slot: active_milestone
+  heading: ==== active_milestone ====
+- id: sc
+  slot: success_criteria
+  heading: ==== success_criteria ====
+- id: goal
+  slot: goal
+  heading: ==== goal ====
+- id: sess
+  slot: session_json
+  heading: ==== session ====
+- id: nav
+  slot: nav_assist
+  heading: ==== nav ====
+  skip_if_empty: true
+- id: know
+  slot: knowledge_body
+  heading: ==== knowledge ====
+  skip_if_empty: true
+- id: doc
+  slot: doc_context
+  heading: ==== doc ====
+  skip_if_empty: true
+- id: hier
+  slot: hierarchy_text
+  heading: ==== hierarchy ====
+  skip_if_empty: true
+- id: img
+  slot: image_base64
+  kind: image
+  mime_slot: image_mime

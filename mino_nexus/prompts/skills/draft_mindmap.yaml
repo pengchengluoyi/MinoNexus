@@ -1,0 +1,28 @@
+id: draft_mindmap
+version: 1
+label: 写测试脑图
+summary: 按入口和端铺覆盖脑图。
+category: flow
+role: mindmap-writer
+role_label: 测试脑图编写
+engine: qa_job
+sop:
+  phases:
+  - prep
+  - do
+  - check
+  pointer: none
+  tool_kinds:
+  - generic
+  - check
+  - recovery
+  max_steps: 24
+input:
+  type: requirement
+  map: {}
+view:
+  id: flow-doc
+triggers:
+- qa_tick
+enabled: true
+sort_order: 21

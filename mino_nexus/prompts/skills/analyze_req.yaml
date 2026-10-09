@@ -1,0 +1,28 @@
+id: analyze_req
+version: 1
+label: 拆验收标准
+summary: 读需求原文，拆测试点和验收。
+category: flow
+role: req-analyst
+role_label: 需求分析师
+engine: qa_job
+sop:
+  phases:
+  - prep
+  - do
+  - check
+  pointer: none
+  tool_kinds:
+  - generic
+  - check
+  - recovery
+  max_steps: 24
+input:
+  type: requirement
+  map: {}
+view:
+  id: flow-doc
+triggers:
+- qa_tick
+enabled: true
+sort_order: 20

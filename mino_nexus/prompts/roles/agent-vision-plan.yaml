@@ -1,0 +1,19 @@
+id: agent-vision-plan
+version: 1
+label: 看图规划
+group: runtime
+kind: json
+source: llm_jobs
+summary: 规划子里程碑与逻辑块；不直接下发设备操作。
+used_in:
+- Agent 逐步执行
+related_ids: []
+live: true
+owner: test-engineer
+job: agent-vision-plan
+called: wired
+triggers: []
+output: json
+editable: false
+jobs:
+- agent-vision-plan

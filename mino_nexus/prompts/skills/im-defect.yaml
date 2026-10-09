@@ -1,0 +1,29 @@
+id: im-defect
+version: 1
+label: IM 提缺陷
+summary: 把说清的缺陷整理成 JSON。
+category: channel
+role: im-defect-assistant
+role_label: IM 缺陷助手
+engine: chat
+sop:
+  phases:
+  - prep
+  - do
+  - check
+  pointer: none
+  tool_kinds:
+  - generic
+  - check
+  - recovery
+  max_steps: 24
+input:
+  type: none
+  map: {}
+view:
+  id: job-timeline
+triggers:
+- im_chat
+- settings_chat
+enabled: true
+sort_order: 41

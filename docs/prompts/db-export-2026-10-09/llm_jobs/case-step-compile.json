@@ -1,0 +1,80 @@
+{
+  "id": "case-step-compile",
+  "label": "用例步骤拆解",
+  "summary": "按目录闭集把一段编号步拆成摘录和槽",
+  "engine": "json_chat",
+  "role_id": "test-engineer",
+  "output_schema": "json",
+  "slots_json": [
+    {
+      "name": "payload_json",
+      "kind": "text"
+    }
+  ],
+  "flags_json": [],
+  "system_blocks_json": [
+    {
+      "id": "main",
+      "text": "你把测试用例的一段编号步拆成事件。输入 JSON 里有 layer、source、platform、catalog。catalog 是这一层允许的全部事件。\n\n只输出 JSON：{\"spans\":[...]}\n每条 span 含 quote、key_ref，以及该事件声明过的 slots 或 params。\nquote 必须是 source 里逐字连续的一段，不要改写，不要自己报下标。\nkey_ref 只能从 catalog 里选。配不上就不要发明事件，spans 里不要放这一段。\nslots[].quote 必须落在父 quote 里面。params 的键只能是该条目的 param_slots。\n枚举只能用给出的值。登录流用一个父跨度盖住整段，槽用 catalog 里的 id。\n若输入里有 errors，按那些原因改摘录和事件，仍然只能从 catalog 里选。\n不要输出说明文字。\n一条原文只属于一条 span。已经被别的 quote 整段包含的片段不要再单独成条。\n必填槽都要有 quote。\n如果这句话其实属于另一栏，key_ref 用 other_layer_key_refs 里的那条，不要改用本层事件硬套。\n刷新页面时，等待写在 operation.reload_page 的 params.wait_ms（毫秒），不要再拆一条等待。"
+    }
+  ],
+  "user_blocks_json": [
+    {
+      "id": "payload",
+      "slot": "payload_json",
+      "heading": "==== 编号步 ===="
+    }
+  ],
+  "image_json": {},
+  "call_json": {
+    "temperature": 0.1,
+    "max_tokens": 1200,
+    "timeout_sec": 60,
+    "json_mode": true
+  },
+  "enabled": 1,
+  "builtin": 1,
+  "sort_order": 0,
+  "seed_rev": "",
+  "overrides_json": {
+    "revisions": [
+      {
+        "version": 1,
+        "at": "2026-10-09T14:51:58+08:00",
+        "note": "v2 one span per stretch, required slot quotes",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你把测试用例的一段编号步拆成事件。输入 JSON 里有 layer、source、platform、catalog。catalog 是这一层允许的全部事件。\n\n只输出 JSON：{\"spans\":[...]}\n每条 span 含 quote、key_ref，以及该事件声明过的 slots 或 params。\nquote 必须是 source 里逐字连续的一段，不要改写，不要自己报下标。\nkey_ref 只能从 catalog 里选。配不上就不要发明事件，spans 里不要放这一段。\nslots[].quote 必须落在父 quote 里面。params 的键只能是该条目的 param_slots。\n枚举只能用给出的值。登录流用一个父跨度盖住整段，槽用 catalog 里的 id。\n若输入里有 errors，按那些原因改摘录和事件，仍然只能从 catalog 里选。\n不要输出说明文字。"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "payload",
+            "slot": "payload_json",
+            "heading": "==== 编号步 ===="
+          }
+        ]
+      },
+      {
+        "version": 2,
+        "at": "2026-10-09T15:08:08+08:00",
+        "note": "v3 other layer and reload wait",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你把测试用例的一段编号步拆成事件。输入 JSON 里有 layer、source、platform、catalog。catalog 是这一层允许的全部事件。\n\n只输出 JSON：{\"spans\":[...]}\n每条 span 含 quote、key_ref，以及该事件声明过的 slots 或 params。\nquote 必须是 source 里逐字连续的一段，不要改写，不要自己报下标。\nkey_ref 只能从 catalog 里选。配不上就不要发明事件，spans 里不要放这一段。\nslots[].quote 必须落在父 quote 里面。params 的键只能是该条目的 param_slots。\n枚举只能用给出的值。登录流用一个父跨度盖住整段，槽用 catalog 里的 id。\n若输入里有 errors，按那些原因改摘录和事件，仍然只能从 catalog 里选。\n不要输出说明文字。\n一条原文只属于一条 span。已经被别的 quote 整段包含的片段不要再单独成条。\n必填槽都要有 quote。"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "payload",
+            "slot": "payload_json",
+            "heading": "==== 编号步 ===="
+          }
+        ]
+      }
+    ]
+  },
+  "prompt_version": 3
+}

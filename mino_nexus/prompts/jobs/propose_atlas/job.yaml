@@ -1,0 +1,29 @@
+id: propose_atlas
+version: 1
+label: 建议图谱变更
+summary: 判断需求影响模块
+engine: json_chat
+role: req-analyst
+output_schema: atlas_proposal
+enabled: true
+sort_order: 23
+flags: []
+slots:
+- name: user_payload
+  kind: text
+  required: true
+call:
+  temperature: 0.0
+  max_tokens: 2048
+  timeout_sec: 120
+  json_mode: true
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: main
+  slot: user_payload
+  heading: ==== 输入 JSON ====
+- id: nag
+  file: user/10-nag.md

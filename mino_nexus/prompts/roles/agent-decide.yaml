@@ -1,0 +1,19 @@
+id: agent-decide
+version: 1
+label: 看图决策
+group: runtime
+kind: json
+source: llm_jobs
+summary: 每一步看截图决定下一个动作。
+used_in:
+- Agent 逐步执行
+related_ids: []
+live: true
+owner: test-engineer
+job: agent-decide
+called: wired
+triggers: []
+output: json
+editable: false
+jobs:
+- agent-decide

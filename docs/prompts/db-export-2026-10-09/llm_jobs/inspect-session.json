@@ -1,0 +1,147 @@
+{
+  "id": "inspect-session",
+  "label": "会话观察",
+  "summary": "观察当前屏登录态",
+  "engine": "observe",
+  "role_id": "test-engineer",
+  "output_schema": "inspect_session",
+  "slots_json": [
+    {
+      "name": "required_session",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "name": "knowledge_hint",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "name": "accounts_brief",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "name": "image_base64",
+      "kind": "image",
+      "required": true
+    },
+    {
+      "name": "image_mime",
+      "kind": "text",
+      "required": false
+    }
+  ],
+  "flags_json": [],
+  "system_blocks_json": [
+    {
+      "id": "main",
+      "text": "你在为一条自动化用例观察【当前屏幕】上的登录会话。只判断，不要规划点击。\n\n只返回一个 JSON 对象：\n{\n  \"session\": \"logged_out | logged_in | unknown\",\n  \"identity\": \"match | mismatch | unknown\",\n  \"seen\": \"屏幕上用来判断的文案（登录按钮 / 昵称 / 手机尾号），没有就空\",\n  \"probe\": false,\n  \"next\": \"keep | logout | login | switch | human\",\n  \"reason\": \"一句话\",\n  \"screen_layout\": {\"chrome\": {\"top\": 0.06, \"bottom\": 0.96}, \"regions\": []},\n  \"vlm_hierarchy\": {\"hierarchy_format\": \"accessibility_json\", \"degraded_scout\": false, \"nodes\": []}\n}\n\n规则：\n- 每个应用的登录入口、已登录特征、退出路径都不同。只根据【本应用说明书/知识】和当前截图判断。禁止套用其它 App 的底栏、我的页、登录弹窗。\n- 禁止用「底栏是否齐全」「有没有首页 Tab」「桌面图标」当登录态。\n- 当前截图是系统桌面/启动器/其它 App → session=logged_out 或 unknown。不要把桌面图标（含微信）当成微信登录页。\n- 登录页、一键登录、验证码登录、手机号登录、访客浏览 → session=logged_out。\n- 知识写了已登录特征且当前屏命中（昵称/手机号/退出）→ session=logged_in。\n- 游客和登录共用底栏时，不能只因为有底栏就判已登录。\n- 当前屏是首页/信息流/内容页，没有登录按钮也没有昵称/手机号/退出 → session=unknown，identity=unknown，next=keep。这不是失败，不要 next=human。\n- 当前屏已经是登录页或身份页但仍看不清、且不是在问可填字段 → next=human。\n- 口令/验证码输入页是登录流程：session=logged_out，next=login。禁止因为要填口令就 next=human。口令由资源网关提供。\n- 用例要求游客且已登录 → next=logout。\n- 用例要求指定账号且当前屏已能看出对不上 → next=switch。\n- 只有本应用屏幕上「只能微信登录、没有手机号入口」才算微信不可测；桌面上的微信图标不算。\n- 禁止编造昵称。禁止 Markdown、禁止多个 JSON。\n\n<!-- prompt_version >= 2（screen_layout + vlm_hierarchy） -->\n\n### 不要输出布局 JSON\n\n不要输出 screen_layout、vlm_hierarchy。只输出 session / identity / next / reason。\n\n<!-- prompt_version >= 3 (drop forced visual JSON) -->\n"
+    }
+  ],
+  "user_blocks_json": [
+    {
+      "id": "req",
+      "heading": "==== 本条用例要的会话 ====",
+      "slot": "required_session"
+    },
+    {
+      "id": "know",
+      "heading": "==== 本步相关知识 ====",
+      "slot": "knowledge_hint"
+    },
+    {
+      "id": "acc",
+      "heading": "==== 已租账号公开信息（尾号 / 标签，不含口令）====",
+      "slot": "accounts_brief"
+    },
+    {
+      "id": "nag",
+      "text": "请看【下方截图】判断当前登录态，只返回一个 JSON 对象。"
+    }
+  ],
+  "image_json": {
+    "slot": "image_base64",
+    "position": "after_text",
+    "required": true
+  },
+  "call_json": {
+    "temperature": 0.0,
+    "max_tokens": 320,
+    "timeout_sec": 60,
+    "json_mode": true
+  },
+  "enabled": 1,
+  "builtin": 1,
+  "sort_order": 12,
+  "seed_rev": "8a45b8abc49e16d1",
+  "overrides_json": {
+    "revisions": [
+      {
+        "version": 1,
+        "at": "2026-09-16T13:17:32+08:00",
+        "note": "v1 before program upgrade to v2 screen_layout+vlm_hierarchy",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你在为一条自动化用例观察【当前屏幕】上的登录会话。只判断，不要规划点击。\n\n只返回一个 JSON 对象：\n{\n  \"session\": \"logged_out | logged_in | unknown\",\n  \"identity\": \"match | mismatch | unknown\",\n  \"seen\": \"屏幕上用来判断的文案（登录按钮 / 昵称 / 手机尾号），没有就空\",\n  \"probe\": false,\n  \"next\": \"keep | logout | login | switch | human\",\n  \"reason\": \"一句话\"\n}\n\n规则：\n- 每个应用的登录入口、已登录特征、退出路径都不同。只根据【本应用说明书/知识】和当前截图判断。禁止套用其它 App 的底栏、我的页、登录弹窗。\n- 禁止用「底栏是否齐全」「有没有首页 Tab」「桌面图标」当登录态。\n- 当前截图是系统桌面/启动器/其它 App → session=logged_out 或 unknown。不要把桌面图标（含微信）当成微信登录页。\n- 登录页、一键登录、验证码登录、手机号登录、访客浏览 → session=logged_out。\n- 知识写了已登录特征且当前屏命中（昵称/手机号/退出）→ session=logged_in。\n- 游客和登录共用底栏时，不能只因为有底栏就判已登录。\n- 当前屏是首页/信息流/内容页，没有登录按钮也没有昵称/手机号/退出 → session=unknown，identity=unknown，next=keep。这不是失败，不要 next=human。\n- 当前屏已经是登录页或身份页但仍看不清、且不是在问可填字段 → next=human。\n- 口令/验证码输入页是登录流程：session=logged_out，next=login。禁止因为要填口令就 next=human。口令由资源网关提供。\n- 用例要求游客且已登录 → next=logout。\n- 用例要求指定账号且当前屏已能看出对不上 → next=switch。\n- 只有本应用屏幕上「只能微信登录、没有手机号入口」才算微信不可测；桌面上的微信图标不算。\n- 禁止编造昵称。禁止 Markdown、禁止多个 JSON。\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "req",
+            "heading": "==== 本条用例要的会话 ====",
+            "slot": "required_session"
+          },
+          {
+            "id": "know",
+            "heading": "==== 本步相关知识 ====",
+            "slot": "knowledge_hint"
+          },
+          {
+            "id": "acc",
+            "heading": "==== 已租账号公开信息（尾号 / 标签，不含口令）====",
+            "slot": "accounts_brief"
+          },
+          {
+            "id": "nag",
+            "text": "请看【下方截图】判断当前登录态，只返回一个 JSON 对象。"
+          }
+        ]
+      },
+      {
+        "version": 2,
+        "at": "2026-09-17T10:59:24+08:00",
+        "note": "v2 before drop forced screen_layout/vlm_hierarchy",
+        "system_blocks": [
+          {
+            "id": "main",
+            "text": "你在为一条自动化用例观察【当前屏幕】上的登录会话。只判断，不要规划点击。\n\n只返回一个 JSON 对象：\n{\n  \"session\": \"logged_out | logged_in | unknown\",\n  \"identity\": \"match | mismatch | unknown\",\n  \"seen\": \"屏幕上用来判断的文案（登录按钮 / 昵称 / 手机尾号），没有就空\",\n  \"probe\": false,\n  \"next\": \"keep | logout | login | switch | human\",\n  \"reason\": \"一句话\",\n  \"screen_layout\": {\"chrome\": {\"top\": 0.06, \"bottom\": 0.96}, \"regions\": []},\n  \"vlm_hierarchy\": {\"hierarchy_format\": \"accessibility_json\", \"degraded_scout\": false, \"nodes\": []}\n}\n\n规则：\n- 每个应用的登录入口、已登录特征、退出路径都不同。只根据【本应用说明书/知识】和当前截图判断。禁止套用其它 App 的底栏、我的页、登录弹窗。\n- 禁止用「底栏是否齐全」「有没有首页 Tab」「桌面图标」当登录态。\n- 当前截图是系统桌面/启动器/其它 App → session=logged_out 或 unknown。不要把桌面图标（含微信）当成微信登录页。\n- 登录页、一键登录、验证码登录、手机号登录、访客浏览 → session=logged_out。\n- 知识写了已登录特征且当前屏命中（昵称/手机号/退出）→ session=logged_in。\n- 游客和登录共用底栏时，不能只因为有底栏就判已登录。\n- 当前屏是首页/信息流/内容页，没有登录按钮也没有昵称/手机号/退出 → session=unknown，identity=unknown，next=keep。这不是失败，不要 next=human。\n- 当前屏已经是登录页或身份页但仍看不清、且不是在问可填字段 → next=human。\n- 口令/验证码输入页是登录流程：session=logged_out，next=login。禁止因为要填口令就 next=human。口令由资源网关提供。\n- 用例要求游客且已登录 → next=logout。\n- 用例要求指定账号且当前屏已能看出对不上 → next=switch。\n- 只有本应用屏幕上「只能微信登录、没有手机号入口」才算微信不可测；桌面上的微信图标不算。\n- 禁止编造昵称。禁止 Markdown、禁止多个 JSON。\n\n### screen_layout（与 action 同轮输出，必填对象）\n\n除决策 JSON 外，**必须**附带 `screen_layout`，描述当前屏**内容区**布局（顶/底系统栏与 Tab 栏不要画进 regions）：\n- 坐标一律 **0~1 归一化**（相对整屏宽高），与 hierarchy 并行、互不替代。\n- `chrome.top` / `chrome.bottom`：内容区上下边界（0~1）。\n- `regions[]`：每项 `{\"id\":\"r1\",\"label\":\"简短语义\",\"role\":\"banner|feed|dialog|form|...\",\"clickable\":true,\"rect\":{\"x\":0.05,\"y\":0.12,\"w\":0.9,\"h\":0.08}}`\n\n```json\n\"screen_layout\": {\n  \"chrome\": {\"top\": 0.06, \"bottom\": 0.96},\n  \"regions\": [{\"id\":\"r1\",\"label\":\"引流条\",\"role\":\"banner\",\"clickable\":true,\"rect\":{\"x\":0,\"y\":0.08,\"w\":1,\"h\":0.1}}]\n}\n```\n\n### vlm_hierarchy（与 action / 会话字段同轮输出，必填对象）\n\n每轮 JSON **必须**附带 `vlm_hierarchy`（与 `screen_layout` 并列；Scout `==== hierarchy` 是否为空都要写，便于 tap 互证与审计）：\n- `hierarchy_format` 固定 `accessibility_json`；`nodes[]` 字段与 Scout `nodes` 同形（`bounds`/`center` 为设备像素）。\n- 只列可见且与当前步骤相关的节点（≤40）；不要编造 `resource_id`。\n- `degraded_scout`：你认为 Scout hierarchy 不可用/不可信时为 true，否则 false。\n- `screen_layout` 管区域框；`vlm_hierarchy` 管可点名控件文案；与 Scout 冲突时以 Scout 坐标为准、VLM 补 text/desc。\n\n```json\n\"vlm_hierarchy\": {\n  \"hierarchy_format\": \"accessibility_json\",\n  \"degraded_scout\": false,\n  \"nodes\": [{\"text\":\"我的\",\"class\":\"android.widget.TextView\",\"clickable\":true,\"bounds\":[800,2200,950,2300],\"center\":[875,2250]}]\n}\n```\n\n<!-- prompt_version >= 2（screen_layout + vlm_hierarchy） -->\n"
+          }
+        ],
+        "user_blocks": [
+          {
+            "id": "req",
+            "heading": "==== 本条用例要的会话 ====",
+            "slot": "required_session"
+          },
+          {
+            "id": "know",
+            "heading": "==== 本步相关知识 ====",
+            "slot": "knowledge_hint"
+          },
+          {
+            "id": "acc",
+            "heading": "==== 已租账号公开信息（尾号 / 标签，不含口令）====",
+            "slot": "accounts_brief"
+          },
+          {
+            "id": "nag",
+            "text": "请看【下方截图】判断当前登录态，只返回一个 JSON 对象。"
+          }
+        ]
+      }
+    ]
+  },
+  "prompt_version": 3
+}

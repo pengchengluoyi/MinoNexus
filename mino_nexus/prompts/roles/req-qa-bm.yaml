@@ -1,0 +1,24 @@
+id: req-qa-bm
+version: 1
+label: 需求QA BM
+group: product
+kind: conversational
+source: llm_jobs
+summary: 一条需求从覆盖到验收。结论必须人审。
+used_in:
+- map_cases
+- classify_fail
+- draft_sign
+related_ids:
+- req-analyst
+- case-writer
+live: true
+owner: req-qa-bm
+job: draft_sign
+called: wired
+triggers: []
+output: text
+editable: false
+jobs:
+- req-qa-bm
+- draft_sign

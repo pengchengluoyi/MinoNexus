@@ -1,0 +1,22 @@
+id: product-expert
+version: 1
+label: 产品专家
+group: product
+kind: json
+source: llm_jobs
+summary: 了解被测应用的图谱、功能和需求。
+used_in:
+- 应用简报
+related_ids:
+- knowledge-reviewer
+- req-analyst
+live: true
+owner: product-expert
+job: brief_knowledge
+called: wired
+triggers: []
+output: json
+editable: false
+jobs:
+- product-expert
+- brief_knowledge

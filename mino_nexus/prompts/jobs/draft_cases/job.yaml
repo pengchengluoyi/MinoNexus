@@ -1,0 +1,29 @@
+id: draft_cases
+version: 1
+label: 写用例草稿
+summary: 展开步骤与预期
+engine: json_chat
+role: case-writer
+output_schema: case_draft
+enabled: true
+sort_order: 22
+flags: []
+slots:
+- name: user_payload
+  kind: text
+  required: true
+call:
+  temperature: 0.0
+  max_tokens: 2048
+  timeout_sec: 120
+  json_mode: true
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: main
+  slot: user_payload
+  heading: ==== 输入 JSON ====
+- id: nag
+  file: user/10-nag.md

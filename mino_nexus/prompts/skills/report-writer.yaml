@@ -1,0 +1,28 @@
+id: report-writer
+version: 1
+label: 写测试报告
+summary: 按流程事实写报告草稿。
+category: flow
+role: report-writer
+role_label: 报告编写
+engine: chat
+sop:
+  phases:
+  - prep
+  - do
+  - check
+  pointer: none
+  tool_kinds:
+  - generic
+  - check
+  - recovery
+  max_steps: 24
+input:
+  type: none
+  map: {}
+view:
+  id: flow-doc
+triggers:
+- settings_chat
+enabled: true
+sort_order: 60

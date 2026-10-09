@@ -1,0 +1,27 @@
+id: conductor
+version: 1
+label: 分析师
+group: abstract
+kind: json
+source: llm_jobs
+summary: 抽象调度：看当前步骤该调用哪个角色的哪项能力。
+used_in:
+- route
+- qa_tick
+- case_exec_agent
+related_ids:
+- req-analyst
+- test-engineer
+- req-qa-bm
+live: true
+owner: conductor
+job: route
+called: wired
+triggers:
+- 流程 tick 选下一步
+- 设置页问「这一步该调谁」
+output: json
+editable: false
+jobs:
+- conductor
+- route

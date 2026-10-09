@@ -1,0 +1,50 @@
+id: inspect-session
+version: 3
+label: 会话观察
+summary: 观察当前屏登录态
+engine: observe
+role: test-engineer
+output_schema: inspect_session
+enabled: true
+sort_order: 12
+flags: []
+slots:
+- name: required_session
+  kind: text
+  required: false
+- name: knowledge_hint
+  kind: text
+  required: false
+- name: accounts_brief
+  kind: text
+  required: false
+- name: image_base64
+  kind: image
+  required: true
+- name: image_mime
+  kind: text
+  required: false
+call:
+  temperature: 0.0
+  max_tokens: 320
+  timeout_sec: 60
+  json_mode: true
+image:
+  slot: image_base64
+  position: after_text
+  required: true
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: req
+  slot: required_session
+  heading: ==== 本条用例要的会话 ====
+- id: know
+  slot: knowledge_hint
+  heading: ==== 本步相关知识 ====
+- id: acc
+  slot: accounts_brief
+  heading: ==== 已租账号公开信息（尾号 / 标签，不含口令）====
+- id: nag
+  text: 请看【下方截图】判断当前登录态，只返回一个 JSON 对象。

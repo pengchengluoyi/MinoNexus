@@ -1,0 +1,58 @@
+{
+  "id": "nav-widget-state",
+  "label": "Nav 控件态判定",
+  "summary": "单控件 VLM 兜底：空心/实心等，非整屏分类",
+  "engine": "text_chat",
+  "role_id": "",
+  "output_schema": "json",
+  "slots_json": [
+    {
+      "name": "widget",
+      "kind": "text"
+    },
+    {
+      "name": "candidate_states",
+      "kind": "text"
+    },
+    {
+      "name": "hint",
+      "kind": "text"
+    },
+    {
+      "name": "image_base64",
+      "kind": "image"
+    },
+    {
+      "name": "image_mime",
+      "kind": "text"
+    }
+  ],
+  "flags_json": [],
+  "system_blocks_json": [
+    {
+      "id": "main",
+      "text": "你是 UI 控件态判定器。只看截图里指定控件处于哪个态。\n候选态：{{candidate_states}}\n控件：{{widget}}\n{{hint}}\n只输出 JSON：{\"state\":\"候选之一\",\"confidence\":0-1,\"reason\":\"\"}"
+    }
+  ],
+  "user_blocks_json": [
+    {
+      "id": "img",
+      "kind": "image",
+      "slot": "image_base64",
+      "mime_slot": "image_mime"
+    }
+  ],
+  "image_json": {},
+  "call_json": {
+    "temperature": 0.0,
+    "max_tokens": 200,
+    "timeout_sec": 30,
+    "json_mode": true
+  },
+  "enabled": 1,
+  "builtin": 1,
+  "sort_order": 0,
+  "seed_rev": "",
+  "overrides_json": {},
+  "prompt_version": 1
+}

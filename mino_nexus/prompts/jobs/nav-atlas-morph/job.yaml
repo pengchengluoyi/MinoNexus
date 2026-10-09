@@ -1,0 +1,31 @@
+id: nav-atlas-morph
+version: 1
+label: Atlas 多态判定
+summary: 同一逻辑页内容多态 vs 应拆页（仅建议 pin/split）
+engine: text_chat
+role: ''
+output_schema: json
+enabled: true
+sort_order: 0
+flags: []
+slots:
+- name: context_json
+  kind: text
+- name: image_base64
+  kind: image
+- name: image_mime
+  kind: text
+call:
+  temperature: 0.0
+  max_tokens: 280
+  timeout_sec: 45
+  json_mode: true
+image:
+  slot: image_base64
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: ctx
+  slot: context_json
+  heading: ==== 两帧上下文（JSON）====

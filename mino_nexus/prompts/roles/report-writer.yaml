@@ -1,0 +1,22 @@
+id: report-writer
+version: 1
+label: 报告编写
+group: product
+kind: json
+source: llm_jobs
+summary: 按流程事实写报告草稿。
+used_in:
+- 测试报告
+related_ids:
+- req-qa-bm
+- doc-keeper
+live: true
+owner: report-writer
+job: draft_test_report
+called: sandbox
+triggers: []
+output: json
+editable: false
+jobs:
+- report-writer
+- draft_test_report

@@ -1,0 +1,53 @@
+{
+  "id": "explore-app",
+  "label": "应用探索",
+  "summary": "在 App 内自由探索，被动采集拓展 Screen Atlas。",
+  "category": "device",
+  "role_id": "test-engineer",
+  "role_label": "测试工程师",
+  "engine": "agent_loop",
+  "system_prompt": "",
+  "sop_json": {
+    "phases": [
+      {
+        "id": "do",
+        "job": "agent-decide",
+        "tool_kinds": [
+          "generic",
+          "recovery"
+        ],
+        "guards": [
+          "action_fuse",
+          "limit_recovery_retry",
+          "block_login_after_guest"
+        ],
+        "advance_on": "signal_done"
+      }
+    ],
+    "inspections": [],
+    "pointer": "none",
+    "tool_kinds": [
+      "generic",
+      "recovery"
+    ],
+    "max_steps": 80,
+    "max_idle_steps": 15
+  },
+  "input_json": {
+    "type": "instruction",
+    "map": {
+      "goal": "case.steps_raw",
+      "success": "case.success_criteria"
+    }
+  },
+  "view_json": {
+    "id": "job-timeline"
+  },
+  "triggers_json": [
+    "app_explore",
+    "explore_run"
+  ],
+  "enabled": 1,
+  "builtin": 1,
+  "sort_order": 11
+}

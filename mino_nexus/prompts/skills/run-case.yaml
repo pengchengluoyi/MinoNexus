@@ -1,0 +1,77 @@
+id: run-case
+version: 1
+label: 执行测试用例
+summary: 看图按前置 / 操作 / 预期推进，调用能力目录里的 function。
+category: device
+role: test-engineer
+role_label: 测试工程师
+engine: agent_loop
+sop:
+  phases:
+  - id: prep
+    job: agent-vision-plan
+    tool_kinds:
+    - generic
+    - recovery
+    guards:
+    - exec_script_params
+    - action_fuse
+    - require_session
+    - prep_clear_before_launch
+    - block_prep_login_when_logged_in_required
+    advance_on: milestones
+    require: ''
+    exec_job: agent-vision-exec
+  - id: do
+    job: agent-vision-plan
+    tool_kinds:
+    - generic
+    - recovery
+    guards:
+    - action_fuse
+    - limit_recovery_retry
+    - block_assert_in_do
+    - require_sms_send_before_otp
+    - block_back_without_nav_back_semantics
+    - require_session
+    - block_fsm_off_step_target
+    - require_otp_before_login_tap
+    - block_repeat_get_otp_when_ready
+    advance_on: milestones
+    require: ''
+    exec_job: agent-vision-exec
+  - id: check
+    job: agent-vision-plan
+    tool_kinds:
+    - check
+    - recovery
+    guards:
+    - deny_mutate
+    - force_case_expectation
+    advance_on: milestones
+    require: saw_assert
+    exec_job: agent-vision-assert
+  inspections:
+  - job: inspect-session
+    at: case_start
+    on_fail: continue
+  pointer: case_columns
+  tool_kinds:
+  - generic
+  - check
+  - recovery
+  max_steps: 30
+  run_case_sop_vision_v1: true
+input:
+  type: case
+  map:
+    precondition: case.precondition
+    steps: case.steps
+    expected: case.expected
+view:
+  id: case-three-column
+triggers:
+- case_run
+- instruction
+enabled: true
+sort_order: 10

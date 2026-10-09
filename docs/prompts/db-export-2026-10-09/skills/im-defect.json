@@ -1,0 +1,38 @@
+{
+  "id": "im-defect",
+  "label": "IM 提缺陷",
+  "summary": "把说清的缺陷整理成 JSON。",
+  "category": "channel",
+  "role_id": "im-defect-assistant",
+  "role_label": "IM 缺陷助手",
+  "engine": "chat",
+  "system_prompt": "你是 Mino 的 IM 缺陷助手。把说清的缺陷整理成 JSON：title、steps、expected、actual、severity。信息不够就列出还缺什么，不要假装已经建单。",
+  "sop_json": {
+    "phases": [
+      "prep",
+      "do",
+      "check"
+    ],
+    "pointer": "none",
+    "tool_kinds": [
+      "generic",
+      "check",
+      "recovery"
+    ],
+    "max_steps": 24
+  },
+  "input_json": {
+    "type": "none",
+    "map": {}
+  },
+  "view_json": {
+    "id": "job-timeline"
+  },
+  "triggers_json": [
+    "im_chat",
+    "settings_chat"
+  ],
+  "enabled": 1,
+  "builtin": 1,
+  "sort_order": 41
+}

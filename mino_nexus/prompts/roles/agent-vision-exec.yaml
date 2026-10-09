@@ -1,0 +1,19 @@
+id: agent-vision-exec
+version: 1
+label: 看图执行
+group: runtime
+kind: json
+source: llm_jobs
+summary: 按 plan_digest 输出单步 capability。
+used_in:
+- Agent 逐步执行
+related_ids: []
+live: true
+owner: test-engineer
+job: agent-vision-exec
+called: wired
+triggers: []
+output: json
+editable: false
+jobs:
+- agent-vision-exec

@@ -1,0 +1,102 @@
+{
+  "id": "run-case",
+  "label": "执行测试用例",
+  "summary": "看图按前置 / 操作 / 预期推进，调用能力目录里的 function。",
+  "category": "device",
+  "role_id": "test-engineer",
+  "role_label": "测试工程师",
+  "engine": "agent_loop",
+  "system_prompt": "你是操控一台移动设备的自动化 agent（通过当前可用通道执行：adb / 远程节点 / iOS WDA / playwright）。你会看到【当前屏幕截图】，只做指针里【当前阶段】的事。菜单里出现的工具才能调。\n\n回答方式：必须调用一个工具（function call）。工具名 = capability id。一次只调一个。不要在正文写 JSON。\n本步结束 → signal_done；客观做不到 → signal_give_up；要人填能进输入框的信息 → signal_ask_human。\nthought 一两句即可。\n\n铁律：\n1. 坐标一律用【0-1000 归一化整数】：x=横向千分比、y=纵向千分比。屏幕正中央 = x:500,y:500。\n   - tap_element: x,y,selector_text（selector_text=按钮上可见文字，如「首页」）\n   - multi_tap: x,y,count=6,interval_ms=80\n   - swipe_element_to_element: from_x,from_y,to_x,to_y,duration_ms\n   - input_text: text,x,y（先点输入框再输入）\n   - launch_app/close_app: package 必须是下方「目标应用」\n   - press_key: key=back|home|...\n   - wait_ms: ms\n   - assert_visual: expectation=当前屏应看到的客观状态（校验阶段用）\n   - relogin: 看屏对齐登录态\n2. 你能看图：遇到未预期的隐私协议/权限申请/更新提示/广告弹窗等，主动点同意/允许/关闭/稍后，不要卡住。\n3. **只做当前阶段**。signal_done 不是整案完成。\n   - 前置：做完前置原文再 signal_done。不要进步骤、不要验预期。\n   - 操作：做完当前步骤再 signal_done。不要跳步。\n   - 校验：只能看。用 assert_visual；通过后再 signal_done。禁止点击/滑动/输入来改界面凑绿。\n4. 客观无法完成 → signal_give_up。加载/占位用 wait_ms。\n5. 需要人提供【能填进界面的信息】→ signal_ask_human。禁止让人去设备上点。\n   - 当前屏是登录/手机号输入 → input_text 并带 field=phone。\n   - 当前屏在问一次性口令 → input_text 并带 field=sms_code。\n6. 不要连续多次点同一位置；不要盲目连按返回键退出应用。\n7. 已执行动作历史和【短期记忆】会给你。后面要对比变化时把事实写入 remember。\n8. 当前屏明显在加载/转圈时，用 wait_ms，禁止乱点。\n9. 【本步简报】是编译结果，不是某条原文。与当前屏幕冲突时以屏幕为准。\n10. 每个应用的登录、退出、业务路径都不同。只按本应用简报和当前截图操作。",
+  "sop_json": {
+    "phases": [
+      {
+        "id": "prep",
+        "job": "agent-vision-plan",
+        "tool_kinds": [
+          "generic",
+          "recovery"
+        ],
+        "guards": [
+          "exec_script_params",
+          "action_fuse",
+          "require_session",
+          "prep_clear_before_launch",
+          "block_prep_login_when_logged_in_required"
+        ],
+        "advance_on": "milestones",
+        "require": "",
+        "exec_job": "agent-vision-exec"
+      },
+      {
+        "id": "do",
+        "job": "agent-vision-plan",
+        "tool_kinds": [
+          "generic",
+          "recovery"
+        ],
+        "guards": [
+          "action_fuse",
+          "limit_recovery_retry",
+          "block_assert_in_do",
+          "require_sms_send_before_otp",
+          "block_back_without_nav_back_semantics",
+          "require_session",
+          "block_fsm_off_step_target",
+          "require_otp_before_login_tap",
+          "block_repeat_get_otp_when_ready"
+        ],
+        "advance_on": "milestones",
+        "require": "",
+        "exec_job": "agent-vision-exec"
+      },
+      {
+        "id": "check",
+        "job": "agent-vision-plan",
+        "tool_kinds": [
+          "check",
+          "recovery"
+        ],
+        "guards": [
+          "deny_mutate",
+          "force_case_expectation"
+        ],
+        "advance_on": "milestones",
+        "require": "saw_assert",
+        "exec_job": "agent-vision-assert"
+      }
+    ],
+    "inspections": [
+      {
+        "job": "inspect-session",
+        "at": "case_start",
+        "on_fail": "continue"
+      }
+    ],
+    "pointer": "case_columns",
+    "tool_kinds": [
+      "generic",
+      "check",
+      "recovery"
+    ],
+    "max_steps": 30,
+    "run_case_sop_vision_v1": true
+  },
+  "input_json": {
+    "type": "case",
+    "map": {
+      "precondition": "case.precondition",
+      "steps": "case.steps",
+      "expected": "case.expected"
+    }
+  },
+  "view_json": {
+    "id": "case-three-column"
+  },
+  "triggers_json": [
+    "case_run",
+    "instruction"
+  ],
+  "enabled": 1,
+  "builtin": 1,
+  "sort_order": 10
+}

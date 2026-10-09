@@ -1,0 +1,19 @@
+id: agent-vision-assert
+version: 1
+label: 看图校验
+group: runtime
+kind: json
+source: llm_jobs
+summary: check 阶段批量视觉校验点。
+used_in:
+- Agent 逐步执行
+related_ids: []
+live: true
+owner: test-engineer
+job: agent-vision-assert
+called: wired
+triggers: []
+output: json
+editable: false
+jobs:
+- agent-vision-assert

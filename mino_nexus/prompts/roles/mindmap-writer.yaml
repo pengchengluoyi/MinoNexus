@@ -1,0 +1,23 @@
+id: mindmap-writer
+version: 1
+label: 测试脑图编写
+group: product
+kind: json
+source: llm_jobs
+summary: 沿入口和端铺覆盖脑图。
+used_in:
+- draft_mindmap
+related_ids:
+- req-analyst
+- case-writer
+live: true
+owner: mindmap-writer
+job: draft_mindmap
+called: wired
+triggers:
+- 需求分析完成
+- 流程 tick
+output: json
+editable: false
+jobs:
+- draft_mindmap

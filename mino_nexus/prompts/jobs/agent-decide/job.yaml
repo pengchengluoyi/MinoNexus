@@ -1,0 +1,140 @@
+id: agent-decide
+version: 24
+label: agent-decide
+summary: ''
+engine: vision_decide
+role: test-engineer
+output_schema: agent_decision
+enabled: true
+sort_order: 10
+flags: []
+slots:
+- name: goal
+  kind: text
+  required: true
+- name: success_criteria
+  kind: text
+  required: true
+- name: target_app
+  kind: text
+  required: true
+- name: session_json
+  kind: text
+  required: false
+- name: accounts_json
+  kind: text
+  required: false
+- name: checkpoints_block
+  kind: text
+  required: true
+- name: screen_size_block
+  kind: text
+  required: true
+- name: history_block
+  kind: text
+  required: true
+- name: memory_block
+  kind: text
+  required: false
+- name: knowledge_hint
+  kind: text
+  required: false
+- name: knowledge_body
+  kind: text
+  required: false
+- name: hierarchy_text
+  kind: text
+  required: false
+- name: image_base64
+  kind: image
+  required: true
+- name: image_mime
+  kind: text
+  required: false
+- name: nav_assist
+  kind: text
+  desc: NavFSM RouteAssist（可空）
+- name: doc_context
+  kind: text
+  desc: 文档库 FTS 摘录（可空）
+call:
+  temperature: 0.1
+  max_tokens: 768
+  timeout_sec: 90
+  json_mode: false
+  require_tool_calls: true
+image:
+  slot: image_base64
+  position: after_text
+  required: true
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: goal
+  slot: goal
+  heading: ==== 目标 ====
+  empty_text: （未提供目标）
+- id: success
+  slot: success_criteria
+  heading: ==== 本步要完成的操作（做完调 signal_done；不要自己校验）====
+  empty_text: （未提供，凭目标自行判断）
+- id: target
+  slot: target_app
+  heading: ==== 目标应用（launch/open 必须用此标识：App 包名或网页网址）====
+- id: session
+  slot: session_json
+  heading: ==== 会话状态 JSON（session_json）====
+- id: accounts
+  slot: accounts_json
+  heading: ==== 租号/账号 JSON（accounts_json）====
+- id: checkpoints
+  slot: checkpoints_block
+  heading: ==== 检查点 / 步骤指针（只做标记为当前的那一步）====
+  empty_text: （无）
+- id: device
+  heading: ==== 设备/通道 ====
+  enabled: false
+- id: screen
+  slot: screen_size_block
+  heading: ==== 当前屏幕 screen_size ====
+- id: menu
+  heading: ==== 可用能力 capability_menu ====
+  enabled: false
+- id: history
+  slot: history_block
+  heading: ==== 已执行动作历史（最近在后）====
+  empty_text: （这是第一步）
+- id: memory
+  slot: memory_block
+  heading: ==== 短期记忆（后面找内容 / 对比变化时用这些，不要丢掉）====
+  empty_text: （暂无）
+- id: knowledge
+  slot: knowledge_hint
+  heading: ==== 本步相关知识目录（只有标题，没有正文；与屏幕冲突时以屏幕为准。需要某条正文时在工具参数里填 knowledge_ids，本步会重新决策一次）====
+  empty_text: （本步没有匹配到已审核知识，按屏幕和目标正常操作）
+  max_chars: 4000
+- id: knowledge_body
+  slot: knowledge_body
+  heading: ==== 你点名的知识正文（仅本步有效；业务事实以此为准，界面现状仍以屏幕为准）====
+  skip_if_empty: true
+  max_chars: 1200
+- id: hierarchy
+  slot: hierarchy_text
+  heading: ==== 本页可点元素（仅辅助定位，不是登录/业务结论）====
+  skip_if_empty: true
+  max_chars: 4000
+- id: footer
+  file: user/10-footer.md
+- id: nav_assist
+  slot: nav_assist
+  heading: ==== 导航 assist（按本应用导航图编译，优先于你的猜测）====
+  skip_if_empty: true
+  max_chars: 2400
+  enabled: true
+- id: doc_context
+  slot: doc_context
+  heading: ==== 文档摘录（上传文档检索，仅供参考）====
+  skip_if_empty: true
+  max_chars: 1400
+  enabled: true

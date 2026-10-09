@@ -1,0 +1,25 @@
+id: im-dialogue
+version: 1
+label: IM 对话
+summary: 通道里回答测试同学
+engine: text_chat
+role: im-qa-assistant
+output_schema: chat_reply
+enabled: true
+sort_order: 40
+flags: []
+slots:
+- name: user_payload
+  kind: text
+  required: false
+call:
+  temperature: 0.4
+  max_tokens: 2048
+  timeout_sec: 90
+  json_mode: false
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+  enabled: true
+user: []

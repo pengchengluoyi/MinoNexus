@@ -1,0 +1,20 @@
+id: im-defect-assistant
+version: 1
+label: IM 缺陷助手
+group: product
+kind: json
+source: llm_jobs
+summary: 把缺陷整理成 JSON。prompt 可在设置页改。
+used_in:
+- IM 提缺陷
+related_ids:
+- im-qa-assistant
+live: true
+owner: im-defect-assistant
+job: ''
+called: wired
+triggers: []
+output: json
+editable: true
+jobs:
+- im-defect

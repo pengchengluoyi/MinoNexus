@@ -1,0 +1,88 @@
+id: agent-vision-plan
+version: 12
+label: 看图规划
+summary: 本回合里程碑与逻辑块编排；不输出 tap/input
+engine: json_chat
+role: test-engineer
+output_schema: json
+enabled: true
+sort_order: 0
+flags: []
+slots:
+- name: image_base64
+  kind: image
+- name: image_mime
+  kind: text
+- name: case_execution_context_json
+  kind: text
+- name: check_program_plan
+  kind: text
+- name: do_program_plan
+  kind: text
+- name: doc_context
+  kind: text
+- name: hierarchy_text
+  kind: text
+- name: knowledge_body
+  kind: text
+- name: knowledge_hint
+  kind: text
+- name: nav_assist
+  kind: text
+- name: phase
+  kind: text
+- name: phase_step_text
+  kind: text
+- name: prep_program_plan
+  kind: text
+- name: review_program_fail
+  kind: text
+- name: screen_size_block
+  kind: text
+- name: session_json
+  kind: text
+- name: success_criteria
+  kind: text
+- name: target_app
+  kind: text
+- name: task_context_json
+  kind: text
+- name: resource_claim_json
+  kind: text
+call:
+  temperature: 0.15
+  max_tokens: 2400
+  timeout_sec: 90
+  json_mode: true
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: sc
+  slot: success_criteria
+  heading: success_criteria
+- id: know
+  slot: knowledge_body
+  heading: knowledge
+  skip_if_empty: true
+- id: nav
+  slot: nav_assist
+  heading: nav
+  skip_if_empty: true
+- id: doc
+  slot: doc_context
+  heading: doc
+  skip_if_empty: true
+- id: hier
+  slot: hierarchy_text
+  heading: hierarchy
+  skip_if_empty: true
+- id: rev
+  slot: review_program_fail
+  heading: program_fail_review
+  skip_if_empty: true
+- id: img
+  slot: image_base64
+  kind: image
+  mime_slot: image_mime

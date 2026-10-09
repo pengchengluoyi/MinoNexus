@@ -1,0 +1,38 @@
+{
+  "id": "im-dialogue",
+  "label": "IM 对话",
+  "summary": "通道里回答测试同学并建议下一步。",
+  "category": "channel",
+  "role_id": "im-qa-assistant",
+  "role_label": "IM 总指挥",
+  "engine": "chat",
+  "system_prompt": "你是 Mino 的 IM 总指挥。在通道里回答测试同学的问题，并可建议推进流程、下发任务。人审门禁仍须人点。不要编造未提供的任务或设备。",
+  "sop_json": {
+    "phases": [
+      "prep",
+      "do",
+      "check"
+    ],
+    "pointer": "none",
+    "tool_kinds": [
+      "generic",
+      "check",
+      "recovery"
+    ],
+    "max_steps": 24
+  },
+  "input_json": {
+    "type": "none",
+    "map": {}
+  },
+  "view_json": {
+    "id": "job-timeline"
+  },
+  "triggers_json": [
+    "im_chat",
+    "settings_chat"
+  ],
+  "enabled": 1,
+  "builtin": 1,
+  "sort_order": 40
+}

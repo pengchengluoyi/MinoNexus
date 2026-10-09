@@ -1,0 +1,28 @@
+id: test-engineer-chat
+version: 1
+label: 测试工程师（对话）
+summary: 身份说明。真机执行走「执行测试用例」。
+category: device
+role: test-engineer
+role_label: 测试工程师
+engine: chat
+sop:
+  phases:
+  - prep
+  - do
+  - check
+  pointer: none
+  tool_kinds:
+  - generic
+  - check
+  - recovery
+  max_steps: 24
+input:
+  type: none
+  map: {}
+view:
+  id: job-timeline
+triggers:
+- settings_chat
+enabled: true
+sort_order: 52

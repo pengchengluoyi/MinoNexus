@@ -1,0 +1,29 @@
+id: draft_mindmap
+version: 1
+label: 写测试脑图
+summary: 按入口铺覆盖脑图
+engine: json_chat
+role: mindmap-writer
+output_schema: mindmap
+enabled: true
+sort_order: 21
+flags: []
+slots:
+- name: user_payload
+  kind: text
+  required: true
+call:
+  temperature: 0.0
+  max_tokens: 2048
+  timeout_sec: 120
+  json_mode: true
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: main
+  slot: user_payload
+  heading: ==== 输入 JSON ====
+- id: nag
+  file: user/10-nag.md

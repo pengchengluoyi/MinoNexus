@@ -1,0 +1,29 @@
+id: analyze_req
+version: 1
+label: 拆验收标准
+summary: 读需求原文拆测试点
+engine: json_chat
+role: req-analyst
+output_schema: req_analysis
+enabled: true
+sort_order: 20
+flags: []
+slots:
+- name: user_payload
+  kind: text
+  required: true
+call:
+  temperature: 0.0
+  max_tokens: 2048
+  timeout_sec: 120
+  json_mode: true
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: main
+  slot: user_payload
+  heading: ==== 需求 JSON ====
+- id: nag
+  file: user/10-nag.md

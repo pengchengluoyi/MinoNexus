@@ -1,0 +1,28 @@
+id: draft_cases
+version: 1
+label: 写用例草稿
+summary: 按测试点展开步骤和预期。
+category: flow
+role: case-writer
+role_label: 测试用例编写
+engine: qa_job
+sop:
+  phases:
+  - prep
+  - do
+  - check
+  pointer: none
+  tool_kinds:
+  - generic
+  - check
+  - recovery
+  max_steps: 24
+input:
+  type: requirement
+  map: {}
+view:
+  id: flow-doc
+triggers:
+- qa_tick
+enabled: true
+sort_order: 22

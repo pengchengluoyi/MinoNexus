@@ -1,0 +1,25 @@
+id: conductor
+version: 1
+label: 分析师调度
+summary: 看当前步骤该调用哪个角色
+engine: text_chat
+role: conductor
+output_schema: chat_reply
+enabled: true
+sort_order: 30
+flags: []
+slots:
+- name: user_payload
+  kind: text
+  required: false
+call:
+  temperature: 0.4
+  max_tokens: 2048
+  timeout_sec: 90
+  json_mode: false
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+  enabled: true
+user: []

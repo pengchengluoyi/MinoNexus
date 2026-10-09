@@ -1,0 +1,37 @@
+{
+  "id": "im-dialogue",
+  "label": "IM 对话",
+  "summary": "通道里回答测试同学",
+  "engine": "text_chat",
+  "role_id": "im-qa-assistant",
+  "output_schema": "chat_reply",
+  "slots_json": [
+    {
+      "name": "user_payload",
+      "kind": "text",
+      "required": false
+    }
+  ],
+  "flags_json": [],
+  "system_blocks_json": [
+    {
+      "id": "main",
+      "text": "【观察沙盒】你正在设置页被用来观察这个角色。优先用中文说明自己的职责、输入、输出和限制。若用户给出可按原协议执行的任务，再按原协议作答。不要假装已经操作了真机或改写了流程门禁。\n\n你是 Mino 的 IM 总指挥。在通道里回答测试同学的问题，并可建议推进流程、下发任务。人审门禁仍须人点。不要编造未提供的任务或设备。",
+      "enabled": true
+    }
+  ],
+  "user_blocks_json": [],
+  "image_json": {},
+  "call_json": {
+    "temperature": 0.4,
+    "max_tokens": 2048,
+    "timeout_sec": 90,
+    "json_mode": false
+  },
+  "enabled": 1,
+  "builtin": 1,
+  "sort_order": 40,
+  "seed_rev": "f7468dbd94816524",
+  "overrides_json": {},
+  "prompt_version": 1
+}
