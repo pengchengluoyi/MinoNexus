@@ -608,8 +608,14 @@ def save_knowledge_job_settings(
 
 def get_case_import_settings() -> dict[str, Any]:
     ci = _root().get("case_import") if isinstance(_root().get("case_import"), dict) else {}
+    try:
+        batch = int(ci.get("preview_batch_size") or 5)
+    except (TypeError, ValueError):
+        batch = 5
+    batch = min(20, max(1, batch))
     return {
         "block_on_step_key_issues_default": bool(ci.get("block_on_step_key_issues_default")),
+        "preview_batch_size": batch,
     }
 
 
@@ -621,6 +627,12 @@ def save_case_import_settings(payload: dict[str, Any]) -> dict[str, Any]:
         root["case_import"] = ci
     if "block_on_step_key_issues_default" in payload:
         ci["block_on_step_key_issues_default"] = bool(payload.get("block_on_step_key_issues_default"))
+    if "preview_batch_size" in payload:
+        try:
+            batch = int(payload.get("preview_batch_size") or 5)
+        except (TypeError, ValueError):
+            batch = 5
+        ci["preview_batch_size"] = min(20, max(1, batch))
     _save(root)
     return get_case_import_settings()
 

@@ -1865,6 +1865,141 @@ def ensure_account_facet_commit_job() -> int:
     return 1
 
 
+def ensure_case_step_compile_job() -> int:
+    """保存用例时把编号步拆成目录事件。正文不写被测 App 的按钮文案。"""
+    from mino_nexus.services.job_store import get_job, _to_row
+
+    jid = "case-step-compile"
+    if get_job(jid):
+        return 0
+    spec = {
+        "id": jid,
+        "label": "用例步骤拆解",
+        "summary": "按目录闭集把一段编号步拆成摘录和槽",
+        "engine": "json_chat",
+        "role_id": "test-engineer",
+        "enabled": True,
+        "builtin": True,
+        "prompt_version": 1,
+        "output_schema": "json",
+        "slots": [{"name": "payload_json", "kind": "text"}],
+        "system_blocks": [
+            {
+                "id": "main",
+                "text": (
+                    "你把测试用例的一段编号步拆成事件。输入 JSON 里有 layer、source、platform、catalog。"
+                    "catalog 是这一层允许的全部事件。\n\n"
+                    "只输出 JSON：{\"spans\":[...]}\n"
+                    "每条 span 含 quote、key_ref，以及该事件声明过的 slots 或 params。\n"
+                    "quote 必须是 source 里逐字连续的一段，不要改写，不要自己报下标。\n"
+                    "key_ref 只能从 catalog 里选。配不上就不要发明事件，spans 里不要放这一段。\n"
+                    "一条原文只属于一条 span。已经被别的 quote 整段包含的片段不要再单独成条。\n"
+                    "slots[].quote 必须落在父 quote 里面。必填槽都要有 quote。params 的键只能是该条目的 param_slots。\n"
+                    "枚举只能用给出的值。登录流用一个父跨度盖住整段，槽用 catalog 里的 id。\n"
+                    "若输入里有 errors，按那些原因改摘录和事件，仍然只能从 catalog 里选。\n"
+                    "不要输出说明文字。"
+                ),
+            }
+        ],
+        "user_blocks": [
+            {
+                "id": "payload",
+                "slot": "payload_json",
+                "heading": "==== 编号步 ====",
+            }
+        ],
+        "call": {"temperature": 0.1, "max_tokens": 1200, "timeout_sec": 60, "json_mode": True},
+        "flags": ["case_execution_use"],
+    }
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.llm_job import LlmJob
+
+    with session_scope() as db:
+        if db.query(LlmJob).filter(LlmJob.id == jid).first():
+            return 0
+        db.add(_to_row(spec))
+        db.flush()
+    return 1
+
+
+def upgrade_case_step_compile_to_v2() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "case-step-compile"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 2:
+        return 0
+    text = str(((row.get("system_blocks") or [{}])[0]).get("text") or "")
+    extra = (
+        "一条原文只属于一条 span。已经被别的 quote 整段包含的片段不要再单独成条。\n"
+        "必填槽都要有 quote。\n"
+    )
+    if "只属于一条 span" not in text:
+        text = text.rstrip() + "\n" + extra
+    merged = copy.deepcopy(row)
+    merged["system_blocks"] = [{"id": "main", "text": text.strip()}]
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v2 one span per stretch, required slot quotes",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 2
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_case_step_compile_to_v3() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "case-step-compile"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 3:
+        return 0
+    text = str(((row.get("system_blocks") or [{}])[0]).get("text") or "")
+    extra = (
+        "如果这句话其实属于另一栏，key_ref 用 other_layer_key_refs 里的那条，不要改用本层事件硬套。\n"
+        "刷新页面时，等待写在 operation.reload_page 的 params.wait_ms（毫秒），不要再拆一条等待。\n"
+    )
+    if "other_layer_key_refs" not in text:
+        text = text.rstrip() + "\n" + extra
+    merged = copy.deepcopy(row)
+    merged["system_blocks"] = [{"id": "main", "text": text.strip()}]
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v3 other layer and reload wait",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 3
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
 def ensure_nav_atlas_morph_job() -> int:
     """M4：两帧/线框上下文 + 截图，判定 same_page_morph | split_page。"""
     from mino_nexus.services.job_store import get_job, _to_row
@@ -2620,6 +2755,8 @@ _VISION_EXEC_V5_SYSTEM = """\
 没有 prior_action 时不要填 prior_status，只对 status 为 in_progress 的那一条调用工具。
 
 画面还在加载、看不清上一步的结果时：只调用 wait_screen_ready，不要填 prior_status。检查单留到下一张稳定的画面，再给 pass 或 fail。
+
+expected 已经出现在画面上就是 pass。输入框已聚焦、登录页已经打开，都算达成。不要因为整页没有跳转就判 fail。
 """
 
 
@@ -3067,6 +3204,48 @@ def upgrade_agent_vision_exec_to_v7() -> int:
     })
     merged["prompt_version"] = 7
     merged["summary"] = "加载中只等待，不把没填 prior_status 当成失败"
+    _set_revisions(merged, revisions)
+    _validate_job(merged)
+    _smoke_render(merged)
+    _commit_job_upgrade(merged, jid)
+    return 1
+
+
+def upgrade_agent_vision_exec_to_v8() -> int:
+    import copy
+    from datetime import datetime
+
+    from mino_nexus.services.job_store import (
+        _blocks_snapshot,
+        _revision_list,
+        _set_revisions,
+        _smoke_render,
+        _validate_job,
+        get_job,
+    )
+
+    jid = "agent-vision-exec"
+    row = get_job(jid)
+    if not row or int(row.get("prompt_version") or 0) >= 8:
+        return 0
+    text = str(((row.get("system_blocks") or [{}])[0]).get("text") or "")
+    extra = (
+        "expected 已经出现在画面上就是 pass。输入框已聚焦、登录页已经打开，都算达成。"
+        "不要因为整页没有跳转就判 fail。\n"
+    )
+    if "输入框已聚焦" not in text:
+        text = text.rstrip() + "\n" + extra
+    merged = copy.deepcopy(row)
+    merged["system_blocks"] = [{"id": "main", "text": text.strip()}]
+    revisions = _revision_list(row)
+    revisions.append({
+        "version": int(row.get("prompt_version") or 1),
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "note": "v8 visible expected is pass",
+        **_blocks_snapshot(row),
+    })
+    merged["prompt_version"] = 8
+    merged["summary"] = "画面已经是检查单上的结果就是通过"
     _set_revisions(merged, revisions)
     _validate_job(merged)
     _smoke_render(merged)

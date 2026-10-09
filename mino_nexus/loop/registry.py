@@ -699,6 +699,14 @@ def _guard_action_fuse(ctx: dict[str, Any]) -> Optional[str]:
 
     run_ctx = ctx.get("run_ctx")
     web_channel = ui_channel_from_ctx(run_ctx) == UiChannel.WEB
+    focus_mid = ""
+    if step_cursor is not None:
+        from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
+        from mino_nexus.loop.milestones import read_state
+
+        focus_row = in_progress_milestone(read_state(step_cursor))
+        if isinstance(focus_row, dict):
+            focus_mid = str(focus_row.get("id") or "")
 
     return gate.check(
         phase=str(ctx.get("phase") or ""),
@@ -712,6 +720,7 @@ def _guard_action_fuse(ctx: dict[str, Any]) -> Optional[str]:
         intents_done=set(getattr(step_cursor, "step_intents_done", None) or set()),
         login_flow_step=login_flow_step,
         web_channel=web_channel,
+        milestone_id=focus_mid,
     )
 
 

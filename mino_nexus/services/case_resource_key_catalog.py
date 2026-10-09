@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CATALOG_VERSION = 8
+CATALOG_VERSION = 10
 
 # Claim 落库：case.meta.resource_key（v1）；与 case_scene 合并时 case_scene 优先同名字段。
 CLAIM_STORAGE = {
@@ -321,8 +321,9 @@ def _entries() -> list[dict[str, Any]]:
             kind="flow_block",
             block_id="fb.global.login",
             slots=[
-                {"id": "credential", "label": "凭证", "required": True, "literals": ["输入手机号或邮箱验证码"]},
-                {"id": "submit", "label": "提交", "required": True, "literals": ["完成登录"]},
+                {"id": "entry", "label": "入口", "required": False},
+                {"id": "credential", "label": "凭证", "required": True},
+                {"id": "submit", "label": "提交", "required": True},
             ],
         ),
         _entry(
@@ -540,6 +541,14 @@ def _entries() -> list[dict[str, Any]]:
             kind="hook",
             event_name="勾选",
             schemes=["visual", "dom"],
+            param_slots=[
+                {
+                    "id": "target.role",
+                    "required": True,
+                    "enum": ["checkbox"],
+                },
+                {"id": "target.name", "required": True},
+            ],
             compile_patterns=[
                 {
                     "priority": 60,
@@ -593,6 +602,10 @@ def _entries() -> list[dict[str, Any]]:
             key_ref="expected.ui_copy",
             event_name="文案检查",
             schemes=["visual", "dom"],
+            param_slots=[
+                {"id": "title", "required": False},
+                {"id": "body", "required": False},
+            ],
             compile_patterns=[
                 {
                     "priority": 85,
@@ -627,6 +640,14 @@ def _entries() -> list[dict[str, Any]]:
             key_ref="expected.ui_style",
             event_name="UI样式检查",
             schemes=["visual", "dom"],
+            param_slots=[
+                {
+                    "id": "style",
+                    "required": True,
+                    "enum": ["disabled", "enabled", "visible", "centered"],
+                },
+                {"id": "label", "required": False},
+            ],
             compile_patterns=[
                 {
                     "priority": 80,
@@ -687,6 +708,11 @@ def _entries() -> list[dict[str, Any]]:
             key_ref="expected.dialog",
             event_name="弹窗检查",
             schemes=["visual", "dom"],
+            param_slots=[
+                {"id": "which", "required": False},
+                {"id": "exclusive", "required": False},
+                {"id": "present", "required": False},
+            ],
             compile_patterns=[
                 {
                     "priority": 100,
@@ -731,6 +757,10 @@ def _entries() -> list[dict[str, Any]]:
             key_ref="expected.input_value",
             event_name="输入文案检查",
             schemes=["visual", "dom"],
+            param_slots=[
+                {"id": "max_length", "required": False},
+                {"id": "accepts_special", "required": False},
+            ],
             compile_patterns=[
                 {
                     "priority": 75,
@@ -777,6 +807,15 @@ def _entries() -> list[dict[str, Any]]:
             key_ref="expected.spatial_relation",
             event_name="位置关系观察",
             schemes=["visual", "dom"],
+            param_slots=[
+                {"id": "relative_to", "required": True},
+                {"id": "subject", "required": False},
+                {
+                    "id": "relation",
+                    "required": True,
+                    "enum": ["right", "left", "above", "below"],
+                },
+            ],
             compile_patterns=[
                 {
                     "priority": 65,

@@ -518,16 +518,17 @@ def compile_operation_text(
     platform: str = "",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     """返回 (plan_steps, warnings, key_refs)。"""
-    from mino_nexus.services.case_clause_events import compile_text_spans, user_message
+    from mino_nexus.services.case_clause_events import user_message
+    from mino_nexus.services.case_step_span_llm import compile_step_spans
 
     warnings: list[dict[str, Any]] = []
     key_refs: list[str] = []
     plan_steps: list[dict[str, Any]] = []
     units: list[tuple[str, dict[str, Any] | None]] = []
     for body in split_clauses(instruction):
-        hits, uncovered = compile_text_spans(body, "operation")
-        if uncovered:
-            units.append((body, {"_block": "uncovered", "detail": uncovered}))
+        hits, fail = compile_step_spans(body, "operation", platform=platform)
+        if fail:
+            units.append((body, {"_block": str(fail.get("reason") or "unmapped"), "detail": str(fail.get("detail") or "")}))
             continue
         if not hits:
             units.append((body, None))
@@ -700,11 +701,11 @@ def compile_expected_text(
     do_steps: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     from mino_nexus.services.case_clause_events import (
-        compile_text_spans,
         incomplete_reason,
         merge_dialog_checks,
         user_message,
     )
+    from mino_nexus.services.case_step_span_llm import compile_step_spans
 
     warnings: list[dict[str, Any]] = []
     key_refs: list[str] = []
@@ -717,9 +718,10 @@ def compile_expected_text(
     expanded: list[tuple[int, str, dict[str, Any] | None]] = []
     cursor = 0
     for body in clauses:
-        hits, uncovered = compile_text_spans(body, "expected")
-        if uncovered or not hits:
-            reason = "uncovered" if uncovered else "unmapped"
+        hits, fail = compile_step_spans(body, "expected", platform=platform)
+        if fail or not hits:
+            reason = str((fail or {}).get("reason") or ("uncovered" if fail else "unmapped"))
+            uncovered = str((fail or {}).get("detail") or "")
             warnings.append(
                 {
                     "case_step": case_step,
@@ -868,8 +870,13 @@ def build_do_program_plan_for_step(
     steps, warnings, key_refs = compile_operation_text(
         instruction, case_step=case_step, platform=platform
     )
+    from mino_nexus.services.case_resource_key_catalog import CATALOG_VERSION
+
     return {
         "schema": "mino.do_program_plan.v1",
+        "compiler": "case-step-compile",
+        "catalog_version": CATALOG_VERSION,
+        "source": str(instruction or ""),
         "case_step": int(case_step),
         "steps": steps,
         "spans": _spans_from_steps(steps),
@@ -893,8 +900,13 @@ def build_check_program_plan_for_step(
         platform=platform,
         do_steps=do_steps,
     )
+    from mino_nexus.services.case_resource_key_catalog import CATALOG_VERSION
+
     return {
         "schema": "mino.check_program_plan.v1",
+        "compiler": "case-step-compile",
+        "catalog_version": CATALOG_VERSION,
+        "source": str(expected or ""),
         "case_step": int(case_step),
         "instruction_hint": str(instruction or "")[:200],
         "checkpoints": checkpoints,
@@ -905,21 +917,49 @@ def build_check_program_plan_for_step(
     }
 
 
+def _stored_plan_fresh(plan: Any, source: str) -> bool:
+    from mino_nexus.services.case_resource_key_catalog import CATALOG_VERSION
+
+    if not isinstance(plan, dict):
+        return False
+    if str(plan.get("compiler") or "") != "case-step-compile":
+        return False
+    if int(plan.get("catalog_version") or 0) != int(CATALOG_VERSION):
+        return False
+    if str(plan.get("source") or "") != str(source or ""):
+        return False
+    warnings = plan.get("compile_warnings") if isinstance(plan.get("compile_warnings"), list) else []
+    if any(isinstance(row, dict) and row.get("blocked") for row in warnings):
+        return False
+    return True
+
+
 def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
     """整案编译 → step_program_keys + 各步 plan 缓存 + warnings + ui_automation。"""
     step_keys: dict[str, Any] = {}
     all_warnings: list[dict[str, Any]] = []
     platform = str(case.get("platform") or "")
+    meta = case.get("meta") if isinstance(case.get("meta"), dict) else {}
+    previous = meta.get("step_program_keys") if isinstance(meta.get("step_program_keys"), dict) else {}
     for node in build_seq_nodes(case):
         n = int(node.n)
-        do_plan = build_do_program_plan_for_step(n, str(node.instruction or ""), platform=platform)
-        ck_plan = build_check_program_plan_for_step(
-            n,
-            str(node.expected or ""),
-            instruction=str(node.instruction or ""),
-            platform=platform,
-            do_steps=list(do_plan.get("steps") or []),
-        )
+        instr = str(node.instruction or "")
+        expected = str(node.expected or "")
+        old = previous.get(str(n)) if isinstance(previous.get(str(n)), dict) else {}
+        do_old = old.get("do_program_plan") if isinstance(old, dict) else None
+        ck_old = old.get("check_program_plan") if isinstance(old, dict) else None
+        if _stored_plan_fresh(do_old, instr) and _stored_plan_fresh(ck_old, expected):
+            do_plan = dict(do_old or {})
+            ck_plan = dict(ck_old or {})
+        else:
+            do_plan = build_do_program_plan_for_step(n, instr, platform=platform)
+            ck_plan = build_check_program_plan_for_step(
+                n,
+                expected,
+                instruction=instr,
+                platform=platform,
+                do_steps=list(do_plan.get("steps") or []),
+            )
         step_keys[str(n)] = {
             "operations": list(do_plan.get("key_refs") or []),
             "expected": list(ck_plan.get("key_refs") or []),
@@ -928,6 +968,46 @@ def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
         }
         all_warnings.extend(do_plan.get("compile_warnings") or [])
         all_warnings.extend(ck_plan.get("compile_warnings") or [])
+        from mino_nexus.services.control_registry import stamp_compiled_plans
+
+        for item in stamp_compiled_plans(case, do_plan, ck_plan):
+            all_warnings.append({"case_step": item.get("case_step"), "layer": "operation", "blocked": item})
+    from mino_nexus.services.case_step_span_llm import compile_step_spans, layer_menu
+
+    if layer_menu("precondition"):
+        import re
+
+        from mino_nexus.services.case_clause_events import user_message
+
+        pre = str(case.get("precondition") or case.get("precondition_raw") or "")
+        for line in re.split(r"[\n\r]+", pre):
+            body = re.sub(r"^\s*\d+[.)、．]\s*", "", line.strip())
+            if not body or "：" in body or ":" in body:
+                continue
+            _hits, fail = compile_step_spans(body, "precondition", platform=platform)
+            if not fail:
+                continue
+            all_warnings.append(
+                {
+                    "case_step": 0,
+                    "layer": "precondition",
+                    "line": body,
+                    "raw_text": body,
+                    "blocked": _blocked_item(
+                        phase="prep",
+                        case_step=0,
+                        clause=body,
+                        reason=str(fail.get("reason") or "unmapped"),
+                        user_message=user_message(
+                            case_step=0,
+                            layer="precondition",
+                            clause=body,
+                            reason=str(fail.get("reason") or "unmapped"),
+                            detail=str(fail.get("detail") or ""),
+                        ),
+                    ),
+                }
+            )
     blocked: list[dict[str, Any]] = []
     for w in all_warnings:
         item = w.get("blocked") if isinstance(w, dict) else None

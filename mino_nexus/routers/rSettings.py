@@ -869,6 +869,7 @@ def get_case_resource_key_catalog(_sess: dict = Depends(current_session)):
 
 class CaseImportSettingsBody(BaseModel):
     block_on_step_key_issues_default: bool | None = None
+    preview_batch_size: int | None = None
 
 
 @router.get("/case-import")

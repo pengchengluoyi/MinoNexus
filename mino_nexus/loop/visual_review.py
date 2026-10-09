@@ -27,12 +27,36 @@ _INTERNAL_CAPS = frozenset({
 })
 
 
+def _visible_expected(capability_id: str, milestone_id: str, title: str) -> str:
+    """检查单写画面上能看见的结果，不写「已完成」。"""
+    mid = str(milestone_id or "")
+    name = str(title or "")
+    if mid == "login_entry" or "登录入口" in name:
+        return "登录页已经打开"
+    if mid in ("account_field", "otp_field", "prep_tap_input_box") or "聚焦" in name:
+        return "输入框已聚焦，可以填写"
+    if mid == "send_code":
+        return "验证码框已经可以填写"
+    if mid == "submit_login":
+        return "登录提交后的画面已经出现"
+    if capability_id == "input_text":
+        return "框内看得到本次填写的内容"
+    if capability_id == "swipe_direction":
+        return "画面相对点击前发生了位移"
+    if capability_id == "reload_page":
+        return "页面已换成刷新后的画面"
+    if name:
+        return f"{name}的结果已经出现在画面上"
+    return "该位置附近出现了这一步要的变化"
+
+
 def _check_sheet(
     capability_id: str,
     params: dict[str, Any],
     summary: str,
     *,
     milestone_title: str = "",
+    milestone_id: str = "",
 ) -> dict[str, str]:
     target = params.get("target") if isinstance(params.get("target"), dict) else {}
     field = str(params.get("field") or "").strip()
@@ -44,16 +68,10 @@ def _check_sheet(
             role = "button"
     title = str(milestone_title or "").strip()
     expected = str(params.get("text") or "").strip()
-    if not expected:
-        if capability_id == "input_text":
-            expected = "框内看得到本次填写的内容"
-        elif capability_id == "tap_element":
-            expected = f"{title}已完成" if title else "该位置附近出现了这一步要的变化"
-        elif capability_id == "swipe_direction":
-            expected = f"{title}已完成" if title else "画面相对点击前发生了位移"
-        elif capability_id == "reload_page":
-            expected = f"{title}已完成" if title else "页面已换成刷新后的画面"
-        else:
+    if capability_id != "input_text" or not expected:
+        if not expected or capability_id == "tap_element":
+            expected = _visible_expected(capability_id, milestone_id, title)
+        elif not expected:
             expected = title or str(summary or "")[:80]
     return {
         "x": str(params.get("x") if params.get("x") is not None else ""),
@@ -158,6 +176,7 @@ def remember_visual_prior(
         kept,
         str(summary or ""),
         milestone_title=title,
+        milestone_id=str(milestone_id or ""),
     )
     setattr(
         cursor,
@@ -218,7 +237,21 @@ def apply_same_turn_prior(
         return "none"
     prior = getattr(cursor, "visual_prior", None)
     if not isinstance(prior, dict) or not str(prior.get("milestone_id") or "").strip():
-        return "none"
+        answered = str(getattr(decision, "prior_status", "") or "").strip()
+        if answered:
+            from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
+            from mino_nexus.loop.milestones import read_state
+
+            row = in_progress_milestone(read_state(cursor))
+            if isinstance(row, dict) and str(row.get("id") or "").strip():
+                action = getattr(decision, "action", None)
+                prior = {
+                    "milestone_id": str(row.get("id") or ""),
+                    "capability_id": str(getattr(action, "capability_id", "") or ""),
+                }
+                setattr(cursor, "visual_prior", prior)
+        if not isinstance(prior, dict) or not str(prior.get("milestone_id") or "").strip():
+            return "none"
     from mino_nexus.loop.milestones import read_state
 
     mid = str(prior.get("milestone_id") or "")
@@ -243,6 +276,44 @@ def apply_same_turn_prior(
                 },
             )
         return "none"
+    if not raw_status:
+        # 没填不是画面结论。留着检查单再问一次，不要把下一步吃成重做。
+        asked = getattr(cursor, "visual_prior_reask", None)
+        if not isinstance(asked, dict):
+            asked = {}
+        if asked.get(mid):
+            asked.pop(mid, None)
+            setattr(cursor, "visual_prior_reask", asked)
+            msg = f"{mid} 没有给出上一步的 pass 或 fail，已停止。"
+            setattr(cursor, "semantic_stop", msg)
+            setattr(cursor, "visual_prior", None)
+            if writer:
+                writer.append(
+                    "review/fail",
+                    {"milestone_id": mid, "reason": "prior_omitted", "redo_already_sent": False},
+                )
+            return "stop"
+        asked[mid] = True
+        setattr(cursor, "visual_prior_reask", asked)
+        setattr(
+            cursor,
+            "correction_hint",
+            "上一张图必须给出 prior_status，只能是 pass 或 fail。本回合不下发。",
+        )
+        if writer:
+            writer.append(
+                "review/hold",
+                {
+                    "milestone_id": mid,
+                    "capability_id": str(prior.get("capability_id") or ""),
+                    "reason": "prior_omitted",
+                },
+            )
+        return "reask"
+    asked = getattr(cursor, "visual_prior_reask", None)
+    if isinstance(asked, dict) and mid in asked:
+        asked.pop(mid, None)
+        setattr(cursor, "visual_prior_reask", asked)
     status = _normalize_prior_status(raw_status)
     if writer:
         writer.append(
@@ -256,19 +327,28 @@ def apply_same_turn_prior(
     if status != "pass":
         _rewind(cursor, mid)
         setattr(cursor, "pending_visual_review", None)
-        streak = _bump_streak(cursor, mid)
+        sent = getattr(cursor, "visual_redo_sent", None)
+        if not isinstance(sent, dict):
+            sent = {}
+        already = bool(sent.get(mid))
         hint = _hint(cursor, mid, "画面上上一步还没完成")
         setattr(cursor, "correction_hint", hint)
         if writer:
             writer.append(
                 "review/fail",
-                {"milestone_id": mid, "reason": "prior_fail", "streak": streak},
+                {"milestone_id": mid, "reason": "prior_fail", "redo_already_sent": already},
             )
-        if streak >= 2:
-            setattr(cursor, "semantic_stop", f"{hint} 连续 {streak} 次回看未通过，已停止。")
+        if already:
+            sent.pop(mid, None)
+            setattr(cursor, "visual_redo_sent", sent)
+            setattr(cursor, "semantic_stop", f"{hint} 重做之后画面仍未达成，已停止。")
             setattr(cursor, "visual_prior", None)
             return "stop"
         return "redo"
+    sent = getattr(cursor, "visual_redo_sent", None)
+    if isinstance(sent, dict) and mid in sent:
+        sent.pop(mid, None)
+        setattr(cursor, "visual_redo_sent", sent)
     _clear_streak(cursor, mid)
     setattr(cursor, "semantic_stop", "")
     repeated = _action_repeats(cursor, prior, decision)
@@ -282,6 +362,9 @@ def apply_same_turn_prior(
     )
     setattr(cursor, "visual_prior", None)
     setattr(cursor, "pending_visual_review", None)
+    gate = getattr(cursor, "progress_gate", None)
+    if gate is not None and hasattr(gate, "note_submilestone_pass"):
+        gate.note_submilestone_pass()
     if writer:
         writer.append(
             "review/pass",
@@ -563,20 +646,33 @@ def _normalize_prior_status(raw: Any) -> str:
 
 
 def _prior_still_current(state: dict[str, Any], milestone_id: str) -> bool:
-    seen = False
+    """这一步还没通过，回看就还有效。后面有别的步骤通过，不能把这次回看丢掉。"""
     for row in state.get("milestones") or []:
         if not isinstance(row, dict):
             continue
-        if str(row.get("id") or "") == milestone_id:
-            seen = True
+        if str(row.get("id") or "") != milestone_id:
             continue
-        if seen and str(row.get("status") or "").strip().lower() == "pass":
-            return False
-    return seen
+        return str(row.get("status") or "").strip().lower() not in ("pass", "skipped", "failed")
+    return False
+
+
+def _milli(params: dict[str, Any], key: str) -> int | None:
+    try:
+        return int(float(params.get(key)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _same_point(prior_params: dict[str, Any], now: dict[str, Any]) -> bool:
+    ax, ay = _milli(prior_params, "x"), _milli(prior_params, "y")
+    bx, by = _milli(now, "x"), _milli(now, "y")
+    if None in (ax, ay, bx, by):
+        return False
+    return abs(ax - bx) <= 30 and abs(ay - by) <= 30
 
 
 def _action_repeats(cursor: Any, prior: dict[str, Any], decision: Any) -> bool:
-    """上一步还没记 pass、这次又返回同一步时，确认后不再下发。已经 pass 的点击，下一次点击是下一步。"""
+    """通过之后，同一个点不再下发。换了坐标就是下一步。"""
     action = getattr(decision, "action", None)
     cap = str(getattr(action, "capability_id", "") or "")
     if cap != str(prior.get("capability_id") or ""):
@@ -586,12 +682,12 @@ def _action_repeats(cursor: Any, prior: dict[str, Any], decision: Any) -> bool:
     row = _row_by_id(read_state(cursor), str(prior.get("milestone_id") or "")) or {}
     if str(row.get("status") or "").strip().lower() == "pass":
         return False
-    if cap != "input_text":
-        return True
     params = getattr(action, "params", None)
-    field_now = str((params or {}).get("field") or "") if isinstance(params, dict) else ""
+    now = params if isinstance(params, dict) else {}
     prior_params = prior.get("params") if isinstance(prior.get("params"), dict) else {}
-    return field_now == str(prior_params.get("field") or "")
+    if cap == "input_text":
+        return str(now.get("field") or "") == str(prior_params.get("field") or "")
+    return _same_point(prior_params, now)
 
 
 def _confirm_visual_prior(

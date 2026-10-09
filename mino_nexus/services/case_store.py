@@ -33,6 +33,11 @@ def _public(row) -> dict[str, Any]:
         "index": row.sort_index,
         "updated_at": row.updated_at or "",
     }
+    from mino_nexus.services.case_key_registry import stored_preview_lines
+
+    steps_parsed, expected_parsed = stored_preview_lines(out)
+    out["steps_parsed"] = steps_parsed
+    out["expected_parsed"] = expected_parsed
     return out
 
 

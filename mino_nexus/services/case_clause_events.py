@@ -455,7 +455,7 @@ def user_message(
     if reason == "missing_slot":
         return f"{head}无法执行：缺少{detail or '必填槽'}。"
     if reason == "uncovered":
-        return f"{head}无法执行：这几个字没有落进任何事件：{detail}。"
+        return f"{head}未执行：{detail}"
     if reason == "unmapped":
         return f"{head}无法执行：当前目录没有对应事件。"
     if reason in ("unavailable_cap", "capability_disabled"):

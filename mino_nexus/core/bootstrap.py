@@ -219,6 +219,7 @@ def bootstrap() -> None:
             upgrade_agent_vision_exec_to_v5,
             upgrade_agent_vision_exec_to_v6,
             upgrade_agent_vision_exec_to_v7,
+            upgrade_agent_vision_exec_to_v8,
             upgrade_vision_assert_language_neutral,
         )
 
@@ -304,14 +305,33 @@ def bootstrap() -> None:
         ve7 = upgrade_agent_vision_exec_to_v7()
         if ve7:
             SLog.i(TAG, "agent-vision-exec upgraded to prompt v7 wait is not a verdict")
+        ve8 = upgrade_agent_vision_exec_to_v8()
+        if ve8:
+            SLog.i(TAG, "agent-vision-exec upgraded to prompt v8 visible expected is pass")
         nm = ensure_nav_atlas_morph_job()
         if nm:
             SLog.i(TAG, "nav-atlas-morph job seeded")
-        from mino_nexus.ai.job_upgrades import ensure_account_facet_commit_job
+        from mino_nexus.ai.job_upgrades import (
+            ensure_account_facet_commit_job,
+            ensure_case_step_compile_job,
+        )
 
         af = ensure_account_facet_commit_job()
         if af:
             SLog.i(TAG, "account-facet-commit job seeded")
+        cs = ensure_case_step_compile_job()
+        if cs:
+            SLog.i(TAG, "case-step-compile job seeded")
+        from mino_nexus.ai.job_upgrades import upgrade_case_step_compile_to_v2
+
+        cs2 = upgrade_case_step_compile_to_v2()
+        if cs2:
+            SLog.i(TAG, "case-step-compile upgraded to prompt v2")
+        from mino_nexus.ai.job_upgrades import upgrade_case_step_compile_to_v3
+
+        cs3 = upgrade_case_step_compile_to_v3()
+        if cs3:
+            SLog.i(TAG, "case-step-compile upgraded to prompt v3")
         db.commit()
     except Exception:
         db.rollback()

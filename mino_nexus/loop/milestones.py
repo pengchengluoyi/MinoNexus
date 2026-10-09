@@ -944,16 +944,9 @@ def note_tool_fail_milestone(
 def _case_steps_include_login(case: Any) -> bool:
     if not isinstance(case, dict):
         return False
-    texts: list[str] = []
-    steps = case.get("steps")
-    if isinstance(steps, list):
-        texts.extend(str(item or "") for item in steps)
-    elif isinstance(steps, str):
-        texts.append(steps)
-    texts.append(str(case.get("steps_raw") or ""))
-    from mino_nexus.loop.step_contract import instruction_allows_login_flow
+    from mino_nexus.loop.step_contract import case_plan_has_login
 
-    return any(instruction_allows_login_flow(text) for text in texts if text.strip())
+    return case_plan_has_login(case)
 
 
 def _seed_login_when_required_session_unmet(cursor: Any, ctx: Any, *, writer: Any = None) -> None:

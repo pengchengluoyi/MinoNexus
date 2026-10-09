@@ -58,11 +58,15 @@ def _case_ui_automation(case: dict[str, Any]) -> dict[str, Any]:
     ua = meta.get("ui_automation") if isinstance(meta.get("ui_automation"), dict) else None
     if isinstance(ua, dict) and "coverable" in ua:
         return ua
-    from mino_nexus.services.case_step_key_compiler import compile_case_step_program_keys
-
-    compiled = compile_case_step_program_keys(case)
-    row = compiled.get("ui_automation")
-    return dict(row) if isinstance(row, dict) else {"coverable": True, "blocked_by": []}
+    return {
+        "coverable": False,
+        "blocked_by": [
+            {
+                "reason": "unmapped",
+                "user_message": "这次用例还没有编译成程序图",
+            }
+        ],
+    }
 
 
 def _reject_uncoverable_cases(cases: list[dict[str, Any]]) -> None:

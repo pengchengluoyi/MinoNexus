@@ -14,20 +14,13 @@ from mino_nexus.loop.milestones import (
     write_state,
     _sync_scope,
 )
-from mino_nexus.services.case_step_key_compiler import (
-    build_check_program_plan_for_step,
-    step_bundle,
-    sync_case_step_program_keys,
-)
+from mino_nexus.services.case_step_key_compiler import step_bundle
 
 
 def _case_with_meta(case: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(case, dict):
         return {}
-    meta = case.get("meta")
-    if isinstance(meta, dict) and meta.get("step_program_keys"):
-        return case
-    return sync_case_step_program_keys(dict(case))
+    return case
 
 
 def resolve_check_program_plan(case: dict[str, Any] | None, cursor: Any) -> dict[str, Any]:
@@ -39,12 +32,7 @@ def resolve_check_program_plan(case: dict[str, Any] | None, cursor: Any) -> dict
         return cached
     c = _case_with_meta(case)
     bundle = step_bundle(c, case_step)
-    plan = bundle.get("check_program_plan") if isinstance(bundle.get("check_program_plan"), dict) else None
-    if not plan or not plan.get("checkpoints"):
-        cur = cursor.current() if hasattr(cursor, "current") else None
-        exp = str(getattr(cur, "expected", "") or "").strip()
-        instr = str(getattr(cur, "instruction", "") or "").strip()
-        plan = build_check_program_plan_for_step(case_step, exp, instruction=instr)
+    plan = bundle.get("check_program_plan") if isinstance(bundle.get("check_program_plan"), dict) else {}
     setattr(cursor, "check_program_plan", plan)
     return plan
 

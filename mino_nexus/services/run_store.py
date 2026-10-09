@@ -262,6 +262,19 @@ def spec_lines(items: Any) -> list[str]:
     return [t for t in (line_text(x) for x in items) if t]
 
 
+def _run_case_meta(raw: dict[str, Any]) -> dict[str, Any]:
+    """任务快照只带跑起来要读的编译结果。操作阶段不再现场编译。"""
+    meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+    kept: dict[str, Any] = {}
+    plans = meta.get("step_program_keys")
+    if isinstance(plans, dict):
+        kept["step_program_keys"] = plans
+    auto = meta.get("ui_automation")
+    if isinstance(auto, dict):
+        kept["ui_automation"] = auto
+    return kept
+
+
 def seed_case(run_id: str, raw: dict[str, Any], index: int, *, sn: str = "", coverage: str = "once") -> dict[str, Any]:
     cid = str(raw.get("case_id") or "").strip() or f"case-{index}"
     steps = spec_lines(raw.get("steps"))
@@ -290,6 +303,9 @@ def seed_case(run_id: str, raw: dict[str, Any], index: int, *, sn: str = "", cov
         "engine_steps": [],
         "platform": str(raw.get("platform") or "").strip(),
         "point_ids": [str(x).strip() for x in (raw.get("point_ids") or []) if str(x).strip()],
+        "steps_parsed": [str(x) for x in (raw.get("steps_parsed") or []) if str(x).strip()],
+        "expected_parsed": [str(x) for x in (raw.get("expected_parsed") or []) if str(x).strip()],
+        "meta": _run_case_meta(raw),
         "error": "",
     }
 

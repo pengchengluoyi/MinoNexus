@@ -139,16 +139,28 @@ def _fps_equal(a: str, b: str) -> bool:
     return aa == bb and bool(aa)
 
 
+# 程序里程碑：聚焦和点登录入口经常不改画面指纹。看图点击没有选择器文案，豁免认这个 id。
+_FOCUS_MILESTONE_IDS = frozenset({
+    "login_entry",
+    "account_field",
+    "otp_field",
+    "prep_tap_input_box",
+})
+
+
 def fp_neutral_cap(
     cap_id: str,
     params: dict[str, Any] | None,
     *,
     intents_done: set[str] | None = None,
     login_flow_step: bool = False,
+    milestone_id: str = "",
 ) -> bool:
     """登录链上常同屏的操作：不计入「指纹未变」熔断，但会写入合成进展指纹。"""
     cid = str(cap_id or "").strip()
     if cid in _FP_NEUTRAL_CAPS:
+        return True
+    if cid == "tap_element" and str(milestone_id or "") in _FOCUS_MILESTONE_IDS:
         return True
     done = set(intents_done or set())
     if cid == "input_text":
@@ -345,6 +357,7 @@ class ProgressGate:
         intents_done: set[str] | None = None,
         login_flow_step: bool = False,
         web_channel: bool = False,
+        milestone_id: str = "",
     ) -> Optional[str]:
         if not fuseable_cap(cap_id):
             return None
@@ -358,6 +371,7 @@ class ProgressGate:
             params,
             intents_done=done,
             login_flow_step=login_flow_step,
+            milestone_id=milestone_id,
         ):
             return None
 
@@ -482,6 +496,7 @@ class ProgressGate:
                 params,
                 intents_done=done,
                 login_flow_step=login_flow_step,
+                milestone_id=milestone_id,
             ):
                 hint = fuse_hint(cap_id, params, reason="no_progress", **kw)
                 return (
@@ -510,6 +525,8 @@ class ProgressGate:
         login_flow_step: bool = False,
         web_channel: bool = False,
         web_focus_fp: str = "",
+        fingerprint_compared: bool = True,
+        milestone_id: str = "",
     ) -> None:
         if not fuseable_cap(cap_id):
             return
@@ -532,12 +549,17 @@ class ProgressGate:
             params,
             intents_done=intents_done,
             login_flow_step=login_flow_step,
+            milestone_id=milestone_id,
         )
         if neutral:
             self.no_progress_streak = 0
             if _fps_equal(pre, post):
                 coarse = coarse_action_key(cap_id, params)
                 post = f"{post}#neutral:{coarse}"
+            if not self.warning_hint.startswith("【熔断·强制转向】"):
+                self.warning_hint = ""
+        elif not fingerprint_compared:
+            # 看图没有第二张图，前后指纹是同一份，不能当成画面没变。
             if not self.warning_hint.startswith("【熔断·强制转向】"):
                 self.warning_hint = ""
         elif _fps_equal(pre, post):

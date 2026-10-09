@@ -29,6 +29,7 @@ from mino_nexus.models.settings import Settings
 from mino_nexus.models.skill import Skill
 from mino_nexus.models.task import Task
 from mino_nexus.models.token import InstallToken, NodeCredential
+from mino_nexus.models.ui_control import UiControl
 
 __all__ = [
     "AppIntelLink",

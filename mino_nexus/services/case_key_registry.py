@@ -383,6 +383,49 @@ def _format_block_line(item: dict[str, Any], *, case_step: int) -> str:
     return f"{int(case_step)}. × {clause}（{reason}）"[:240]
 
 
+def preview_lines_from_plans(spk: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """只读已经落库的程序图，不调用模型。"""
+    steps_parsed: list[str] = []
+    expected_parsed: list[str] = []
+
+    def _step_num(key: str) -> int:
+        try:
+            return int(key)
+        except (TypeError, ValueError):
+            return 0
+
+    for key in sorted(spk.keys(), key=_step_num):
+        bundle = spk.get(key) if isinstance(spk.get(key), dict) else {}
+        n = _step_num(str(key)) or 1
+        do_plan = bundle.get("do_program_plan") if isinstance(bundle.get("do_program_plan"), dict) else {}
+        ck_plan = bundle.get("check_program_plan") if isinstance(bundle.get("check_program_plan"), dict) else {}
+        for step in do_plan.get("steps") or []:
+            if isinstance(step, dict):
+                steps_parsed.append(_format_plan_line(step, case_step=n))
+        for warning in do_plan.get("compile_warnings") or []:
+            blocked = warning.get("blocked") if isinstance(warning, dict) and isinstance(warning.get("blocked"), dict) else None
+            if blocked:
+                steps_parsed.append(_format_block_line(blocked, case_step=n))
+        for step in ck_plan.get("checkpoints") or []:
+            if isinstance(step, dict):
+                expected_parsed.append(_format_plan_line(step, case_step=n))
+        for warning in ck_plan.get("compile_warnings") or []:
+            blocked = warning.get("blocked") if isinstance(warning, dict) and isinstance(warning.get("blocked"), dict) else None
+            if blocked:
+                expected_parsed.append(_format_block_line(blocked, case_step=n))
+    return steps_parsed[:40], expected_parsed[:40]
+
+
+def stored_preview_lines(case: dict[str, Any] | None) -> tuple[list[str], list[str]]:
+    if not isinstance(case, dict):
+        return [], []
+    meta = case.get("meta") if isinstance(case.get("meta"), dict) else {}
+    spk = meta.get("step_program_keys") if isinstance(meta.get("step_program_keys"), dict) else {}
+    if not spk:
+        return [], []
+    return preview_lines_from_plans(spk)
+
+
 def compile_preview_view(case: dict[str, Any] | None) -> dict[str, Any]:
     """导入预览：把程序图和未映射句编成步骤/预期/备注文案。"""
     if not isinstance(case, dict):
@@ -398,34 +441,7 @@ def compile_preview_view(case: dict[str, Any] | None) -> dict[str, Any]:
     meta = synced.get("meta") if isinstance(synced.get("meta"), dict) else {}
     ua = ui_automation_summary(synced)
     spk = meta.get("step_program_keys") if isinstance(meta.get("step_program_keys"), dict) else {}
-    steps_parsed: list[str] = []
-    expected_parsed: list[str] = []
-
-    def _step_num(key: str) -> int:
-        try:
-            return int(key)
-        except (TypeError, ValueError):
-            return 0
-
-    for key in sorted(spk.keys(), key=_step_num):
-        bundle = spk.get(key) if isinstance(spk.get(key), dict) else {}
-        n = _step_num(str(key)) or 1
-        do_plan = bundle.get("do_program_plan") if isinstance(bundle.get("do_program_plan"), dict) else {}
-        ck_plan = bundle.get("check_program_plan") if isinstance(bundle.get("check_program_plan"), dict) else {}
-        for s in do_plan.get("steps") or []:
-            if isinstance(s, dict):
-                steps_parsed.append(_format_plan_line(s, case_step=n))
-        for w in do_plan.get("compile_warnings") or []:
-            blocked = w.get("blocked") if isinstance(w, dict) and isinstance(w.get("blocked"), dict) else None
-            if blocked:
-                steps_parsed.append(_format_block_line(blocked, case_step=n))
-        for s in ck_plan.get("checkpoints") or []:
-            if isinstance(s, dict):
-                expected_parsed.append(_format_plan_line(s, case_step=n))
-        for w in ck_plan.get("compile_warnings") or []:
-            blocked = w.get("blocked") if isinstance(w, dict) and isinstance(w.get("blocked"), dict) else None
-            if blocked:
-                expected_parsed.append(_format_block_line(blocked, case_step=n))
+    steps_parsed, expected_parsed = preview_lines_from_plans(spk)
     remarks: list[str] = []
     for item in ua.get("blocked_by") or []:
         if not isinstance(item, dict):

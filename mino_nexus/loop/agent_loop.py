@@ -171,6 +171,69 @@ def _log_turn_end(
     writer.append("turn/end", payload)
 
 
+def _locator_blocks_action(ctx: Any, cap_id: str, params: dict[str, Any], cursor: Any) -> str:
+    if cap_id not in ("tap_element", "input_text", "swipe_direction", "reload_page"):
+        return ""
+    control_id, target_desc = _control_from_turn(cap_id, params, cursor)
+    if not control_id:
+        return ""
+    from mino_nexus.action_space.scheme import action_scheme
+    from mino_nexus.services.control_registry import locator_stop_reason
+
+    platform = str(getattr(ctx, "platform", "") or getattr(ctx, "device_platform", "") or "")
+    dom_locator = str(params.get("selector") or params.get("css") or params.get("xpath") or params.get("resource_id") or "")
+    return locator_stop_reason(
+        project_id=str(getattr(ctx, "project_id", "") or getattr(ctx, "app_id", "") or ""),
+        control_id=control_id,
+        scheme=action_scheme(ctx),
+        platform=platform,
+        dom_locator=dom_locator,
+        target_desc=target_desc,
+    )
+
+
+def _control_from_turn(cap_id: str, params: dict[str, Any], cursor: Any) -> tuple[str, str]:
+    control_id = str(params.get("control_id") or "")
+    target_desc = str(params.get("selector_text") or params.get("text") or "")
+    plan = getattr(cursor, "do_program_plan", None)
+    if isinstance(plan, dict):
+        for step in plan.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            same = str(step.get("hook_cap") or "") == cap_id or (
+                cap_id == "tap_element" and str(step.get("action_type") or "") in ("click", "check")
+            )
+            if not same:
+                continue
+            control_id = control_id or str(step.get("control_id") or "")
+            target_desc = target_desc or str(step.get("target_desc") or "")
+            break
+    return control_id, target_desc
+
+
+def _note_control_locator(writer: Any, ctx: Any, cap_id: str, params: dict[str, Any], cursor: Any) -> None:
+    """按执行渠道和设备渠道记下用了哪一格定位。看图不把坐标写进控件。"""
+    if cap_id not in ("tap_element", "input_text", "swipe_direction", "reload_page"):
+        return
+    control_id, target_desc = _control_from_turn(cap_id, params, cursor)
+    if not control_id:
+        return
+    from mino_nexus.action_space.scheme import action_scheme
+    from mino_nexus.services.control_registry import note_execution_locator
+
+    platform = str(getattr(ctx, "platform", "") or getattr(ctx, "device_platform", "") or "")
+    dom_locator = str(params.get("selector") or params.get("css") or params.get("xpath") or "")
+    note_execution_locator(
+        writer,
+        project_id=str(getattr(ctx, "project_id", "") or getattr(ctx, "app_id", "") or ""),
+        control_id=control_id,
+        scheme=action_scheme(ctx),
+        platform=platform,
+        dom_locator=dom_locator,
+        target_desc=target_desc,
+    )
+
+
 def _program_executor(ctx: Any) -> str:
     from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
 
@@ -328,6 +391,9 @@ def run_case(
 ) -> dict[str, Any]:
     from mino_nexus.ai import dispatch_log as dispatch
 
+    from mino_nexus.loop.step_contract import bind_run_case
+
+    bind_run_case(case if isinstance(case, dict) else None)
     cid = str(case.get("case_id") or "")
     stream_id = str(case.get("report_run_id") or "").strip() or (
         report_run_id(run_id, cid, sn=str(sn or ""), coverage=str(case.get("coverage") or "once"))
@@ -845,6 +911,9 @@ def _run_loop(
             precondition=str(case.get("precondition") or "").strip(),
         )
     setattr(ctx, "_step_cursor", cursor)
+    from mino_nexus.loop.step_contract import bind_run_cursor
+
+    bind_run_cursor(cursor)
     inspect_slots: dict[str, str] = {
         "session_block": "", "hierarchy_text": "", "knowledge_hint": "", "knowledge_body": "",
         "nav_assist": "", "doc_context": "",
@@ -898,6 +967,8 @@ def _run_loop(
     last_phase_seen = ""
     ctx.case_scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
     ctx.case = case
+    if isinstance(cursor, StepCursor):
+        setattr(cursor, "case", case)
     from mino_nexus.loop.observe.session_scope import begin_case_session_scope
 
     begin_case_session_scope(ctx, case_id=str(cid or ""), scene=ctx.case_scene)
@@ -3235,6 +3306,14 @@ def _run_loop(
             stop_prior = str(getattr(cursor, "semantic_stop", "") or "").strip()
             if prior_kind == "stop" or (prior_kind == "redo" and stop_prior):
                 return _leave(status="fail", summary=(stop_prior or "回看未通过")[:500])
+            if prior_kind == "reask":
+                summary = (
+                    str(getattr(cursor, "correction_hint", "") or "").strip()
+                    or "上一张图必须给出 prior_status，只能是 pass 或 fail。"
+                )
+                emit("think", thought=summary, step=seq, status="pending")
+                _log_turn_end(writer, cap="", status="pending")
+                continue
             if prior_kind == "redo" and not cap_id:
                 emit(
                     "think",
@@ -3246,6 +3325,15 @@ def _run_loop(
                 continue
             if prior_kind == "redo":
                 setattr(cursor, "visual_turn_pending", True)
+                if cap_id:
+                    sent = getattr(cursor, "visual_redo_sent", None)
+                    if not isinstance(sent, dict):
+                        sent = {}
+                    prior = getattr(cursor, "visual_prior", None)
+                    mid = str(prior.get("milestone_id") or "") if isinstance(prior, dict) else ""
+                    if mid:
+                        sent[mid] = True
+                        setattr(cursor, "visual_redo_sent", sent)
             elif prior_kind == "settled":
                 summary = "上一步已在画面上完成，本回合不重复下发。"
                 emit("think", thought=summary, step=seq, status="continue")
@@ -4227,6 +4315,11 @@ def _run_loop(
                 continue
             if gate is not None:
                 gate.clear_missing_coordinate()
+        locator_block = _locator_blocks_action(ctx, cap_id, params if isinstance(params, dict) else {}, cursor)
+        if locator_block:
+            if writer:
+                writer.append("control/locator", {"status": "pending", "summary": locator_block, "capability_id": cap_id})
+            return _leave(status="fail", summary=locator_block[:500])
         emit(
             "step",
             thought=thought, step=seq, status=decision.status, thumb=thumb,
@@ -4420,6 +4513,7 @@ def _run_loop(
             if recovery_extra:
                 payload.update(recovery_extra)
             writer.append("tool/result", payload)
+            _note_control_locator(writer, ctx, cap_id, params if isinstance(params, dict) else {}, cursor)
         if writer and hasattr(result, "recovered"):
             writer.append(
                 "recovery/match",
@@ -4792,6 +4886,14 @@ def _run_loop(
                     str(cur.instruction or ""),
                     login_module_case=bool(login_module_case),
                 )
+            _focus_mid = ""
+            if isinstance(cursor, StepCursor):
+                from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
+                from mino_nexus.loop.milestones import read_state
+
+                _focus_row = in_progress_milestone(read_state(cursor))
+                if isinstance(_focus_row, dict):
+                    _focus_mid = str(_focus_row.get("id") or "")
             cursor.progress_gate.record_pass(
                 cap_id=cap_id if fuseable_cap(cap_id) else "tap_element",
                 params=params if fuseable_cap(cap_id) else {},
@@ -4799,6 +4901,8 @@ def _run_loop(
                 post_fp=post_fp,
                 intents_done=set(getattr(cursor, "step_intents_done", None) or set()),
                 login_flow_step=_lf_record,
+                fingerprint_compared=not visual_scheme,
+                milestone_id=_focus_mid,
                 **_progress_gate_web_kwargs(ctx, proxy),
             )
             if isinstance(cursor, StepCursor):

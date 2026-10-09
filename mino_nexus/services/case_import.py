@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import threading
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any, Literal
@@ -278,23 +279,11 @@ def preview_import(
             flags.append("empty_expected")
         if conflict and not cid:
             flags.append("likely_duplicate")
-        step_key_validation: dict[str, Any] = {}
-        try:
-            from mino_nexus.services.case_key_registry import import_row_key_summary
-
-            app_id = ""
-            for app in ps.list_apps(pid):
-                if str(app.get("id") or ""):
-                    app_id = str(app.get("id") or "")
-                    break
-            step_key_validation = import_row_key_summary(row, app_id=app_id)
-            if step_key_validation.get("issues"):
-                flags.append("step_key_issues")
-            ua = step_key_validation.get("ui_automation") if isinstance(step_key_validation, dict) else None
-            if isinstance(ua, dict) and ua.get("coverable") is False:
-                flags.append("ui_not_coverable")
-        except Exception:
-            step_key_validation = {}
+        steps_text = "\n".join(str(x) for x in steps if str(x).strip()) or str(row.get("steps_raw") or "")
+        expected_text = "\n".join(str(x) for x in expected if str(x).strip()) or str(row.get("expected_raw") or "")
+        incomplete = not name or not steps_text.strip() or not expected_text.strip()
+        if incomplete:
+            flags.append("incomplete")
         preview_rows.append({
             "row_index": raw.get("row_index", i),
             "case_id": cid,
@@ -306,17 +295,19 @@ def preview_import(
             "resource_claim_summary": claim_summary,
             "steps_preview": "\n".join(steps)[:240],
             "expected_preview": "\n".join(expected)[:240],
-            "steps_parsed": list(step_key_validation.get("steps_parsed") or []) if isinstance(step_key_validation, dict) else [],
-            "expected_parsed": list(step_key_validation.get("expected_parsed") or []) if isinstance(step_key_validation, dict) else [],
-            "remark": str(step_key_validation.get("remark") or "") if isinstance(step_key_validation, dict) else "",
-            "step_key_validation": step_key_validation,
-            "ui_automation": (step_key_validation.get("ui_automation") if isinstance(step_key_validation, dict) else None)
-            or {"coverable": True, "blocked_by": []},
+            "steps_parsed": [],
+            "expected_parsed": [],
+            "remark": "标题、操作、预期缺一列，不解析" if incomplete else "",
+            "step_key_validation": {},
+            "ui_automation": {"coverable": False, "blocked_by": []} if incomplete else {"coverable": True, "blocked_by": []},
+            "parse_status": "incomplete" if incomplete else "pending",
             "flags": flags,
-            "selected_by_default": "likely_header" not in flags,
+            "selected_by_default": (not incomplete) and "likely_header" not in flags,
             "conflict": conflict,
             "payload": row,
         })
+    from mino_nexus.services.settings_store import get_case_import_settings
+
     token = uuid.uuid4().hex
     _previews[token] = {
         "created_at": _now(),
@@ -325,20 +316,111 @@ def preview_import(
         "default_platform": default_plat,
         "rows": copy.deepcopy(preview_rows),
         "meta": meta,
+        "cancel": False,
+        "batch_size": int(get_case_import_settings().get("preview_batch_size") or 5),
     }
-    from mino_nexus.services.settings_store import get_case_import_settings
-
+    threading.Thread(target=_compile_preview_batches, args=(token,), daemon=True).start()
     return {
         "preview_token": token,
         "project_id": pid,
         "requirement_id": rid,
         "requirement_title": _requirement_title(pid, rid),
-        "parsed": len(preview_rows),
+        "parsed": sum(1 for row in preview_rows if row.get("parse_status") != "pending"),
+        "total": len(preview_rows),
+        "done": all(row.get("parse_status") != "pending" for row in preview_rows),
         "conflicts": conflicts,
         "rows": preview_rows,
         "import_defaults": get_case_import_settings(),
         **meta,
     }
+
+
+def preview_status(preview_token: str) -> dict[str, Any] | None:
+    doc = _previews.get(str(preview_token or ""))
+    if not doc:
+        return None
+    rows = list(doc.get("rows") or [])
+    parsed = sum(1 for row in rows if row.get("parse_status") != "pending")
+    return {
+        "preview_token": str(preview_token),
+        "parsed": parsed,
+        "total": len(rows),
+        "done": parsed >= len(rows) and not any(row.get("parse_status") == "pending" for row in rows),
+        "rows": rows,
+        "cancelled": bool(doc.get("cancel")),
+    }
+
+
+def cancel_preview(preview_token: str) -> bool:
+    doc = _previews.get(str(preview_token or ""))
+    if not doc:
+        return False
+    doc["cancel"] = True
+    for row in doc.get("rows") or []:
+        if row.get("parse_status") == "pending":
+            row["parse_status"] = "cancelled"
+    return True
+
+
+def retry_preview_row(preview_token: str, row_index: int) -> bool:
+    doc = _previews.get(str(preview_token or ""))
+    if not doc:
+        return False
+    found = False
+    for row in doc.get("rows") or []:
+        if int(row.get("row_index") or -1) != int(row_index):
+            continue
+        if row.get("parse_status") == "incomplete":
+            return False
+        row["parse_status"] = "pending"
+        row["steps_parsed"] = []
+        row["expected_parsed"] = []
+        found = True
+        break
+    if not found:
+        return False
+    doc["cancel"] = False
+    threading.Thread(target=_compile_preview_batches, args=(str(preview_token),), daemon=True).start()
+    return True
+
+
+def _compile_preview_batches(token: str) -> None:
+    doc = _previews.get(token)
+    if not doc:
+        return
+    from mino_nexus.services.case_key_registry import import_row_key_summary
+
+    while True:
+        doc = _previews.get(token)
+        if not doc or doc.get("cancel"):
+            return
+        pending = [row for row in (doc.get("rows") or []) if row.get("parse_status") == "pending"]
+        if not pending:
+            return
+        batch = pending[: int(doc.get("batch_size") or 5)]
+        for row in batch:
+            if doc.get("cancel"):
+                return
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            try:
+                summary = import_row_key_summary(payload, app_id=str(doc.get("project_id") or ""))
+            except Exception as exc:
+                row["parse_status"] = "error"
+                row["remark"] = str(exc)[:200]
+                continue
+            row["steps_parsed"] = list(summary.get("steps_parsed") or [])
+            row["expected_parsed"] = list(summary.get("expected_parsed") or [])
+            row["remark"] = str(summary.get("remark") or "")
+            row["step_key_validation"] = summary
+            row["ui_automation"] = summary.get("ui_automation") or {"coverable": True, "blocked_by": []}
+            flags = list(row.get("flags") or [])
+            if summary.get("issues") and "step_key_issues" not in flags:
+                flags.append("step_key_issues")
+            ua = row["ui_automation"]
+            if isinstance(ua, dict) and ua.get("coverable") is False and "ui_not_coverable" not in flags:
+                flags.append("ui_not_coverable")
+            row["flags"] = flags
+            row["parse_status"] = "done"
 
 
 def normalize_table(table: Any) -> list[list[str]]:
@@ -370,6 +452,8 @@ def commit_import(
             raise ValueError("预览与项目不匹配")
         if str(doc.get("requirement_id") or "") != rid:
             raise ValueError("预览与需求不匹配")
+        if any(row.get("parse_status") == "pending" for row in (doc.get("rows") or [])):
+            raise ValueError("解析还没完成")
         if not fill_plat:
             fill_plat = str(doc.get("default_platform") or "").strip()
         work_rows = copy.deepcopy(list(doc.get("rows") or []))

@@ -691,7 +691,9 @@ def dispatch_spec_for_edge(fsm: dict[str, Any], edge_step: dict[str, Any]) -> tu
         exe = edge_step.get("execute") if isinstance(edge_step.get("execute"), dict) else {}
         key = str(exe.get("key") or "BACK").strip().upper() or "BACK"
         return "press_key", {"key": key}
-    return "tap_element", tap_params_for_edge(fsm, edge_step)
+    params = tap_params_for_edge(fsm, edge_step)
+    _attach_edge_control(fsm, edge_step, params)
+    return "tap_element", params
 
 
 def tap_params_for_edge(fsm: dict[str, Any], edge: dict[str, Any]) -> dict[str, Any]:
@@ -757,6 +759,31 @@ def tap_params_for_edge(fsm: dict[str, Any], edge: dict[str, Any]) -> dict[str, 
     if short and short not in ("home", "unknown"):
         return {"selector_text": short, "text": short}
     return {}
+
+
+def _attach_edge_control(fsm: dict[str, Any], edge: dict[str, Any], params: dict[str, Any]) -> None:
+    """边上的文案变成 control_id。采集到的 resource_id 写入控件，坐标不写入。"""
+    desc = str(params.get("selector_text") or params.get("text") or "").strip()
+    if not desc:
+        return
+    from mino_nexus.services.control_registry import ensure_control, fill_locator
+
+    app_id = str(fsm.get("app_id") or "")
+    control_id = ensure_control(app_id, target_desc=desc, element_type="button", vlm_text=desc)
+    params["control_id"] = control_id
+    exe = edge.get("execute") if isinstance(edge.get("execute"), dict) else {}
+    rid = str(exe.get("resource_id") or exe.get("accessibility_id") or "").strip()
+    if not rid:
+        return
+    platform = str(fsm.get("platform") or "android")
+    fill_locator(
+        app_id,
+        control_id,
+        scheme="dom",
+        platform=platform,
+        value=rid,
+        source="capture",
+    )
 
 
 def tab_root_entry_hint(fsm: dict[str, Any], to_state_ref: str) -> str:

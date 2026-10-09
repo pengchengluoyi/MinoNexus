@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from contextvars import ContextVar, Token
 from typing import Any
 
 _OPEN_RE = re.compile(r"打开|启动|进入应用|冷启动", re.I)
@@ -103,27 +104,86 @@ def instruction_micro_progress_line(instruction: str) -> str:
     return f"【本步子动作】须完成：{'、'.join(bits)}（每次 pass 的设备操作计 1 次，收工前须达标）"
 
 
-def instruction_allows_login_flow(
-    instruction: str,
-    *,
-    login_module_case: bool = False,
-) -> bool:
-    """当前 instruction 是否声明登录流（看编译结果，不靠中文正则）。"""
-    _ = login_module_case
-    from mino_nexus.services.case_step_key_compiler import compile_operation_text
+_run_case: ContextVar[dict[str, Any] | None] = ContextVar("mino_run_case", default=None)
+_run_cursor: ContextVar[Any] = ContextVar("mino_run_cursor", default=None)
 
-    steps, _, refs = compile_operation_text(str(instruction or ""), case_step=1)
-    if any(str(r or "") == "operation.login_flow" for r in refs):
+
+def bind_run_case(case: dict[str, Any] | None) -> Token:
+    """本条用例执行期间，登录判断只读已存计划，不再调用编译模型。"""
+    _run_cursor.set(None)
+    return _run_case.set(case if isinstance(case, dict) else None)
+
+
+def bind_run_cursor(cursor: Any) -> None:
+    _run_cursor.set(cursor)
+
+
+def reset_run_case(token: Token) -> None:
+    _run_case.reset(token)
+
+
+def _bundle_has_login(bundle: Any) -> bool:
+    if not isinstance(bundle, dict):
+        return False
+    do = bundle.get("do_program_plan") if isinstance(bundle.get("do_program_plan"), dict) else {}
+    refs = [str(item or "") for item in (do.get("key_refs") or [])]
+    if "operation.login_flow" in refs:
         return True
-    for step in steps:
+    for step in do.get("steps") or []:
         if not isinstance(step, dict):
             continue
         if str(step.get("key_ref") or "") == "operation.login_flow":
             return True
-        bid = str(step.get("block_id") or "").strip().lower()
-        if bid.startswith("fb.global.login"):
+        if str(step.get("block_id") or "").strip().lower().startswith("fb.global.login"):
             return True
     return False
+
+
+def case_plan_has_login(case: dict[str, Any] | None, *, case_step: int = 0) -> bool:
+    """已编译的操作计划里有没有登录块。case_step>0 时只看这一编号步。"""
+    if not isinstance(case, dict):
+        return False
+    meta = case.get("meta") if isinstance(case.get("meta"), dict) else {}
+    plans = meta.get("step_program_keys") if isinstance(meta.get("step_program_keys"), dict) else {}
+    if case_step > 0:
+        bundle = plans.get(str(case_step)) or plans.get(str(int(case_step))) or {}
+        return _bundle_has_login(bundle)
+    return any(_bundle_has_login(bundle) for bundle in plans.values())
+
+
+def instruction_allows_login_flow(
+    instruction: str,
+    *,
+    login_module_case: bool = False,
+    case: dict[str, Any] | None = None,
+    ctx: Any = None,
+    cursor: Any = None,
+) -> bool:
+    """当前编号步的已存计划是否含登录流。跑的时候不调用编译模型。"""
+    _ = instruction, login_module_case
+    row = case if isinstance(case, dict) else None
+    if row is None and ctx is not None:
+        raw = getattr(ctx, "case", None)
+        if isinstance(raw, dict):
+            row = raw
+    active = cursor if cursor is not None else _run_cursor.get()
+    if row is None and active is not None:
+        raw = getattr(active, "case", None)
+        if isinstance(raw, dict):
+            row = raw
+    if row is None:
+        raw = _run_case.get()
+        if isinstance(raw, dict):
+            row = raw
+    phase = str(getattr(active, "phase", "") or "") if active is not None else ""
+    if phase and phase != "do":
+        return False
+    step_n = 0
+    if phase == "do" and active is not None and hasattr(active, "current"):
+        cur = active.current()
+        if cur is not None:
+            step_n = int(getattr(cur, "n", 0) or 0)
+    return case_plan_has_login(row, case_step=step_n)
 
 
 def step_actions_satisfied(

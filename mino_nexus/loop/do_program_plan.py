@@ -14,21 +14,14 @@ from mino_nexus.loop.milestones import (
     write_state,
     _sync_scope,
 )
-from mino_nexus.services.case_step_key_compiler import (
-    build_do_program_plan_for_step,
-    step_bundle,
-    sync_case_step_program_keys,
-)
+from mino_nexus.services.case_step_key_compiler import step_bundle
 from mino_nexus.services.nav_flow_block_catalog import resolve_effective_steps
 
 
 def _case_with_meta(case: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(case, dict):
         return {}
-    meta = case.get("meta")
-    if isinstance(meta, dict) and meta.get("step_program_keys"):
-        return case
-    return sync_case_step_program_keys(dict(case))
+    return case
 
 
 def resolve_do_program_plan(
@@ -45,11 +38,7 @@ def resolve_do_program_plan(
         return cached
     c = _case_with_meta(case)
     bundle = step_bundle(c, case_step)
-    plan = bundle.get("do_program_plan") if isinstance(bundle.get("do_program_plan"), dict) else None
-    if not plan or not plan.get("steps"):
-        cur = cursor.current() if hasattr(cursor, "current") else None
-        instr = str(getattr(cur, "instruction", "") or "").strip()
-        plan = build_do_program_plan_for_step(case_step, instr)
+    plan = bundle.get("do_program_plan") if isinstance(bundle.get("do_program_plan"), dict) else {}
     setattr(cursor, "do_program_plan", plan)
     return plan
 
