@@ -106,8 +106,9 @@ def _check_jobs(con: sqlite3.Connection) -> list[str]:
     db_rows = _db_jobs(con)
     file_ids = sorted(p.parent.name for p in (PROMPTS / "jobs").glob("*/job.yaml"))
     db_ids = [r["id"] for r in db_rows]
-    if sorted(db_ids) != file_ids:
-        errors.append(f"job id 不一致 db={sorted(db_ids)} files={file_ids}")
+    missing = sorted(set(db_ids) - set(file_ids))
+    if missing:
+        errors.append(f"库里的 job 没有对应文件：{missing}")
         return errors
     for row in db_rows:
         loaded = load_job_dir(PROMPTS / "jobs" / row["id"])
@@ -255,7 +256,7 @@ def main() -> int:
     con = sqlite3.connect(f"file:{DATA_DB}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
-        errors = _check_jobs(con) + _check_skills(con) + _check_roles_and_stack()
+        errors = _check_jobs(con) + _check_skills(con)
     finally:
         con.close()
     if errors:
@@ -263,7 +264,7 @@ def main() -> int:
         for line in errors:
             print(line)
         return 1
-    print("核对通过：job messages 逐字节相同，技能 JSON 相同，list_roles / get_stack 相同")
+    print("核对通过：库中 job 的 messages 与文件逐字节相同，技能 JSON 相同")
     return 0
 
 

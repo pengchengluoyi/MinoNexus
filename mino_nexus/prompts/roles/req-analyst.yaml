@@ -1,5 +1,6 @@
 id: req-analyst
-version: 1
+version: 2
+sort_order: 20
 label: 需求分析师
 group: product
 kind: json

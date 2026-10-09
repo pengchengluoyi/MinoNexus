@@ -93,176 +93,49 @@ def _apply_role_prompt(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _roles_from_files(group: str) -> list[dict[str, Any]]:
+    from mino_nexus.ai.prompt_repo import role_specs
+
+    rows: list[dict[str, Any]] = []
+    for spec in role_specs():
+        if group == "runtime" and spec.get("group") != "runtime":
+            continue
+        if group != "runtime" and spec.get("group") == "runtime":
+            continue
+        prompt = ""
+        rows.append({
+            "id": spec.get("id"),
+            "label": spec.get("label") or spec.get("id"),
+            "group": spec.get("group") or "",
+            "kind": spec.get("kind") or "",
+            "source": spec.get("source") or "",
+            "used_in": list(spec.get("used_in") or []),
+            "summary": spec.get("summary") or "",
+            "system_prompt": prompt,
+            "prompt_chars": 0,
+            "related_ids": list(spec.get("related_ids") or []),
+            "live": spec.get("live", True) is not False,
+            "owner": spec.get("owner") or "",
+            "job": spec.get("job") or "",
+            "called": spec.get("called") or "",
+            "triggers": list(spec.get("triggers") or []),
+            "output": spec.get("output") or "",
+            "editable": False,
+            "default_prompt": prompt,
+            "prompt_custom": False,
+            "version": int(spec.get("version") or 1),
+            "sha": str(spec.get("_sha") or ""),
+            "source_path": str(spec.get("_source_path") or ""),
+        })
+    return rows
+
+
 def _product_roles() -> list[dict[str, Any]]:
-    return [
-        _role(
-            id="conductor", label="分析师", group="abstract", kind="json",
-            source="llm_jobs",
-            used_in=["route", "qa_tick", "case_exec_agent"],
-            summary="抽象调度：看当前步骤该调用哪个角色的哪项能力。",
-            system_prompt=_job_prompt("conductor"),
-            related_ids=["req-analyst", "test-engineer", "req-qa-bm"],
-            live=True, owner="conductor", job="route", called="wired",
-            triggers=["流程 tick 选下一步", "设置页问「这一步该调谁」"],
-        ),
-        _role(
-            id="req-analyst", label="需求分析师", group="product", kind="json",
-            source="llm_jobs",
-            used_in=["analyze_req", "propose_atlas"],
-            summary="读需求原文，拆验收标准和测试点。",
-            system_prompt=_job_prompt("req-analyst"),
-            related_ids=["mindmap-writer", "case-writer", "req-qa-bm"],
-            live=True, owner="req-analyst", job="analyze_req", called="wired",
-            triggers=["新建需求", "流程 tick"],
-        ),
-        _role(
-            id="mindmap-writer", label="测试脑图编写", group="product", kind="json",
-            source="llm_jobs",
-            used_in=["draft_mindmap"],
-            summary="沿入口和端铺覆盖脑图。",
-            system_prompt=_job_prompt("mindmap-writer"),
-            related_ids=["req-analyst", "case-writer"],
-            live=True, owner="mindmap-writer", job="draft_mindmap", called="wired",
-            triggers=["需求分析完成", "流程 tick"],
-        ),
-        _role(
-            id="case-writer", label="测试用例编写", group="product", kind="json",
-            source="llm_jobs",
-            used_in=["draft_cases"],
-            summary="按测试点展开用例草稿。",
-            system_prompt=_job_prompt("case-writer"),
-            related_ids=["req-analyst", "mindmap-writer"],
-            live=True, owner="case-writer", job="draft_cases", called="wired",
-            triggers=["测试点缺用例", "流程 tick"],
-        ),
-        _role(
-            id="req-qa-bm", label="需求QA BM", group="product", kind="conversational",
-            source="llm_jobs",
-            used_in=["map_cases", "classify_fail", "draft_sign"],
-            summary="一条需求从覆盖到验收。结论必须人审。",
-            system_prompt=_job_prompt("req-qa-bm"),
-            related_ids=["req-analyst", "case-writer"],
-            live=True, owner="req-qa-bm", job="draft_sign", called="wired",
-        ),
-        _role(
-            id="version-qa-bm", label="版本QA BM", group="product", kind="conversational",
-            source="llm_jobs",
-            used_in=["pick_regression", "draft_gate"],
-            summary="这版带哪些需求出门、历史回归与发版评审。",
-            system_prompt=_job_prompt("version-qa-bm"),
-            related_ids=["req-qa-bm"],
-            live=True, owner="version-qa-bm", job="draft_gate", called="wired",
-        ),
-        _role(
-            id="test-engineer", label="测试工程师", group="product", kind="conversational",
-            source="llm_jobs",
-            used_in=["用例执行", "Agent"],
-            summary="在设备上执行用例并给出屏幕证据。",
-            system_prompt=_job_prompt("test-engineer"),
-            related_ids=["agent-decide"],
-            live=True, owner="test-engineer", called="wired",
-            triggers=["下发任务", "Case Runner"],
-        ),
-        _role(
-            id="report-writer", label="报告编写", group="product", kind="json",
-            source="llm_jobs",
-            used_in=["测试报告"],
-            summary="按流程事实写报告草稿。",
-            system_prompt=_job_prompt("report-writer"),
-            related_ids=["req-qa-bm", "doc-keeper"],
-            live=True, owner="report-writer", job="draft_test_report", called="sandbox",
-        ),
-        _role(
-            id="doc-keeper", label="文档维护", group="product", kind="json",
-            source="llm_jobs",
-            used_in=["文档插件"],
-            summary="把人确认过的内容同步到外部文档。",
-            system_prompt=_job_prompt("doc-keeper"),
-            related_ids=["report-writer"],
-            live=True, owner="doc-keeper", job="publish_wiki", called="sandbox",
-        ),
-        _role(
-            id="im-qa-assistant", label="IM 总指挥", group="product", kind="conversational",
-            source="llm_jobs",
-            used_in=["角色 · prompt"],
-            summary="IM 通道里的总指挥。prompt 可在设置页改。",
-            system_prompt=_job_prompt("im-qa-assistant"),
-            related_ids=["im-defect-assistant"],
-            live=True, owner="im-qa-assistant", called="wired",
-        ),
-        _role(
-            id="im-defect-assistant", label="IM 缺陷助手", group="product", kind="json",
-            source="llm_jobs",
-            used_in=["IM 提缺陷"],
-            summary="把缺陷整理成 JSON。prompt 可在设置页改。",
-            system_prompt=_job_prompt("im-defect-assistant"),
-            related_ids=["im-qa-assistant"],
-            live=True, owner="im-defect-assistant", called="wired",
-        ),
-        _role(
-            id="knowledge-reviewer", label="知识审核员", group="product", kind="json",
-            source="llm_jobs",
-            used_in=["知识库机审"],
-            summary="审执行沉淀的知识草稿。",
-            system_prompt=_job_prompt("knowledge-reviewer"),
-            related_ids=["product-expert"],
-            live=True, owner="knowledge-reviewer", job="review_knowledge", called="wired",
-        ),
-        _role(
-            id="product-expert", label="产品专家", group="product", kind="json",
-            source="llm_jobs",
-            used_in=["应用简报"],
-            summary="了解被测应用的图谱、功能和需求。",
-            system_prompt=_job_prompt("product-expert"),
-            related_ids=["knowledge-reviewer", "req-analyst"],
-            live=True, owner="product-expert", job="brief_knowledge", called="wired",
-        ),
-    ]
+    return _roles_from_files("product")
 
 
 def _runtime_roles() -> list[dict[str, Any]]:
-    return [
-        _role(
-            id="propose_atlas", label="影响范围与骨架变更", group="runtime", kind="json",
-            source="llm_jobs",
-            used_in=["propose_atlas"],
-            summary="判断需求影响哪些模块/功能。只出品变更，等人确认。",
-            system_prompt=_job_prompt("propose_atlas"),
-            owner="req-analyst", job="propose_atlas",
-        ),
-        _role(
-            id="agent-decide", label="看图决策", group="runtime", kind="json",
-            source="llm_jobs",
-            used_in=["Agent 逐步执行"],
-            summary="每一步看截图决定下一个动作。",
-            system_prompt=_job_prompt("agent-decide"),
-            owner="test-engineer", job="agent-decide",
-        ),
-        _role(
-            id="agent-vision-plan", label="看图规划", group="runtime", kind="json",
-            source="llm_jobs",
-            used_in=["Agent 逐步执行"],
-            summary="规划子里程碑与逻辑块；不直接下发设备操作。",
-            system_prompt=_job_prompt("agent-vision-plan"),
-            owner="test-engineer", job="agent-vision-plan",
-        ),
-        _role(
-            id="agent-vision-exec", label="看图执行", group="runtime", kind="json",
-            source="llm_jobs",
-            used_in=["Agent 逐步执行"],
-            summary="按 plan_digest 输出单步 capability。",
-            system_prompt=_job_prompt("agent-vision-exec"),
-            owner="test-engineer", job="agent-vision-exec",
-        ),
-        _role(
-            id="agent-vision-assert", label="看图校验", group="runtime", kind="json",
-            source="llm_jobs",
-            used_in=["Agent 逐步执行"],
-            summary="check 阶段批量视觉校验点。",
-            system_prompt=_job_prompt("agent-vision-assert"),
-            owner="test-engineer", job="agent-vision-assert",
-        ),
-    ]
+    return _roles_from_files("runtime")
 
 
 def _all_catalog_rows() -> list[dict[str, Any]]:

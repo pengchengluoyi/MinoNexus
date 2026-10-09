@@ -399,6 +399,7 @@ def record_llm(*, messages: list | None = None, parsed=None, raw_text: str = "",
             "finish_reason": str(meta.get("finish_reason") or ""),
             "fail_kind": str(meta.get("fail_kind") or ""),
             "prompt_version": int(meta.get("prompt_version") or 0) or None,
+            "prompt_sha": str(meta.get("prompt_sha") or "") or None,
         }
     )
 

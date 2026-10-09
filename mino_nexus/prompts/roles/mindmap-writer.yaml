@@ -1,5 +1,6 @@
 id: mindmap-writer
-version: 1
+version: 2
+sort_order: 30
 label: 测试脑图编写
 group: product
 kind: json

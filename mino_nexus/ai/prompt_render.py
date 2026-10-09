@@ -101,14 +101,15 @@ def render_job(row: dict[str, Any], slots: dict[str, str]) -> tuple[list[dict], 
         "output_schema": str(row.get("output_schema") or ""),
         "call": dict(row.get("call") or {}),
         "prompt_version": int(row.get("prompt_version") or 1),
+        "prompt_sha": str(row.get("prompt_sha") or ""),
     }
     return messages, meta
 
 
 def render(job_id: str, slots: dict[str, str]) -> tuple[list[dict], dict]:
-    from mino_nexus.services.job_store import get_job
+    from mino_nexus.ai.prompt_repo import get_job
 
     row = get_job(job_id)
     if not row:
-        raise JobRenderError(f"llm_jobs 里没有 {job_id}")
+        raise JobRenderError(f"prompts 里没有 {job_id}")
     return render_job(row, slots)

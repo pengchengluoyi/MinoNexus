@@ -208,40 +208,30 @@ def get_ai_skill(skill_id: str, _sess: dict = Depends(current_session)):
     return ok(row)
 
 
+def _prompt_readonly(path: str):
+    raise HTTPException(
+        status_code=410,
+        detail=f"prompt 已改为在仓库中维护，文件路径为 {path}",
+    )
+
+
 @router.post("/ai/skills")
 def create_ai_skill(body: SkillSaveBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.services import skill_store as sks
-
-    payload = body.model_dump(exclude_none=True)
-    payload.pop("reset", None)
-    try:
-        data = sks.save_skill(payload.get("id") or payload.get("label") or "", payload, create=True)
-    except Exception as e:
-        http_error(e)
-    return ok(data, msg="已新建技能")
+    del body
+    _prompt_readonly("mino_nexus/prompts/skills/")
 
 
 @router.put("/ai/skills/{skill_id}")
 def save_ai_skill(skill_id: str, body: SkillSaveBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.services import skill_store as sks
-
-    payload = body.model_dump(exclude_none=True)
-    reset = bool(payload.pop("reset", False))
-    try:
-        if reset:
-            data = sks.reset_skill_prompt(skill_id)
-        else:
-            data = sks.save_skill(skill_id, payload, create=False)
-    except Exception as e:
-        http_error(e)
-    return ok(data, msg="已恢复默认" if reset else "已保存")
+    del body
+    _prompt_readonly(f"mino_nexus/prompts/skills/{skill_id}.yaml")
 
 
 @router.get("/ai/jobs")
 def list_ai_jobs(_sess: dict = Depends(current_session)):
-    from mino_nexus.services import job_store as js
+    from mino_nexus.ai.prompt_repo import list_jobs
 
-    return ok({"jobs": js.list_jobs()})
+    return ok({"jobs": list_jobs()})
 
 
 @router.get("/ai/jobs/health")
@@ -253,9 +243,9 @@ def ai_jobs_health(_sess: dict = Depends(current_session)):
 
 @router.get("/ai/jobs/{job_id}")
 def get_ai_job(job_id: str, _sess: dict = Depends(current_session)):
-    from mino_nexus.services import job_store as js
+    from mino_nexus.ai.prompt_repo import get_job
 
-    row = js.get_job(job_id)
+    row = get_job(job_id)
     if not row:
         raise HTTPException(status_code=404, detail=f"未知 job：{job_id}")
     return ok(row)
@@ -263,17 +253,8 @@ def get_ai_job(job_id: str, _sess: dict = Depends(current_session)):
 
 @router.put("/ai/jobs/{job_id}")
 def save_ai_job(job_id: str, body: JobSaveBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.services import job_store as js
-
-    payload = body.model_dump(exclude_none=True)
-    reset = bool(payload.pop("reset", False))
-    if reset:
-        payload = {"reset": True}
-    try:
-        data = js.save_job(job_id, payload)
-    except Exception as e:
-        http_error(e)
-    return ok(data, msg="已恢复上一版" if reset else "已保存")
+    del body
+    _prompt_readonly(f"mino_nexus/prompts/jobs/{job_id}/job.yaml")
 
 
 @router.post("/ai/jobs/{job_id}/preview")
@@ -312,20 +293,14 @@ def get_stack(_sess: dict = Depends(current_session)):
 
 @router.put("/ai/stack")
 def save_stack(body: LayerStackBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.ai.layer_stack import save_bindings
-
-    payload = body.model_dump(exclude_none=True)
-    reset = bool(payload.pop("reset", False))
-    return ok(save_bindings(payload, reset=reset), msg="已恢复默认" if reset else "已保存")
+    del body
+    _prompt_readonly("mino_nexus/prompts/stack/stack.yaml")
 
 
 @router.put("/ai/roles/{role_id}/prompt")
 def save_role_prompt(role_id: str, body: RolePromptBody, _sess: dict = Depends(current_session)):
-    try:
-        data = ss.save_role_prompt(role_id, system_prompt=body.system_prompt, reset=body.reset)
-    except Exception as e:
-        http_error(e)
-    return ok(data, msg="已恢复默认" if body.reset else "已保存")
+    del body
+    _prompt_readonly(f"mino_nexus/prompts/roles/{role_id}.yaml")
 
 
 @router.post("/ai/roles/chat")

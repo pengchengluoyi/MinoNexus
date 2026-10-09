@@ -1,5 +1,6 @@
 id: report-writer
-version: 1
+version: 2
+sort_order: 80
 label: 报告编写
 group: product
 kind: json

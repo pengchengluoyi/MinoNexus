@@ -1,5 +1,6 @@
 id: test-engineer
-version: 1
+version: 2
+sort_order: 70
 label: 测试工程师
 group: product
 kind: conversational

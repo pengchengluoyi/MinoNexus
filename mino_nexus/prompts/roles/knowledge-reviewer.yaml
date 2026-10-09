@@ -1,5 +1,6 @@
 id: knowledge-reviewer
-version: 1
+version: 2
+sort_order: 120
 label: 知识审核员
 group: product
 kind: json

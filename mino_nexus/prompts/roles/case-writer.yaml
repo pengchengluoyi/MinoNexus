@@ -1,5 +1,6 @@
 id: case-writer
-version: 1
+version: 2
+sort_order: 40
 label: 测试用例编写
 group: product
 kind: json

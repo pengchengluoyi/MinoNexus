@@ -4,6 +4,10 @@
       "version": 1,
       "sha256": "53564c56ecfc9d91fe06c50e25089ec9ba0a58dbcdd6e01f2ce28de2c190aee3"
     },
+    "jobs/account-facet-schema": {
+      "version": 1,
+      "sha256": "101aee46cf22588e5382fcf7a02b863849a357ce3769962db52c592407456211"
+    },
     "jobs/agent-decide": {
       "version": 24,
       "sha256": "e19632f92f6da9ab94124bda53bd27fcb5ce2f671f895ba8fcafec95cf3518a3"
@@ -24,6 +28,10 @@
       "version": 1,
       "sha256": "a466240a162fe7849b8e796747d976198c2bccee9ef66edf489db5bdacb43a7f"
     },
+    "jobs/app-intel-ask": {
+      "version": 1,
+      "sha256": "ac8b84c80cf914d0f9a4560ddb1e8decd2c6a08704e8dd64038c10151289fc3c"
+    },
     "jobs/assert-vision": {
       "version": 4,
       "sha256": "2bdf394ef0a7cb34a4b9c56692b2deff9898dc93f4b628542336ab6fd6d88577"
@@ -39,6 +47,10 @@
     "jobs/doc-keeper": {
       "version": 1,
       "sha256": "ae3edd67c844c0045f216c9cc46df660b54d525897820deb6bd1274b19806031"
+    },
+    "jobs/doc-learn": {
+      "version": 1,
+      "sha256": "7795f70b8a7f5723f4493deaf0e89a43324a039a67cba6cb93f6d556ab12f9c6"
     },
     "jobs/draft_cases": {
       "version": 1,
@@ -59,6 +71,14 @@
     "jobs/inspect-session": {
       "version": 3,
       "sha256": "77f6eeb0175b223e96d891b68aa52a9cb36a0b097a47e5e5d3f364c231aca1cc"
+    },
+    "jobs/knowledge-extract": {
+      "version": 1,
+      "sha256": "eca64906312732ce7945a9627768d7a9c00f9061d88220ca0e3039bf986044ee"
+    },
+    "jobs/knowledge-extract-batch": {
+      "version": 1,
+      "sha256": "96ca35558cbd6d8f53d9e55ee0964c64e4e7e4b7af155675bcabb77940e3ed7e"
     },
     "jobs/knowledge-reviewer": {
       "version": 1,
@@ -97,76 +117,76 @@
       "sha256": "a7bfc6896f8e9aaea79cb4c4852f6ae2149058c5e1e6c7b6c4b49e8a01f49f83"
     },
     "roles/agent-decide": {
-      "version": 1,
-      "sha256": "864b29dfc8038f01bc4a837b2a7645ce3a0840ce9333c877332e4e6e37ca7a80"
+      "version": 2,
+      "sha256": "3a77705e590b3031818f7395945457fab8648efd6d804e18cb051a88caba0ac8"
     },
     "roles/agent-vision-assert": {
-      "version": 1,
-      "sha256": "7f9b5e67c2c9eb866ac8e2566ab90f64c18e74219c82b0fffc95a2c5d11c73ef"
+      "version": 2,
+      "sha256": "0e315de8f116cb0648b5269d29ae417c79b4130ad7aa6619239c5e0ae9beac6b"
     },
     "roles/agent-vision-exec": {
-      "version": 1,
-      "sha256": "960475bac6c039b0876c2be43d437f91ea14b099cf72ba5d250abbd0259cb7ec"
+      "version": 2,
+      "sha256": "12c801c5291e4bb773d03d8d292f9084750ecca2b5441ec90d279bea0eac10a8"
     },
     "roles/agent-vision-plan": {
-      "version": 1,
-      "sha256": "5af5f7eb85f0e6ae81dac92cd581b0f63eb6325c57f40d65afeddc11d341a9a2"
+      "version": 2,
+      "sha256": "5376c554b38fab62db9d3d0a5ac9abc1a7642b2275d1d849d683dcd95253c116"
     },
     "roles/case-writer": {
-      "version": 1,
-      "sha256": "2fcd84cb49a097eea756a94bddb83dc72d0c2b6c299b0d625f2623da04f8b74b"
+      "version": 2,
+      "sha256": "afa11266ff9a730dc097040295eb4b65d5d906d60d6fe43e019070a7dc9cd4ec"
     },
     "roles/conductor": {
-      "version": 1,
-      "sha256": "6d4e0c315fbf44390a57c4b1375293392697cac995a6cbaebe703aa1242da647"
+      "version": 2,
+      "sha256": "1be5fb703dbdbbf0e3bf79c49fc23998a65a57076e63ed4209e682a14f21a930"
     },
     "roles/doc-keeper": {
-      "version": 1,
-      "sha256": "7793d7d4b320d4bce7bc4b4dcc72fa94191cf2e5dadbfbc1cfe582a9e043916a"
+      "version": 2,
+      "sha256": "b9d5ca69279552b594bb90d21b1c870647fff1c35c55ea976a7a6e4f05d2f2dd"
     },
     "roles/im-defect-assistant": {
-      "version": 1,
-      "sha256": "0146bc535cd82f8e1ac0c82183b859c65e2bc11098c0c829f9e480bd9b5c42f1"
+      "version": 2,
+      "sha256": "880895b8d9d1a4ba97599d6d94522aaa9a1d09dafe8d71f723dc9755bb592f05"
     },
     "roles/im-qa-assistant": {
-      "version": 1,
-      "sha256": "0dd1bf4b50a7b86befe52377f8ed1af8076a09bd0b477a279cc7307194e1ae55"
+      "version": 2,
+      "sha256": "a80ffa85b4ccbeb3fd5f8e7c1d7ed37587cfad3bf92365677abb58e4a3d51213"
     },
     "roles/knowledge-reviewer": {
-      "version": 1,
-      "sha256": "0df292347005e6ffaeae44035e1f42ca4d22c0b40f2bc6dd506a0f95516e77b5"
+      "version": 2,
+      "sha256": "1332c0db9614223f9928c19bca451f0be0e8b4a7f48ff13cdcc5545a8948055f"
     },
     "roles/mindmap-writer": {
-      "version": 1,
-      "sha256": "08da6e4df9cb65f1c3d8c136ef14001d34a4f8031d6317f07edff4c190779966"
+      "version": 2,
+      "sha256": "d3e3490a517da82f7f51337c16c039f20f1c61a9fca013f51514c0b95738d57b"
     },
     "roles/product-expert": {
-      "version": 1,
-      "sha256": "da4c616d1aa3500350bc490ef26b443856e17d0df75c1fdf94f7a538ad827b65"
+      "version": 2,
+      "sha256": "72a21ce1793d74ec9d8e3a1f51afdf3d59f38ba566b627ef96552cc1f32e497b"
     },
     "roles/propose_atlas": {
-      "version": 1,
-      "sha256": "2a769359bc3a7ea15ebc924d15309aae433e8b1744d02eddf0321743754c304e"
+      "version": 2,
+      "sha256": "5921c8d181ef2d67378b0e1346e230530706d4eced8acc03e5bd486c316e6007"
     },
     "roles/report-writer": {
-      "version": 1,
-      "sha256": "f8670c5552964e3dc5d686b29a2b40dbc5e36df3e8331068928ef43dbfa23987"
+      "version": 2,
+      "sha256": "b267875d3d4382a90150b49fb46b313f1ed0cd89d1f479eba14ba38c88e8f696"
     },
     "roles/req-analyst": {
-      "version": 1,
-      "sha256": "da0a59788bf02f800f191ba21695f7880152adf4310a6728ae0f0603883f0ab0"
+      "version": 2,
+      "sha256": "956451a1a5a1c86a9e5029d1c2f2959caa29ce6c02d45fb8d9e3e728a79b265a"
     },
     "roles/req-qa-bm": {
-      "version": 1,
-      "sha256": "477db347ab19b582091e2f652d787e0d7c3eb39f5363dd915fafed595a83df5e"
+      "version": 2,
+      "sha256": "bc3e5edd04efe778cfdf250d599e8c2402addb04018bcbccbbe1373d09256adc"
     },
     "roles/test-engineer": {
-      "version": 1,
-      "sha256": "2e568bd1d6192c87d0dbb9ffb11028b3252d143d2a8b6071a2fd78140ea27fc3"
+      "version": 2,
+      "sha256": "f20c5e2afed20f010c9ef3caaa7e5e1e8d9c4f47a007890c94c67c4239217cb9"
     },
     "roles/version-qa-bm": {
-      "version": 1,
-      "sha256": "97ec79d932f549ccfac808e8116c147d23d29046d7b927ad84c9b7fdeb72a06e"
+      "version": 2,
+      "sha256": "898ef0d3b62a9173b67bf2fd71b698f16f8f96a4a0bc7de09c41fe2f5b11e973"
     },
     "skills/analyze_req": {
       "version": 1,

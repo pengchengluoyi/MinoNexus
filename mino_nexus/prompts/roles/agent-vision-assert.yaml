@@ -1,5 +1,6 @@
 id: agent-vision-assert
-version: 1
+version: 2
+sort_order: 180
 label: 看图校验
 group: runtime
 kind: json

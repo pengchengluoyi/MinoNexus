@@ -1,0 +1,27 @@
+id: app-intel-ask
+version: 1
+label: 应用信息问答
+summary: 只根据检索上下文回答
+engine: text_chat
+role: ''
+output_schema: ''
+enabled: true
+sort_order: 83
+flags: []
+slots:
+- name: user_payload
+  kind: text
+  required: true
+call:
+  temperature: 0.2
+  max_tokens: 2048
+  timeout_sec: 90
+  json_mode: false
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: payload
+  slot: user_payload
+  max_chars: 12000

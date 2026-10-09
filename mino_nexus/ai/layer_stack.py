@@ -157,48 +157,64 @@ def _merged_role_skills() -> dict[str, list[str]]:
 
 
 def get_stack() -> dict[str, Any]:
-    role_skills = _merged_role_skills()
-    extra_sd = _store().get("skill_drivers")
+    from mino_nexus.ai.prompt_repo import stack_spec
+
+    spec = stack_spec()
+    drivers = list(spec.get("drivers") or [])
+    categories = list(spec.get("skill_categories") or [])
+    skills_src = [row for row in (spec.get("skills") or []) if isinstance(row, dict)]
+    roles_src = [row for row in (spec.get("roles") or []) if isinstance(row, dict)]
+    triggers_src = [row for row in (spec.get("triggers") or []) if isinstance(row, dict)]
+    default_skill_drivers = dict(spec.get("skill_drivers") or {})
+    default_role_skills = {rid: list(ids) for rid, ids in (spec.get("role_skills") or {}).items()}
+    default_trigger_roles = dict(spec.get("trigger_roles") or {})
+    default_trigger_skills = dict(spec.get("trigger_skills") or {})
+    intent_label = dict(spec.get("intent_labels") or _INTENT_LABEL)
+    skill_ids = {row["id"] for row in skills_src}
+    role_ids = {row["id"] for row in roles_src}
+    driver_ids = {d["id"] for d in drivers}
+    bindings = spec.get("bindings") if isinstance(spec.get("bindings"), dict) else {}
+
+    extra = bindings.get("role_skills")
+    extra = extra if isinstance(extra, dict) else {}
+    role_skills = {rid: list(ids) for rid, ids in default_role_skills.items()}
+    for rid in role_ids:
+        if rid in extra:
+            role_skills[rid] = _clean_id_list(extra[rid], skill_ids)
+    extra_sd = bindings.get("skill_drivers")
     extra_sd = extra_sd if isinstance(extra_sd, dict) else {}
-    skill_drivers = {**DEFAULT_SKILL_DRIVERS, **{
-        sid: _clean_id_list(ids, {d["id"] for d in DRIVERS})
-        for sid, ids in extra_sd.items() if sid in _SKILL_IDS
+    skill_drivers = {**default_skill_drivers, **{
+        sid: _clean_id_list(ids, driver_ids)
+        for sid, ids in extra_sd.items() if sid in skill_ids
     }}
-    extra_tr = _store().get("trigger_roles")
+    extra_tr = bindings.get("trigger_roles")
     extra_tr = extra_tr if isinstance(extra_tr, dict) else {}
-    extra_ts = _store().get("trigger_skills")
+    extra_ts = bindings.get("trigger_skills")
     extra_ts = extra_ts if isinstance(extra_ts, dict) else {}
-    trigger_roles = {**DEFAULT_TRIGGER_ROLES, **extra_tr}
-    trigger_skills = {**DEFAULT_TRIGGER_SKILLS, **extra_ts}
+    trigger_roles = {**default_trigger_roles, **extra_tr}
+    trigger_skills = {**default_trigger_skills, **extra_ts}
 
     skills = []
-    for row in SKILLS:
+    for row in skills_src:
         sid = row["id"]
-        skills.append({
-            **row,
-            "driver_ids": list(skill_drivers.get(sid) or []),
-        })
+        skills.append({**row, "driver_ids": list(skill_drivers.get(sid) or [])})
     roles = []
-    for row in ROLES:
+    for row in roles_src:
         rid = row["id"]
         ids = list(role_skills.get(rid) or [])
-        roles.append({
-            **row,
-            "skill_ids": ids,
-            "skills": [s for s in skills if s["id"] in ids],
-        })
+        roles.append({**row, "skill_ids": ids, "skills": [s for s in skills if s["id"] in ids]})
     triggers = []
-    for row in TRIGGERS:
+    for row in triggers_src:
         tid = row["id"]
         triggers.append({
             **row,
             "roles": trigger_roles.get(tid) or {},
             "skills": trigger_skills.get(tid) or {},
-            "intent_labels": {key: _INTENT_LABEL.get(key, key) for key in (row.get("intents") or ["default"])},
+            "intent_labels": {key: intent_label.get(key, key) for key in (row.get("intents") or ["default"])},
         })
     return {
-        "drivers": list(DRIVERS),
-        "skill_categories": list(SKILL_CATEGORIES),
+        "drivers": drivers,
+        "skill_categories": categories,
         "skills": skills,
         "roles": roles,
         "triggers": triggers,
@@ -206,12 +222,15 @@ def get_stack() -> dict[str, Any]:
         "role_skills": role_skills,
         "trigger_roles": trigger_roles,
         "trigger_skills": trigger_skills,
-        "intent_labels": dict(_INTENT_LABEL),
+        "intent_labels": intent_label,
+        "version": int(spec.get("version") or 1),
+        "sha": str(spec.get("_sha") or ""),
+        "source_path": str(spec.get("_source_path") or ""),
         "custom": {
-            "skill_drivers": bool(_store().get("skill_drivers")),
-            "role_skills": bool(_store().get("role_skills")),
-            "trigger_roles": bool(_store().get("trigger_roles")),
-            "trigger_skills": bool(_store().get("trigger_skills")),
+            "skill_drivers": bool(bindings.get("skill_drivers")),
+            "role_skills": bool(bindings.get("role_skills")),
+            "trigger_roles": bool(bindings.get("trigger_roles")),
+            "trigger_skills": bool(bindings.get("trigger_skills")),
         },
     }
 

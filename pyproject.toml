@@ -25,6 +25,7 @@ dependencies = [
   "pypdf>=5.0",
   "lark-oapi>=1.7",       # 飞书
   "zeroconf>=0.148",      # mDNS：给 Scout 发现用
+  "pyyaml>=6.0",          # prompts/ 文件
 ]
 
 [project.scripts]
@@ -41,4 +42,10 @@ include = ["mino_nexus*"]
 version = {file = "mino_nexus/VERSION"}
 
 [tool.setuptools.package-data]
-mino_nexus = ["VERSION"]
+mino_nexus = [
+  "VERSION",
+  "prompts/*",
+  "prompts/*/*",
+  "prompts/*/*/*",
+  "prompts/*/*/*/*",
+]

@@ -1,5 +1,6 @@
 id: version-qa-bm
-version: 1
+version: 2
+sort_order: 60
 label: 版本QA BM
 group: product
 kind: conversational

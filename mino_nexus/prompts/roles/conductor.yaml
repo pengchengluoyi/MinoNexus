@@ -1,5 +1,6 @@
 id: conductor
-version: 1
+version: 2
+sort_order: 10
 label: 分析师
 group: abstract
 kind: json

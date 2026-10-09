@@ -1,5 +1,6 @@
 id: agent-vision-exec
-version: 1
+version: 2
+sort_order: 170
 label: 看图执行
 group: runtime
 kind: json

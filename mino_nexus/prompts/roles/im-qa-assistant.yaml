@@ -1,5 +1,6 @@
 id: im-qa-assistant
-version: 1
+version: 2
+sort_order: 100
 label: IM 总指挥
 group: product
 kind: conversational

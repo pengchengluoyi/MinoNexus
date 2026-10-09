@@ -1,5 +1,6 @@
 id: doc-keeper
-version: 1
+version: 2
+sort_order: 90
 label: 文档维护
 group: product
 kind: json

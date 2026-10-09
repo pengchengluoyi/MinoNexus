@@ -46,47 +46,6 @@ _ENV_CANON = {
 SIT_MATCH_USED = 3
 BACKFILL_BATCH = 8
 
-EXTRACT_SYSTEM = """You classify a knowledge article about any app or website for a test agent.
-Return one JSON object, no markdown.
-Do not assume a particular product. Do not copy UI labels into facet/need/slot enums.
-
-{
-  "facet": "chrome | server | hybrid | exception | ",
-  "situation": {
-    "surface": "app | web | ",
-    "lane": "prep | step | expect | ",
-    "need": "fill | judge_selected | judge | howto | ",
-    "slot": "identity.otp | identity.phone | identity.password | ",
-    "screen_role": "chrome_nav | auth_form | content | dialog | "
-  },
-  "bind": {
-    "slot": "identity.otp | identity.phone | identity.password | ",
-    "value": "string to type into a field, or empty",
-    "env": "test | staging | prod | ",
-    "surface": "app | web | "
-  }
-}
-
-facet:
-- chrome: shell / navigation / selected state / independent entry
-- server: observable result of backend rules (counts, timing, state)
-- hybrid: one action must match both UI and backend
-- exception: lab secrets, known defects, must-ask-human doors
-
-need fill + bind.value: a reusable value the agent can type (one-time code, login id, password).
-identity.otp = one-time code (sms, email, authenticator, fixed lab code).
-identity.phone = login identifier (phone, email, username).
-identity.password = password.
-If the text does not give a concrete fillable value, leave bind.value empty.
-If env is implied (lab / test only), set env=test.
-Empty string means unrestricted.
-"""
-
-EXTRACT_BATCH_SYSTEM = EXTRACT_SYSTEM + """
-Input is a JSON list of {id, title, content}.
-Return {"items":[{id, facet, situation, bind}, ...]}. Keep the same ids. Skip empty articles.
-"""
-
 _BACKFILL_DONE: set[str] = set()
 
 
@@ -380,6 +339,7 @@ def _extract_via_llm(title: str, content: str) -> dict[str, Any] | None:
     try:
         from mino_nexus.ai.dispatch_log import bind, reset
         from mino_nexus.ai.llm_client import call_chat_text, resolve_regression_provider
+        from mino_nexus.ai.prompt_render import render
     except Exception as exc:
         SLog.w(TAG, f"extract import failed: {exc}")
         return None
@@ -396,16 +356,15 @@ def _extract_via_llm(title: str, content: str) -> dict[str, Any] | None:
         skill="knowledge-situation",
     )
     try:
+        messages, prompt_meta = render("knowledge-extract", {"user_payload": user})
+        call = prompt_meta.get("call") or {}
         raw, meta = call_chat_text(
             provider=provider,
-            messages=[
-                {"role": "system", "content": EXTRACT_SYSTEM},
-                {"role": "user", "content": user},
-            ],
-            temperature=0.0,
-            max_tokens=400,
-            timeout_sec=25,
-            json_mode=True,
+            messages=messages,
+            temperature=call.get("temperature", 0),
+            max_tokens=int(call.get("max_tokens") or 400),
+            timeout_sec=int(call.get("timeout_sec") or 25),
+            json_mode=bool(call.get("json_mode")),
         )
     finally:
         reset(tok)
@@ -431,6 +390,7 @@ def _extract_batch_via_llm(rows: list[dict[str, Any]]) -> dict[str, dict[str, An
     try:
         from mino_nexus.ai.dispatch_log import bind, reset
         from mino_nexus.ai.llm_client import call_chat_text, resolve_regression_provider
+        from mino_nexus.ai.prompt_render import render
     except Exception as exc:
         SLog.w(TAG, f"batch extract import failed: {exc}")
         return {}
@@ -445,16 +405,18 @@ def _extract_batch_via_llm(rows: list[dict[str, Any]]) -> dict[str, dict[str, An
         skill="knowledge-situation",
     )
     try:
+        messages, prompt_meta = render(
+            "knowledge-extract-batch",
+            {"user_payload": json.dumps(payload, ensure_ascii=False)},
+        )
+        call = prompt_meta.get("call") or {}
         raw, meta = call_chat_text(
             provider=provider,
-            messages=[
-                {"role": "system", "content": EXTRACT_BATCH_SYSTEM},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ],
-            temperature=0.0,
-            max_tokens=1200,
-            timeout_sec=45,
-            json_mode=True,
+            messages=messages,
+            temperature=call.get("temperature", 0),
+            max_tokens=int(call.get("max_tokens") or 1200),
+            timeout_sec=int(call.get("timeout_sec") or 45),
+            json_mode=bool(call.get("json_mode")),
         )
     finally:
         reset(tok)

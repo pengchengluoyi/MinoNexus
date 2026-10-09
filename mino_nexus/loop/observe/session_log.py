@@ -364,10 +364,11 @@ def append_llm_request(*, job_id: str, messages: list | None) -> int:
         payload["screenshot_hash"] = _screenshot_hash.get()
     if job_id == "agent-decide":
         try:
-            from mino_nexus.services.job_store import get_job
+            from mino_nexus.ai.prompt_repo import get_job
 
             row = get_job("agent-decide") or {}
             payload["prompt_version"] = int(row.get("prompt_version") or 0) or None
+            payload["prompt_sha"] = str(row.get("prompt_sha") or "") or None
         except Exception:
             pass
     return writer.append("llm/request", payload)

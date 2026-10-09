@@ -1,0 +1,26 @@
+id: account-facet-schema
+version: 1
+label: 账号池扩展字段
+summary: 根据用例前置建议 Facet 扩展
+engine: json_chat
+role: test-engineer
+output_schema: ''
+enabled: true
+sort_order: 84
+flags: []
+slots:
+- name: user_payload
+  kind: text
+  required: true
+call:
+  temperature: 0.1
+  max_tokens: 900
+  timeout_sec: 45
+  json_mode: true
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: payload
+  slot: user_payload

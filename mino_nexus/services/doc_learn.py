@@ -11,17 +11,6 @@ from mino_nexus.services import knowledge_store as ks
 
 TAG = "DocLearn"
 
-DOC_LEARN_SYSTEM = """You extract test-verifiable facts from product documentation excerpts.
-Return one JSON object only:
-{"items":[{"title":"short label","content":"verifiable rule for testers","category":"业务逻辑|UI导航|交互规范|其他","tags":[],"evidence":"verbatim quote"}]}
-
-Rules:
-- Only include facts verifiable during UI/manual testing (timeouts, counts, copy requirements, flows).
-- Do NOT include architecture, implementation, or subjective praise.
-- Each item MUST include evidence copied from the excerpt.
-- Skip duplicates; max 5 items per batch.
-- If nothing testable, return {"items":[]}."""
-
 
 def _extract_batch(batch: list[dict[str, Any]], *, doc_title: str, source_id: str) -> list[dict[str, Any]]:
     if not batch:
@@ -41,6 +30,7 @@ def _extract_batch(batch: list[dict[str, Any]], *, doc_title: str, source_id: st
     try:
         from mino_nexus.ai.dispatch_log import bind, reset
         from mino_nexus.ai.llm_client import call_chat_text, resolve_regression_provider
+        from mino_nexus.ai.prompt_render import render
     except Exception as exc:
         SLog.w(TAG, f"import failed: {exc}")
         return []
@@ -56,16 +46,18 @@ def _extract_batch(batch: list[dict[str, Any]], *, doc_title: str, source_id: st
         skill="doc-learn",
     )
     try:
+        messages, prompt_meta = render(
+            "doc-learn",
+            {"user_payload": json.dumps(payload, ensure_ascii=False)},
+        )
+        call = prompt_meta.get("call") or {}
         raw, meta = call_chat_text(
             provider=provider,
-            messages=[
-                {"role": "system", "content": DOC_LEARN_SYSTEM},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ],
-            temperature=0.0,
-            max_tokens=1200,
-            timeout_sec=60,
-            json_mode=True,
+            messages=messages,
+            temperature=call.get("temperature", 0),
+            max_tokens=int(call.get("max_tokens") or 1200),
+            timeout_sec=int(call.get("timeout_sec") or 60),
+            json_mode=bool(call.get("json_mode")),
         )
     finally:
         reset(tok)

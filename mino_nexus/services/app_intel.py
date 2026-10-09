@@ -663,6 +663,7 @@ def ask(
 ) -> dict[str, Any]:
     """检索 + LLM 问答，返回 answer 与 citations。"""
     from mino_nexus.ai.llm_client import call_chat_plain, resolve_regression_provider
+    from mino_nexus.ai.prompt_render import render
 
     aid = str(app_id or "").strip()
     q = str(question or "").strip()
@@ -694,21 +695,15 @@ def ask(
             "context_preview": context[:2000],
         }
 
-    system = (
-        "你是被测应用的信息助手。仅根据【检索上下文】作答；"
-        "无法从上下文得出结论时明确说不知道。"
-        "回答末尾用「引用：」列出用到的 [编号]。"
-    )
     user = f"问题：{q}\n\n【检索上下文】\n{context}"
+    messages, prompt_meta = render("app-intel-ask", {"user_payload": user})
+    call = prompt_meta.get("call") or {}
     text, meta = call_chat_plain(
         provider=provider,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user[:12000]},
-        ],
-        temperature=0.2,
-        max_tokens=2048,
-        timeout_sec=90,
+        messages=messages,
+        temperature=call.get("temperature", 0.2),
+        max_tokens=int(call.get("max_tokens") or 2048),
+        timeout_sec=int(call.get("timeout_sec") or 90),
     )
     if not text:
         return {

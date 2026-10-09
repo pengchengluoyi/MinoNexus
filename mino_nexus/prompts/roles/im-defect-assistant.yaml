@@ -1,5 +1,6 @@
 id: im-defect-assistant
-version: 1
+version: 2
+sort_order: 110
 label: IM 缺陷助手
 group: product
 kind: json
