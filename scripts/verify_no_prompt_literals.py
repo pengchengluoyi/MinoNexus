@@ -1,53 +1,63 @@
 #!/usr/bin/env python3
-"""扫描 mino_nexus 模块级 ALL_CAPS 长中文字符串，防止 prompt 回流到 .py。"""
+"""拦截写回 .py 的 prompt 字面量。中英文都算。"""
 from __future__ import annotations
 
 import ast
-import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SCAN_ROOT = ROOT / "mino_nexus"
 MIN_LEN = 80
-_CJK = re.compile(r"[\u4e00-\u9fff]{8,}")
-_ALL_CAPS = re.compile(r"^[A-Z][A-Z0-9_]+$")
 
 
-def _assign_names(node: ast.Assign) -> list[str]:
-    out: list[str] = []
-    for target in node.targets:
-        if isinstance(target, ast.Name):
-            out.append(target.id)
-    return out
+def _name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    return ""
 
 
-def _is_prompt_literal(node: ast.AST) -> bool:
+def _is_long(node: ast.AST) -> bool:
     if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
         return False
-    text = node.value.strip()
-    if len(text) < MIN_LEN:
-        return False
-    return bool(_CJK.search(text))
+    return len(node.value.strip()) >= MIN_LEN
+
+
+class _Visitor(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.hits: list[tuple[int, str]] = []
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        names = [_name(t) for t in node.targets]
+        interesting = any("SYSTEM" in n or "PROMPT" in n for n in names)
+        if interesting and _is_long(node.value):
+            snippet = str(node.value.value).strip().replace("\n", " ")[:60]
+            self.hits.append((node.lineno, snippet))
+        self.generic_visit(node)
+
+    def visit_Dict(self, node: ast.Dict) -> None:
+        role = ""
+        content: ast.AST | None = None
+        for key, value in zip(node.keys, node.values):
+            if isinstance(key, ast.Constant) and key.value == "role" and isinstance(value, ast.Constant):
+                role = str(value.value)
+            if isinstance(key, ast.Constant) and key.value == "content":
+                content = value
+        if role == "system" and content is not None and _is_long(content):
+            snippet = str(content.value).strip().replace("\n", " ")[:60]
+            self.hits.append((content.lineno, snippet))
+        self.generic_visit(node)
 
 
 def scan_file(path: Path) -> list[tuple[int, str]]:
     src = path.read_text(encoding="utf-8")
     try:
         tree = ast.parse(src, filename=str(path))
-    except SyntaxError as e:
-        return [(e.lineno or 0, f"语法错误：{e}")]
-    hits: list[tuple[int, str]] = []
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        names = _assign_names(node)
-        if not any(_ALL_CAPS.match(n) for n in names):
-            continue
-        if _is_prompt_literal(node.value):
-            snippet = str(node.value.value).strip().replace("\n", " ")[:60]
-            hits.append((node.lineno, snippet))
-    return hits
+    except SyntaxError as exc:
+        return [(exc.lineno or 0, f"语法错误：{exc}")]
+    visitor = _Visitor()
+    visitor.visit(tree)
+    return visitor.hits
 
 
 def main() -> int:
@@ -61,7 +71,7 @@ def main() -> int:
         for row in failures:
             print(" ", row)
         return 1
-    print(f"OK — no module-level prompt literals under {SCAN_ROOT.name}/")
+    print(f"OK — no prompt literals under {SCAN_ROOT.name}/")
     return 0
 
 

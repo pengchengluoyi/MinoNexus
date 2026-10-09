@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from mino_nexus.services import settings_store as ss
-
 DRIVERS: list[dict[str, Any]] = [
     {"id": "adb", "label": "真机 ADB", "kind": "device", "summary": "本机点按、截图、装包"},
     {"id": "claw", "label": "Scout 远程", "kind": "device", "summary": "经 Scout 执行"},
@@ -31,39 +29,6 @@ def _normalize_skill_id(skill_id: str) -> str:
     sid = str(skill_id or "").strip()
     return _SKILL_ALIASES.get(sid, sid)
 
-
-def _build_skills() -> list[dict[str, Any]]:
-    from mino_nexus.ai.skill_defs import builtin_skills
-
-    rows: list[dict[str, Any]] = []
-    for spec in builtin_skills():
-        sid = str(spec.get("id") or "")
-        role = spec.get("role") if isinstance(spec.get("role"), dict) else {}
-        engine = str(spec.get("engine") or "")
-        intent = "act" if engine == "agent_loop" else ("persist" if engine == "qa_job" else "talk")
-        rows.append({
-            "id": sid,
-            "label": str(spec.get("label") or sid),
-            "owner": str(role.get("id") or ""),
-            "summary": str(spec.get("summary") or ""),
-            "intent": intent,
-            "category": str(spec.get("category") or "flow"),
-        })
-    extras = [
-        {"id": "map_cases", "label": "对照用例库", "owner": "req-qa-bm", "summary": "看覆盖够不够", "intent": "persist", "category": "flow"},
-        {"id": "draft_sign", "label": "验收草稿", "owner": "req-qa-bm", "summary": "出建议，结论人点", "intent": "persist", "category": "flow"},
-        {"id": "pick_regression", "label": "圈回归范围", "owner": "version-qa-bm", "summary": "圈本版回归用例", "intent": "persist", "category": "flow"},
-        {"id": "draft_gate", "label": "发版草稿", "owner": "version-qa-bm", "summary": "出建议，结论人点", "intent": "persist", "category": "flow"},
-        {"id": "assert-vision", "label": "视觉断言", "owner": "test-engineer", "summary": "检查点是否达成", "intent": "act", "category": "device"},
-    ]
-    seen = {r["id"] for r in rows}
-    for row in extras:
-        if row["id"] not in seen:
-            rows.append(row)
-    return rows
-
-
-SKILLS: list[dict[str, Any]] = _build_skills()
 
 ROLES: list[dict[str, str]] = [
     {"id": "conductor", "label": "分析师"},
@@ -123,13 +88,8 @@ DEFAULT_TRIGGER_SKILLS: dict[str, dict[str, str]] = {
 }
 
 _INTENT_LABEL = {"dialogue": "问答", "defect": "提缺陷", "default": "默认"}
-_SKILL_IDS = {row["id"] for row in SKILLS}
+_SKILL_IDS: set[str] = set()
 _ROLE_IDS = {row["id"] for row in ROLES}
-
-
-def _store() -> dict[str, Any]:
-    raw = ss.get_layer_stack()
-    return raw if isinstance(raw, dict) else {}
 
 
 def _clean_id_list(raw: Any, allowed: set[str]) -> list[str]:
@@ -143,16 +103,6 @@ def _clean_id_list(raw: Any, allowed: set[str]) -> list[str]:
             continue
         seen.add(sid)
         out.append(sid)
-    return out
-
-
-def _merged_role_skills() -> dict[str, list[str]]:
-    extra = _store().get("role_skills")
-    extra = extra if isinstance(extra, dict) else {}
-    out = {rid: list(ids) for rid, ids in DEFAULT_ROLE_SKILLS.items()}
-    for rid in _ROLE_IDS:
-        if rid in extra:
-            out[rid] = _clean_id_list(extra[rid], _SKILL_IDS)
     return out
 
 
@@ -233,30 +183,3 @@ def get_stack() -> dict[str, Any]:
             "trigger_skills": bool(bindings.get("trigger_skills")),
         },
     }
-
-
-def save_bindings(body: dict[str, Any] | None, *, reset: bool = False) -> dict[str, Any]:
-    if reset:
-        ss.save_layer_stack({}, reset=True)
-        return get_stack()
-    incoming = body if isinstance(body, dict) else {}
-    payload: dict[str, Any] = {}
-    if "skill_drivers" in incoming and isinstance(incoming["skill_drivers"], dict):
-        payload["skill_drivers"] = {
-            sid: _clean_id_list(ids, {d["id"] for d in DRIVERS})
-            for sid, ids in incoming["skill_drivers"].items()
-            if str(sid) in _SKILL_IDS
-        }
-    if "role_skills" in incoming and isinstance(incoming["role_skills"], dict):
-        payload["role_skills"] = {
-            rid: _clean_id_list(ids, _SKILL_IDS)
-            for rid, ids in incoming["role_skills"].items()
-            if str(rid) in _ROLE_IDS
-        }
-    if "trigger_roles" in incoming:
-        payload["trigger_roles"] = incoming["trigger_roles"]
-    if "trigger_skills" in incoming:
-        payload["trigger_skills"] = incoming["trigger_skills"]
-    if payload:
-        ss.save_layer_stack(payload, reset=False)
-    return get_stack()

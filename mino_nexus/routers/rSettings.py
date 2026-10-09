@@ -57,43 +57,10 @@ class AIUsageSaveBody(BaseModel):
     plan_compress_image: bool = True
 
 
-class LayerStackBody(BaseModel):
-    skill_drivers: dict[str, list[str]] | None = None
-    role_skills: dict[str, list[str]] | None = None
-    trigger_roles: dict[str, dict[str, str]] | None = None
-    trigger_skills: dict[str, dict[str, str]] | None = None
-    skills: list[Any] | None = None
-    roles: list[Any] | None = None
-    skill_categories: list[Any] | None = None
-    drivers: list[Any] | None = None
-    triggers: list[Any] | None = None
-    reset: bool = False
-
-
-class RolePromptBody(BaseModel):
-    system_prompt: str = ""
-    reset: bool = False
-
-
 class RoleChatBody(BaseModel):
     role_id: str = ""
     messages: list[dict[str, Any]] = []
     explain_mode: bool = False
-
-
-class JobSaveBody(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    label: str = ""
-    summary: str = ""
-    system_blocks: list[dict[str, Any]] | None = None
-    user_blocks: list[dict[str, Any]] | None = None
-    image: dict[str, Any] | None = None
-    call: dict[str, Any] | None = None
-    enabled: bool | None = None
-    sort_order: int | None = None
-    reset: bool = False
-    activate_version: int | None = None
 
 
 class JobPreviewBody(BaseModel):
@@ -101,28 +68,6 @@ class JobPreviewBody(BaseModel):
     flags: dict[str, bool] | None = None
     system_blocks: list[dict[str, Any]] | None = None
     user_blocks: list[dict[str, Any]] | None = None
-
-
-class SkillSaveBody(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    id: str = ""
-    label: str = ""
-    summary: str = ""
-    category: str = ""
-    engine: str = ""
-    system_prompt: str = ""
-    sop: dict[str, Any] | None = None
-    input: dict[str, Any] | None = None
-    view: dict[str, Any] | None = None
-    view_id: str = ""
-    role: dict[str, Any] | None = None
-    role_id: str = ""
-    role_label: str = ""
-    triggers: list[str] | None = None
-    enabled: bool | None = None
-    sort_order: int | None = None
-    reset: bool = False
 
 
 class FigmaSettingsBody(BaseModel):
@@ -208,25 +153,6 @@ def get_ai_skill(skill_id: str, _sess: dict = Depends(current_session)):
     return ok(row)
 
 
-def _prompt_readonly(path: str):
-    raise HTTPException(
-        status_code=410,
-        detail=f"prompt 已改为在仓库中维护，文件路径为 {path}",
-    )
-
-
-@router.post("/ai/skills")
-def create_ai_skill(body: SkillSaveBody, _sess: dict = Depends(current_session)):
-    del body
-    _prompt_readonly("mino_nexus/prompts/skills/")
-
-
-@router.put("/ai/skills/{skill_id}")
-def save_ai_skill(skill_id: str, body: SkillSaveBody, _sess: dict = Depends(current_session)):
-    del body
-    _prompt_readonly(f"mino_nexus/prompts/skills/{skill_id}.yaml")
-
-
 @router.get("/ai/jobs")
 def list_ai_jobs(_sess: dict = Depends(current_session)):
     from mino_nexus.ai.prompt_repo import list_jobs
@@ -249,12 +175,6 @@ def get_ai_job(job_id: str, _sess: dict = Depends(current_session)):
     if not row:
         raise HTTPException(status_code=404, detail=f"未知 job：{job_id}")
     return ok(row)
-
-
-@router.put("/ai/jobs/{job_id}")
-def save_ai_job(job_id: str, body: JobSaveBody, _sess: dict = Depends(current_session)):
-    del body
-    _prompt_readonly(f"mino_nexus/prompts/jobs/{job_id}/job.yaml")
 
 
 @router.post("/ai/jobs/{job_id}/preview")
@@ -289,18 +209,6 @@ def get_stack(_sess: dict = Depends(current_session)):
     from mino_nexus.ai.layer_stack import get_stack
 
     return ok(get_stack())
-
-
-@router.put("/ai/stack")
-def save_stack(body: LayerStackBody, _sess: dict = Depends(current_session)):
-    del body
-    _prompt_readonly("mino_nexus/prompts/stack/stack.yaml")
-
-
-@router.put("/ai/roles/{role_id}/prompt")
-def save_role_prompt(role_id: str, body: RolePromptBody, _sess: dict = Depends(current_session)):
-    del body
-    _prompt_readonly(f"mino_nexus/prompts/roles/{role_id}.yaml")
 
 
 @router.post("/ai/roles/chat")

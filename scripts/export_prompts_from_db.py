@@ -115,13 +115,13 @@ def _catalog_snapshot() -> dict[str, Any]:
         _INTENT_LABEL,
         _SKILL_ALIASES,
     )
-    from mino_nexus.ai.skill_defs import ALIASES, builtin_skills, enums
+    from mino_nexus.services.skill_store import ALIASES, enums
 
     roles_catalog._job_prompt = lambda *_a, **_k: ""  # 目录正文在 job 里，这里只取写死字段
     product = [_strip_prompt(row) for row in roles_catalog._product_roles()]
     runtime = [_strip_prompt(row) for row in roles_catalog._runtime_roles()]
     return {
-        "skill_defs": {"skills": builtin_skills(), "aliases": dict(ALIASES), "enums": enums()},
+        "skill_defs": {"aliases": dict(ALIASES), "enums": enums()},
         "roles_catalog": {
             "role_job_map": dict(roles_catalog.ROLE_JOB_MAP),
             "product": product,

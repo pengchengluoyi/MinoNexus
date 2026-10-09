@@ -6,9 +6,34 @@ from typing import Any
 
 from mino_nexus.ai.prompt_repo import get_skill as _get_skill
 from mino_nexus.ai.prompt_repo import list_skills as _list_skills
-from mino_nexus.ai.skill_defs import ALIASES, enums
+from mino_nexus.catalog.exec_classes import ALL_KINDS
 
 _SLUG = re.compile(r"[^a-z0-9_-]+")
+
+ALIASES = {
+    "agent-decide": "run-case",
+    "agent-vision-exec": "run-case",
+    "agent_do": "run-case",
+    "explore-decide": "explore-app",
+}
+
+
+def enums() -> dict[str, Any]:
+    return {
+        "engines": ["agent_loop", "qa_job", "chat"],
+        "pointers": ["case_columns", "none"],
+        "views": ["case-three-column", "job-timeline", "flow-doc"],
+        "input_types": ["case", "instruction", "requirement", "none"],
+        "categories": ["flow", "device", "channel", "sync"],
+        "tool_kinds": list(ALL_KINDS),
+        "advance_on": ["milestones", "signal_done", "assert_pass"],
+        "phase_jobs": [
+            "agent-vision-plan",
+            "agent-vision-exec",
+            "agent-vision-assert",
+            "agent-decide",
+        ],
+    }
 
 
 def resolve_id(skill_id: str) -> str:

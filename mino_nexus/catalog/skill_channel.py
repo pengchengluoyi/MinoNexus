@@ -538,42 +538,9 @@ def _retire_prep_do_kinds(db: Any) -> int:
 
 
 def _rewrite_skill_tool_kinds(db: Any) -> int:
-    """技能 SOP 里的目录分组名去掉 prep / do，菜单只留通用。"""
-    from sqlalchemy.orm.attributes import flag_modified
-
-    from mino_nexus.models.skill import Skill
-
-    n = 0
-    for row in db.query(Skill).all():
-        sop = dict(row.sop_json or {})
-        changed = False
-        kinds = sop.get("tool_kinds")
-        if isinstance(kinds, list):
-            nxt = _without_legacy_kinds(kinds)
-            if nxt != kinds:
-                sop["tool_kinds"] = nxt
-                changed = True
-        phases = sop.get("phases")
-        if isinstance(phases, list):
-            new_phases = []
-            for phase in phases:
-                if not isinstance(phase, dict):
-                    new_phases.append(phase)
-                    continue
-                phase = dict(phase)
-                pkinds = phase.get("tool_kinds")
-                if isinstance(pkinds, list):
-                    nxt = _without_legacy_kinds(pkinds)
-                    if nxt != pkinds:
-                        phase["tool_kinds"] = nxt
-                        changed = True
-                new_phases.append(phase)
-            sop["phases"] = new_phases
-        if changed:
-            row.sop_json = sop
-            flag_modified(row, "sop_json")
-            n += 1
-    return n
+    """技能 SOP 已改由 prompts/ 维护，不再改库。"""
+    del db
+    return 0
 
 
 def _without_legacy_kinds(kinds: list[Any]) -> list[str]:

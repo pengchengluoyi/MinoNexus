@@ -14,7 +14,6 @@ from mino_nexus.models.resource_ops import (
 from mino_nexus.models.dispatch import DispatchCall
 from mino_nexus.models.doc_library import DocChunk, DocSource
 from mino_nexus.models.knowledge import KnowledgeEntry
-from mino_nexus.models.llm_job import LlmJob
 from mino_nexus.models.nav import StudioNav
 from mino_nexus.models.nav_fsm import NavFsm, NavFsmEdge, NavFsmState
 from mino_nexus.models.nav_flow_block_catalog import NavFlowBlockCatalog
@@ -26,7 +25,6 @@ from mino_nexus.models.project_pool_config import ProjectPoolConfig
 from mino_nexus.models.run import AppRegressionRun, MCaseBaseline, MCaseRunTrace
 from mino_nexus.models.session_event import SessionEvent, SessionMeta
 from mino_nexus.models.settings import Settings
-from mino_nexus.models.skill import Skill
 from mino_nexus.models.task import Task
 from mino_nexus.models.token import InstallToken, NodeCredential
 from mino_nexus.models.ui_control import UiControl
@@ -48,7 +46,6 @@ __all__ = [
     "DocChunk",
     "DocSource",
     "KnowledgeEntry",
-    "LlmJob",
     "InstallToken",
     "NodeCredential",
     "MCaseBaseline",
@@ -66,7 +63,6 @@ __all__ = [
     "SessionEvent",
     "SessionMeta",
     "Settings",
-    "Skill",
     "Studio",
     "StudioNav",
     "Task",

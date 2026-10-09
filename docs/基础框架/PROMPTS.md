@@ -6,19 +6,17 @@
 
 | 内容 | 真源 | 说明 |
 |---|---|---|
-| **prompt 正文** | `llm_jobs` 表 | 块列表、call 参数、槽声明（Console Jobs 页） |
-| **阶段程序** | `skills.sop_json`（`run-case` 一行） | phases / inspections / pointer |
-| **步骤指针措辞** | `loop/step_pointer.py` | 模板常量；运行时注入 `checkpoints_block` / `success_criteria` 槽，替代 job 内 when 分块 |
-| **角色 override** | `settings._role_prompts` | 仅 IM 等可编辑角色；跑批读 `llm_jobs` |
+| **prompt 正文、技能、角色、编排** | `mino_nexus/prompts/` | git 是唯一真源。`jobs/`、`skills/`、`roles/`、`stack/` |
+| **加载** | `ai/prompt_repo.py` | 启动时校验；`MINO_PROMPTS_RELOAD=1` 时按文件 mtime 热加载 |
+| **渲染** | `ai/prompt_render.py` | 块 → messages。形状与以前的 job 行一致 |
+| **步骤指针措辞** | `loop/step_pointer.py` | 运行时注入槽，不写进 job 模板 |
 
 ```
 mino_nexus/
-├── ai/
-│   ├── llm_client.py      OpenAI-compatible 客户端
-│   ├── planner.py         各 job 入口（内部 render()）
-│   ├── prompt_render.py   块 → messages
-│   └── job_slots.py       槽值生产者（Python）
-├── services/job_store.py  读写 / 校验 / preview
+├── ai/prompt_repo.py    读 prompts/、校验、指纹
+├── ai/prompt_render.py  块 → messages
+├── ai/job_slots.py      槽值生产者（Python）
+└── prompts/             prompt 文件。不放 Python
 ```
 
 ## 2. 活 job 列表
@@ -35,13 +33,16 @@ mino_nexus/
 
 ## 3. 改 prompt 的流程
 
-1. **生产环境**：Console → **Jobs** → 选 job → 编辑块 → 保存 → `GET /settings/ai/jobs/health` 确认无 broken
-2. **禁止**在 `mino_nexus/**/*.py` 写模块级中文 prompt（`scripts/verify_no_prompt_literals.py` 守门）
-3. **不要**在 `skills.system_prompt` 列维护跑批 prompt —— 该列已废弃，读侧走 `job_store`
+1. 改 `mino_nexus/prompts/` 里的文件。改了正文就把该文件的 `version` 加 1。
+2. `python scripts/verify_prompts.py`。内容变了但版本没加会失败；通过后更新 `prompts.lock.json`。
+3. 提交。生产环境重启 Nexus 后生效。开发时可设 `MINO_PROMPTS_RELOAD=1`，改文件不用重启。
+4. **禁止**在 `mino_nexus/**/*.py` 里写 system prompt 字面量（`scripts/verify_no_prompt_literals.py`，中英文都拦）。
 
-每次保存会递增 `prompt_version`（当前生效版本）；`dispatch` 调用记录带 `prompt_version`，Studio 调用详情在技能旁展示。
+`dispatch_log` 同时记下 `prompt_version` 和 `prompt_sha`。查问题时用 sha 对回当时的文件内容。
 
-恢复上一版：`PUT /settings/ai/jobs/{id}` body `{ "reset": true }`。恢复指定历史：`{ "activate_version": 3 }`（会生成新版本号并启用该内容）。
+Workbench 的 Jobs / 技能 / 角色 / 编排页只读，展示版本、sha 和文件路径。
+
+下面各节是历史版本当时改了什么。正文已经在 `prompts/jobs/` 里，启动时不再打补丁。
 
 ## 4. 铁律
 

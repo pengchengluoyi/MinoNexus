@@ -75,21 +75,13 @@ def _job_prompt(role_or_job_id: str) -> str:
 
 
 def _apply_role_prompt(row: dict[str, Any]) -> dict[str, Any]:
-    from mino_nexus.services.settings_store import get_role_prompt_override
-
     out = dict(row)
     rid = str(out.get("id") or "")
     built_in = _job_prompt(rid) or str(out.get("default_prompt") or out.get("system_prompt") or "").strip()
     out["default_prompt"] = built_in
-    override = get_role_prompt_override(rid)
-    if override:
-        out["system_prompt"] = override
-        out["prompt_chars"] = len(override)
-        out["prompt_custom"] = True
-    else:
-        out["system_prompt"] = built_in
-        out["prompt_chars"] = len(built_in)
-        out["prompt_custom"] = False
+    out["system_prompt"] = built_in
+    out["prompt_chars"] = len(built_in)
+    out["prompt_custom"] = False
     return out
 
 
