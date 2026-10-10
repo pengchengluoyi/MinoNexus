@@ -306,11 +306,6 @@ def write_prompts(jobs: list[dict[str, Any]], skills: list[dict[str, Any]], extr
         if not any(p.is_file() and p.name != ".gitkeep" for p in (PROMPTS / rel).iterdir()):
             keep.write_text("", encoding="utf-8")
 
-    lock_doc = {"entries": dict(sorted(lock.items()))}
-    (PROMPTS / "prompts.lock.json").write_text(
-        json.dumps(lock_doc, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
     return {"lock": lock, "chars": char_rows}
 
 

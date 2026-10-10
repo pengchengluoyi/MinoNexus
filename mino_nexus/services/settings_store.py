@@ -326,6 +326,120 @@ def save_ai_usage(payload: dict[str, Any]) -> dict[str, Any]:
     return get_ai_usage()
 
 
+def get_ai_provider_credentials(provider_id: str | None = None) -> dict[str, Any]:
+    """给 LLM 调用层用，含明文 key，不要回给前端。"""
+    ai = _ai_root()
+    pid = str(provider_id or "").strip().lower() or str(ai.get("_default_provider") or "openai").strip().lower()
+    raw = ai.get(pid) if isinstance(ai.get(pid), dict) else {}
+    preset = next((p for p in AI_PROVIDER_PRESETS if p["id"] == pid), None)
+    api_key = str(raw.get("api_key") or "").strip()
+    return {
+        "id": pid,
+        "name": raw.get("name") or (preset or {}).get("name") or pid,
+        "configured": bool(api_key),
+        "enabled": raw.get("enabled", True) is not False if api_key else False,
+        "api_key": api_key,
+        "base_url": str(raw.get("base_url") or (preset or {}).get("base_url") or "").rstrip("/"),
+        "model": str(raw.get("model") or (preset or {}).get("default_model") or "").strip(),
+        "api_type": str(raw.get("api_type") or (preset or {}).get("api_type") or "openai").strip(),
+        "case_execution_use": bool(raw.get("case_execution_use")) if api_key else False,
+        "embedding_model": str(raw.get("embedding_model") or "").strip(),
+        "plan_compress_ratio": float(raw.get("plan_compress_ratio") or 3.0),
+        "web_compress_ratio": float(raw.get("web_compress_ratio") or 2.0),
+        "android_compress_ratio": float(raw.get("android_compress_ratio") or 1.0),
+    }
+
+
+def find_case_execution_provider_id() -> str:
+    usage = get_ai_usage()
+    usage_pid = str(usage.get("case_execution_provider_id") or "").strip().lower()
+    if usage_pid:
+        cred = get_ai_provider_credentials(usage_pid)
+        if cred.get("configured") and cred.get("enabled") and cred.get("case_execution_use"):
+            return usage_pid
+    ai = _ai_root()
+    for pid, raw in ai.items():
+        if str(pid).startswith("_") or not isinstance(raw, dict):
+            continue
+        cred = get_ai_provider_credentials(str(pid))
+        if cred.get("configured") and cred.get("enabled") and cred.get("case_execution_use"):
+            return str(pid)
+    return usage_pid
+
+
+def should_use_ai_planning(channel: str, provider_id: str | None = None) -> dict[str, Any]:
+    usage = get_ai_usage()
+    normalized = (channel or "copilot").strip().lower()
+    explicit = bool(str(provider_id or "").strip())
+    if normalized in {"case", "case_execution", "regression", "feishu"}:
+        scope_enabled = bool(usage.get("case_execution_enabled"))
+    elif normalized == "copilot" and explicit:
+        scope_enabled = True
+    else:
+        scope_enabled = bool(usage.get("copilot_enabled"))
+    selected = str(provider_id or "").strip() or None
+    if normalized in {"case", "case_execution", "regression", "feishu"} and not selected:
+        selected = find_case_execution_provider_id() or None
+    provider = get_ai_provider_credentials(selected)
+    ok = bool(
+        scope_enabled
+        and provider.get("configured")
+        and provider.get("enabled")
+        and provider.get("case_execution_use")
+    )
+    reason = ""
+    if not scope_enabled:
+        reason = "未开启「使用大模型能力」（请到密钥配置 → 大模型 Key）"
+    elif not provider.get("configured"):
+        reason = f"还没有配置模型 Key：{provider.get('id')}"
+    elif not provider.get("enabled"):
+        reason = f"模型已关闭：{provider.get('id')}"
+    elif not provider.get("case_execution_use"):
+        reason = "未找到「可用 + 用例」的大模型（请到密钥配置 → 大模型 Key 设置）"
+    public = {k: v for k, v in provider.items() if k != "api_key"}
+    return {
+        "enabled": ok,
+        "reason": reason,
+        "mode": usage.get("mode") or "local_first",
+        "channel": normalized,
+        "provider": public,
+    }
+
+
+def get_figma_settings() -> dict[str, Any]:
+    raw = _root().get("figma") if isinstance(_root().get("figma"), dict) else {}
+    token = str(raw.get("access_token") or "").strip()
+    return {
+        "access_token_masked": _mask_secret(token),
+        "configured": bool(token),
+        "default_file_url": str(raw.get("default_file_url") or "").strip(),
+    }
+
+
+def get_figma_access_token() -> str:
+    raw = _root().get("figma") if isinstance(_root().get("figma"), dict) else {}
+    return str(raw.get("access_token") or "").strip()
+
+
+def save_figma_settings(
+    *,
+    access_token: str = "",
+    clear_token: bool = False,
+    default_file_url: Optional[str] = None,
+) -> dict[str, Any]:
+    root = _root()
+    row = root.get("figma") if isinstance(root.get("figma"), dict) else {}
+    if clear_token:
+        row["access_token"] = ""
+    elif str(access_token or "").strip():
+        row["access_token"] = str(access_token).strip()
+    if default_file_url is not None:
+        row["default_file_url"] = str(default_file_url or "").strip()
+    root["figma"] = row
+    _save(root)
+    return get_figma_settings()
+
+
 def list_testing_knowledge(*, app_id: str = "", account_id: str = "", account_ident: str = "") -> list[dict[str, Any]]:
     from mino_nexus.services import knowledge_store as ks
 

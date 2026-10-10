@@ -67,8 +67,14 @@ def run_dom_structured_check(
         )
     else:
         fails: list[str] = []
+        checkpoint_results: list[dict[str, Any]] = []
         for row in rows:
             ok, reason = _eval_one(row, nodes)
+            checkpoint_results.append({
+                "point_id": str(row.get("point_id") or ""),
+                "passed": ok,
+                "evidence": reason if reason else "DOM 目标与规则匹配",
+            })
             if not ok:
                 fails.append(reason)
         if fails:
@@ -77,6 +83,7 @@ def run_dom_structured_check(
                 confidence=1.0,
                 ai_reasoning="；".join(fails)[:500],
                 evidence="dom",
+                checkpoint_results=checkpoint_results,
             )
         else:
             result = AssertResult(
@@ -84,6 +91,7 @@ def run_dom_structured_check(
                 confidence=1.0,
                 ai_reasoning=f"DOM 校验通过（{len(rows)} 条）",
                 evidence="dom",
+                checkpoint_results=checkpoint_results,
             )
     if writer:
         writer.append(

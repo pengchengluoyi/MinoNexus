@@ -36,7 +36,7 @@ def _visible_expected(capability_id: str, milestone_id: str, title: str) -> str:
     if mid in ("account_field", "otp_field", "prep_tap_input_box") or "聚焦" in name:
         return "输入框已聚焦，可以填写"
     if mid == "send_code":
-        return "验证码框已经可以填写"
+        return "本次发码已被接受：出现倒计时、发送成功提示，或发送按钮变为已发送。验证码框本来就能填，不能算发码成功。"
     if mid == "submit_login":
         return "登录提交后的画面已经出现"
     if capability_id == "input_text":
@@ -121,6 +121,8 @@ def defer_visual_pass(
     kept = dict(params or {})
     pending = {
         "milestone_id": mid,
+        "attempt_ref": f"{getattr(writer, 'session_id', '')}:{getattr(writer, 'turn', 0)}" if writer else "",
+        "dispatch_turn": int(getattr(writer, "turn", 0) or 0),
         "capability_id": cap,
         "params": kept,
         "summary": str(summary or "")[:400],
@@ -134,6 +136,10 @@ def defer_visual_pass(
         params=kept,
         summary=pending["summary"],
     )
+    prior = getattr(cursor, "visual_prior", None)
+    if isinstance(prior, dict):
+        prior["attempt_ref"] = pending["attempt_ref"]
+        prior["dispatch_turn"] = pending["dispatch_turn"]
     if writer:
         sheet = getattr(cursor, "visual_prior", None)
         sheet = sheet if isinstance(sheet, dict) else {}
@@ -141,13 +147,14 @@ def defer_visual_pass(
             "review/dispatched",
             {
                 "milestone_id": mid,
+                "attempt_ref": pending["attempt_ref"],
                 "capability_id": cap,
                 "summary": pending["summary"],
                 "x": str(sheet.get("x") or ""),
                 "y": str(sheet.get("y") or ""),
                 "role": str(sheet.get("role") or ""),
                 "field": str(sheet.get("field") or ""),
-                "expected": str(sheet.get("expected") or "")[:200],
+                "expected": "[已脱敏输入值]" if cap == "input_text" else str(sheet.get("expected") or "")[:200],
             },
         )
     return True
@@ -205,6 +212,7 @@ def prior_action_payload(cursor: Any) -> dict[str, str] | None:
         return None
     return {
         "milestone_id": mid,
+        "attempt_ref": str(prior.get("attempt_ref") or ""),
         "capability_id": str(prior.get("capability_id") or ""),
         "x": str(prior.get("x") or ""),
         "y": str(prior.get("y") or ""),
@@ -239,17 +247,10 @@ def apply_same_turn_prior(
     if not isinstance(prior, dict) or not str(prior.get("milestone_id") or "").strip():
         answered = str(getattr(decision, "prior_status", "") or "").strip()
         if answered:
-            from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
-            from mino_nexus.loop.milestones import read_state
-
-            row = in_progress_milestone(read_state(cursor))
-            if isinstance(row, dict) and str(row.get("id") or "").strip():
-                action = getattr(decision, "action", None)
-                prior = {
-                    "milestone_id": str(row.get("id") or ""),
-                    "capability_id": str(getattr(action, "capability_id", "") or ""),
-                }
-                setattr(cursor, "visual_prior", prior)
+            if writer:
+                writer.append("review/rejected", {"reason": "no_dispatched_action", "prior_status": answered})
+            setattr(cursor, "correction_hint", "没有待回看的已派发动作，不能报告 prior_status。")
+            return "reask"
         if not isinstance(prior, dict) or not str(prior.get("milestone_id") or "").strip():
             return "none"
     from mino_nexus.loop.milestones import read_state
@@ -259,6 +260,22 @@ def apply_same_turn_prior(
         setattr(cursor, "visual_prior", None)
         setattr(cursor, "pending_visual_review", None)
         return "none"
+    dispatched = int(prior.get("dispatch_turn") or 0)
+    observed = int(getattr(writer, "turn", 0) or 0)
+    if (dispatched and observed <= dispatched) or not str(getattr(ctx, "decision_screenshot_hash", "") or ""):
+        attempts = int(getattr(cursor, "review_observation_missing", 0) or 0) + 1
+        setattr(cursor, "review_observation_missing", attempts)
+        if writer:
+            writer.append("review/hold", {
+                "milestone_id": mid, "attempt_ref": str(prior.get("attempt_ref") or ""),
+                "reason": "fresh_observation_missing", "count": attempts,
+            })
+        if attempts >= 2:
+            setattr(cursor, "semantic_stop", "动作后未取得新截图，不能裁定回看")
+            return "stop"
+        setattr(cursor, "correction_hint", "动作后缺少新截图，本轮不能裁定；请重新观察一次。")
+        return "reask"
+    setattr(cursor, "review_observation_missing", 0)
     action = getattr(decision, "action", None)
     action_cap = str(getattr(action, "capability_id", "") or "")
     raw_status = str(getattr(decision, "prior_status", "") or "").strip()
@@ -386,6 +403,14 @@ def settle_pending_review(
     if not isinstance(pending, dict) or not pending.get("milestone_id"):
         return "none"
     mid = str(pending.get("milestone_id") or "")
+    dispatched = int(pending.get("dispatch_turn") or 0)
+    if dispatched and writer is not None and int(getattr(writer, "turn", 0) or 0) <= dispatched:
+        if writer:
+            writer.append("review/hold", {
+                "milestone_id": mid, "attempt_ref": str(pending.get("attempt_ref") or ""),
+                "reason": "fresh_observation_missing",
+            })
+        return "none"
     cap = str(pending.get("capability_id") or "")
     params = pending.get("params") if isinstance(pending.get("params"), dict) else {}
     summary = str(pending.get("summary") or "")
@@ -656,38 +681,38 @@ def _prior_still_current(state: dict[str, Any], milestone_id: str) -> bool:
     return False
 
 
-def _milli(params: dict[str, Any], key: str) -> int | None:
-    try:
-        return int(float(params.get(key)))
-    except (TypeError, ValueError):
-        return None
-
-
-def _same_point(prior_params: dict[str, Any], now: dict[str, Any]) -> bool:
-    ax, ay = _milli(prior_params, "x"), _milli(prior_params, "y")
-    bx, by = _milli(now, "x"), _milli(now, "y")
-    if None in (ax, ay, bx, by):
-        return False
-    return abs(ax - bx) <= 30 and abs(ay - by) <= 30
-
-
 def _action_repeats(cursor: Any, prior: dict[str, Any], decision: Any) -> bool:
-    """通过之后，同一个点不再下发。换了坐标就是下一步。"""
+    """仅拦截同一能力且目标相同的再次下发。"""
     action = getattr(decision, "action", None)
     cap = str(getattr(action, "capability_id", "") or "")
-    if cap != str(prior.get("capability_id") or ""):
+    if not cap or cap != str(prior.get("capability_id") or ""):
         return False
-    from mino_nexus.loop.milestones import read_state
-
-    row = _row_by_id(read_state(cursor), str(prior.get("milestone_id") or "")) or {}
-    if str(row.get("status") or "").strip().lower() == "pass":
+    current_mid = str(getattr(decision, "milestone_id", "") or "")
+    prior_mid = str(prior.get("milestone_id") or "")
+    if current_mid and prior_mid and current_mid != prior_mid:
         return False
-    params = getattr(action, "params", None)
-    now = params if isinstance(params, dict) else {}
-    prior_params = prior.get("params") if isinstance(prior.get("params"), dict) else {}
-    if cap == "input_text":
-        return str(now.get("field") or "") == str(prior_params.get("field") or "")
-    return _same_point(prior_params, now)
+    previous = prior.get("params") if isinstance(prior.get("params"), dict) else {}
+    current = getattr(action, "params", None)
+    current = current if isinstance(current, dict) else {}
+    matched_target = False
+    for key in ("control_id", "selector_text", "field", "target"):
+        old = previous.get(key)
+        new = current.get(key)
+        if old is not None and new is not None and old != new:
+            return False
+        matched_target = matched_target or (old is not None and new is not None)
+    if all(key in previous and key in current for key in ("x", "y")):
+        try:
+            same_point = all(abs(float(previous[key]) - float(current[key])) <= 24 for key in ("x", "y"))
+        except (TypeError, ValueError):
+            same_point = False
+        if not same_point:
+            return False
+        return True
+    if matched_target:
+        return True
+    # 只有能力 ID 一样不足以证明目标相同，下一步可能仍需点击另一个控件。
+    return False
 
 
 def _confirm_visual_prior(
@@ -718,6 +743,15 @@ def _confirm_visual_prior(
     if changed:
         state["milestones"] = ms
         write_state(cursor, state)
+        if milestone_id == "send_code":
+            from mino_nexus.loop.login_verification import record_verification_send
+
+            record_verification_send(ctx)
+            intents = getattr(cursor, "step_intents_done", None)
+            if isinstance(intents, set):
+                intents.add("sms_send")
+            cursor.login_post_sms_pending = True
+            cursor.login_post_sms_stall = 0
         advance_in_progress_focus(cursor, writer=writer)
         from mino_nexus.loop.step_phase_fsm import try_transition_after_tool_pass
 

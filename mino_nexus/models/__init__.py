@@ -1,4 +1,12 @@
 from mino_nexus.models.app_intel import AppIntelLink, AppIntelProposal
+from mino_nexus.models.assistant import (
+    AssistantMcpToken,
+    AssistantProfile,
+    AssistantSubscription,
+    AssistantTurn,
+    ImBindCode,
+    ImIdentity,
+)
 from mino_nexus.models.atlas import AtlasAlias
 from mino_nexus.models.auth import AuthSession, AuthState, User
 from mino_nexus.models.case import ProjectCase
@@ -30,6 +38,12 @@ from mino_nexus.models.token import InstallToken, NodeCredential
 from mino_nexus.models.ui_control import UiControl
 
 __all__ = [
+    "AssistantMcpToken",
+    "AssistantProfile",
+    "AssistantSubscription",
+    "AssistantTurn",
+    "ImBindCode",
+    "ImIdentity",
     "AppIntelLink",
     "AppIntelProposal",
     "App",

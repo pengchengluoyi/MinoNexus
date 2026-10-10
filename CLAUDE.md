@@ -108,7 +108,7 @@ mino_nexus/
 | 你要做什么 | 先读 |
 |---|---|
 | 加一条能力 / 改能力的实现路径 | [docs/CAPABILITY_CATALOG.md](docs/基础框架/CAPABILITY_CATALOG.md)。多数情况只改 YAML，**Scout 侧零改动** |
-| 改 prompt / 决策逻辑 | [docs/PROMPTS.md](docs/基础框架/PROMPTS.md) — **真源是 `mino_nexus/prompts/`，改文件后跑 `scripts/verify_prompts.py` 再提交** |
+| 改 prompt / 决策逻辑 | [docs/PROMPTS.md](docs/基础框架/PROMPTS.md) — **真源是 `mino_nexus/prompts/`，改文件后重启即可（启动时解析，格式错会拒绝启动）** |
 | 改与 Scout 的通信 | [docs/PROTOCOL.md](docs/基础框架/PROTOCOL.md) + §5。**协议改动必须两仓同步** |
 | 派单 / 设备归属 / 多节点 | [docs/NODE_REGISTRY.md](docs/基础框架/NODE_REGISTRY.md) |
 | 动数据模型 | [docs/DATA_MODEL.md](docs/基础框架/DATA_MODEL.md) |

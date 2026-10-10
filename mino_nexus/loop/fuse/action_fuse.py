@@ -269,6 +269,27 @@ class ProgressGate:
         self.last_intervention: str = ""
         self._milestone_exhausted: bool = False
         self.missing_coord_streak: int = 0
+        self._guard_rejections: dict[str, tuple[tuple[str, ...], int, str]] = {}
+
+    def record_guard_rejection(
+        self, *, case_step: int, capability_id: str, guard_id: str,
+        passed_milestones: tuple[str, ...], reason: str,
+    ) -> Optional[str]:
+        """同一步、同一动作和守卫在没有新里程碑证据时只能被拒绝有限次数。"""
+        key = f"{case_step}:{capability_id}:{guard_id}"
+        previous, count, first_reason = self._guard_rejections.get(key, ((), 0, reason))
+        if previous == passed_milestones:
+            count += 1
+        else:
+            count, first_reason = 1, reason
+        self._guard_rejections[key] = (passed_milestones, count, first_reason)
+        if count < 4:
+            return None
+        self.last_intervention = "stop"
+        return (
+            f"步骤 {case_step} 的 {capability_id} 连续 {count} 次被守卫 {guard_id} 拒绝，"
+            f"且必要里程碑没有新进展；已停止。首次阻塞：{first_reason[:180]}"
+        )
 
     def note_submilestone_pass(self) -> None:
         """子里程碑推进：缓解步数预算熔断对登录等多步子流程的误判。"""

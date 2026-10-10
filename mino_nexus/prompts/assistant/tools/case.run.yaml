@@ -1,0 +1,36 @@
+id: case.run
+version: 1
+title: 跑用例
+description: 在指定设备上执行用例，返回任务 id。用户说跑一下、执行、回归时用。
+route: POST /case-runner/run
+risk: write
+async: true
+params_schema:
+  type: object
+  properties:
+    app_id:
+      type: string
+      description: 应用 id 或应用名
+    sn:
+      type: string
+      description: 设备序列号或别名
+    case_ids:
+      type: array
+      items:
+        type: string
+      description: 用例 id，可省略
+  required:
+  - app_id
+param_resolvers:
+  app_id: app.by_name
+  sn: device.by_alias
+result_pick:
+- data.task_id
+- data.run_id
+- data.id
+card: case_run_started
+surfaces:
+- im
+- mcp
+enabled: true
+followup_card: case_run_finished

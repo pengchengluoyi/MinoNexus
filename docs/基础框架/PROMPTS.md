@@ -34,7 +34,7 @@ mino_nexus/
 ## 3. 改 prompt 的流程
 
 1. 改 `mino_nexus/prompts/` 里的文件。改了正文就把该文件的 `version` 加 1。
-2. `python scripts/verify_prompts.py`。内容变了但版本没加会失败；通过后更新 `prompts.lock.json`。
+2. 重启 Nexus。启动时会解析所有 prompt 文件，格式错、引用断了会直接拒绝启动并说明原因。
 3. 提交。生产环境重启 Nexus 后生效。开发时可设 `MINO_PROMPTS_RELOAD=1`，改文件不用重启。
 4. **禁止**在 `mino_nexus/**/*.py` 里写 system prompt 字面量（`scripts/verify_no_prompt_literals.py`，中英文都拦）。
 

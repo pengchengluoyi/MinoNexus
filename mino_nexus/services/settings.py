@@ -32,6 +32,7 @@
 """
 from __future__ import annotations
 
+import contextvars
 import os
 from typing import Any, Optional
 
@@ -121,9 +122,37 @@ def get_ai_android_compress_ratio(provider_id: Optional[str] = None) -> float:
 
 
 def get_ai_plan_compress_ratio(provider_id: Optional[str] = None) -> float:
-    """喂给大模型的统一压缩比；1.0=不缩小，默认 3.0。各渠道都转 JPEG。"""
+    """喂给大模型的统一压缩比；1.0=不缩小，默认 3.0。各渠道都转 JPEG。
+
+    只用于采集端没有再压过的图。Web / 安卓的渠道压缩比已经作用在截图上时，不要再套这个值。
+    """
     raw = _provider_for_ratio(provider_id).get("plan_compress_ratio")
     return _compress_ratio(raw, 3.0)
+
+
+_channel_capture_ratio: contextvars.ContextVar[float] = contextvars.ContextVar(
+    "mino_channel_capture_ratio", default=1.0
+)
+
+
+def note_channel_capture_ratio(ratio: float) -> None:
+    """记下这张截图在采集端用过的压缩比。调用方线程上记，给后面的喂模缩图用。"""
+    try:
+        value = float(ratio)
+    except (TypeError, ValueError):
+        value = 1.0
+    _channel_capture_ratio.set(value if value > 0 else 1.0)
+
+
+def llm_shrink_after_capture() -> float:
+    """渠道压缩和 plan_compress_ratio 不叠加。
+
+    采集已经按 web_compress_ratio / android_compress_ratio 缩小过（比 > 1）时，喂模只转 JPEG，不再除以 3。
+    采集没缩（比 = 1）时，才用 plan_compress_ratio。
+    """
+    if _channel_capture_ratio.get() > 1.0:
+        return 1.0
+    return get_ai_plan_compress_ratio()
 
 
 def channel_screenshot_compress_ratio(platform: str, provider_id: Optional[str] = None) -> float:

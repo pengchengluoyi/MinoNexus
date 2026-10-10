@@ -14,6 +14,9 @@ _ALLOWED = frozenset({
     "plugin.bot.send",
     "plugin.bot.wechat",
     "plugin.gmail.fetch_otp",
+    "plugin.im.send",
+    "plugin.im.history",
+    "plugin.im.upload_image",
 })
 
 _HIDDEN = ("secret", "password", "webhook", "bot_token", "app_secret", "plugin_secret")
@@ -36,8 +39,10 @@ def node_for_plugin(kind: str, plugin_id: str, node_id: str = ""):
         if not node.alive or node.send is None or node.plugins is None:
             continue
         for row in node.plugins:
+            row_kind = str(row.get("class") or "")
+            same = row_kind == kind or (plugin_id == "wechat" and {row_kind, kind} <= {"bot", "im"})
             if (
-                row.get("class") == kind
+                same
                 and row.get("id") == plugin_id
                 and row.get("configured")
             ):

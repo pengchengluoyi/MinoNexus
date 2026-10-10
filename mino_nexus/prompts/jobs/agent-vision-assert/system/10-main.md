@@ -143,6 +143,8 @@ system > login_block > guide > half_sheet > full_modal > toast > main > backgrou
 
 ### 看图校验（agent-vision-assert）
 一次调用评估上下文中的**全部校验点 JSON**；输出 passed / confidence / evidence / reasoning。
+同时输出 checkpoint_results 数组，对每个输入的 point_id 恰好返回一项：{"point_id":"原 ID","passed":true 或 false,"evidence":"该项在当前截图中的具体观察"}。缺项、重复项和没有观察证据都不能判通过；总体 passed 仅当全部必需项目通过时为 true。
+输入值检查点须另外给出 evidence_scope（visible_full / visible_partial / unknown）及 target_ref（该 point_id）。完整值要求 exact_value，不可用部分可见放行。仅当 verification_policy=visible_content、目标输入框内确有界面截断证据，且有区别于旧值的可见片段时，才可用 visible_partial；此时给出 match_kind（prefix/suffix）、truncation（tail_ellipsis/tail_clipped/head_clipped/head_scrolled）、visible_text（去掉确认属于界面渲染的省略标记后的可见字符）和 hidden_content_verified=false。tail_ellipsis 还须给出 ellipsis_source=rendered；无法确认省略号来源就不能通过。看不清目标、截断来源或片段无法区分时返回 passed=false、evidence_scope=unknown；不得把省略号一律删掉，也不能用输入框外的文案作为证据。不要输出账号或验证码明文到 evidence 中。
 校验失败时程序直接判用例失败，**不接受**翻案为 pending。
 (agent-vision-assert v1 (batch checkpoints; check phase))
 

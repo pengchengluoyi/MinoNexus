@@ -1,0 +1,22 @@
+id: task.get
+version: 1
+title: 任务详情
+description: 查看一次跑批任务的结果和失败原因。
+route: GET /case-runner/tasks/{task_id}
+risk: read
+async: false
+params_schema:
+  type: object
+  properties:
+    task_id:
+      type: string
+  required:
+  - task_id
+param_resolvers: {}
+result_pick:
+- data
+card: answer
+surfaces:
+- im
+- mcp
+enabled: true

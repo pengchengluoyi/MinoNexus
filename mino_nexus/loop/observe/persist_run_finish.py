@@ -15,5 +15,11 @@ def persist_run_finish(run_doc: dict[str, Any]) -> None:
         return
     try:
         run_store.put(run_doc)
+        try:
+            from mino_nexus.services.assistant_notify import on_run_finished
+
+            on_run_finished(run_doc)
+        except Exception as exc:
+            SLog.w(TAG, f"assistant notify failed run={run_doc.get('run_id')}: {type(exc).__name__}: {exc}")
     except Exception as exc:
         SLog.w(TAG, f"persist_run_finish failed run={run_doc.get('run_id')}: {exc}")

@@ -78,6 +78,8 @@ def ensure_single_in_progress(cursor: Any, *, writer: Any = None) -> bool:
         st = str(row.get("status") or "pending").strip().lower()
         if st in ("pass", "failed", "skipped"):
             continue
+        if _required_failed_before(ms, row):
+            continue
         if menu_ids and not milestone_caps_registered(row, menu_ids, allow_program=True):
             row["status"] = "skipped"
             row["skip_reason"] = "unregistered"
@@ -91,7 +93,7 @@ def ensure_single_in_progress(cursor: Any, *, writer: Any = None) -> bool:
                 row["status"] = "pending"
             else:
                 focus_id = str(row.get("id") or "")
-        elif st == "pending" and pending_idx < 0:
+        elif st == "pending" and pending_idx < 0 and not _required_failed_before(ms, row):
             pending_idx = i
     if not focus_id and pending_idx >= 0:
         ms[pending_idx]["status"] = "in_progress"
@@ -104,6 +106,52 @@ def ensure_single_in_progress(cursor: Any, *, writer: Any = None) -> bool:
             writer.append("milestone/focus", {"milestone_id": focus_id, **dict(zip(("case_step", "phase"), step_scope_key(cursor)))})
         return True
     return False
+
+
+def _required_failed_before(ms: list[dict[str, Any]], row: dict[str, Any]) -> bool:
+    """这条之前已有必做步骤失败。失败的前置不能被后面的 pending 顶掉。"""
+    for prev in ms:
+        if prev is row:
+            return False
+        if prev.get("optional"):
+            continue
+        if str(prev.get("status") or "").strip().lower() == "failed":
+            return True
+    return False
+
+
+def required_milestone_failure(state: dict[str, Any]) -> dict[str, Any] | None:
+    """第一条失败的必做里程碑。后面的步骤还开着也不能越过它。"""
+    for row in _milestones_list(state):
+        if row.get("optional"):
+            continue
+        if str(row.get("status") or "").strip().lower() == "failed":
+            return row
+    return None
+
+
+def program_hook_to_dispatch(focus: dict[str, Any] | None) -> str:
+    """取码、租号这类钩子由程序派发，不进看图设备菜单。
+
+    钩子已经完成、下一步是设备动作（例如租到号之后要输入）时返回空，交给看图。
+    """
+    if not isinstance(focus, dict):
+        return ""
+    if str(focus.get("kind") or "").strip().lower() != "hook":
+        return ""
+    hook = str(focus.get("hook_cap") or "").strip()
+    if not hook:
+        return ""
+    device = str(focus.get("device_cap") or "").strip()
+    ready = bool(focus.get("lease_ready") or focus.get("otp_ready"))
+    if device and device != hook and ready:
+        return ""
+    from mino_nexus.catalog.skill_channel import PROGRAM_CAPS
+    from mino_nexus.loop.router_proxy import is_local_cap
+
+    if hook in PROGRAM_CAPS or is_local_cap(hook):
+        return hook
+    return ""
 
 
 def advance_in_progress_focus(cursor: Any, *, writer: Any = None) -> bool:
@@ -565,6 +613,27 @@ def run_vision_orchestrated_turn(
 
     maybe_pop_interrupt(cursor, writer=writer)
     ensure_single_in_progress(cursor, writer=writer)
+    blocked = required_milestone_failure(read_state(cursor))
+    if blocked is not None:
+        pf = blocked.get("program_fail") if isinstance(blocked.get("program_fail"), dict) else {}
+        reason = str(pf.get("reason") or blocked.get("evidence") or blocked.get("id") or "未通过")
+        mid = str(blocked.get("id") or "")
+        if writer:
+            writer.append(
+                "orchestrator/blocked",
+                {
+                    "milestone_id": mid,
+                    "reason": reason[:300],
+                    **dict(zip(("case_step", "phase"), step_scope_key(cursor))),
+                },
+            )
+        return OrchestratedTurn(
+            decision=AgentDecision(
+                status="give_up",
+                thought=f"{mid} 未通过，不能继续后续步骤：{reason}"[:500],
+            ),
+            plan_only=True,
+        )
     from mino_nexus.loop.flow_block_runner_v2 import skip_login_entry_if_form_visible
     from mino_nexus.loop.vision_plan import retire_repeat_wait_focus
 
@@ -737,6 +806,36 @@ def run_vision_orchestrated_turn(
         if isinstance((focus or {}).get("params"), dict)
         else {}
     )
+    hook_now = program_hook_to_dispatch(focus)
+    if hook_now:
+        from mino_nexus.catalog.skill_channel import capability_enabled
+
+        if not capability_enabled(hook_now):
+            return OrchestratedTurn(
+                decision=AgentDecision(
+                    status="give_up",
+                    thought=f"{hook_now} 未启用，无法继续 {str((focus or {}).get('id') or '')}".strip(),
+                    parse_warnings=["capability_disabled"],
+                ),
+                plan_only=True,
+            )
+        if writer:
+            writer.append(
+                "orchestrator/program_hook",
+                {
+                    "milestone_id": str((focus or {}).get("id") or ""),
+                    "capability_id": hook_now,
+                    **dict(zip(("case_step", "phase"), step_scope_key(cursor))),
+                },
+            )
+        title = str((focus or {}).get("title") or hook_now)
+        return OrchestratedTurn(
+            decision=AgentDecision(
+                status="continue",
+                thought=title[:240],
+                action=AgentAction(capability_id=hook_now, params=focus_params),
+            )
+        )
     if focus_obs == "program" and focus_cap:
         title = str((focus or {}).get("title") or focus_cap)
         return OrchestratedTurn(
@@ -795,25 +894,26 @@ def run_vision_orchestrated_turn(
     )
     warnings = list(getattr(decision, "parse_warnings", None) or [])
     if "focused cap missing from menu" in warnings:
-        state = _sync_scope(cursor, read_state(cursor))
-        ms = _milestones_list(state)
-        focus = in_progress_milestone(state)
-        if focus is not None:
-            from mino_nexus.catalog.skill_channel import is_program_caller
+        focus = in_progress_milestone(read_state(cursor))
+        cap = str((focus or {}).get("hook_cap") or (focus or {}).get("device_cap") or "").strip()
+        from mino_nexus.catalog.skill_channel import capability_dispatch_ok, phase_allows
 
-            cap = str(focus.get("hook_cap") or focus.get("device_cap") or "").strip()
-            # 程序自己派的能力不在用例菜单里。缺菜单不等于未注册，不能把里程碑跳过。
-            if not is_program_caller(cap):
-                focus["status"] = "skipped"
-                focus["skip_reason"] = "unregistered"
-                focus["skipped_by"] = "menu"
-                state["milestones"] = ms
-                write_state(cursor, state)
-                ensure_single_in_progress(cursor, writer=writer)
+        reason_code = (
+            "capability_disabled" if cap and not capability_dispatch_ok(cap)
+            else "capability_filtered_by_phase" if cap and not phase_allows(cap, str(getattr(cursor, "phase", "") or ""))
+            else "capability_missing_from_menu"
+        )
+        if writer:
+            writer.append("orchestrator/blocked", {
+                "reason_code": reason_code,
+                "milestone_id": str((focus or {}).get("id") or ""),
+                "capability_id": cap,
+                **dict(zip(("case_step", "phase"), step_scope_key(cursor))),
+            })
         return OrchestratedTurn(
             decision=AgentDecision(
-                status="continue",
-                thought=str(getattr(decision, "thought", "") or "已跳过未注册能力")[:500],
+                status="give_up",
+                thought=f"所需能力 {cap or '未知'} 无法派发（{reason_code}）；里程碑未跳过。"[:500],
             ),
             plan_only=True,
         )

@@ -1,0 +1,27 @@
+id: case.list
+version: 1
+title: 项目用例列表
+description: 列出某个应用所在项目下的用例。用户问有哪些用例、搜某条用例时用。
+route: GET /project/{project_id}/cases
+risk: read
+async: false
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    keyword:
+      type: string
+      description: 按用例名过滤，可省略
+  required:
+  - project_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- im
+- mcp
+enabled: true

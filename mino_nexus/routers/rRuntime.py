@@ -309,8 +309,8 @@ async def install_node_plugin(
 ):
     kind = str(body.kind or "").strip()
     plugin_id = str(body.plugin_id or "").strip()
-    if kind not in ("cli", "mcp"):
-        raise HTTPException(status_code=400, detail="只有 CLI 和 MCP 需要安装")
+    if kind not in ("cli", "mcp", "im"):
+        raise HTTPException(status_code=400, detail="只有 CLI、MCP 和对话渠道（LangBot）需要安装")
     live = _require_live_node(node_id, sess, studio_id)
     out = await _relay_plugin(
         node_id,
@@ -366,6 +366,7 @@ async def call_node_plugin(
         plugin_id = str((body.params or {}).get("kind") or "")
     if cap == "plugin.bot.wechat":
         plugin_id = "wechat"
+        kind = "im"
     live = _require_live_node(node_id, sess, studio_id)
     params = dict(body.params or {})
     timeout = 90.0 if cap == "plugin.cli.feishu" else 50.0

@@ -38,10 +38,27 @@ def _hit(rules: list[tuple[str, set[str]]], path: str, method: str) -> bool:
     return False
 
 
+def _api_token_allowed(path: str, method: str) -> bool:
+    """助手 token / MCP token 只能走工具表里登记过的路由；删除类一律不放行。"""
+    from mino_nexus.services.assistant_tools import route_allowed
+
+    return route_allowed(method, path)
+
+
 class ClientGateMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         if request.method == "OPTIONS":
             return await call_next(request)
+        auth = str(request.headers.get("authorization") or "").strip()
+        raw = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
+        if raw.startswith(("mino_mcp_", "mino_ast_")):
+            if request.url.path == "/mcp" and raw.startswith("mino_mcp_"):
+                return await call_next(request)
+            if not _api_token_allowed(request.url.path, request.method.upper()):
+                return JSONResponse(
+                    {"detail": "助手 / MCP 只能调用工具表里登记过的接口"},
+                    status_code=403,
+                )
         client = str(request.headers.get("x-mino-client") or "").strip().lower()
         path = request.url.path
         method = request.method.upper()

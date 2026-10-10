@@ -31,16 +31,20 @@ def stamp_scheme_params(cap_id: str, params: dict[str, Any] | None, scheme: str)
         if cid == "input_text" and typed is not None:
             out["text"] = typed
         return out
-    from mino_nexus.action_space.visual import apply_visual_point
+    from mino_nexus.action_space.visual import apply_focus_input, apply_visual_point
 
-    return apply_visual_point(out, keep_text=(cid == "input_text"))
+    if cid == "input_text":
+        return apply_focus_input(out)
+    return apply_visual_point(out, keep_text=False)
 
 
 def visual_point_missing(cap_id: str, params: dict[str, Any] | None) -> bool:
-    """看图的点、长按、连点、输入必须带 x,y。方向滑动可以只有 direction。"""
+    """看图的点、长按、连点必须带 x,y。输入写当前焦点，不带坐标。方向滑动可以只有 direction。"""
     cid = str(cap_id or "").strip()
     p = params or {}
-    if cid in ("tap_element", "long_press_element", "multi_tap", "input_text"):
+    if cid == "input_text":
+        return False
+    if cid in ("tap_element", "long_press_element", "multi_tap"):
         return p.get("x") is None or p.get("y") is None
     if cid == "swipe_element_to_element":
         return any(p.get(k) is None for k in ("from_x", "from_y", "to_x", "to_y"))
@@ -69,4 +73,9 @@ def assemble_execute_params(
         from mino_nexus.action_space.web import apply_web_point
 
         out = apply_web_point(out)
-    return stamp_scheme_params(cid, out, scheme)
+    out = stamp_scheme_params(cid, out, scheme)
+    if cid == "input_text" and scheme != "dom":
+        from mino_nexus.action_space.visual import bind_focus_ref
+
+        out = bind_focus_ref(out, ctx)
+    return out

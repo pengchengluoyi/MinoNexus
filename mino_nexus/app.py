@@ -25,12 +25,15 @@ from mino_nexus.core.paths import data_dir
 from mino_nexus.routers import (
     rAppAutomation,
     rAppIntel,
+    rAssistant,
     rAuth,
     rCaseRunner,
     rDevice,
     rDocs,
     rFlowBlocks,
+    rMcp,
     rMe,
+    rMcp,
     rNavFsm,
     rObserve,
     rPacks,
@@ -157,6 +160,12 @@ def create_app() -> FastAPI:
     app.include_router(rFlowBlocks.router)
     app.include_router(rAppIntel.router)
     app.include_router(rTask.router)
+    app.include_router(rAssistant.router)
+    app.include_router(rMcp.router)
+    app.include_router(rMcp.router)
+    from mino_nexus.services.assistant_tools import bind_app
+
+    bind_app(app)
 
     node_ws.register_routes(app)
     ui_ws.register_routes(app)

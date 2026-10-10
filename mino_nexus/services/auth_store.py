@@ -601,3 +601,24 @@ def save_agent_sessions(token: str, sessions: list[dict[str, Any]]) -> list[dict
     store[sess["user_id"]] = rows
     _save(root)
     return rows
+
+
+def api_session_for(user_id: str) -> Optional[dict[str, Any]]:
+    """助手 token / MCP token 对应的会话视图：只读用户资料，不落库、不占用户的登录会话名额。"""
+    uid = str(user_id or "").strip()
+    if not uid:
+        return None
+    for user in users():
+        if str(user.get("id") or user.get("user_id") or "") == uid:
+            pub = _public_user(user)
+            return {
+                "token": "",
+                "user_id": pub["user_id"],
+                "email": pub["email"],
+                "name": pub["name"],
+                "username": pub["username"],
+                "role": pub["role"],
+                "email_verified": True,
+                "expires_at": _now() + 60,
+            }
+    return None

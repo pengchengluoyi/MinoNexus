@@ -120,6 +120,17 @@ class RouterProxy:
         compress_ratio: float | None = None,
     ) -> CapturedScreen:
         """替代上游的 `capture_screen(ctx, ...)`，返回值保持 CapturedScreen 形状。"""
+        if kind == "screenshot":
+            from mino_nexus.services.settings import (
+                channel_screenshot_compress_ratio,
+                note_channel_capture_ratio,
+            )
+
+            if compress_ratio is None:
+                node, _why = get_registry().resolve(self.sn)
+                plat = _device_platform(self.sn, node) if node is not None else ""
+                compress_ratio = channel_screenshot_compress_ratio(plat)
+            note_channel_capture_ratio(float(compress_ratio or 1.0))
         return _run_sync(
             self.observe_async(
                 kind, prefer=prefer, force_fresh=force_fresh,
@@ -350,6 +361,10 @@ class RouterProxy:
             compress_ratio = channel_screenshot_compress_ratio(plat)
         elif compress_ratio is None:
             compress_ratio = 1.0
+        if kind == "screenshot":
+            from mino_nexus.services.settings import note_channel_capture_ratio
+
+            note_channel_capture_ratio(float(compress_ratio or 1.0))
         family = set(executors_for_platform(plat))
         device_order = executors_for_device(self.sn, node)
         if prefer is None:

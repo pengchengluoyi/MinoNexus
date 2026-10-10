@@ -107,7 +107,7 @@ def make_llm_jpeg(
     compress_ratio: float | None = None,
     quality: int = _LLM_JPEG_QUALITY,
 ) -> tuple[str, str]:
-    """喂给大模型的图：各渠道都转 JPEG，按 plan_compress_ratio 等比缩小。
+    """喂给大模型的图：转 JPEG。采集端已经按渠道压缩比缩过的图不再套 plan_compress_ratio。
 
     1.0 不缩小。点按仍用千分比，不依赖像素。
     返回 ``(jpeg_b64, image/jpeg)``；失败则 ``("", "")``，调用方回落原图。
@@ -124,9 +124,9 @@ def make_llm_jpeg(
         w, h = img.size
         ratio = compress_ratio
         if ratio is None:
-            from mino_nexus.services.settings import get_ai_plan_compress_ratio
+            from mino_nexus.services.settings import llm_shrink_after_capture
 
-            ratio = get_ai_plan_compress_ratio()
+            ratio = llm_shrink_after_capture()
         try:
             ratio = float(ratio)
         except (TypeError, ValueError):
@@ -206,5 +206,11 @@ def emit_testing_task(data: dict[str, Any]) -> None:
         if payload.get("run_id") and not payload.get("task_id"):
             payload["task_id"] = payload["run_id"]
         ui_ws.broadcast_sync({"type": "testing_task", "data": payload})
+        if payload.get("event") == "task_finished":
+            import threading
+
+            from mino_nexus.services.assistant_notify import on_run_finished
+
+            threading.Thread(target=on_run_finished, args=(payload,), name="assistant-notify", daemon=True).start()
     except Exception as exc:
         SLog.d(TAG, f"emit_testing_task broadcast failed: {exc}")

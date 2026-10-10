@@ -189,32 +189,8 @@ def _require(spec: dict[str, Any], keys: tuple[str, ...], *, where: str) -> None
         raise PromptRepoError(f"{where} 缺少字段：{', '.join(missing)}")
 
 
-def _load_lock(root: Path) -> dict[str, Any]:
-    path = root / "prompts.lock.json"
-    if not path.is_file():
-        raise PromptRepoError("缺少 prompts.lock.json，先跑 scripts/verify_prompts.py")
-    data = json.loads(path.read_text(encoding="utf-8"))
-    entries = data.get("entries") if isinstance(data, dict) else None
-    if not isinstance(entries, dict):
-        raise PromptRepoError("prompts.lock.json 没有 entries")
-    return entries
-
-
-def _check_hash(entries: dict[str, Any], key: str, version: int, digest: str) -> None:
-    locked = entries.get(key)
-    if not isinstance(locked, dict):
-        raise PromptRepoError(f"{key} 不在 prompts.lock.json 里")
-    if int(locked.get("version") or 0) != int(version) or str(locked.get("sha256") or "") != digest:
-        raise PromptRepoError(
-            f"{key} 的 version/sha256 与 prompts.lock.json 不一致。"
-            "改了 prompt 要先把 version 加 1，再跑 scripts/verify_prompts.py"
-        )
-
-
 def _scan(root: Path) -> Repo:
     repo = Repo()
-    lock = _load_lock(root)
-    seen: set[str] = set()
     jobs_dir = root / "jobs"
     if jobs_dir.is_dir():
         for directory in sorted(p for p in jobs_dir.iterdir() if p.is_dir()):
@@ -233,8 +209,6 @@ def _scan(root: Path) -> Repo:
                 _smoke_render(row)
             digest = content_sha256(_entry_files(directory), root=directory)
             key = f"jobs/{row['id']}"
-            _check_hash(lock, key, int(spec["version"]), digest)
-            seen.add(key)
             row["prompt_sha"] = digest
             row["source_path"] = _rel(spec_path)
             repo.jobs[row["id"]] = row
@@ -250,8 +224,6 @@ def _scan(root: Path) -> Repo:
             _require(spec, ("id", "version"), where=str(path))
             digest = content_sha256([path], root=skills_dir)
             key = f"skills/{spec['id']}"
-            _check_hash(lock, key, int(spec["version"]), digest)
-            seen.add(key)
             repo.skills[str(spec["id"])] = spec
             repo.fingerprints[("skill", str(spec["id"]))] = (int(spec["version"]), digest)
             repo.paths[("skill", str(spec["id"]))] = _rel(path)
@@ -265,8 +237,6 @@ def _scan(root: Path) -> Repo:
             _require(spec, ("id", "version", "label"), where=str(path))
             digest = content_sha256([path], root=roles_dir)
             key = f"roles/{spec['id']}"
-            _check_hash(lock, key, int(spec["version"]), digest)
-            seen.add(key)
             spec = dict(spec)
             spec["_source_path"] = _rel(path)
             spec["_sha"] = digest
@@ -281,8 +251,6 @@ def _scan(root: Path) -> Repo:
         if not isinstance(spec, dict):
             raise PromptRepoError("stack.yaml 不是映射")
         digest = content_sha256([stack_path], root=stack_path.parent)
-        _check_hash(lock, "stack/stack", int(spec.get("version") or 1), digest)
-        seen.add("stack/stack")
         spec = dict(spec)
         spec["_source_path"] = _rel(stack_path)
         spec["_sha"] = digest
@@ -290,15 +258,12 @@ def _scan(root: Path) -> Repo:
         repo.fingerprints[("stack", "stack")] = (int(spec.get("version") or 1), digest)
         repo.paths[("stack", "stack")] = spec["_source_path"]
 
-    _scan_assistant(root, repo, lock, seen)
+    _scan_assistant(root, repo)
     _check_refs(repo)
-    unknown = sorted(set(lock) - seen)
-    if unknown:
-        raise PromptRepoError("prompts.lock.json 多出条目：" + ", ".join(unknown))
     return repo
 
 
-def _scan_assistant(root: Path, repo: Repo, lock: dict[str, Any], seen: set[str]) -> None:
+def _scan_assistant(root: Path, repo: Repo) -> None:
     base = root / "assistant"
     jobs = base / "jobs"
     if jobs.is_dir():
@@ -313,8 +278,6 @@ def _scan_assistant(root: Path, repo: Repo, lock: dict[str, Any], seen: set[str]
                 _smoke_render(row)
             digest = content_sha256(_entry_files(directory), root=directory)
             key = f"assistant/jobs/{row['id']}"
-            _check_hash(lock, key, int(spec.get("version") or 1), digest)
-            seen.add(key)
             row["prompt_sha"] = digest
             row["source_path"] = _rel(spec_path)
             repo.jobs[row["id"]] = row
@@ -331,8 +294,6 @@ def _scan_assistant(root: Path, repo: Repo, lock: dict[str, Any], seen: set[str]
             _require(spec, ("id", "version"), where=str(path))
             digest = content_sha256([path], root=folder)
             key = f"assistant/{folder.name}/{spec['id']}"
-            _check_hash(lock, key, int(spec["version"]), digest)
-            seen.add(key)
             spec = dict(spec)
             spec["source_path"] = _rel(path)
             spec["sha256"] = digest

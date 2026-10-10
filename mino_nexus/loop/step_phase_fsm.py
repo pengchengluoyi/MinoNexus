@@ -162,6 +162,10 @@ def apply_flow_block_skip_ops(cursor: Any, plan: Any, *, writer: Any = None) -> 
         if not sid or sid not in by_id:
             continue
         row = by_id[sid]
+        if not row.get("optional") or str(row.get("status") or "pending") in _TERMINAL:
+            if writer:
+                writer.append("milestone/skip_rejected", {"milestone_id": sid, "reason": "required_or_terminal"})
+            continue
         row["status"] = "skipped"
         row["skip_reason"] = str(op.get("reason") or "plan_skip")[:200]
         row["skipped_by"] = "plan"

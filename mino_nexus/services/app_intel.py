@@ -33,6 +33,8 @@ class ContextPack:
     policy_applied: str = ""
     know_rows: list[dict[str, Any]] = field(default_factory=list)
     wiki_guard_text: str = ""
+    retrieval_app_id: str = ""
+    retrieval_project_id: str = ""
 
     def to_slots(self) -> dict[str, str]:
         return {
@@ -186,6 +188,8 @@ def context_pack_for_step(
 
     pack = ContextPack(policy_applied=str(policy or "wiki_first").strip() or "wiki_first")
     app_id, project_id = resolve_knowledge_scope(ctx)
+    pack.retrieval_app_id = str(app_id or "")
+    pack.retrieval_project_id = str(project_id or "")
 
     know_rows = match_step_knowledge(
         ctx=ctx,
@@ -935,6 +939,16 @@ def log_context_pack(writer, pack: ContextPack) -> None:
                 "has_knowledge_body": bool(pack.knowledge_body),
                 "has_doc_context": bool(pack.doc_context),
                 "has_wiki_guard": bool(pack.wiki_guard_text),
+                "scope_app_id": pack.retrieval_app_id,
+                "scope_project_id": pack.retrieval_project_id,
+                "knowledge_candidates": len(pack.know_rows),
+                "empty_reason": (
+                    "scope_missing" if not pack.retrieval_app_id
+                    else "no_retrieval_matches" if not pack.know_rows and not pack.citations
+                    else "body_not_injected" if pack.know_rows and not pack.knowledge_body
+                    else "no_doc_match" if not pack.doc_context and "doc_context" not in pack.skipped
+                    else ""
+                ),
             },
         )
     except Exception:

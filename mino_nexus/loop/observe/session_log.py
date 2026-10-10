@@ -115,6 +115,8 @@ class SessionWriter:
         self._llm_ms = 0
         self._tool_ms = 0
         self._guard_blocks = 0
+        self._first_blocker: dict[str, Any] | None = None
+        self._latest_error: dict[str, Any] | None = None
 
     @property
     def turn(self) -> int:
@@ -147,6 +149,27 @@ class SessionWriter:
             self._tool_ms += int(body.get("elapsed_ms") or 0)
         elif evt_type == "guard/block":
             self._guard_blocks += 1
+        if evt_type in ("guard/block", "contract/blocked") and self._first_blocker is None:
+            self._first_blocker = {
+                "event_type": evt_type,
+                "turn": self._turn,
+                "reason_code": str(body.get("reason_code") or body.get("code") or body.get("dispatch_gate_code") or "blocked")[:100],
+                "capability_id": str(body.get("capability_id") or "")[:80],
+            }
+        if evt_type == "tool/result" and str(body.get("status") or "").lower() in ("fail", "failed", "error", "timeout"):
+            self._latest_error = {
+                "event_type": evt_type,
+                "turn": self._turn,
+                "capability_id": str(body.get("capability_id") or "")[:80],
+                "executor_used": str(body.get("executor_used") or "")[:80],
+                "error_kind": "timeout" if "timeout" in str(body.get("error") or body.get("summary") or "").lower() else "executor_failure",
+            }
+        elif evt_type == "assert/vision" and body.get("passed") is False:
+            self._latest_error = {
+                "event_type": evt_type,
+                "turn": self._turn,
+                "error_kind": "evidence_insufficient" if body.get("reason_code") == "observation_missing" or body.get("parse_warnings") else "assertion_failed",
+            }
         with self._lock:
             try:
                 return session_store.append_event(
@@ -169,6 +192,18 @@ class SessionWriter:
                 self._closed = True
                 return
             wall_ms = max(0, int((time.perf_counter() - self._t0) * 1000))
+            if status != "pass":
+                stop_kind = (
+                    "cancelled" if status in ("cancel", "cancelled")
+                    else "timeout" if status == "timeout" or "timeout" in summary.lower()
+                    else "dependency_blocked" if status == "blocked"
+                    else (self._latest_error or {}).get("error_kind") or "unclassified"
+                )
+                self.append("session/attribution", {
+                    "first_blocker": self._first_blocker,
+                    "latest_error": self._latest_error,
+                    "stop_reason": {"status": status, "kind": stop_kind},
+                })
             self.append(
                 "perf/summary",
                 {

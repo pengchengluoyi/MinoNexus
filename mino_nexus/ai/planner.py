@@ -231,12 +231,20 @@ def _parse_assert_result(
     from mino_nexus.services.nav_screen_layout import normalize_vision_layout
 
     warnings: list[str] = []
-    passed = bool(raw.get("passed"))
-    confidence = float(raw.get("confidence") or 0.0)
+    passed = raw.get("passed")
+    if type(passed) is not bool:
+        warnings.append("passed 必须是 JSON 布尔值")
+        passed = False
+    try:
+        confidence = float(raw.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+        warnings.append("confidence 格式不合法")
     confidence = max(0.0, min(1.0, confidence))
     evidence = str(raw.get("evidence") or "").strip()
     if not evidence:
         warnings.append("evidence 为空，模型未遵守约束")
+        passed = False
     raw_layout = raw.get("screen_layout")
     screen_layout = (
         normalize_vision_layout(raw_layout, screen_w=width, screen_h=height)
@@ -733,8 +741,8 @@ def vision_exec_turn(
         if not menu:
             focused = "、".join(sorted(allow))
             return AgentDecision(
-                status="continue",
-                thought=f"未注册能力已跳过：{focused}",
+                status="give_up",
+                thought=f"当前阶段能力菜单不包含所需能力：{focused}；依赖阻塞，未执行动作",
                 parse_warnings=["focused cap missing from menu"],
             )
     from mino_nexus.catalog.tool_schema import tools_chat_payload, tools_for_menu

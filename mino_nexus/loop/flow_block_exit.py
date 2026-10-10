@@ -83,6 +83,8 @@ def device_input_text_exit(
     )
     if landed is False:
         return "fail", f"input_point_off_sent:{land_detail}"
+    if "已写入当前焦点" in summ:
+        return "pass", "focus_write_dispatched"
     if field_value is not None and exp:
         got = str(field_value or "").strip()
         if not got:

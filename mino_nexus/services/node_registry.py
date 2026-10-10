@@ -43,7 +43,7 @@ def _channel_connected(channels: Any) -> bool:
     return any(_channel_value(v) in _ONLINE_CHANNEL for v in channels.values())
 
 
-_PLUGIN_CLASSES = frozenset({"cli", "mcp", "bot", "mail"})
+_PLUGIN_CLASSES = frozenset({"cli", "mcp", "bot", "mail", "im"})
 _SECRET_MARKERS = ("secret", "password", "token", "webhook")
 
 
@@ -69,8 +69,57 @@ def _secret_names(raw: Any) -> list[str]:
     out: list[str] = []
     for item in raw:
         name = str(item or "").strip()
-        if name and len(name) <= 64 and name.replace("_", "").isalnum():
+        # LangBot 平台字段形如 lark.app_secret，带「平台.」前缀，所以允许点号
+        if name and len(name) <= 64 and name.replace("_", "").replace(".", "").isalnum():
             out.append(name)
+    return out
+
+
+def _plugin_status(raw: Any) -> dict[str, Any]:
+    """渠道连接状态：只留连接与否、最近收消息的时间、一句错误。不含消息正文。"""
+    if not isinstance(raw, dict):
+        return {}
+    try:
+        last = int(raw.get("last_message_at") or 0)
+    except (TypeError, ValueError):
+        last = 0
+    out = {
+        "connected": bool(raw.get("connected")),
+        "last_message_at": last,
+        "error": str(raw.get("error") or "")[:200],
+    }
+    if raw.get("account_id"):
+        out["account_id"] = str(raw["account_id"])[:128]
+    if "holding" in raw:
+        out["holding"] = bool(raw.get("holding"))
+    if raw.get("state"):
+        out["state"] = str(raw["state"])[:16]
+        out["healthy"] = bool(raw.get("healthy"))
+        out["version"] = str(raw.get("version") or "")[:32]
+        out["restarts"] = int(raw.get("restarts") or 0)
+    return out
+
+
+def _plugin_platforms(raw: Any) -> dict[str, Any]:
+    """LangBot 各平台状态：只留开关、连接与否、最近收消息时间、一句错误。"""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for pid, st in raw.items():
+        key = str(pid or "").strip()
+        if not key or len(key) > 32 or not isinstance(st, dict):
+            continue
+        try:
+            last = int(st.get("last_message_at") or 0)
+        except (TypeError, ValueError):
+            last = 0
+        out[key] = {
+            "enabled": bool(st.get("enabled")),
+            "holding": st.get("holding") is not False,
+            "connected": bool(st.get("connected")),
+            "last_message_at": last,
+            "error": str(st.get("error") or "")[:200],
+        }
     return out
 
 
@@ -94,57 +143,46 @@ def sanitize_plugins(raw: Any) -> list[dict[str, Any]] | None:
             "installed": bool(row.get("installed")),
             "configured": bool(row.get("configured")),
         }
+        status = _plugin_status(row.get("status"))
+        if status:
+            item["status"] = status
         values = _plain_values(row.get("values"))
         secrets = _secret_names(row.get("saved_secrets"))
         if values:
             item["values"] = values
         if secrets:
             item["saved_secrets"] = secrets
+        fields = []
+        for field in row.get("fields") or []:
+            if not isinstance(field, dict):
+                continue
+            key = str(field.get("key") or "").strip()
+            if not key:
+                continue
+            fields.append({
+                "key": key,
+                "label": str(field.get("label") or key),
+                "placeholder": str(field.get("placeholder") or ""),
+                "secret": bool(field.get("secret")),
+                "optional": bool(field.get("optional")),
+                **({"type": str(field["type"])[:16]} if field.get("type") else {}),
+                **({"group": str(field["group"])[:32]} if field.get("group") else {}),
+            })
+        if fields:
+            item["fields"] = fields
+        if row.get("label"):
+            item["label"] = str(row.get("label"))
+        groups = [
+            {"id": str(g.get("id") or "")[:32], "label": str(g.get("label") or "")[:40]}
+            for g in (row.get("groups") or []) if isinstance(g, dict) and g.get("id")
+        ]
+        if groups:
+            item["groups"] = groups
+        platforms = _plugin_platforms(row.get("platforms"))
+        if platforms:
+            item["platforms"] = platforms
         out.append(item)
     return out
-
-
-def _reply_wechat_message(payload: dict[str, str]) -> None:
-    """微信正文只用来生成回复，不写日志。"""
-    text = str(payload.get("text") or "").strip()
-    user_id = str(payload.get("from_user_id") or "").strip()
-    context = str(payload.get("context_token") or "").strip()
-    node_id = str(payload.get("node_id") or "").strip()
-    if not text or not user_id or not context or not node_id:
-        return
-    reply = ""
-    try:
-        from mino_nexus.ai.roles_catalog import chat_with_role
-
-        data = chat_with_role(
-            role_id="im-qa-assistant",
-            messages=[{"role": "user", "content": text}],
-        )
-        if isinstance(data, dict):
-            reply = str(data.get("reply") or data.get("content") or data.get("text") or "").strip()
-    except Exception as exc:
-        SLog.w(TAG, f"wechat reply failed: {type(exc).__name__}")
-        return
-    if not reply:
-        return
-    try:
-        from mino_nexus.services.node_plugin_call import call_plugin
-
-        call_plugin(
-            kind="bot",
-            plugin_id="wechat",
-            node_id=node_id,
-            capability_id="plugin.bot.wechat",
-            params={
-                "action": "send",
-                "to_user_id": user_id,
-                "context_token": context,
-                "text": reply[:2000],
-            },
-            timeout=30,
-        )
-    except Exception as exc:
-        SLog.w(TAG, f"wechat send failed: {type(exc).__name__}")
 
 
 def _public_plugin_job(raw: dict[str, Any]) -> dict[str, Any]:
@@ -181,6 +219,7 @@ class NodeSession:
     host: dict[str, Any] = field(default_factory=dict)
     # None：这台 Scout 还没报插件状态。列表只含 class/id/installed/configured。
     plugins: Optional[list[dict[str, Any]]] = None
+    runtime_capabilities: Optional[list[dict[str, Any]]] = None
     plugin_job: dict[str, Any] = field(default_factory=dict)
     # 发一条消息并等应答；由 websocket/node.py 注入
     send: Optional[Callable[..., Any]] = None
@@ -320,6 +359,7 @@ class NodeRegistry:
                 studio_id=studio_id,
                 owner_user_id=owner,
                 plugins=sanitize_plugins(getattr(reg, "plugins", None)),
+                runtime_capabilities=getattr(reg, "runtime_capabilities", None),
             )
             self._nodes[reg.node_id] = session
             session.persist_snapshot()
@@ -429,6 +469,9 @@ class NodeRegistry:
             reported = getattr(hb, "plugins", None)
             if reported is not None:
                 node.plugins = sanitize_plugins(reported)
+            caps = getattr(hb, "runtime_capabilities", None)
+            if caps is not None:
+                node.runtime_capabilities = list(caps)
             ver = str(getattr(hb, "scout_version", "") or "").strip()
             if ver:
                 node.scout_version = ver
@@ -482,7 +525,7 @@ class NodeRegistry:
         sn = str(req.sn or req.device_id or params.get("sn") or "").strip()
         detail = str(params.get("detail") or "")
         interrupted: list[str] = []
-        wechat_reply: dict[str, str] | None = None
+        inbound: dict[str, Any] | None = None
         with self._lock:
             node = self._nodes.get(nid)
             if node is None:
@@ -528,22 +571,34 @@ class NodeRegistry:
                 raw = params.get("progress")
                 if isinstance(raw, dict):
                     node.plugin_job = _public_plugin_job(raw)
-            elif event == "plugin_wechat_message":
-                wechat_reply = {
-                    "node_id": nid,
-                    "text": str(params.get("text") or "")[:2000],
-                    "from_user_id": str(params.get("from_user_id") or ""),
-                    "context_token": str(params.get("context_token") or ""),
-                }
+            elif event in ("plugin_im_message", "plugin_wechat_message"):
+                im = params.get("im") if isinstance(params.get("im"), dict) else {}
+                if event == "plugin_wechat_message" and not im:
+                    im = {
+                        "channel": "wechat",
+                        "chat_id": str(params.get("from_user_id") or ""),
+                        "sender_id": str(params.get("from_user_id") or ""),
+                        "text": str(params.get("text") or "")[:2000],
+                        "mentioned": True,
+                        "chat_type": "private",
+                        "msg_id": "",
+                        "reply_ctx": {"context_token": str(params.get("context_token") or "")},
+                    }
+                inbound = dict(im)
+                inbound["node_id"] = nid
             self._purge_orphaned_legacy_web_slots()
             if node is not None:
                 node.persist_snapshot()
         SLog.i(TAG, f"EXECUTE {cap} node={nid} sn={sn} {detail}")
-        if wechat_reply and wechat_reply.get("text") and wechat_reply.get("context_token"):
+        if inbound and inbound.get("text"):
+            import threading
+
+            from mino_nexus.services.assistant_gateway import handle_inbound
+
             threading.Thread(
-                target=_reply_wechat_message,
-                args=(wechat_reply,),
-                name="wechat-reply",
+                target=handle_inbound,
+                args=(inbound,),
+                name="im-inbound",
                 daemon=True,
             ).start()
         return interrupted

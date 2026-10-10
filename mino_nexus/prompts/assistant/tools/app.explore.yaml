@@ -1,0 +1,29 @@
+id: app.explore
+version: 1
+title: 探索应用
+description: 在一台设备上探索一个应用并采集页面。用户说探索、逛一下这个应用时用。
+route: POST /case-runner/explore
+risk: write
+async: true
+params_schema:
+  type: object
+  properties:
+    app_id:
+      type: string
+      description: 应用 id 或应用名
+    sn:
+      type: string
+      description: 设备序列号或别名
+  required:
+  - app_id
+param_resolvers:
+  app_id: app.by_name
+  sn: device.by_alias
+result_pick:
+- data.task_id
+- data.run_id
+card: case_run_started
+surfaces:
+- im
+- mcp
+enabled: true

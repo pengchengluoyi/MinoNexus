@@ -72,15 +72,19 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {
             "text": {"type": "string", "description": "要输入的文本；口令可写占位，值由系统填"},
-            "x": COORD,
-            "y": COORD,
             "field": {
                 "type": "string",
                 "enum": ["email", "phone", "sms_code", "password", "text"],
                 "description": "邮箱登录用 email；手机号登录用 phone；验证码 sms_code。值由租号网关填，勿填 display_name",
             },
+            "mode": {
+                "type": "string",
+                "enum": ["replace", "append"],
+                "description": "replace 替换当前焦点内容，append 在光标处追加。不要给 x,y",
+            },
         },
-        "required": ["text", "x", "y"],
+        "required": ["text"],
+        "description": "写入当前已聚焦的输入框，不要给坐标，也不要再点一次",
     },
     "swipe_element_to_element": {
         "type": "object",

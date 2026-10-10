@@ -360,6 +360,9 @@ def record_llm(*, messages: list | None = None, parsed=None, raw_text: str = "",
     system_text, imgs_s = _clip_media(system, stem=f"{row_id}-s")
     input_text, imgs_u = _clip_media(user, stem=f"{row_id}-u")
     output_text, imgs_o = _clip_media(output, stem=f"{row_id}-o")
+    if str(job).startswith("assistant"):
+        input_text = f"[redacted {len(str(input_text))} chars]"
+        output_text = f"[redacted {len(str(output_text))} chars]"
     parsed_dict = parsed if isinstance(parsed, dict) else {}
     return _write(
         {

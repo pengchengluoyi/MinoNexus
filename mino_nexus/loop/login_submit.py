@@ -51,17 +51,12 @@ def account_session_logged_in(ctx: Any | None) -> bool:
 
 
 def _sms_send_done(history: list[str], intents_done: set[str] | None) -> bool:
-    """request_sms_code / Web Send tap，或已记录的 sms_send 意图（避免 history 滑窗丢发码行）。"""
+    """发码成功意图或明确的程序发码回执；点击事件本身不证明请求被接受。"""
     done = set(intents_done or set())
     if "sms_send" in done:
         return True
     if _history_has(history, "request_sms_code"):
         return True
-    for line in history or []:
-        if "tap_element" not in line or "pass" not in line.lower():
-            continue
-        if sms_send_tap_matches(line):
-            return True
     return False
 
 

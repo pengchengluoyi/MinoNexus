@@ -320,34 +320,15 @@ def _dispatch_email_fill(
 
         return vision_fallback_result(
             capability_id="input_text",
-            params={"field": field, "text": text},
+            params={"field": field, "text": text, "mode": "replace", "focus_ref": "previous_focus_action"},
             reason="account_fill",
             milestone_id=mid,
             block_id=block_id,
             step_id=mid,
         )
-    cached_email = getattr(ctx, "web_email_tap_milli", None)
-    if isinstance(cached_email, (list, tuple)) and len(cached_email) >= 2:
-        try:
-            fill_params["x"] = int(cached_email[0])
-            fill_params["y"] = int(cached_email[1])
-            fill_params["email_coords_from_prior_tap_only"] = True
-            fill_params["web_coordinate_only"] = True
-            fill_params["tap_prefer_coordinates"] = True
-        except (TypeError, ValueError):
-            pass
+    fill_params["mode"] = "replace"
+    fill_params["focus_ref"] = "previous_focus_action"
     params = enrich_web_input_text_params(fill_params, ctx)
-    if params.get("x") is None and params.get("y") is None:
-        from mino_nexus.loop.program_device_fallback import vision_fallback_result
-
-        return vision_fallback_result(
-            capability_id="input_text",
-            params={"field": field, "text": text},
-            reason="no_web_coords",
-            milestone_id=mid,
-            block_id=block_id,
-            step_id=mid,
-        )
     from mino_nexus.loop.channel_observation import read_field_after_input
     from mino_nexus.loop.flow_block_exit import device_input_text_exit
     from mino_nexus.loop.observe.program_tool_log import log_program_tool

@@ -44,6 +44,7 @@ def _public(row: Any) -> dict[str, Any]:
     }
     return {
         "control_id": row.control_id,
+        "legacy_control_id": str(merged.get("legacy_control_id") or ""),
         "element_type": row.element_type or "button",
         "scope": row.scope or "page",
         "locator_value": merged,
@@ -58,8 +59,11 @@ def ensure_control(
     element_type: str = "button",
     scope: str = "page",
     vlm_text: str = "",
+    page_id: str = "",
+    container_id: str = "",
+    platform: str = "",
 ) -> str:
-    """同一项目、同一描述复用 control_id。看图只写描述。"""
+    """有明确页面/容器身份时按其作用域复用；历史无身份的控件保留旧键。"""
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.ui_control import UiControl
 
@@ -68,12 +72,18 @@ def ensure_control(
     key = _desc_key(desc)
     if not key:
         key = uuid.uuid4().hex[:8]
+    legacy_key = key
     kind = _ROLE_TYPE.get(str(element_type or "").strip(), str(element_type or "button"))
     if kind not in _ELEMENT_TYPES:
         kind = "button"
     where = str(scope or "page").strip()
     if where not in _SCOPES:
         where = "page"
+    page = str(page_id or "").strip()
+    container = str(container_id or "").strip()
+    channel = str(platform or "").strip().lower()
+    if page or container:
+        key = f"{channel}:{page}:{container}:{where}:{kind}:{key}"
     with session_scope() as db:
         row = (
             db.query(UiControl)
@@ -85,6 +95,15 @@ def ensure_control(
             text = str(vlm_text or desc)[:200]
             locator["vlm_text"] = text
             locator["source"]["vlm_text"] = "case"
+            if page or container:
+                # 明确记录旧身份来源；新作用域只继承描述，不继承可能串页面的定位器。
+                legacy = (
+                    db.query(UiControl)
+                    .filter(UiControl.project_id == pid, UiControl.desc_key == legacy_key)
+                    .first()
+                )
+                if legacy is not None:
+                    locator["legacy_control_id"] = str(legacy.control_id)
             row = UiControl(
                 control_id=f"ctl_{uuid.uuid4().hex[:8]}",
                 project_id=pid,
@@ -258,6 +277,9 @@ def stamp_compiled_plans(case: dict[str, Any], do_plan: dict[str, Any], check_pl
             element_type=str(target.get("role") or "button"),
             scope="dialog" if "弹窗" in desc else "page",
             vlm_text=desc,
+            page_id=str(target.get("page_id") or step.get("page_id") or ""),
+            container_id=str(target.get("container_id") or step.get("container_id") or ""),
+            platform=str(case.get("platform") or ""),
         )
         for slot in step.get("slots") or []:
             if not isinstance(slot, dict):
@@ -270,6 +292,9 @@ def stamp_compiled_plans(case: dict[str, Any], do_plan: dict[str, Any], check_pl
                 element_type=str(slot_target.get("role") or "button"),
                 scope="page",
                 vlm_text=slot_desc,
+                page_id=str(slot_target.get("page_id") or step.get("page_id") or ""),
+                container_id=str(slot_target.get("container_id") or step.get("container_id") or ""),
+                platform=str(case.get("platform") or ""),
             )
         extra = dict(params.get("rules") or {}) if isinstance(params.get("rules"), dict) else {}
         if params.get("wait_ms"):
@@ -304,6 +329,9 @@ def stamp_compiled_plans(case: dict[str, Any], do_plan: dict[str, Any], check_pl
             element_type="dialog" if kind in ("exists", "visible") and "弹窗" in desc else "text",
             scope="dialog" if "弹窗" in desc else "page",
             vlm_text=desc,
+            page_id=str(rules.get("page_id") or step.get("page_id") or ""),
+            container_id=str(rules.get("container_id") or step.get("container_id") or ""),
+            platform=str(case.get("platform") or ""),
         )
         step["assert_params"] = assert_params
     return blocked

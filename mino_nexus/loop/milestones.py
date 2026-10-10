@@ -845,16 +845,19 @@ def note_tool_pass_milestone(
             if rid == "account_field" and isinstance(p, dict):
                 _record_email_field_tap_coords(ctx, p)
             if rid == "send_code":
-                intents = getattr(cursor, "step_intents_done", None)
-                if isinstance(intents, set):
-                    intents.add("sms_send")
-                cursor.login_post_sms_pending = True
-                cursor.login_post_sms_stall = 0
-                setattr(cursor, "send_code_tap_passed", True)
-                if ctx is not None:
-                    from mino_nexus.loop.login_verification import record_verification_send
+                from mino_nexus.action_space.scheme import action_scheme
 
-                    record_verification_send(ctx)
+                if action_scheme(ctx) != "visual":
+                    intents = getattr(cursor, "step_intents_done", None)
+                    if isinstance(intents, set):
+                        intents.add("sms_send")
+                    cursor.login_post_sms_pending = True
+                    cursor.login_post_sms_stall = 0
+                    setattr(cursor, "send_code_tap_passed", True)
+                    if ctx is not None:
+                        from mino_nexus.loop.login_verification import record_verification_send
+
+                        record_verification_send(ctx)
             if kind in ("visual_tap", "visual_action", "visual_input"):
                 row["status"] = "pass"
                 row["evidence"] = f"tap_element:{sel}" if sel else cap
@@ -1196,6 +1199,43 @@ def apply_check_evidences_to_milestones(
     _log_milestones_snapshot(writer, state, source="check_programmatic")
 
 
+def apply_assert_checkpoint_results(cursor: Any, result: Any, *, writer: Any = None) -> bool:
+    """仅用本次断言逐项覆盖的有效证据推进当前检查点。"""
+    state = _sync_scope(cursor, read_state(cursor))
+    ms = state.get("milestones") if isinstance(state.get("milestones"), list) else []
+    pending = {
+        str(row.get("id") or ""): row
+        for row in milestones_for_phase_eval(state, cursor)
+        if str(row.get("kind") or "") == "checkpoint"
+        and str(row.get("status") or "pending") not in _TERMINAL
+    }
+    rows = getattr(result, "checkpoint_results", [])
+    if not pending or not isinstance(rows, list) or len(rows) != len(pending):
+        return False
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            return False
+        point_id = str(row.get("point_id") or "")
+        if point_id not in pending or point_id in seen:
+            return False
+        if type(row.get("passed")) is not bool or not str(row.get("evidence") or "").strip():
+            return False
+        seen.add(point_id)
+    if seen != set(pending) or not all(row["passed"] for row in rows):
+        return False
+    for row in rows:
+        milestone = pending[row["point_id"]]
+        milestone["status"] = "pass"
+        milestone["evidence"] = str(row["evidence"]).strip()[:400]
+        milestone["evidence_scope"] = str(row.get("evidence_scope") or "visible_full")
+        milestone["hidden_content_verified"] = row.get("hidden_content_verified") is True
+    state["milestones"] = ms
+    write_state(cursor, state)
+    _log_milestones_snapshot(writer, state, source="check_assert")
+    return True
+
+
 @dataclass
 class MilestoneVerdict:
     phase_complete: bool = False
@@ -1320,17 +1360,11 @@ def evaluate_milestones(
             summary=f"待完成：{'; '.join(pending_required[:3])}",
         )
     if programmatic_pass and pending_required:
-        for row in ms:
-            if isinstance(row, dict) and str(row.get("status") or "") not in _TERMINAL:
-                if not row.get("optional"):
-                    row["status"] = "pass"
-                    row["evidence"] = "programmatic_check"
-        state = _sync_scope(cursor, state)
-        state["milestones"] = ms
-        state["status"] = "pass"
-        state["exit_allowed"] = True
-        write_state(cursor, state)
-        return MilestoneVerdict(phase_complete=True, status="pass", summary="程序化校验通过")
+        return MilestoneVerdict(
+            phase_complete=False,
+            status="in_progress",
+            summary="程序化总结果不能替代逐项校验",
+        )
     if not pending_required:
         from mino_nexus.loop.fuse.interrupt_stack import stack_depth
 

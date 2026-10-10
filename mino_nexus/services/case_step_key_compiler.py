@@ -12,6 +12,7 @@ _BLOCK_RE = re.compile(r"【块[:：]\s*([^】]+)】")
 _NAV_RE = re.compile(r"【导航[:：]\s*([^】]+)】")
 _CAP_RE = re.compile(r"【cap[:：]\s*([^】]+)】", re.I)
 _KEY_REF_RE = re.compile(r"\b((?:operation|expected)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)\b", re.I)
+_COMPILE_CONTRACT_REVISION = 2
 _SLUG_BAD = re.compile(r"[^\w]+", re.UNICODE)
 _SPATIAL_HINTS: tuple[tuple[str, str], ...] = (
     ("右上", "top_right"),
@@ -876,6 +877,8 @@ def build_do_program_plan_for_step(
         "schema": "mino.do_program_plan.v1",
         "compiler": "case-step-compile",
         "catalog_version": CATALOG_VERSION,
+        "compile_contract_revision": _COMPILE_CONTRACT_REVISION,
+        "platform": str(platform or ""),
         "source": str(instruction or ""),
         "case_step": int(case_step),
         "steps": steps,
@@ -906,9 +909,12 @@ def build_check_program_plan_for_step(
         "schema": "mino.check_program_plan.v1",
         "compiler": "case-step-compile",
         "catalog_version": CATALOG_VERSION,
+        "compile_contract_revision": _COMPILE_CONTRACT_REVISION,
+        "platform": str(platform or ""),
         "source": str(expected or ""),
         "case_step": int(case_step),
         "instruction_hint": str(instruction or "")[:200],
+        "instruction_source": str(instruction or ""),
         "checkpoints": checkpoints,
         "spans": _spans_from_steps(checkpoints),
         "key_refs": key_refs,
@@ -917,7 +923,35 @@ def build_check_program_plan_for_step(
     }
 
 
-def _stored_plan_fresh(plan: Any, source: str) -> bool:
+def _block_dependencies(plan: dict[str, Any], app_id: str) -> dict[str, str]:
+    """只摘要本计划用到的逻辑块（含应用覆盖），不使无关块修改失效。"""
+    import hashlib
+    import json
+
+    from mino_nexus.services.nav_flow_block_catalog import load_block_row, resolve_effective_steps
+
+    result: dict[str, str] = {}
+    def visit(block_id: str) -> None:
+        if not block_id or block_id in result:
+            return
+        row = load_block_row(app_id=app_id, block_id=block_id) or {}
+        effective = resolve_effective_steps(app_id=app_id, block_id=block_id)
+        data = {"version": row.get("version"), "enabled": row.get("enabled"), "steps": effective}
+        result[block_id] = hashlib.sha256(
+            json.dumps(data, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+        ).hexdigest()[:16]
+        for child in effective:
+            if isinstance(child, dict):
+                visit(str(child.get("block_id") or "").strip())
+
+    for step in plan.get("steps") or []:
+        if isinstance(step, dict):
+            visit(str(step.get("block_id") or "").strip())
+    return result
+
+
+def _stored_plan_fresh(plan: Any, source: str, *, platform: str = "", instruction: str | None = None,
+                       app_id: str = "") -> bool:
     from mino_nexus.services.case_resource_key_catalog import CATALOG_VERSION
 
     if not isinstance(plan, dict):
@@ -925,6 +959,14 @@ def _stored_plan_fresh(plan: Any, source: str) -> bool:
     if str(plan.get("compiler") or "") != "case-step-compile":
         return False
     if int(plan.get("catalog_version") or 0) != int(CATALOG_VERSION):
+        return False
+    if int(plan.get("compile_contract_revision") or 0) != _COMPILE_CONTRACT_REVISION:
+        return False
+    if str(plan.get("platform") or "") != str(platform or ""):
+        return False
+    if plan.get("block_dependencies") != _block_dependencies(plan, app_id):
+        return False
+    if instruction is not None and str(plan.get("instruction_source") or "") != str(instruction or ""):
         return False
     if str(plan.get("source") or "") != str(source or ""):
         return False
@@ -948,7 +990,10 @@ def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
         old = previous.get(str(n)) if isinstance(previous.get(str(n)), dict) else {}
         do_old = old.get("do_program_plan") if isinstance(old, dict) else None
         ck_old = old.get("check_program_plan") if isinstance(old, dict) else None
-        if _stored_plan_fresh(do_old, instr) and _stored_plan_fresh(ck_old, expected):
+        app_id = str(case.get("app_id") or case.get("project_id") or "")
+        if _stored_plan_fresh(do_old, instr, platform=platform, app_id=app_id) and _stored_plan_fresh(
+            ck_old, expected, platform=platform, instruction=instr, app_id=app_id
+        ):
             do_plan = dict(do_old or {})
             ck_plan = dict(ck_old or {})
         else:
@@ -960,11 +1005,34 @@ def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
                 platform=platform,
                 do_steps=list(do_plan.get("steps") or []),
             )
+        do_plan["block_dependencies"] = _block_dependencies(do_plan, app_id)
+        ck_plan["block_dependencies"] = _block_dependencies(ck_plan, app_id)
+        required_caps = {
+            str(step.get("hook_cap") or step.get("device_cap") or "")
+            for step in do_plan.get("steps") or [] if isinstance(step, dict)
+        }
+        from mino_nexus.services.nav_flow_block_catalog import resolve_effective_steps
+
+        app_id = str(case.get("app_id") or case.get("project_id") or "")
+        seen_blocks: set[str] = set()
+
+        def collect(block_id: str) -> None:
+            if not block_id or block_id in seen_blocks:
+                return
+            seen_blocks.add(block_id)
+            for block_step in resolve_effective_steps(app_id=app_id, block_id=block_id):
+                required_caps.add(str(block_step.get("hook_cap") or block_step.get("device_cap") or ""))
+                collect(str(block_step.get("block_id") or ""))
+
+        for step in do_plan.get("steps") or []:
+            if isinstance(step, dict):
+                collect(str(step.get("block_id") or ""))
         step_keys[str(n)] = {
             "operations": list(do_plan.get("key_refs") or []),
             "expected": list(ck_plan.get("key_refs") or []),
             "do_program_plan": do_plan,
             "check_program_plan": ck_plan,
+            "required_capabilities": sorted(required_caps - {""}),
         }
         all_warnings.extend(do_plan.get("compile_warnings") or [])
         all_warnings.extend(ck_plan.get("compile_warnings") or [])

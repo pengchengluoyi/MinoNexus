@@ -1,0 +1,28 @@
+id: case.retry_failed
+version: 1
+title: 重跑失败项
+description: 把一次任务里失败的用例再跑一遍。
+route: POST /case-runner/tasks/{task_id}/retry-failed
+risk: write
+async: true
+params_schema:
+  type: object
+  properties:
+    task_id:
+      type: string
+    sn:
+      type: string
+      description: 设备序列号或别名
+  required:
+  - task_id
+param_resolvers:
+  sn: device.by_alias
+result_pick:
+- data.task_id
+- data.run_id
+card: case_run_started
+surfaces:
+- im
+- mcp
+enabled: true
+followup_card: case_run_finished

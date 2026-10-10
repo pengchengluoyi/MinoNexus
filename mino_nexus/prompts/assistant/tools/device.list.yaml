@@ -1,0 +1,18 @@
+id: device.list
+version: 1
+title: 在线设备
+description: 列出当前在线的测试设备。用户问设备在不在线、哪台空闲时用。
+route: GET /case-runner/devices
+risk: read
+async: false
+params_schema:
+  type: object
+  properties: {}
+param_resolvers: {}
+result_pick:
+- data
+card: answer
+surfaces:
+- im
+- mcp
+enabled: true

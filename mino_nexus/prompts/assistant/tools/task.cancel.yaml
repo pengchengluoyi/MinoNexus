@@ -1,0 +1,22 @@
+id: task.cancel
+version: 1
+title: 取消任务
+description: 取消一个正在跑的任务。不删除记录。
+route: POST /case-runner/tasks/{task_id}/cancel
+risk: write
+async: false
+params_schema:
+  type: object
+  properties:
+    task_id:
+      type: string
+  required:
+  - task_id
+param_resolvers: {}
+result_pick:
+- data
+card: answer
+surfaces:
+- im
+- mcp
+enabled: true

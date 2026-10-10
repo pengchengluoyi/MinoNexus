@@ -260,6 +260,7 @@ class AssertResult(BaseModel):
     confidence: float = Field(0.0, ge=0.0, le=1.0)
     ai_reasoning: str = Field(..., description="判断依据")
     evidence: str = Field("", description="截图中观察到的关键证据描述")
+    checkpoint_results: list[dict[str, Any]] = Field(default_factory=list)
     screen_layout: dict[str, Any] = Field(
         default_factory=dict,
         description="断言时的屏面布局线框（归一化坐标）",

@@ -337,8 +337,14 @@ def _steer_email_off_otp(out: dict[str, Any], ctx: Any | None, field: str) -> di
 
 
 def enrich_web_input_text_params(params: dict[str, Any], ctx: Any | None = None) -> dict[str, Any]:
-    """Web 输入：补 field 元数据 + VLM/hierarchy 坐标（Scout 仅坐标点击后键入）。"""
+    """Web 看图输入写入当前焦点，不补坐标。DOM 方案仍按节点定位。"""
     out = dict(params or {})
+    from mino_nexus.action_space.scheme import action_scheme
+
+    if action_scheme(ctx) != "dom":
+        from mino_nexus.action_space.visual import apply_focus_input, bind_focus_ref
+
+        return bind_focus_ref(apply_focus_input(out), ctx)
     field = str(out.get("field") or "").strip().lower()
     if out.pop("web_type_into_focus", None):
         cached = _cached_sms_milli(ctx) if field in _SMS_FIELDS else None

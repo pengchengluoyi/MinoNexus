@@ -1,0 +1,46 @@
+id: assistant-route
+version: 1
+label: 助手意图路由
+summary: 把一句话收成工具调用、追问或直接回答
+engine: text_chat
+role: ""
+output_schema: ""
+enabled: true
+sort_order: 5
+flags: []
+slots:
+- name: persona_block
+  kind: text
+  required: true
+- name: user_profile
+  kind: text
+  required: false
+- name: recent_turns
+  kind: text
+  required: false
+- name: utterance
+  kind: text
+  required: true
+call:
+  temperature: 0.1
+  max_tokens: 800
+  timeout_sec: 60
+  json_mode: false
+image: {}
+system:
+- id: persona
+  slot: persona_block
+- id: rules
+  file: system/20-rules.md
+user:
+- id: profile
+  slot: user_profile
+  heading: 【用户】
+  skip_if_empty: true
+- id: history
+  slot: recent_turns
+  heading: 【最近对话】
+  skip_if_empty: true
+- id: utterance
+  slot: utterance
+  heading: 【这句话】

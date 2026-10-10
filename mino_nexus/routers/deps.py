@@ -10,6 +10,16 @@ from mino_nexus.core.http_util import bearer
 
 
 def current_session(authorization: str = Header(default="")) -> dict[str, Any]:
+    raw = bearer(authorization)
+    from mino_nexus.services import assistant_store
+
+    if assistant_store.is_api_token(raw):
+        # 助手 token / MCP token：权限等同其主人，可随时在 Workbench 吊销
+        uid = assistant_store.resolve_api_token(raw)
+        sess = auth_store.api_session_for(uid) if uid else None
+        if sess is None:
+            raise HTTPException(status_code=401, detail="token 无效或已吊销")
+        return sess
     try:
         return auth_store.require_session(bearer(authorization))
     except PermissionError as exc:
