@@ -1222,11 +1222,13 @@ def apply_assert_checkpoint_results(cursor: Any, result: Any, *, writer: Any = N
         if type(row.get("passed")) is not bool or not str(row.get("evidence") or "").strip():
             return False
         seen.add(point_id)
-    if seen != set(pending) or not all(row["passed"] for row in rows):
+    if getattr(result, "error_kind", "") or getattr(result, "parse_warnings", []):
+        return False
+    if seen != set(pending) or not all(row["passed"] for row in rows if not pending[row["point_id"]].get("optional")):
         return False
     for row in rows:
         milestone = pending[row["point_id"]]
-        milestone["status"] = "pass"
+        milestone["status"] = "pass" if row["passed"] else "failed"
         milestone["evidence"] = str(row["evidence"]).strip()[:400]
         milestone["evidence_scope"] = str(row.get("evidence_scope") or "visible_full")
         milestone["hidden_content_verified"] = row.get("hidden_content_verified") is True
@@ -1342,7 +1344,7 @@ def evaluate_milestones(
         st = str(row.get("status") or "pending").strip().lower()
         opt = bool(row.get("optional"))
         title = str(row.get("title") or row.get("id") or "")
-        if st == "failed":
+        if st == "failed" and not (opt and row.get("kind") == "checkpoint"):
             failed.append(title)
         elif st not in _TERMINAL:
             if not opt:

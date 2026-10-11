@@ -249,6 +249,38 @@ def session_llm_calls(session_id: str, _sess: dict = Depends(current_session)):
     return ok({"session_id": session_id, "items": project_llm_calls(session_id)})
 
 
+@router.get("/sessions/{session_id:path}/llm-calls")
+def session_llm_diagnostics(
+    session_id: str,
+    from_seq: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    turn: int | None = Query(None, ge=0),
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.llm_diagnostics import list_session_calls
+    from mino_nexus.services.session_store import get_meta
+
+    if get_meta(session_id) is None:
+        raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
+    return ok(list_session_calls(session_id, from_seq=from_seq, limit=limit, turn=turn))
+
+
+@router.get("/llm/{dispatch_id}")
+def llm_diagnostics(
+    dispatch_id: str,
+    section: str = Query("response", pattern="^(response|request|metadata)$"),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(12000, ge=1, le=32000),
+    _sess: dict = Depends(current_session),
+):
+    from mino_nexus.services.llm_diagnostics import get_call_page
+
+    data = get_call_page(dispatch_id, section=section, offset=offset, limit=limit)
+    if data is None:
+        raise HTTPException(status_code=404, detail="调度记录不存在或已超过日志保留范围")
+    return ok(data)
+
+
 @router.get("/sessions/{session_id:path}/metrics")
 def session_metrics(session_id: str, _sess: dict = Depends(current_session)):
     from mino_nexus.loop.observe.session_log import get_meta
@@ -366,5 +398,3 @@ def get_trace_detail(run_id: str, _sess: dict = Depends(current_session)):
         if isinstance(case.get("slots"), dict):
             payload["slots"] = case.get("slots")
     return ok(payload)
-
-

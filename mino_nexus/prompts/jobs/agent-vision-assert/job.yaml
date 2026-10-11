@@ -1,7 +1,7 @@
 id: agent-vision-assert
-version: 2
+version: 3
 label: 看图校验
-summary: check 阶段按里程碑校验点批量断言；失败不翻案
+summary: check 阶段逐项校验必选与选填项，区分页面失败和校验无法完成
 engine: vision_assert
 role: test-engineer
 output_schema: assert_result

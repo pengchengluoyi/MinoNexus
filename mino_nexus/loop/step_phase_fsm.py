@@ -259,6 +259,12 @@ def try_transition_after_tool_pass(
 ) -> Optional[str]:
     if not step_phase_fsm_v1_enabled() or not milestone_v1_enabled():
         return None
+    from mino_nexus.loop.milestone_orchestrator import program_exit_allowed
+
+    state = read_state(cursor)
+    if state.get("exit_allowed") is not True and program_exit_allowed(state, ctx):
+        state["exit_allowed"] = True
+        write_state(cursor, state)
     mv = evaluate_milestones(cursor, ctx)
     if not mv.phase_complete:
         return None

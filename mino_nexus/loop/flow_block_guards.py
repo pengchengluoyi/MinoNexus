@@ -226,6 +226,25 @@ def _evaluate_fuse_repeat_tap(
     from mino_nexus.loop.milestone_orchestrator import in_progress_milestone_id
 
     focus_mid = in_progress_milestone_id(cursor)
+    from mino_nexus.loop.milestones import read_state, write_state
+    from mino_nexus.loop.visual_review import input_focus_menu_ids
+
+    run_ctx = ctx.get("run_ctx") or ctx.get("ctx")
+    if str(ctx.get("cap_id") or "") == "tap_element" and input_focus_menu_ids(cursor, run_ctx) == {
+        "tap_element", "wait_ms", "wait_screen_ready"
+    }:
+        state = read_state(cursor)
+        for row in state.get("milestones") or []:
+            if (
+                isinstance(row, dict)
+                and row.get("id") == focus_mid
+                and row.get("input_refocus_required")
+                and row.get("input_recovery_attempts") == 1
+                and not row.get("input_recovery_tap_permitted")
+            ):
+                row["input_recovery_tap_permitted"] = True
+                write_state(cursor, state)
+                return None
     if (
         focus_mid == "otp_field"
         and str(ctx.get("cap_id") or "") == "tap_element"

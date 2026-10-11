@@ -50,6 +50,20 @@ def normalize_input_text_for_lease(
     """按 login.kind 纠正 field/text，避免邮箱登录填成 phone+用户名。"""
     out = dict(params or {})
     acc = dict(getattr(ctx, "picked_account", None) or {}) if ctx is not None else {}
+    cursor = getattr(ctx, "_step_cursor", None) if ctx is not None else None
+    state = getattr(cursor, "success_criteria_state", None)
+    rows = state.get("milestones", []) if isinstance(state, dict) else []
+    active = next((row for row in rows if isinstance(row, dict) and row.get("status") == "in_progress"), {})
+    if active.get("id") == "otp_fill":
+        code = str(acc.get("otp") or acc.get("sms_code") or "").strip()
+        out["field"] = "sms_code"
+        out["login_field"] = "sms_code"
+        out["text"] = code
+        if code:
+            out.pop("_credential_unresolved", None)
+        else:
+            out["_credential_unresolved"] = "otp_missing"
+        return out
     kind = login_kind_from_ctx(ctx) if ctx is not None else "phone"
     field = str(out.get("field") or "text").strip().lower()
     email = lease_email_address(acc)

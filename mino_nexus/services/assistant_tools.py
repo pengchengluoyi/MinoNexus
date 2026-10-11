@@ -308,7 +308,7 @@ def _asgi_request(method: str, url: str, rest: dict[str, Any], headers: dict[str
         return pool.submit(lambda: asyncio.run(_once())).result()
 
 
-def run_tool(spec: dict[str, Any], args: dict[str, Any], *, user_id: str, profile: dict[str, Any] | None = None) -> ToolOutcome:
+def run_tool(spec: dict[str, Any], args: dict[str, Any], *, user_id: str, profile: dict[str, Any] | None = None, surface: str = "im") -> ToolOutcome:
     from mino_nexus.services.assistant_store import ensure_assistant_token
 
     route = str(spec.get("route") or "")
@@ -367,7 +367,7 @@ def run_tool(spec: dict[str, Any], args: dict[str, Any], *, user_id: str, profil
         detail = payload.get("detail") if isinstance(payload, dict) else ""
         summary = str(detail or response.status_code)
     text = json.dumps(picked, ensure_ascii=False, default=str)
-    if len(text) > 4000:
+    if surface != "mcp" and len(text) > 4000:
         picked = {"preview": text[:4000]}
     return ToolOutcome(
         ok=ok,

@@ -132,13 +132,22 @@ class SessionWriter:
     def set_phase(self, phase: str) -> None:
         self._phase = str(phase or "")
 
-    def append(self, type: str, payload: dict[str, Any] | None = None) -> int:
+    def append(
+        self,
+        type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        turn: int | None = None,
+        phase: str | None = None,
+    ) -> int:
         if self._closed or not self.session_id:
             return 0
         evt_type = str(type or "").strip()
         if not evt_type:
             return 0
         body = _sanitize_payload(payload or {})
+        event_turn = self._turn if turn is None else max(0, int(turn))
+        event_phase = self._phase if phase is None else str(phase)
         if evt_type == "turn/start":
             self._turn_t0 = time.perf_counter()
         elif evt_type == "turn/end" and "elapsed_ms" not in body:
@@ -164,11 +173,18 @@ class SessionWriter:
                 "executor_used": str(body.get("executor_used") or "")[:80],
                 "error_kind": "timeout" if "timeout" in str(body.get("error") or body.get("summary") or "").lower() else "executor_failure",
             }
-        elif evt_type == "assert/vision" and body.get("passed") is False:
+        elif evt_type in ("assert/vision", "assert/dom", "check/blocked") and (body.get("passed") is False or evt_type == "check/blocked"):
             self._latest_error = {
                 "event_type": evt_type,
                 "turn": self._turn,
-                "error_kind": "evidence_insufficient" if body.get("reason_code") == "observation_missing" or body.get("parse_warnings") else "assertion_failed",
+                "error_kind": str(body.get("error_kind") or ("evidence_insufficient" if body.get("reason_code") == "observation_missing" or body.get("parse_warnings") else "assertion_failed")),
+            }
+        elif evt_type == "contract/blocked" and body.get("error_kind"):
+            self._latest_error = {
+                "event_type": evt_type,
+                "turn": event_turn,
+                "error_kind": str(body["error_kind"]),
+                "reason_code": body.get("reason_code") or "",
             }
         with self._lock:
             try:
@@ -176,8 +192,8 @@ class SessionWriter:
                     session_id=self.session_id,
                     type=evt_type,
                     payload=body,
-                    turn=self._turn,
-                    phase=self._phase,
+                    turn=event_turn,
+                    phase=event_phase,
                 )
             except Exception as exc:
                 SLog.w(TAG, f"append {evt_type} failed session={self.session_id}: {exc!r}")
@@ -196,6 +212,7 @@ class SessionWriter:
                 stop_kind = (
                     "cancelled" if status in ("cancel", "cancelled")
                     else "timeout" if status == "timeout" or "timeout" in summary.lower()
+                    else "llm_output_contract_error" if (self._latest_error or {}).get("error_kind") == "llm_output_contract_error"
                     else "dependency_blocked" if status == "blocked"
                     else (self._latest_error or {}).get("error_kind") or "unclassified"
                 )
@@ -316,13 +333,12 @@ def mirror_stream_event(data: dict[str, Any]) -> int:
         return 0
     slim = dict(data or {})
     slim.pop("image_base64", None)
-    phase = str(slim.get("loop_phase") or slim.get("phase") or writer.phase or "")
-    if phase:
-        writer.set_phase(phase)
+    phase = str(slim.get("loop_phase") or writer.phase or "")
     step = slim.get("step")
-    if isinstance(step, int) and step > 0:
-        writer.set_turn(step)
-    return writer.append("stream/emit", slim)
+    turn = step if isinstance(step, int) and step > 0 else None
+    if slim.get("loop_phase") and (turn is None or turn >= writer.turn):
+        writer.set_phase(phase)
+    return writer.append("stream/emit", slim, turn=turn, phase=phase)
 
 
 def append_llm_response(dispatch_row: dict[str, Any]) -> int:
@@ -349,6 +365,8 @@ def append_llm_response(dispatch_row: dict[str, Any]) -> int:
             "system_len": len(system),
             "input_len": len(user),
             "output_len": len(output),
+            "raw_response_available": bool(dispatch_row.get("raw_response_available")),
+            "raw_response_redacted": bool(dispatch_row.get("raw_response_redacted")),
             "error": str(dispatch_row.get("error") or "")[:400],
             "tool_name": str(dispatch_row.get("tool_name") or ""),
             "prompt_version": int(dispatch_row.get("prompt_version") or 0) or None,

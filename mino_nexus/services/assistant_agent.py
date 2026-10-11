@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from mino_nexus.ai.prompt_render import render
@@ -51,6 +52,23 @@ def _parse_args(raw: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _started_summary(answer: str, task_id: str, steps: list[dict[str, Any]]) -> str:
+    labels = {str(step.get("label") or step.get("tool") or "").strip() for step in steps}
+    lines = []
+    for raw_line in answer.splitlines():
+        line = raw_line.strip()
+        plain = line.strip("* ").strip()
+        if plain == "已开始":
+            continue
+        trace = re.fullmatch(r"[-•]\s*[✅❌❓•]\s*(.+)", line)
+        if trace and trace.group(1).strip() in labels:
+            continue
+        if task_id and re.fullmatch(rf"[-•]?\s*任务\s*[：:]\s*`?{re.escape(task_id)}`?", line):
+            continue
+        lines.append(raw_line)
+    return "\n".join(lines).strip()
 
 
 def _call_model(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
@@ -168,6 +186,16 @@ def handle_utterance(
         template = str(spec.get("card") or "answer")
         if last_outcome.ask or not last_outcome.ok:
             template = "answer"  # 没真正执行成功就别套「已开始」之类的卡片
+    if template == "case_run_started":
+        task_data = last_outcome.data if last_outcome else None
+        task_id = task_data if isinstance(task_data, str) else (
+            task_data.get("task_id") or task_data.get("run_id") or ""
+            if isinstance(task_data, dict) else ""
+        )
+        answer = _started_summary(answer, str(task_id), steps)
+        answer = re.sub(r"^已开始(?:任务)?\s*(?:的)?\s*", "", answer).strip()
+        if not answer:
+            answer = last_outcome.summary if last_outcome and last_outcome.summary else "任务已提交，完成后会发送执行结果。"
     card = build_card(
         template_id=template,
         title="助手",
@@ -177,6 +205,8 @@ def handle_utterance(
         steps=steps,
         status="done" if not last_outcome or last_outcome.ok or last_outcome.ask else "failed",
     )
+    if template == "case_run_started" and task_id and str(task_id) in answer:
+        card["blocks"] = [block for block in card["blocks"] if block.get("type") != "kv"]
     return {
         "answer": answer,
         "intent": " → ".join(str(s.get("label") or s.get("tool")) for s in steps),

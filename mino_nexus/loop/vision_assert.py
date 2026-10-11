@@ -84,6 +84,7 @@ def vision_assert_checkpoints(
             ai_reasoning=f"未启用 AI 视觉：{gate.get('reason')}",
             evidence="",
             parse_warnings=["provider unavailable"],
+            error_kind="provider_unavailable",
         )
     image_base64, image_mime = _llm_image(image_base64, image_mime)
     cp_block = ""
@@ -105,6 +106,7 @@ def vision_assert_checkpoints(
             ai_reasoning=str(exc),
             evidence="",
             parse_warnings=["job render failed"],
+            error_kind="assert_render_error",
         )
     call = job_meta.get("call") or {}
     job_id = str(job_meta.get("id") or job_meta.get("job_id") or "agent-vision-assert")
@@ -126,8 +128,17 @@ def vision_assert_checkpoints(
             evidence="",
             parse_warnings=[str(meta.get("error") or "")[:160]],
             raw_llm={"meta": meta},
+            error_kind="assert_service_error",
+        )
+    if not isinstance(raw, dict):
+        return AssertResult(
+            passed=False, confidence=0.0, ai_reasoning="校验响应不是 JSON 对象",
+            parse_warnings=["assert response must be an object"], error_kind="assert_output_invalid",
         )
     result = _parse_assert_result(raw)
+    if result.parse_warnings:
+        result.passed = False
+        result.error_kind = "assert_output_invalid"
     if checkpoints:
         result.raw_llm = {key: value for key, value in raw.items() if key != "checkpoint_results"}
         requested = {str(row.get("point_id") or ""): row for row in checkpoints}
@@ -135,6 +146,8 @@ def vision_assert_checkpoints(
         seen: set[str] = set()
         valid: list[dict[str, Any]] = []
         errors: list[str] = []
+        if "" in requested or len(requested) != len(checkpoints):
+            errors.append("请求中的校验点 ID 为空或重复")
         if not isinstance(rows, list):
             errors.append("缺少逐项 checkpoint_results")
             rows = []
@@ -164,14 +177,15 @@ def vision_assert_checkpoints(
                 "match_kind": str(row.get("match_kind") or ""),
                 "hidden_content_verified": row.get("hidden_content_verified") is True,
             })
-        if seen != requested:
+        if seen != set(requested):
             errors.append("逐项结果未覆盖全部校验点")
-        result.checkpoint_results = valid if not errors else []
+        result.checkpoint_results = valid
         if errors:
             result.passed = False
             result.parse_warnings.extend(errors)
-        elif not all(row["passed"] for row in valid):
-            result.passed = False
+            result.error_kind = "assert_output_invalid"
+        elif not result.error_kind:
+            result.passed = all(row["passed"] for row in valid if requested[row["point_id"]].get("required") is not False)
     return result
 
 
@@ -228,11 +242,7 @@ def run_vision_assert_if_enabled(
         return None
     cps = checkpoints_from_milestones(cursor)
     structured = bool(cps) and all(isinstance(c, dict) and (c.get("element") or c.get("rules")) for c in cps)
-    ctx_for_job = (
-        "只按校验点 JSON 的 element 与 rules 判断。不要根据编号原文另找目标。"
-        if structured
-        else context_block
-    )
+    ctx_for_job = context_block
     img = ""
     if callable(getattr(shot, "has_image", None)) and shot.has_image():
         img = str(getattr(shot, "image_base64", "") or "")
@@ -243,6 +253,8 @@ def run_vision_assert_if_enabled(
                 "passed": False,
                 "checkpoints": len(cps),
                 "reason_code": "observation_missing",
+                "status": "blocked",
+                "error_kind": "observation_missing",
             })
         return AssertResult(
             passed=False,
@@ -250,6 +262,7 @@ def run_vision_assert_if_enabled(
             ai_reasoning="本轮没有可用截图，不能进行看图验收",
             evidence="",
             parse_warnings=["observation missing"],
+            error_kind="observation_missing",
         )
     result = vision_assert_checkpoints(
         expectation="" if structured else str(expected or ""),
@@ -269,6 +282,8 @@ def run_vision_assert_if_enabled(
                 "observation_turn": int(getattr(writer, "turn", 0) or 0),
                 "raw_image_hash": hashlib.sha256(img.encode("ascii", errors="ignore")).hexdigest()[:20],
                 "passed": bool(result.passed),
+                "status": "blocked" if result.error_kind else ("pass" if result.passed else "fail"),
+                "error_kind": result.error_kind,
                 "confidence": float(result.confidence or 0),
                 "checkpoints": len(cps),
                 "evidence": str(result.evidence or "")[:300],

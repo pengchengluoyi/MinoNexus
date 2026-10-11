@@ -76,14 +76,24 @@ def ensure_single_in_progress(cursor: Any, *, writer: Any = None) -> bool:
         if platform and apply_channel_skip(row, platform):
             continue
         st = str(row.get("status") or "pending").strip().lower()
-        if st in ("pass", "failed", "skipped"):
+        if st in ("pass", "failed", "skipped", "blocked"):
             continue
         if _required_failed_before(ms, row):
             continue
-        if menu_ids and not milestone_caps_registered(row, menu_ids, allow_program=True):
-            row["status"] = "skipped"
-            row["skip_reason"] = "unregistered"
-            row["skipped_by"] = "menu"
+        if ctx is not None and not milestone_caps_registered(row, menu_ids, allow_program=True):
+            if row.get("optional"):
+                row["status"] = "skipped"
+                row["skip_reason"] = "unregistered"
+                row["skipped_by"] = "menu"
+            else:
+                row["status"] = "blocked"
+                row["error_kind"] = "capability_unavailable"
+                row["evidence"] = "必要步骤的能力未注册或不在当前可执行菜单中，不能跳过"
+                state["exit_allowed"] = False
+    state["milestones"] = ms
+    write_state(cursor, state)
+    if required_milestone_blocker(state) is not None:
+        return False
     focus_id = ""
     pending_idx = -1
     for i, row in enumerate(ms):
@@ -93,12 +103,36 @@ def ensure_single_in_progress(cursor: Any, *, writer: Any = None) -> bool:
                 row["status"] = "pending"
             else:
                 focus_id = str(row.get("id") or "")
-        elif st == "pending" and pending_idx < 0 and not _required_failed_before(ms, row):
+        elif (
+            st == "pending"
+            and not row.get("verify_with_milestone")
+            and pending_idx < 0
+            and not _required_failed_before(ms, row)
+        ):
             pending_idx = i
     if not focus_id and pending_idx >= 0:
         ms[pending_idx]["status"] = "in_progress"
         focus_id = str(ms[pending_idx].get("id") or "")
     if focus_id:
+        focus = next(row for row in ms if str(row.get("id") or "") == focus_id)
+        if (
+            str(focus.get("hook_cap") or "") == "lease_account"
+            and str(focus.get("device_cap") or "") == "input_text"
+            and not focus.get("lease_ready")
+            and not focus.get("params")
+        ):
+            from mino_nexus.loop.login_account_lease import picked_account_ready_for_login
+            from mino_nexus.services.account_lease import current_lease_is_active
+
+            if picked_account_ready_for_login(ctx) and current_lease_is_active(ctx):
+                focus["lease_ready"] = True
+                focus["evidence"] = "existing_account_lease"
+                if writer:
+                    writer.append("account/reused", {
+                        "milestone_id": focus_id,
+                        "account_id": str((getattr(ctx, "resource_lease", None) or {}).get("account_id") or ""),
+                        "reason": "active_case_lease",
+                    })
         state["milestones"] = ms
         state["status"] = "in_progress"
         write_state(cursor, state)
@@ -115,9 +149,16 @@ def _required_failed_before(ms: list[dict[str, Any]], row: dict[str, Any]) -> bo
             return False
         if prev.get("optional"):
             continue
-        if str(prev.get("status") or "").strip().lower() == "failed":
+        if str(prev.get("status") or "").strip().lower() in ("failed", "blocked"):
             return True
     return False
+
+
+def required_milestone_blocker(state: dict[str, Any]) -> dict[str, Any] | None:
+    for row in _milestones_list(state):
+        if not row.get("optional") and row.get("status") == "blocked":
+            return row
+    return None
 
 
 def required_milestone_failure(state: dict[str, Any]) -> dict[str, Any] | None:
@@ -452,6 +493,23 @@ def focus_exec_menu_ids(cursor: Any, ctx: Any = None) -> Optional[set[str]]:
     row = in_progress_milestone(read_state(cursor))
     if not row:
         return None
+    from mino_nexus.loop.visual_review import input_focus_menu_ids, same_turn_review_targets
+    from mino_nexus.action_space.scheme import action_scheme
+
+    transition = same_turn_review_targets(cursor) if action_scheme(ctx) == "visual" else None
+    if transition:
+        caps = {"wait_ms", "wait_screen_ready"}
+        for branch in ("if_pass", "if_fail"):
+            target = transition.get(branch)
+            if target:
+                caps.update(target["capabilities"])
+        if transition.get("if_pass") is None:
+            caps.update(_phase_device_menu(cursor, ctx))
+        return caps
+
+    input_menu = input_focus_menu_ids(cursor, ctx)
+    if input_menu is not None:
+        return input_menu
     listed = row.get("exec_caps")
     if isinstance(listed, list):
         caps = {str(x).strip() for x in listed if str(x).strip()}
@@ -482,11 +540,12 @@ def success_criteria_for_exec_llm(cursor: Any) -> dict[str, Any]:
     """exec 注入：标出 in_progress 为 active_focus。"""
     state = dict(read_state(cursor))
     fid = in_progress_milestone_id(cursor)
-    from mino_nexus.loop.visual_review import prior_action_payload
+    from mino_nexus.loop.visual_review import prior_action_payload, same_turn_review_targets
 
     prior = prior_action_payload(cursor)
     if prior:
         state["prior_action"] = prior
+        state["review_transition"] = same_turn_review_targets(cursor)
     if fid:
         state["active_focus_milestone_id"] = fid
         for row in state.get("milestones") or []:

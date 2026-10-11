@@ -943,7 +943,7 @@ def call_chat_text(
             resp_json, meta, require_tool_calls=req_tools,
         )
         if parsed is not None:
-            _safe_record_llm(messages=messages, parsed=parsed, meta=meta)
+            _safe_record_llm(messages=messages, parsed=parsed, raw_text=content, meta=meta)
             return parsed, meta
 
         # 截断 / 墙钟超时：同 budget 再打没用。空白熔断 / no_tool_calls 允许再打一轮。
@@ -963,7 +963,7 @@ def call_chat_text(
         _safe_record_llm(messages=messages, raw_text=content, meta={**meta, "status_hint": "parse_retry"})
         time.sleep(_backoff_delay(round_i + 1))
 
-    _safe_record_llm(messages=messages, parsed=parsed, meta=meta)
+    _safe_record_llm(messages=messages, parsed=parsed, raw_text=content, meta=meta)
     return parsed, meta
 
 

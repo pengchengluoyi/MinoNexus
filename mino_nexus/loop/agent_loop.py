@@ -1049,6 +1049,24 @@ def _run_loop(
         kw["extra"] = extra
         return _record(steps, history, seq, **kw)
 
+    def _leave_execution_blocked(seq: int, cap: str, summary: str, error_kind: str):
+        rec(seq, capability_id=cap, status="blocked", summary=summary, thought=summary)
+        emit("result", step=seq, capability_id=cap, status="blocked",
+             result_status="blocked", summary=summary, thought=summary)
+        if writer:
+            writer.append("contract/blocked", {
+                "capability_id": cap, "error_kind": error_kind,
+                "reason_code": error_kind, "reason": summary, "retryable": False,
+            })
+        _log_turn_end(writer, cap=cap, status="blocked")
+        return _leave(status="blocked", summary=summary)
+
+    def _required_execution_blocker():
+        from mino_nexus.loop.milestone_orchestrator import required_milestone_blocker
+        from mino_nexus.loop.milestones import read_state
+
+        return required_milestone_blocker(read_state(cursor))
+
     if fork_state:
         prov_override = str(fork_state.get("provider_id") or "").strip()
         if prov_override:
@@ -2064,6 +2082,13 @@ def _run_loop(
                 app_id=str(getattr(ctx, "app_id", "") or ""),
                 writer=writer,
             )
+            blocked_step = _required_execution_blocker()
+            if blocked_step:
+                return _leave_execution_blocked(
+                    seq, str(blocked_step.get("hook_cap") or blocked_step.get("device_cap") or "program"),
+                    f"{blocked_step.get('title') or blocked_step.get('id')}：{blocked_step.get('evidence')}",
+                    str(blocked_step.get("error_kind") or "capability_unavailable"),
+                )
             from mino_nexus.loop.flow_block_runner import (
                 try_run_login_flow_macro,
                 try_run_system_dialog_macro,
@@ -2252,7 +2277,11 @@ def _run_loop(
             macro = None
             from mino_nexus.loop.recovery_permission import permission_choice_dialog_present
 
-            if permission_choice_dialog_present(nodes):
+            if milestone_v1_enabled():
+                from mino_nexus.loop.flow_block_runner_v2 import try_review_login_submission
+
+                macro = try_review_login_submission(proxy, ctx, cursor, shot=shot, writer=writer)
+            if not macro and permission_choice_dialog_present(nodes):
                 macro = try_run_system_dialog_macro(
                     proxy,
                     ctx,
@@ -2389,6 +2418,11 @@ def _run_loop(
                 thumb = str(macro.get("thumb") or thumb)
             if macro and macro.get("case_fail"):
                 fail_summary = str(macro.get("summary") or "登录未成功")
+                if macro.get("status") == "blocked":
+                    return _leave_execution_blocked(
+                        seq, str(macro.get("capability_id") or "program"), fail_summary,
+                        str(macro.get("error_kind") or "program_hook_failed"),
+                    )
                 rec(
                     seq,
                     capability_id=str(macro.get("capability_id") or "confirm_login_state"),
@@ -2657,6 +2691,13 @@ def _run_loop(
             writer=writer,
             case=case,
         )
+        blocked_step = _required_execution_blocker()
+        if blocked_step:
+            return _leave_execution_blocked(
+                seq, str(blocked_step.get("hook_cap") or blocked_step.get("device_cap") or "program"),
+                f"{blocked_step.get('title') or blocked_step.get('id')}：{blocked_step.get('evidence')}",
+                str(blocked_step.get("error_kind") or "capability_unavailable"),
+            )
 
         _log_context_slots(
             writer,
@@ -2712,7 +2753,7 @@ def _run_loop(
             if vision_assert_v1_enabled() or dom_assert:
                 from mino_nexus.loop.channel_observation import capture_decision_frame
 
-                last_frame = thumb
+                seen_frames: set[str] = set()
                 if not dom_assert:
                     for attempt in range(3):
                         if (
@@ -2723,12 +2764,22 @@ def _run_loop(
                             fresh_shot, fresh_thumb = shot, thumb
                         else:
                             fresh_shot, fresh_thumb = capture_decision_frame(proxy, ctx)
-                        if attempt and (not fresh_thumb or fresh_thumb == last_frame):
+                        image_data = str(getattr(fresh_shot, "image_base64", "") or "")
+                        import hashlib
+
+                        frame_hash = hashlib.sha256(image_data.encode("ascii", errors="ignore")).hexdigest() if image_data else ""
+                        if attempt and (not frame_hash or frame_hash in seen_frames):
+                            if writer:
+                                writer.append("check/retry_skipped", {
+                                    "reason": "unchanged_observation", "attempt": attempt + 1,
+                                    "raw_image_hash": frame_hash[:20],
+                                })
                             break
+                        if frame_hash:
+                            seen_frames.add(frame_hash)
                         if fresh_shot is not None and getattr(fresh_shot, "has_image", lambda: False)():
                             shot = fresh_shot
                             thumb = fresh_thumb or thumb
-                            last_frame = thumb
                         if attempt:
                             setattr(cursor, "vision_assert_done", False)
                         got = run_vision_assert_if_enabled(
@@ -2742,9 +2793,7 @@ def _run_loop(
                         if got is None:
                             break
                         va = got
-                        if va.passed:
-                            break
-                        if va.parse_warnings:
+                        if va.passed or va.error_kind or va.parse_warnings:
                             break
                         if writer:
                             writer.append(
@@ -2762,9 +2811,25 @@ def _run_loop(
                         if not apply_assert_checkpoint_results(cursor, va, writer=writer):
                             va.passed = False
                             va.ai_reasoning = "检查点缺少完整且有效的逐项证据"
+                            va.error_kind = "checkpoint_application_invalid"
                     vision_assert_handled = True
                     cursor.saw_assert = True
                     via = "DOM 校验" if str(getattr(va, "evidence", "") or "") == "dom" else "看图校验"
+                    if va.error_kind or va.parse_warnings:
+                        reason = "；".join(str(item) for item in va.parse_warnings) or va.ai_reasoning
+                        blocked_summary = f"步骤 {cur.n} 校验未完成，不能判定页面预期失败：{reason}"
+                        rec(seq, capability_id="assert_visual", status="blocked",
+                            summary=blocked_summary[:400], thought=f"{via}无法完成", thumb=thumb)
+                        emit("result", thought=f"{via}无法完成", step=seq,
+                             capability_id="assert_visual", status="blocked", result_status="blocked",
+                             summary=blocked_summary[:400], thumb=thumb)
+                        if writer:
+                            writer.append("check/blocked", {
+                                "error_kind": va.error_kind or "assert_output_invalid",
+                                "reason": reason[:400], "business_verdict": "unknown",
+                            })
+                        _log_turn_end(writer, cap="assert_visual", status="blocked")
+                        return _leave(status="blocked", summary=blocked_summary)
                     if va.passed:
                         pass_summary = (
                             f"{via}通过：{va.ai_reasoning or cur.expected}"
@@ -2981,6 +3046,11 @@ def _run_loop(
                         prep_cap = str(prep_macro.get("capability_id") or hook_cap)
                         prep_sum = str(prep_macro.get("summary") or "")
                         if prep_macro.get("case_fail"):
+                            if prep_macro.get("status") == "blocked":
+                                return _leave_execution_blocked(
+                                    seq, prep_cap, prep_sum,
+                                    str(prep_macro.get("error_kind") or "program_hook_failed"),
+                                )
                             rec(
                                 seq,
                                 capability_id=prep_cap,
@@ -3225,6 +3295,8 @@ def _run_loop(
             thought=thought, step=seq, goal=cursor.decide_goal(),
             status=decision.status, thumb=thumb,
             confidence=decision.confidence,
+            event_kind="decision",
+            execution_status="not_dispatched",
             **trace,
         )
         if nav is not None and decision.screen_layout:
@@ -3344,6 +3416,24 @@ def _run_loop(
                 in_check=in_check,
             )
             stop_prior = str(getattr(cursor, "semantic_stop", "") or "").strip()
+            if prior_kind == "wait_stop":
+                return _leave_execution_blocked(seq, cap_id, stop_prior, "review_wait_exhausted")
+            if prior_kind == "contract_stop":
+                summary = (stop_prior or "LLM 回看输出契约错误，尚未验证")[:500]
+                if writer:
+                    writer.append("contract/blocked", {
+                        "reason_code": "llm_prior_status_invalid",
+                        "error_kind": "llm_output_contract_error",
+                        "capability_id": cap_id,
+                        "reason": summary,
+                    })
+                emit(
+                    "think", thought=summary, summary=summary, step=seq, status="blocked",
+                    event_kind="output_contract_error", reason_code="llm_prior_status_invalid",
+                    execution_status="not_dispatched",
+                )
+                _log_turn_end(writer, cap="", status="blocked")
+                return _leave(status="blocked", summary=summary)
             if prior_kind == "stop" or (prior_kind == "redo" and stop_prior):
                 return _leave(status="fail", summary=(stop_prior or "回看未通过")[:500])
             if prior_kind == "reask":
@@ -3351,7 +3441,10 @@ def _run_loop(
                     str(getattr(cursor, "correction_hint", "") or "").strip()
                     or "上一张图必须给出 prior_status，只能是 pass 或 fail。"
                 )
-                emit("think", thought=summary, step=seq, status="pending")
+                emit(
+                    "think", thought=summary, summary=summary, step=seq, status="pending",
+                    event_kind="review_reask", execution_status="not_dispatched",
+                )
                 _log_turn_end(writer, cap="", status="pending")
                 continue
             if prior_kind == "redo" and not cap_id:
@@ -3375,9 +3468,66 @@ def _run_loop(
                         sent[mid] = True
                         setattr(cursor, "visual_redo_sent", sent)
             elif prior_kind == "settled":
-                summary = "上一步已在画面上完成，本回合不重复下发。"
-                emit("think", thought=summary, step=seq, status="continue")
+                from mino_nexus.loop.milestone_orchestrator import in_progress_milestone, program_hook_to_dispatch
+                from mino_nexus.loop.milestones import read_state
+
+                next_focus = in_progress_milestone(read_state(cursor))
+                next_hook = program_hook_to_dispatch(next_focus)
+                if next_hook in ("get_otp", "confirm_login_state") and not (cancel_check and cancel_check()):
+                    from mino_nexus.loop.flow_block_runner_v2 import try_dispatch_block_hook
+
+                    hook = try_dispatch_block_hook(
+                        proxy, ctx, cursor, run_id=scout_run_id, turn_seq=seq,
+                        app_id=str(getattr(ctx, "app_id", "") or ""),
+                        history_lines=list(history[-24:]), writer=writer,
+                    )
+                    if hook:
+                        hook_cap = str(hook.get("capability_id") or next_hook)
+                        hook_summary = str(hook.get("summary") or "")
+                        if hook.get("case_fail"):
+                            if hook.get("status") == "blocked":
+                                return _leave_execution_blocked(
+                                    seq, hook_cap, hook_summary,
+                                    str(hook.get("error_kind") or "program_hook_failed"),
+                                )
+                            rec(seq, capability_id=hook_cap, status="fail", summary=hook_summary, thought=hook_summary)
+                            emit("result", step=seq, capability_id=hook_cap, status="fail",
+                                 result_status="fail", summary=hook_summary, thought=hook_summary)
+                            _log_turn_end(writer, cap=hook_cap, status="fail")
+                            return _leave(status="fail", summary=hook_summary)
+                        hook_status = "wait" if hook.get("defer") else str(hook.get("status") or "fail")
+                        rec(seq, capability_id=hook_cap, status=hook_status, summary=hook_summary, thought=hook_summary)
+                        emit("result", step=seq, capability_id=hook_cap, status=hook_status,
+                             result_status=hook_status, summary=hook_summary, thought=hook_summary)
+                        if writer:
+                            writer.append("review/program_handoff", {
+                                "milestone_id": str((next_focus or {}).get("id") or ""),
+                                "capability_id": hook_cap, "same_turn": True,
+                                "placeholder_dispatched": False, "status": hook_status,
+                            })
+                        if hook.get("ok"):
+                            from mino_nexus.loop.step_phase_fsm import try_transition_after_tool_pass
+
+                            transition = try_transition_after_tool_pass(
+                                cursor, ctx, writer=writer, in_prep=in_prep, in_check=in_check,
+                            )
+                            if transition == "check_to_case_done":
+                                return _leave_case(cursor)
+                        _log_turn_end(writer, cap=hook_cap, status=hook_status)
+                        continue
                 _log_turn_end(writer, cap=cap_id, status="continue")
+                continue
+            from mino_nexus.loop.visual_review import guard_input_focus_action
+
+            input_guard = guard_input_focus_action(cursor, ctx, cap_id, writer=writer)
+            if input_guard == "stop":
+                return _leave(status="blocked", summary=str(cursor.semantic_stop)[:500])
+            if input_guard == "reask":
+                emit(
+                    "think", thought=str(cursor.correction_hint), step=seq, status="pending",
+                    event_kind="input_policy_reask", execution_status="not_dispatched",
+                )
+                _log_turn_end(writer, cap="", status="pending")
                 continue
         if cap_id == "swipe_direction" and params:
             from mino_nexus.ai.coords import prepare_xy_params_for_execute
@@ -4372,7 +4522,23 @@ def _run_loop(
                 width=int(getattr(shot, "width", 0) or 0),
                 height=int(getattr(shot, "height", 0) or 0),
             )
+            if cap_id == "input_text" and params.pop("_credential_unresolved", None):
+                summary = "当前验证码填写里程碑缺少已获取的验证码，未派发输入；不能用邮箱或密码代替。"
+                if writer:
+                    writer.append("input/blocked", {
+                        "code": "otp_value_missing", "failure_stage": "credential_binding",
+                        "execution_started": False, "reason": summary,
+                    })
+                return _leave(status="blocked", summary=summary)
             if cap_id == "input_text" and params.pop("_focus_unresolved", None):
+                from mino_nexus.loop.visual_review import recover_input_focus
+
+                recovery = recover_input_focus(cursor, ctx, reason="focus_reference_missing", writer=writer)
+                if recovery == "retry":
+                    _log_turn_end(writer, cap="", status="pending")
+                    continue
+                if recovery == "stop":
+                    return _leave(status="blocked", summary=str(cursor.semantic_stop)[:500])
                 summary = "当前焦点输入缺少有效的聚焦动作引用，不能静默写入"
                 if writer:
                     writer.append(
@@ -4678,7 +4844,33 @@ def _run_loop(
                 )
             return _leave(status="blocked", summary=error or summary or "被阻塞")
         if hasattr(result, "status") and result.status in (EventStatus.FAIL, EventStatus.DECLINED):
-            from mino_nexus.loop.input_contract import contract_reject_summary
+            from mino_nexus.loop.input_contract import contract_reject_summary, focus_reject_summary
+
+            if cap_id == "tap_element":
+                from mino_nexus.loop.visual_review import input_focus_menu_ids, recover_input_focus
+
+                input_menu = input_focus_menu_ids(cursor, ctx)
+                if input_menu and "tap_element" in input_menu and "input_text" not in input_menu:
+                    recovery = recover_input_focus(
+                        cursor, ctx, reason="refocus_click_failed", execution_started=True, writer=writer,
+                    )
+                    if recovery == "stop":
+                        return _leave(status="blocked", summary=str(cursor.semantic_stop)[:500])
+            focus_error = focus_reject_summary(str(summary or ""), str(error or ""))
+            if cap_id == "input_text" and focus_error and str((params or {}).get("target_mode") or "") == "current_focus":
+                from mino_nexus.loop.visual_review import recover_input_focus
+
+                recovery = recover_input_focus(cursor, ctx, reason=focus_error, writer=writer)
+                if recovery == "retry":
+                    _log_turn_end(writer, cap=cap_id, status="pending")
+                    continue
+                msg = str(getattr(cursor, "semantic_stop", "") or "") if recovery == "stop" else f"当前焦点无效，无法安全输入：{focus_error}"
+                if writer:
+                    writer.append("input/blocked", {
+                        "code": "focus_target_unavailable", "failure_stage": "focus_validation",
+                        "retryable": False, "execution_started": False, "reason": focus_error,
+                    })
+                return _leave(status="blocked", summary=msg[:500])
 
             rejected = contract_reject_summary(str(summary or ""), str(error or ""))
             if cap_id == "input_text" and rejected and str((params or {}).get("target_mode") or "") == "current_focus":
@@ -4775,8 +4967,11 @@ def _run_loop(
             cursor.clear_repeat_tap()
         if status_val == "pass" and cap_id == "tap_element":
             from mino_nexus.loop.milestone_orchestrator import in_progress_milestone_id
+            from mino_nexus.loop.visual_review import input_focus_milestone_id
 
-            focus_target = str(in_progress_milestone_id(cursor) or "") if isinstance(cursor, StepCursor) else ""
+            focus_target = (
+                input_focus_milestone_id(cursor) or str(in_progress_milestone_id(cursor) or "")
+            ) if isinstance(cursor, StepCursor) else ""
             tap_field = str(params.get("field") or "").strip().lower()
             tap_target = params.get("target") if isinstance(params.get("target"), dict) else {}
             input_click = (
@@ -4806,7 +5001,7 @@ def _run_loop(
             from mino_nexus.loop.channel_observation import bind_fresh_observation
             from mino_nexus.loop.milestone_orchestrator import in_progress_milestone_id
             from mino_nexus.loop.milestones import note_tool_pass_milestone
-            from mino_nexus.loop.visual_review import defer_visual_pass, remember_visual_prior
+            from mino_nexus.loop.visual_review import defer_input_focus, defer_visual_pass, remember_visual_prior
 
             visual_now = _scheme_now(ctx) == "visual"
             if redo_turn:
@@ -4814,13 +5009,14 @@ def _run_loop(
                 if visual_now and focus_id and cap_id in (
                     "tap_element", "input_text", "swipe_direction", "reload_page",
                 ):
-                    remember_visual_prior(
-                        cursor,
-                        milestone_id=focus_id,
-                        capability_id=cap_id,
-                        params=params if isinstance(params, dict) else None,
-                        summary=summary,
-                    )
+                    if not defer_input_focus(cursor, ctx, capability_id=cap_id, writer=writer):
+                        remember_visual_prior(
+                            cursor,
+                            milestone_id=focus_id,
+                            capability_id=cap_id,
+                            params=params if isinstance(params, dict) else None,
+                            summary=summary,
+                        )
                 setattr(cursor, "visual_turn_pending", False)
             else:
                 focus_before = in_progress_milestone_id(cursor)

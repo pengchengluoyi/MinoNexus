@@ -270,7 +270,19 @@ class RouterProxy:
 
         ctx = kwargs.get("ctx")
         scheme = action_scheme(ctx) if ctx is not None else str(getattr(self, "action_scheme", "") or "visual")
+        focus_ref = str(params.get("focus_ref") or "")
         params = stamp_scheme_params(event.capability_id, params, scheme)
+        if event.capability_id == "input_text" and params.get("target_mode") == "current_focus" and scheme != "dom":
+            dispatch_run_id = run_id or self.run_id
+            prefix = f"focus:{dispatch_run_id}:"
+            if not dispatch_run_id or not focus_ref.startswith(prefix) or not focus_ref[len(prefix):].isdigit():
+                return _fail(
+                    event, started, t0,
+                    "当前焦点输入缺少本次运行的已绑定 focus_ref，未派发到节点",
+                    executor_used="router_proxy",
+                    local_reason="focus_reference_invalid",
+                )
+            params["focus_ref"] = focus_ref
         event.params = params
 
         req = P.Execute(

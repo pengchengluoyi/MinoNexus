@@ -475,6 +475,40 @@ def row_satisfies_requirements(
     return bool(ok and score >= 0)
 
 
+def current_lease_is_active(ctx: Any) -> bool:
+    """只读核对当前账号仍由本运行、本用例和本设备持有。"""
+    current = getattr(ctx, "resource_lease", None) or {}
+    if not isinstance(current, dict):
+        return False
+    account_id = str(current.get("account_id") or "")
+    project_id = str(current.get("project_id") or "")
+    run_id = str(getattr(ctx, "run_id", "") or "")
+    if not account_id or not project_id or not run_id or current.get("run_id") != run_id:
+        return False
+    picked = getattr(ctx, "picked_account", None) or {}
+    if not isinstance(picked, dict) or str(picked.get("id") or picked.get("account_id") or "") != account_id:
+        return False
+    try:
+        app = ps.require_app(str(getattr(ctx, "app_id", "") or ""))
+        if str(app.get("project_id") or "") != project_id:
+            return False
+        env_doc = ps.project_env(project_id)
+    except KeyError:
+        return False
+    for row in list_test_accounts(env_doc, project_id=project_id):
+        if str(row.get("id") or "") != account_id:
+            continue
+        lease = row.get("lease") if isinstance(row.get("lease"), dict) else {}
+        if lease_expired(lease):
+            return False
+        for key in ("run_id", "case_id", "sn"):
+            if str(lease.get(key) or "") != str(getattr(ctx, key, "") or ""):
+                return False
+        env = str(getattr(ctx, "env_profile", "") or "")
+        return not env or str(row.get("env") or "") == env
+    return False
+
+
 def restore_lease_for_run(ctx: Any, run_id: str) -> tuple[dict[str, Any] | None, str]:
     """run 内后续用例：从号池找回本 run 已占用的账号。"""
     app_id = str(getattr(ctx, "app_id", "") or "").strip()
@@ -601,55 +635,6 @@ def lease_for_context(
     target_id = str(getattr(ctx, "target_package", "") or "")
     holder_sn = str(getattr(ctx, "sn", "") or "").strip()
 
-    if should_provision_gmail_alias(requirements, prompt=prompt, env_doc=env_doc, ctx=ctx):
-        alias_row = provision_gmail_alias_account(
-            ctx,
-            project_id=project_id,
-            env_doc=env_doc,
-            requirements=requirements,
-            run_id=run_id,
-        )
-        if alias_row:
-            account_id = str(alias_row.get("id") or "")
-            if account_id and run_id and _mark_leased(
-                project_id,
-                account_id,
-                run_id,
-                case_id=str(getattr(ctx, "case_id", "") or "")[:64],
-                sn=holder_sn,
-                env=env_profile,
-            ):
-                apply_lease_to_ctx(ctx, alias_row, project_id=project_id)
-                SLog.i(
-                    TAG,
-                    f"leased gmail alias (fresh) {account_ident(alias_row)} run={run_id[:12]}",
-                )
-                return alias_row, ""
-    if should_provision_phone_seq(requirements, prompt=prompt, env_doc=env_doc, ctx=ctx):
-        phone_row = provision_phone_seq_account(
-            ctx,
-            project_id=project_id,
-            env_doc=env_doc,
-            requirements=requirements,
-            run_id=run_id,
-        )
-        if phone_row:
-            account_id = str(phone_row.get("id") or "")
-            if account_id and run_id and _mark_leased(
-                project_id,
-                account_id,
-                run_id,
-                case_id=str(getattr(ctx, "case_id", "") or "")[:64],
-                sn=holder_sn,
-                env=env_profile,
-            ):
-                apply_lease_to_ctx(ctx, phone_row, project_id=project_id)
-                SLog.i(
-                    TAG,
-                    f"leased phone seq (fresh) {account_ident(phone_row)} run={run_id[:12]}",
-                )
-                return phone_row, ""
-
     restored, _rerr = restore_lease_for_run(ctx, run_id)
     if restored and ident_hints and not account_row_matches_hints(restored, ident_hints):
         SLog.i(
@@ -703,6 +688,49 @@ def lease_for_context(
                     f"run lease mismatch run={run_id[:12]} account={account_ident(restored)}; re-pick for case",
                 )
                 release_ctx_lease(ctx)
+
+    if should_provision_gmail_alias(requirements, prompt=prompt, env_doc=env_doc, ctx=ctx):
+        alias_row = provision_gmail_alias_account(
+            ctx,
+            project_id=project_id,
+            env_doc=env_doc,
+            requirements=requirements,
+            run_id=run_id,
+        )
+        if alias_row:
+            account_id = str(alias_row.get("id") or "")
+            if account_id and run_id and _mark_leased(
+                project_id,
+                account_id,
+                run_id,
+                case_id=str(getattr(ctx, "case_id", "") or "")[:64],
+                sn=holder_sn,
+                env=env_profile,
+            ):
+                apply_lease_to_ctx(ctx, alias_row, project_id=project_id)
+                SLog.i(TAG, f"leased gmail alias (fresh) {account_ident(alias_row)} run={run_id[:12]}")
+                return alias_row, ""
+    if should_provision_phone_seq(requirements, prompt=prompt, env_doc=env_doc, ctx=ctx):
+        phone_row = provision_phone_seq_account(
+            ctx,
+            project_id=project_id,
+            env_doc=env_doc,
+            requirements=requirements,
+            run_id=run_id,
+        )
+        if phone_row:
+            account_id = str(phone_row.get("id") or "")
+            if account_id and run_id and _mark_leased(
+                project_id,
+                account_id,
+                run_id,
+                case_id=str(getattr(ctx, "case_id", "") or "")[:64],
+                sn=holder_sn,
+                env=env_profile,
+            ):
+                apply_lease_to_ctx(ctx, phone_row, project_id=project_id)
+                SLog.i(TAG, f"leased phone seq (fresh) {account_ident(phone_row)} run={run_id[:12]}")
+                return phone_row, ""
 
     accounts = list_test_accounts(env_doc, project_id=project_id)
     if not accounts and not gmail_alias_lease_enabled(env_doc, ctx) and not phone_pool_lease_enabled(

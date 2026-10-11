@@ -261,6 +261,7 @@ class AssertResult(BaseModel):
     ai_reasoning: str = Field(..., description="判断依据")
     evidence: str = Field("", description="截图中观察到的关键证据描述")
     checkpoint_results: list[dict[str, Any]] = Field(default_factory=list)
+    error_kind: str = Field("", description="校验本身无法完成的原因；空值表示有效的通过或不通过判定")
     screen_layout: dict[str, Any] = Field(
         default_factory=dict,
         description="断言时的屏面布局线框（归一化坐标）",

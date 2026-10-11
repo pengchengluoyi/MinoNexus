@@ -69,8 +69,10 @@ def try_dispatch_block_hook(
     pending = first_pending_hook_milestone(state)
     if not pending:
         return None
-    block_id = str((state.get("block_ref") or {}).get("block_id") or login_block_id_for_ctx(ctx))
-    steps = resolve_effective_steps(app_id=str(app_id or ""), block_id=block_id)
+    block_id = str(pending.get("source_block") or (state.get("block_ref") or {}).get("block_id") or "")
+    if not block_id and pending.get("source") != "do_program":
+        block_id = login_block_id_for_ctx(ctx)
+    steps = resolve_effective_steps(app_id=str(app_id or ""), block_id=block_id) if block_id else []
     mid = str(pending.get("id") or "")
     step = next((s for s in steps if str(s.get("id") or "") == mid), None)
     cap = str(pending.get("hook_cap") or "").strip()
@@ -80,13 +82,18 @@ def try_dispatch_block_hook(
         return None
     if str(pending.get("kind") or "").strip().lower() != "hook":
         return None
-    from mino_nexus.catalog.skill_channel import capability_dispatch_ok
+    from mino_nexus.catalog.skill_channel import capability_dispatch_ok, is_program_caller
+    from mino_nexus.loop.router_proxy import is_local_cap
+
+    if not is_program_caller(cap) and not is_local_cap(cap):
+        return None
 
     if not capability_dispatch_ok(cap):
         return {
             "ok": False,
             "case_fail": True,
-            "status": "fail",
+            "status": "blocked",
+            "error_kind": "capability_unavailable",
             "summary": f"{cap} 未启用或当前不可覆盖，不能派发",
             "capability_id": cap,
             "milestone_id": mid,
@@ -102,7 +109,9 @@ def try_dispatch_block_hook(
             )
         return {
             "ok": False,
-            "status": "skipped",
+            "case_fail": True,
+            "status": "blocked",
+            "error_kind": "capability_phase_mismatch",
             "summary": f"{cap} 不能在{phase}阶段派发",
             "capability_id": cap,
             "milestone_id": mid,
@@ -190,15 +199,16 @@ def try_dispatch_block_hook(
                 return filled
             return None
 
-    from mino_nexus.loop.router_proxy import is_local_cap
     from mino_nexus.core.schemas import PlanEvent
     from mino_nexus.core.protocol import EventStatus
 
+    hook_params = dict(step.get("params") or {}) if step else {}
+    hook_params.update(dict(pending.get("params") or {}))
     event = PlanEvent(
         seq=int(turn_seq),
         capability_id=cap,
         event_kind=cap,
-        params=dict(step.get("params") or {}) if step else {},
+        params=hook_params,
         ai_reasoning=f"逻辑块 {block_id} · milestone {mid}",
         label=f"块·{mid or cap}",
     )
@@ -225,7 +235,6 @@ def try_dispatch_block_hook(
                 int(getattr(cursor, "get_otp_hook_fail_streak", 0) or 0) + 1
             )
     hook_summary = str(res.summary or res.error or cap)
-    hook_params = dict(step.get("params") or {}) if step else {}
     from mino_nexus.loop.observe.program_tool_log import log_program_tool
 
     log_program_tool(
@@ -264,9 +273,12 @@ def try_dispatch_block_hook(
             "milestone_id": mid,
             "session_logged": "flow_block",
         }
+    blocked = not ok and not (cap == "get_otp" and mid == "otp_fill")
     return {
         "ok": ok,
-        "status": st,
+        "case_fail": blocked,
+        "status": "blocked" if blocked else st,
+        "error_kind": "program_hook_failed" if blocked else "",
         "summary": hook_summary,
         "capability_id": cap,
         "block_id": block_id,
@@ -592,6 +604,46 @@ def try_dispatch_otp_fill_after_get_otp(
     )
 
 
+def try_review_login_submission(
+    proxy: Any,
+    ctx: Any,
+    cursor: Any,
+    *,
+    shot: Any,
+    writer: Any = None,
+) -> Optional[dict[str, Any]]:
+    from mino_nexus.action_space.scheme import action_scheme
+    from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
+
+    if action_scheme(ctx) != "visual":
+        return None
+    prior = getattr(cursor, "visual_prior", None)
+    state = read_state(cursor)
+    focus = in_progress_milestone(state) or {}
+    if not isinstance(prior, dict) or prior.get("milestone_id") != "submit_login":
+        return None
+    if focus.get("id") != "submit_login" or prior.get("capability_id") != "tap_element":
+        return None
+    dispatch_turn = int(prior.get("dispatch_turn") or 0)
+    if not prior.get("attempt_ref") or dispatch_turn <= 0 or int(getattr(writer, "turn", 0) or 0) <= dispatch_turn:
+        return None
+    if not getattr(ctx, "decision_screenshot_hash", ""):
+        return None
+    rows = [row for row in state.get("milestones") or [] if isinstance(row, dict)]
+    pending = [row for row in rows if not row.get("optional") and row.get("status") not in ("pass", "skipped")]
+    if [row.get("id") for row in pending] != ["submit_login", "login_state"]:
+        return None
+    if pending[-1].get("hook_cap") != "confirm_login_state":
+        return None
+    block_id = str(focus.get("source_block") or (state.get("block_ref") or {}).get("block_id") or "")
+    steps = resolve_effective_steps(app_id=str(getattr(ctx, "app_id", "") or ""), block_id=block_id) if block_id else []
+    step = next((row for row in steps if row.get("id") == "login_state"), None)
+    return _dispatch_login_state(
+        proxy, ctx, cursor, block_id=block_id, step=step, writer=writer,
+        shot=shot, review_submit=True,
+    )
+
+
 def _visual_login_form_open(shot: Any) -> bool | None:
     """纯视觉：看决策图判断账号框和验证码框是否还同时在。看不了就返回 None，不当成已离开。"""
     if shot is None or not getattr(shot, "has_image", lambda: False)():
@@ -604,7 +656,7 @@ def _visual_login_form_open(shot: Any) -> bool | None:
         image_mime=str(getattr(shot, "image_mime", "") or "image/png"),
     )
     warnings = list(getattr(result, "parse_warnings", None) or [])
-    if any("provider" in str(w) or "job render" in str(w) for w in warnings):
+    if warnings or getattr(result, "error_kind", ""):
         return None
     return not bool(getattr(result, "passed", False))
 
@@ -617,6 +669,8 @@ def _dispatch_login_state(
     block_id: str,
     step: dict[str, Any] | None,
     writer: Any,
+    shot: Any = None,
+    review_submit: bool = False,
 ) -> dict[str, Any]:
     """登录块结尾：先采层级再截屏，用这一对判断是否离开登录表单。"""
     from mino_nexus.loop.channel_observation import (
@@ -633,10 +687,35 @@ def _dispatch_login_state(
     from mino_nexus.action_space.scheme import action_scheme
 
     visual = action_scheme(ctx) == "visual"
-    _shot, frame_thumb = capture_decision_frame(proxy, ctx, hierarchy=not visual)
+    if visual and shot is not None:
+        _shot, frame_thumb = shot, ""
+    else:
+        _shot, frame_thumb = capture_decision_frame(proxy, ctx, hierarchy=not visual)
     if visual:
-        form_open = _visual_login_form_open(_shot)
+        import hashlib
+
+        prior = getattr(cursor, "visual_prior", None) or {}
+        attempt_ref = str(prior.get("attempt_ref") or "") if review_submit else ""
+        image_data = str(getattr(_shot, "image_base64", "") or "")
+        image_hash = hashlib.sha256(image_data.encode("ascii", errors="ignore")).hexdigest() if image_data else ""
+        cache = getattr(cursor, "login_review_cache", None) or {}
+        if attempt_ref and image_hash and cache.get("attempt_ref") == attempt_ref and cache.get("image_hash") == image_hash:
+            form_open = cache["form_open"]
+            if writer:
+                writer.append("login/review_reused", {"attempt_ref": attempt_ref, "image_hash": image_hash[:20]})
+        else:
+            form_open = _visual_login_form_open(_shot)
+            if attempt_ref and image_hash:
+                cursor.login_review_cache = {"attempt_ref": attempt_ref, "image_hash": image_hash, "form_open": form_open}
         if form_open is None:
+            cursor.login_state_waits = int(getattr(cursor, "login_state_waits", 0) or 0) + 1
+            if cursor.login_state_waits >= max_turns:
+                return {
+                    "ok": False, "case_fail": True, "status": "blocked",
+                    "error_kind": "login_observation_unavailable",
+                    "summary": "登录结果连续无法验证，已停止，不能判定登录成功或失败",
+                    "capability_id": "confirm_login_state", "milestone_id": "login_state",
+                }
             return {
                 "ok": False,
                 "status": "wait",
@@ -681,6 +760,25 @@ def _dispatch_login_state(
             "thumb": frame_thumb,
         }
     cursor.login_state_waits = 0
+    if review_submit:
+        from mino_nexus.loop.visual_review import _confirm_visual_prior
+
+        prior = dict(getattr(cursor, "visual_prior", None) or {})
+        _confirm_visual_prior(
+            cursor, ctx, "submit_login", capability_id="tap_element", writer=writer,
+            in_prep=str(getattr(cursor, "phase", "")) == "prep",
+        )
+        cursor.visual_prior = None
+        cursor.pending_visual_review = None
+        cursor.review_wait_budget = None
+        cursor.login_review_cache = None
+        if writer:
+            writer.append("review/pass", {
+                "milestone_id": "submit_login", "reason": "login_result_shared",
+                "attempt_ref": str(prior.get("attempt_ref") or ""),
+                "observation_hash": str(getattr(ctx, "decision_screenshot_hash", "") or ""),
+                "verified_by": "confirm_login_state",
+            })
     note_tool_pass_milestone(
         cursor,
         capability_id="confirm_login_state",

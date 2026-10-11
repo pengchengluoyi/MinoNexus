@@ -8,6 +8,10 @@ from mino_nexus.loop.hierarchy_slots import node_flag
 
 _STRUCTURED_MODES = frozenset({"copy", "style", "dialog", "input_value", "spatial"})
 
+
+class CheckUnavailable(ValueError):
+    pass
+
 _RELATION_OK = {
     "right": lambda a, s: s[0] > a[0],
     "left": lambda a, s: s[0] < a[0],
@@ -64,26 +68,36 @@ def run_dom_structured_check(
             confidence=1.0,
             ai_reasoning="当前是 DOM 执行，层级为空，无法验证。",
             evidence="dom",
+            error_kind="observation_missing",
         )
     else:
         fails: list[str] = []
+        unavailable: list[str] = []
         checkpoint_results: list[dict[str, Any]] = []
         for row in rows:
-            ok, reason = _eval_one(row, nodes)
+            error_kind = ""
+            try:
+                ok, reason = _eval_one(row, nodes)
+            except CheckUnavailable as exc:
+                ok, reason = False, str(exc)
+                error_kind = "dom_check_unavailable"
+                unavailable.append(reason)
             checkpoint_results.append({
                 "point_id": str(row.get("point_id") or ""),
                 "passed": ok,
                 "evidence": reason if reason else "DOM 目标与规则匹配",
+                "error_kind": error_kind,
             })
-            if not ok:
+            if not ok and not error_kind and row.get("required") is not False:
                 fails.append(reason)
-        if fails:
+        if unavailable or fails:
             result = AssertResult(
                 passed=False,
                 confidence=1.0,
-                ai_reasoning="；".join(fails)[:500],
+                ai_reasoning="；".join(unavailable or fails)[:500],
                 evidence="dom",
                 checkpoint_results=checkpoint_results,
+                error_kind="dom_check_unavailable" if unavailable else "",
             )
         else:
             result = AssertResult(
@@ -98,6 +112,8 @@ def run_dom_structured_check(
             "assert/dom",
             {
                 "passed": bool(result.passed),
+                "status": "blocked" if result.error_kind else ("pass" if result.passed else "fail"),
+                "error_kind": result.error_kind,
                 "checkpoints": len(rows),
                 "nodes": len(nodes),
                 "summary": str(result.ai_reasoning or "")[:300],
@@ -199,7 +215,7 @@ def _eval_one(row: dict[str, Any], nodes: list[dict[str, Any]]) -> tuple[bool, s
         return _eval_input(title, rules, nodes)
     if mode == "spatial":
         return _eval_spatial(title, rules, nodes)
-    return False, f"{title}无法验证：DOM 没有该检查的实现"
+    raise CheckUnavailable(f"{title}无法验证：DOM 没有该检查的实现")
 
 
 def _pool(nodes: list[dict[str, Any]], role: str) -> list[dict[str, Any]]:
@@ -213,7 +229,7 @@ def _eval_copy(title: str, role: str, rules: dict[str, Any], nodes: list[dict[st
     mode = "equals" if str(rules.get("match") or "") == "equals" else "contains"
     needle = str(rules.get("title") or rules.get("body") or rules.get("value") or rules.get("label") or "")
     if not needle:
-        return False, f"{title}无法验证：文案检查缺少要核对的文本"
+        raise CheckUnavailable(f"{title}无法验证：文案检查缺少要核对的文本")
     pool = _pool(nodes, role if role != "dialog" else "")
     if any(_matches_text(n, needle, mode=mode) for n in pool):
         return True, ""
@@ -227,7 +243,7 @@ def _eval_style(title: str, role: str, rules: dict[str, Any], nodes: list[dict[s
     if label:
         pool = [n for n in pool if label in _blob(n)]
     if len(pool) != 1:
-        return False, f"{title}无法验证：样式检查命中 {len(pool)} 个节点"
+        raise CheckUnavailable(f"{title}无法验证：样式检查命中 {len(pool)} 个节点")
     enabled = _node_enabled(pool[0])
     if style == "disabled" and enabled:
         return False, f"{title}未通过：按钮仍可点击"
@@ -235,7 +251,7 @@ def _eval_style(title: str, role: str, rules: dict[str, Any], nodes: list[dict[s
         return False, f"{title}未通过：按钮不可点击"
     if style in ("disabled", "enabled"):
         return True, ""
-    return False, f"{title}无法验证：未知样式 {style}"
+    raise CheckUnavailable(f"{title}无法验证：未知样式 {style}")
 
 
 def _eval_dialog(title: str, rules: dict[str, Any], nodes: list[dict[str, Any]]) -> tuple[bool, str]:
@@ -251,16 +267,16 @@ def _eval_dialog(title: str, rules: dict[str, Any], nodes: list[dict[str, Any]])
             return False, f"{title}未通过：dialog 角色有 {len(dialogs)} 个，要求仅此一个"
     if present or named:
         return True, ""
-    return False, f"{title}无法验证：弹窗检查缺少哪个弹窗"
+    raise CheckUnavailable(f"{title}无法验证：弹窗检查缺少哪个弹窗")
 
 
 def _eval_input(title: str, rules: dict[str, Any], nodes: list[dict[str, Any]]) -> tuple[bool, str]:
     bound = str(rules.get("bound_text") or "")
     if not bound:
-        return False, f"{title}无法验证：没有读到同一步输入的文案"
+        raise CheckUnavailable(f"{title}无法验证：没有读到同一步输入的文案")
     fields = [n for n in nodes if _role_ok(n, "input")]
     if len(fields) != 1:
-        return False, f"{title}无法验证：输入框命中 {len(fields)} 个"
+        raise CheckUnavailable(f"{title}无法验证：输入框命中 {len(fields)} 个")
     value = str(fields[0].get("text") or "").strip()
     try:
         limit = int(rules.get("max_length") or 0)
@@ -288,11 +304,11 @@ def _eval_spatial(title: str, rules: dict[str, Any], nodes: list[dict[str, Any]]
     relation = str(rules.get("relation") or "")
     pred = _RELATION_OK.get(relation)
     if not anchor or not subject or pred is None:
-        return False, f"{title}无法验证：位置关系缺少参照或方向"
+        raise CheckUnavailable(f"{title}无法验证：位置关系缺少参照或方向")
     anchors = [n for n in nodes if anchor in _blob(n) and _center(n)]
     subjects = [n for n in nodes if subject in _blob(n) and _center(n)]
     if len(anchors) != 1 or len(subjects) != 1:
-        return False, f"{title}无法验证：参照 {len(anchors)} 个，主语 {len(subjects)} 个"
+        raise CheckUnavailable(f"{title}无法验证：参照 {len(anchors)} 个，主语 {len(subjects)} 个")
     a = _center(anchors[0])
     s = _center(subjects[0])
     if a is None or s is None or not pred(a, s):

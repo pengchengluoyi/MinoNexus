@@ -49,7 +49,7 @@ def _call(uid: str, name: str, args: dict[str, Any]) -> dict[str, Any]:
         return {"isError": True, "content": [{"type": "text", "text": f"没有这个工具：{name}"}]}
     profile = store.get_profile(uid)
     started = time.time()
-    out = run_tool(spec, args if isinstance(args, dict) else {}, user_id=uid, profile=profile)
+    out = run_tool(spec, args if isinstance(args, dict) else {}, user_id=uid, profile=profile, surface="mcp")
     body = {"ok": out.ok, "summary": out.summary, "data": out.data}
     if out.ask:
         body["ask"] = out.ask

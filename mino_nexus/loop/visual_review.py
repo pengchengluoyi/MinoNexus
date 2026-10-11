@@ -25,6 +25,10 @@ _INTERNAL_CAPS = frozenset({
     "release_account",
     "relogin",
 })
+_FOCUS_INPUT_PAIRS = {
+    "account_field": "account_fill",
+    "otp_field": "otp_fill",
+}
 
 
 def _visible_expected(capability_id: str, milestone_id: str, title: str) -> str:
@@ -62,7 +66,11 @@ def _check_sheet(
     field = str(params.get("field") or "").strip()
     role = str(target.get("role") or "").strip()
     if not role:
-        if field in ("email", "login_email", "sms_code", "验证码", "otp", "phone", "password"):
+        if (
+            field in ("email", "login_email", "sms_code", "验证码", "otp", "phone", "password")
+            or milestone_id in ("account_field", "otp_field", "prep_tap_input_box")
+            or "聚焦" in str(milestone_title or "")
+        ):
             role = "input"
         elif capability_id == "tap_element":
             role = "button"
@@ -91,6 +99,188 @@ def _row_caps(row: dict[str, Any]) -> set[str]:
     return out
 
 
+def _input_focus_pair(cursor: Any) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
+    from mino_nexus.loop.milestones import read_state
+
+    state = read_state(cursor)
+    active = in_progress_milestone(state)
+    if not active:
+        return None
+    active_id = str(active.get("id") or "")
+    rows = [row for row in state.get("milestones") or [] if isinstance(row, dict)]
+    for index, focus in enumerate(rows[:-1]):
+        focus_id = str(focus.get("id") or "")
+        input_id = _FOCUS_INPUT_PAIRS.get(focus_id)
+        following = rows[index + 1]
+        if not input_id or str(following.get("id") or "") != input_id:
+            continue
+        if "input_text" not in _row_caps(following):
+            continue
+        if str(following.get("status") or "") in ("pass", "skipped", "failed"):
+            continue
+        if active_id == focus_id or (
+            active_id == input_id
+            and focus.get("verify_with_milestone") == input_id
+            and str(focus.get("status") or "") == "pending"
+        ):
+            return focus, following
+    return None
+
+
+def input_focus_milestone_id(cursor: Any) -> str:
+    pair = _input_focus_pair(cursor)
+    return str(pair[0].get("id") or "") if pair else ""
+
+
+def input_focus_menu_ids(cursor: Any, ctx: Any) -> set[str] | None:
+    from mino_nexus.action_space.scheme import action_scheme
+
+    if action_scheme(ctx) != "visual":
+        return None
+    pair = _input_focus_pair(cursor)
+    if pair is None:
+        return None
+    _, following = pair
+    if following.get("status") != "in_progress":
+        return None
+    hook = str(following.get("hook_cap") or "")
+    if hook and hook != "input_text" and not (following.get("lease_ready") or following.get("otp_ready")):
+        return None
+    waits = {"wait_screen_ready", "wait_ms"}
+    if has_visual_prior(cursor):
+        return {"input_text", "tap_element"} | waits
+    if following.get("input_refocus_required"):
+        return {"tap_element"} | waits
+    return {"input_text"} | waits
+
+
+def guard_input_focus_action(cursor: Any, ctx: Any, capability_id: str, *, writer: Any = None) -> str:
+    allowed = input_focus_menu_ids(cursor, ctx)
+    if allowed is None:
+        return "none"
+    pair = _input_focus_pair(cursor)
+    if pair is None:
+        return "none"
+    _, following = pair
+    if capability_id in allowed:
+        if following.pop("input_action_reasks", None):
+            setattr(cursor, "correction_hint", "")
+        return "none"
+    attempts = int(following.get("input_action_reasks") or 0) + 1
+    following["input_action_reasks"] = attempts
+    hint = f"{following.get('id')} 当前仅允许 {', '.join(sorted(allowed))}；本次动作未派发。"
+    setattr(cursor, "correction_hint", hint)
+    if writer:
+        writer.append(
+            "contract/blocked" if attempts > 1 else "contract/reask",
+            {
+                "reason_code": "input_action_not_allowed",
+                "capability_id": capability_id,
+                "allowed_capabilities": sorted(allowed),
+                "execution_started": False,
+                "attempt": attempts,
+            },
+        )
+    if attempts > 1:
+        setattr(cursor, "semantic_stop", hint)
+        return "stop"
+    return "reask"
+
+
+def recover_input_focus(
+    cursor: Any,
+    ctx: Any,
+    *,
+    reason: str,
+    execution_started: bool = False,
+    writer: Any = None,
+) -> str:
+    """每个填写里程碑最多恢复一次；重新点击后仍须输入结果回看。"""
+    from mino_nexus.action_space.scheme import action_scheme
+    from mino_nexus.loop.milestones import read_state, write_state
+
+    if action_scheme(ctx) != "visual":
+        return "none"
+    pair = _input_focus_pair(cursor)
+    if pair is None:
+        return "none"
+    focus, following = pair
+    if following.get("status") != "in_progress":
+        return "none"
+    attempts = int(following.get("input_recovery_attempts") or 0)
+    exhausted = attempts >= 1
+    if writer:
+        writer.append(
+            "input/recovery_exhausted" if exhausted else "input/recovery",
+            {
+                "milestone_id": str(following.get("id") or ""),
+                "focus_milestone_id": str(focus.get("id") or ""),
+                "reason": reason[:300],
+                "retryable": not exhausted,
+                "execution_started": execution_started,
+                "attempt": attempts if exhausted else attempts + 1,
+                "limit": 1,
+            },
+        )
+    setattr(ctx, "focus_action_ref", "")
+    setattr(ctx, "focus_action_field", "")
+    setattr(cursor, "visual_prior", None)
+    setattr(cursor, "pending_visual_review", None)
+    setattr(cursor, "visual_turn_pending", False)
+    if exhausted:
+        setattr(cursor, "semantic_stop", f"{following.get('id')} 输入恢复一次后仍未完成，已停止：{reason[:150]}")
+        return "stop"
+    following["input_recovery_attempts"] = attempts + 1
+    following["input_refocus_required"] = True
+    following.pop("input_action_reasks", None)
+    write_state(cursor, read_state(cursor))
+    setattr(cursor, "correction_hint", f"{following.get('id')} 输入未完成，需重新定位输入框后再填写：{reason[:150]}")
+    return "retry"
+
+
+def defer_input_focus(
+    cursor: Any,
+    ctx: Any,
+    *,
+    capability_id: str,
+    writer: Any = None,
+) -> bool:
+    """聚焦点击只允许尝试输入，聚焦与填写在输入结果确认后一起完成。"""
+    from mino_nexus.action_space.scheme import action_scheme
+    from mino_nexus.loop.milestones import read_state, write_state
+
+    if capability_id != "tap_element" or action_scheme(ctx) != "visual":
+        return False
+    pair = _input_focus_pair(cursor)
+    if pair is None:
+        return False
+    focus, following = pair
+    focus_id = str(focus.get("id") or "")
+    input_id = str(following.get("id") or "")
+    state = read_state(cursor)
+    focus["status"] = "pending"
+    focus["verify_with_milestone"] = input_id
+    following["status"] = "in_progress"
+    if following.pop("input_refocus_required", False):
+        setattr(cursor, "correction_hint", "")
+    write_state(cursor, state)
+    setattr(cursor, "visual_prior", None)
+    setattr(cursor, "pending_visual_review", None)
+    if writer:
+        writer.append(
+            "review/deferred",
+            {
+                "milestone_id": focus_id,
+                "capability_id": capability_id,
+                "verify_with_milestone": input_id,
+                "verification_status": "pending",
+                "reason": "verify_input_result",
+            },
+        )
+    return True
+
+
 def defer_visual_pass(
     cursor: Any,
     *,
@@ -108,6 +298,8 @@ def defer_visual_pass(
 
     if action_scheme(ctx) != "visual":
         return False
+    if defer_input_focus(cursor, ctx, capability_id=cap, writer=writer):
+        return True
     from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
     from mino_nexus.loop.milestones import read_state
 
@@ -203,6 +395,52 @@ def has_visual_prior(cursor: Any) -> bool:
     return isinstance(prior, dict) and bool(str(prior.get("milestone_id") or "").strip())
 
 
+def same_turn_review_targets(cursor: Any) -> dict[str, Any] | None:
+    from mino_nexus.loop.milestones import read_state
+    from mino_nexus.loop.milestone_orchestrator import _required_failed_before
+    from mino_nexus.catalog.skill_channel import is_program_caller
+
+    prior = getattr(cursor, "visual_prior", None)
+    if not isinstance(prior, dict):
+        return None
+    mid = str(prior.get("milestone_id") or "")
+    state = read_state(cursor)
+    if not mid or not _prior_still_current(state, mid):
+        return None
+    rows = [row for row in state.get("milestones") or [] if isinstance(row, dict)]
+    current = next((row for row in rows if row.get("id") == mid), {})
+    following = next((row for row in rows
+                      if row.get("id") != mid
+                      and row.get("status", "pending") in ("pending", "in_progress")
+                      and not row.get("verify_with_milestone")
+                      and not _required_failed_before(rows, row)), None)
+
+    def target(row):
+        if not row:
+            return None
+        hook = str(row.get("hook_cap") or "")
+        device = str(row.get("device_cap") or "")
+        if hook and device and hook != device:
+            caps = {device if row.get("lease_ready") or row.get("otp_ready") else hook}
+        else:
+            caps = set(row.get("exec_caps") or []) or _row_caps(row)
+        return {"milestone_id": str(row.get("id") or ""),
+                "title": str(row.get("title") or ""), "capabilities": sorted(caps)}
+
+    failed = target(current)
+    if prior.get("capability_id") == "input_text":
+        pair = _input_focus_pair(cursor)
+        if pair:
+            failed = target(pair[0])
+            failed["capabilities"] = ["tap_element"]
+    passed = target(following)
+    if passed and passed["capabilities"] and all(is_program_caller(cap) for cap in passed["capabilities"]):
+        passed["program_owned"] = True
+        passed["program_capabilities"] = passed["capabilities"]
+        passed["capabilities"] = [str(prior.get("capability_id") or "")]
+    return {"review_milestone_id": mid, "if_pass": passed, "if_fail": failed}
+
+
 def prior_action_payload(cursor: Any) -> dict[str, str] | None:
     prior = getattr(cursor, "visual_prior", None)
     if not isinstance(prior, dict):
@@ -232,10 +470,11 @@ def apply_same_turn_prior(
     in_prep: bool = False,
     in_check: bool = False,
 ) -> str:
-    """同一张决策图上的回看。返回 redo / stop / settled / confirmed / none。
+    """同一张决策图上的回看，区分补答、输出契约阻塞和实际画面失败。
 
     redo：上一步没完成，里程碑改回 in_progress，本回合用返回的坐标继续做。
     stop：连续回看未通过。
+    contract_stop：连续没有合法回看输出，尚不能判定页面成败。
     settled：上一步已完成，这次返回的还是同一步，不再下发。
     confirmed：上一步已完成，这次返回的是下一步。
     """
@@ -279,7 +518,23 @@ def apply_same_turn_prior(
     action = getattr(decision, "action", None)
     action_cap = str(getattr(action, "capability_id", "") or "")
     raw_status = str(getattr(decision, "prior_status", "") or "").strip()
-    if action_cap in ("wait_screen_ready", "wait_ms"):
+    if action_cap in ("wait_screen_ready", "wait_ms") and raw_status not in {"pass", "fail"}:
+        key = str(prior.get("attempt_ref") or f"{mid}:{dispatched}")
+        image_hash = str(getattr(ctx, "decision_screenshot_hash", "") or "")
+        budget = getattr(cursor, "review_wait_budget", None) or {}
+        if budget.get("attempt_ref") != key:
+            budget = {"attempt_ref": key, "count": 0, "same_frame_count": 0}
+        budget["count"] += 1
+        budget["same_frame_count"] = budget["same_frame_count"] + 1 if budget.get("image_hash") == image_hash else 1
+        budget["image_hash"] = image_hash
+        cursor.review_wait_budget = budget
+        if budget["same_frame_count"] >= 2 or budget["count"] >= 3:
+            cursor.semantic_stop = f"{mid} 回看持续等待但没有有效结论，已停止；不能据此判定页面失败。"
+            if writer:
+                writer.append("review/wait_exhausted", {
+                    **budget, "milestone_id": mid, "reason": "review_wait_exhausted",
+                })
+            return "wait_stop"
         # 加载中的等待不是裁定。检查单留着，下一张稳定画面再给 pass 或 fail。
         if writer:
             writer.append(
@@ -293,7 +548,8 @@ def apply_same_turn_prior(
                 },
             )
         return "none"
-    if not raw_status:
+    if raw_status not in {"pass", "fail"}:
+        reason = "prior_omitted" if not raw_status else "prior_invalid"
         # 没填不是画面结论。留着检查单再问一次，不要把下一步吃成重做。
         asked = getattr(cursor, "visual_prior_reask", None)
         if not isinstance(asked, dict):
@@ -301,21 +557,27 @@ def apply_same_turn_prior(
         if asked.get(mid):
             asked.pop(mid, None)
             setattr(cursor, "visual_prior_reask", asked)
-            msg = f"{mid} 没有给出上一步的 pass 或 fail，已停止。"
+            msg = f"LLM 回看输出契约错误：{mid} 未提供合法的 prior_status，尚未验证，已阻塞。"
             setattr(cursor, "semantic_stop", msg)
             setattr(cursor, "visual_prior", None)
             if writer:
                 writer.append(
-                    "review/fail",
-                    {"milestone_id": mid, "reason": "prior_omitted", "redo_already_sent": False},
+                    "review/error",
+                    {
+                        "milestone_id": mid,
+                        "reason": reason,
+                        "error_kind": "llm_output_contract_error",
+                        "redo_already_sent": False,
+                    },
                 )
-            return "stop"
+            return "contract_stop"
         asked[mid] = True
         setattr(cursor, "visual_prior_reask", asked)
         setattr(
             cursor,
             "correction_hint",
-            "上一张图必须给出 prior_status，只能是 pass 或 fail。本回合不下发。",
+            "本回合因上一动作缺少合法 prior_status 而未下发。请先回看 prior_action，"
+            "在工具参数中补 pass 或 fail；只有证据不足时才调用等待工具，不得猜测。",
         )
         if writer:
             writer.append(
@@ -323,7 +585,7 @@ def apply_same_turn_prior(
                 {
                     "milestone_id": mid,
                     "capability_id": str(prior.get("capability_id") or ""),
-                    "reason": "prior_omitted",
+                    "reason": reason,
                 },
             )
         return "reask"
@@ -331,7 +593,10 @@ def apply_same_turn_prior(
     if isinstance(asked, dict) and mid in asked:
         asked.pop(mid, None)
         setattr(cursor, "visual_prior_reask", asked)
+        setattr(cursor, "correction_hint", "")
     status = _normalize_prior_status(raw_status)
+    cursor.review_wait_budget = None
+    transition = same_turn_review_targets(cursor)
     if writer:
         writer.append(
             "review/same_turn",
@@ -342,6 +607,19 @@ def apply_same_turn_prior(
             },
         )
     if status != "pass":
+        if str(prior.get("capability_id") or "") == "input_text":
+            recovery = recover_input_focus(
+                cursor, ctx, reason="input_result_failed", execution_started=True, writer=writer,
+            )
+            if recovery != "none":
+                if writer:
+                    writer.append("review/fail", {
+                        "milestone_id": mid, "reason": "input_result_failed",
+                        "recovery": recovery,
+                    })
+                if recovery == "retry" and action_cap == "tap_element":
+                    return "redo"
+                return "reask" if recovery == "retry" else "stop"
         _rewind(cursor, mid)
         setattr(cursor, "pending_visual_review", None)
         sent = getattr(cursor, "visual_redo_sent", None)
@@ -373,6 +651,7 @@ def apply_same_turn_prior(
         cursor,
         ctx,
         mid,
+        capability_id=str(prior.get("capability_id") or ""),
         writer=writer,
         in_prep=in_prep,
         in_check=in_check,
@@ -387,7 +666,31 @@ def apply_same_turn_prior(
             "review/pass",
             {"milestone_id": mid, "reason": "same_turn", "repeated": repeated},
         )
-    return "settled" if repeated else "confirmed"
+    if transition and transition.get("if_pass"):
+        from mino_nexus.loop.milestone_orchestrator import in_progress_milestone_id
+
+        following = transition["if_pass"]
+        active_id = in_progress_milestone_id(cursor)
+        allowed = following["capabilities"]
+        if active_id == following["milestone_id"] and following.get("program_owned"):
+            return "settled"
+        if active_id == following["milestone_id"] and action_cap in allowed:
+            if writer:
+                writer.append("review/advance", {
+                    "from_milestone_id": mid, "to_milestone_id": active_id,
+                    "capability_id": action_cap, "same_turn": True,
+                })
+            return "confirmed"
+        setattr(cursor, "correction_hint", f"上一动作已通过，当前里程碑为 {active_id}；本次动作不符合回看通过分支，未派发。")
+        if writer:
+            writer.append("contract/reask", {
+                "reason_code": "review_transition_action_mismatch",
+                "from_milestone_id": mid, "to_milestone_id": active_id,
+                "capability_id": action_cap, "allowed_capabilities": allowed,
+                "execution_started": False,
+            })
+        return "reask"
+    return "settled" if repeated or transition else "confirmed"
 
 
 def settle_pending_review(
@@ -720,6 +1023,7 @@ def _confirm_visual_prior(
     ctx: Any,
     milestone_id: str,
     *,
+    capability_id: str = "",
     writer: Any = None,
     in_prep: bool = False,
     in_check: bool = False,
@@ -741,6 +1045,24 @@ def _confirm_visual_prior(
         changed = True
         break
     if changed:
+        if capability_id == "input_text":
+            for row in ms:
+                if not isinstance(row, dict) or row.get("verify_with_milestone") != milestone_id:
+                    continue
+                if str(row.get("status") or "") != "pending":
+                    continue
+                row["status"] = "pass"
+                row["evidence"] = f"input_result:{milestone_id}"
+                row.pop("verify_with_milestone", None)
+                if writer:
+                    writer.append(
+                        "review/pass",
+                        {
+                            "milestone_id": str(row.get("id") or ""),
+                            "reason": "input_result",
+                            "verified_by_milestone": milestone_id,
+                        },
+                    )
         state["milestones"] = ms
         write_state(cursor, state)
         if milestone_id == "send_code":

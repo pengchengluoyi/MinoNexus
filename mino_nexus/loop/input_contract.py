@@ -129,9 +129,29 @@ def focus_input_block_reason(ctx: Any) -> str:
     )
 
 
+def focus_reject_summary(summary: str, error: str = "") -> str:
+    """只识别节点明确在写入前拒绝的焦点错误，兼容旧节点的错误前缀。"""
+    reasons = {
+        "contract_unsupported: 焦点目标已变化或引用失效",
+        "contract_unsupported: 当前焦点不是可编辑控件",
+        "contract_unsupported: 焦点点击引用失效",
+        "focus_unavailable: page_context_missing",
+        "focus_unavailable: page_changed",
+        "focus_unavailable: document_changed",
+        "focus_unavailable: document_check_failed",
+        "focus_unavailable: no_active_element",
+        "focus_unavailable: not_editable",
+        "focus_unavailable: active_element_check_failed",
+    }
+    lines = list(dict.fromkeys(line.strip() for line in f"{summary}\n{error}".splitlines() if line.strip()))
+    return "\n".join(lines) if lines and all(line in reasons for line in lines) else ""
+
+
 def contract_reject_summary(summary: str, error: str = "") -> str:
     """旧 Scout 对无坐标输入的明确拒绝。只认这句，避免宽泛关键词。"""
-    blob = f"{summary}\n{error}"
+    if focus_reject_summary(summary, error):
+        return ""
+    blob = "\n".join(dict.fromkeys(line.strip() for line in f"{summary}\n{error}".splitlines() if line.strip()))
     if "需要坐标 x/y" in blob or "contract_unsupported" in blob:
         return blob.strip()[:300]
     return ""

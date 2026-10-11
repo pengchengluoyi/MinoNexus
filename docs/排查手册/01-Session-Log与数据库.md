@@ -108,6 +108,8 @@ export MINO_NEXUS_DATA_DIR=/path/to/data
 
 ## 5. 命令行访问数据库
 
+外部 Agent 优先使用只读 MCP 诊断工具查询会话及 LLM 正文，见 [MCP 与 LLM 响应查询](06-MCP与LLM响应查询.md)。无需直接读取数据库或索取 token。
+
 ### 5.1 sqlite3
 
 ```bash

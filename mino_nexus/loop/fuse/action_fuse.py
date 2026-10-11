@@ -292,7 +292,11 @@ class ProgressGate:
         )
 
     def note_submilestone_pass(self) -> None:
-        """子里程碑推进：缓解步数预算熔断对登录等多步子流程的误判。"""
+        """已确认的子里程碑进展开启新的停滞窗口，保留阶段总预算。"""
+        self._post_states.clear()
+        self._coarse_actions.clear()
+        self._web_coarse_actions.clear()
+        self._last_web_focus_fp = ""
         self.no_progress_streak = 0
         self.fuse_block_streak = 0
         self._milestone_exhausted = False

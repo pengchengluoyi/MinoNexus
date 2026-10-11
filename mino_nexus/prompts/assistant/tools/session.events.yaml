@@ -1,0 +1,30 @@
+id: session.events
+version: 1
+title: 会话原始事件
+description: 分页读取会话事件，包含工具调用/回执、guard、review、exec/vision 和 LLM 互链。按 next_from_seq 继续，不会截成摘要；查询 LLM 正文请用 session_llm_list 和 llm_get。
+route: GET /case-runner/sessions/{session_id}/events
+risk: read
+async: false
+params_schema:
+  type: object
+  properties:
+    session_id:
+      type: string
+      description: "session_list 返回的完整会话 ID，保留 :: 和设备后缀。"
+    from_seq:
+      type: integer
+      minimum: 0
+      default: 0
+    limit:
+      type: integer
+      minimum: 1
+      maximum: 2000
+      default: 500
+  required:
+  - session_id
+param_resolvers: {}
+result_pick:
+- data
+surfaces:
+- mcp
+enabled: true

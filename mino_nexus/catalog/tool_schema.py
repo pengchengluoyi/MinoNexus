@@ -516,15 +516,22 @@ def fill_input_text_from_ctx(
     from mino_nexus.services.account_credential_text import normalize_input_text_for_lease
 
     out = normalize_input_text_for_lease(out, ctx=ctx)
+    if out.get("_credential_unresolved"):
+        return out
     acc = dict(getattr(ctx, "picked_account", None) or {}) if ctx is not None else {}
     field = str(out.get("field") or "text").strip().lower()
     if field in ("email", "login_email"):
         return out
     if field == "phone" and str(out.get("text") or "").strip():
         return out
-    if field in ("sms_code", "验证码", "password"):
-        code = str(acc.get("otp") or acc.get("sms_code") or acc.get("password") or "").strip()
-        if not code and field in ("sms_code", "验证码") and ctx is not None:
+    if field == "password":
+        if acc.get("password"):
+            out["text"] = str(acc["password"])
+        return out
+    if field in ("sms_code", "验证码", "otp"):
+        out["field"] = "sms_code"
+        code = str(acc.get("otp") or acc.get("sms_code") or "").strip()
+        if not code and ctx is not None:
             from mino_nexus.loop.local_executors import _resolve_otp
 
             code, _ = _resolve_otp(ctx)
@@ -601,6 +608,7 @@ def tools_for_menu(
     *,
     slim_envelope: bool = False,
     include_control_tools: bool = True,
+    require_prior_status: bool = False,
 ) -> list[dict[str, Any]]:
     """当前 Run 可用能力；可选控制信号。assert / 资源网关能力不进 tools。"""
     tools: list[dict[str, Any]] = []
@@ -622,14 +630,21 @@ def tools_for_menu(
             catalog_params = getattr(cap, "params", None) if cap is not None else None
         except Exception:
             catalog_params = None
-        tools.append(
-            openai_tool(
-                cid,
-                str(row.get("summary") or cid),
-                params_schema_for(cid, catalog_params),
-                slim=slim_envelope,
-            )
+        tool = openai_tool(
+            cid,
+            str(row.get("summary") or cid),
+            params_schema_for(cid, catalog_params),
+            slim=slim_envelope,
         )
+        if slim_envelope:
+            parameters = tool["function"]["parameters"]
+            if require_prior_status and cid not in {"wait_screen_ready", "wait_ms"}:
+                parameters["required"] = list(dict.fromkeys([
+                    *(parameters.get("required") or []), "prior_status",
+                ]))
+            else:
+                parameters["properties"].pop("prior_status", None)
+        tools.append(tool)
     if include_control_tools and not slim_envelope:
         tools.extend(CONTROL_TOOLS)
     return tools

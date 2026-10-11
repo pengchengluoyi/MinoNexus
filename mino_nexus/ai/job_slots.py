@@ -149,6 +149,7 @@ def assemble_vision_exec_slots(
     *,
     menu: list[dict[str, Any]],
     success_criteria: str | dict[str, Any] | None = None,
+    correction_hint: str = "",
     knowledge_hint: str = "",
     knowledge_body: str = "",
     nav_assist: str = "",
@@ -173,8 +174,15 @@ def assemble_vision_exec_slots(
             sc_obj = dict(default_sc)
     else:
         sc_obj = dict(default_sc)
+    active_id = str(sc_obj.get("active_focus_milestone_id") or "")
+    active = next((row for row in sc_obj.get("milestones") or []
+                   if isinstance(row, dict) and str(row.get("id") or "") == active_id), {})
+    if sc_obj.get("prior_action") and sc_obj.get("review_transition"):
+        active = {"awaiting_review": active, **sc_obj["review_transition"]}
     return {
         "success_criteria": json.dumps(sc_obj, ensure_ascii=False, indent=2),
+        "active_milestone": json.dumps(active, ensure_ascii=False, indent=2) if active else "",
+        "correction_hint": (correction_hint or "").strip(),
         "knowledge_hint": (knowledge_hint or "").strip(),
         "knowledge_body": (knowledge_body or "").strip(),
         "nav_assist": (nav_assist or "").strip(),

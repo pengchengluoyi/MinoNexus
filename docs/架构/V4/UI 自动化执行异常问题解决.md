@@ -44,6 +44,8 @@ V4 现有工作主要是提示词文件化及 IM/MCP 接入。它们改善维护
 | UI-13 | P1 | 同一种 cap 被当成重复动作，增加空回合 | 已按里程碑、目标及实际坐标限制重复；待运行验证 | §3.8 |
 | UI-14 | P1 | 当前任务知识包为空，业务约束缺乏绑定 | 已加入显式审核规则的里程碑门禁；指定任务知识内容缺失仍待补证、待运行验证 | §4 |
 | UI-15 | P2 | 控件缺页面作用域、编译缓存依赖不全 | 已增加页面作用域、旧控件来源 ID 与逻辑块内容摘要；完整迁移范围待运行验证 | §3.4、§3.5 |
+| UI-16 | P1 | think 未说明未执行，结果图回填还污染当前回合号 | `cr-c8a13f5e7b41` 经 MCP 确认；已补事件含义与回合隔离，待运行验证 | §2.8 |
+| UI-17 | P0 | 回看漏字段、纠偏未送达，输出契约错误被记成业务失败 | 同任务第 7/8 回合确认；已补条件必填、纠偏槽与阻塞分类，待运行验证 | §2.8 |
 
 当前不将任何问题标为“已验证”。代码中存在修复分支不等于运行节点已加载，也不等于其他执行路径没有绕过。
 
@@ -436,6 +438,65 @@ execution_started: false
 
 **验收：**前置未满足时，调度器选择合法补前置、等待新事实或终止；同一阻塞不允许无界重入。不应再靠全局时间耗尽掩盖依赖死锁。
 
+### 2.8 think 事件与回看缺字段（2026-10-11）
+
+经 mino MCP 查询 `cr-c8a13f5e7b41::case-ed53e597::webe22615fbbb917111` 的 184 条事件及关联调度正文：
+
+| 回合 | 已确认的事实 |
+|---|---|
+| 5 | 登录入口已点击；模型返回下一次点击，但缺回看结果。事件 106 `review/hold`，没有工具派发 |
+| 6 | 对登录入口返回 `prior_status=pass`；随后账号框点击成功，事件 133 `tool/result=pass` |
+| 7 | 账号框回看缺字段，事件 158 `review/hold`；本回合没有工具派发 |
+| 8 | 再次缺字段，事件 180 `review/fail(prior_omitted)`，原实现将任务停止为 fail |
+
+**think 的作用：**记录决策和未派发原因，不是设备操作，也不代表通过。应保留诊断事实，但工作台显示“决策（未执行）”“回看补答（未执行）”及原因，不能让用户误以为又执行了一次点击。
+
+**回看链路的代码问题：**工具参数中的 prior_status 原本可选；系统提示只强调 thought；补答时 cursor.correction_hint 未送入视觉执行模型。第 7/8 回合保存的请求相同，均没有纠偏提示。检查单还把 account_field 的元素类型写成 button，和“输入框已聚焦”的预期矛盾。历史记录没有解析前原始响应，因此这里只能确认解析结果缺字段，不能绝对断言模型与解析器的责任比例。
+
+**日志错位：**第 5/7 回合的 llm/request、llm/response 被记在第 4/6 回合。下一张截图回填到上一动作时，mirror_stream_event 把共享 writer 的 turn 改回旧值。修复后单条 stream 事件可指定自己的 turn/phase，旧事件回填不会改变当前循环上下文；当前回合的阶段更新保留，历史事件不改写。
+
+**本轮代码修复，待新 Session 验收：**有 prior_action 时，非等待工具要求 prior_status；无待回看动作或等待时不声明该字段；视觉 Job 增加 correction_hint；输入框检查单纠正 role。漏填或非法值仅允许一次补答，本回合不派发；连续输出契约错误记录 review/error 与 contract/blocked，终止为 blocked/llm_output_contract_error，不判定被测页面失败，也不偷偷补 pass。实际回看 fail 的处理保持不变。无需升级 Scout，不自动重跑或修改历史任务。
+
+### 2.1.2 聚焦回看不可辨：以输入结果验收
+
+`cr-1000b9f7f85a` 的第 5/6 回合点击工具均返回 pass，第 6/7 回合原始模型响应均明确给出 `prior_status=fail`，导致 account_field 重做后停止；不是漏填字段或点击工具异常。仅凭现有记录不能证明是点错位置还是截图无法辨别聚焦。
+
+**采用方案（代码已接入，待重启后新 Session 验收）：**纯视觉登录链路中，成功派发 account_field / otp_field 点击后，不独立要求截图证明聚焦；聚焦里程碑保持 pending，通过 `verify_with_milestone` 关联 account_fill / otp_fill，先允许尝试输入。只有下一张截图确认正确输入框内出现本次完整内容，才同时通过填写和聚焦里程碑。输入工具 pass 本身不算结果通过，DOM 链路及其他点击回看不变。
+
+输入结果失败仍沿用一次重做上限，允许先重新点击输入框再填写，不因聚焦样式不可见终止；未通过输入验收前不能进入发码或提交。Session 以 `review/deferred(reason=verify_input_result)` 记录延后验收，以 `review/pass(reason=input_result)` 记录聚焦由填写结果确认。无需升级 Scout，不修改历史任务或自动重跑。
+
+### 2.1.3 焦点失效恢复与账号租约复用
+
+`cr-cae218300b60` 第 12 回合点击落在插画区域，第 13 回合 current_focus 写入被节点在执行前拒绝。Nexus 将焦点失效统归 contract_unsupported，误判为版本不兼容。`cr-81a964f4a975` 在 account_fill 阶段继续多次点击直至熔断。两个会话的第 1/6 回合分别从前置和填写钩子租号，第二次实际更换账号。
+
+**本轮修复（待重启后新 Session 验收）：**Nexus 精确识别旧节点返回的焦点失效、不可编辑等执行前错误，保留节点的有效焦点保护。每个填写里程碑最多一次重新定位和输入恢复；输入结果回看失败也共享这一预算。真正的能力不兼容继续阻塞。正常填写仅开放 input_text 与等待；恢复阶段开放一次重新点击；待回看输入时允许判断结果并选择下一步，派发前再次检查当前状态，不能只靠模型遵守提示。补齐 active_milestone 槽，明确待输入结果验收的 pending 聚焦项不需要重复点击。
+
+填写钩子从当前有效租约继承 lease_ready，记录 account/reused，不再次调用 lease_account。租号服务先恢复并校验已有租约，再创建新别名/手机号，保留账号需求、登录方式和用例作用域检查。焦点恢复记录 input/recovery，耗尽记录 input/recovery_exhausted；日志不重复拼接相同 summary/error，不记录输入明文。该阶段仅修改 Nexus；下述焦点校验调整需要同时更新 Scout。
+
+**2026-10-11 后续证据与修复（代码接入，待新 Session 验收）：**`cr-aad8efffaa7c` 第 6 回合点击落在 Email 输入框范围，第 7 回合以对应 focus_ref 输入仍被 Scout 拒绝，随后已触发 input/recovery，但第 8–11 回合的恢复点击全部被 fuse_repeat_tap 拦截；最终是恢复与守卫冲突。原始复合错误不足以证明首次拒绝究竟是记录缺失、页面变化还是元素失焦。本次仅一次 lease_account，并出现 account/reused。
+
+Scout 的视觉 current_focus 路径改为保存点击后的页面及焦点所在 frame 链的文档上下文，不保存旧输入元素作为硬门槛。输入时仍检查同一页面对象、文档身份及 URL，拒绝导航或检查异常；focus_ref 保留运行作用域与格式校验用于关联，不再要求与缓存的点击编号严格一致。DOM 的 point_policy=node 定位填写路径不变。
+
+当前输入目标通过 activeElement 取得，沿开放 Shadow DOM 和聚焦 iframe 继续向内检查，不查找其他输入框、不使用坐标邻近兜底、不通过 DOM 写值。仅允许未禁用、非只读、非 inert 的文本类 INPUT（text/search/email/url/tel/password/number）、TEXTAREA 或 contenteditable；普通 body/html、按钮、复选框等拒绝。封闭 Shadow DOM 内部无法可靠检查时安全拒绝。实际写入继续使用键盘，业务成功仍由下一次截图确认；该方案不保证可编辑焦点就是模型预期的业务字段，也不是对页面异步变化的原子锁定。
+
+输入前拒绝通过已有 tool/result.summary/error 返回 `focus_unavailable: <reason>`，reason 限定为 page_context_missing、page_changed、document_changed、document_check_failed、no_active_element、not_editable、active_element_check_failed，不包含页面内容、URL 或凭据。Nexus 精确识别这些错误并复用一次恢复预算；仅对处于 input_refocus_required 且已授权一次恢复的填写里程碑放行一次重复点击，普通重复点击仍熔断，不全局清空守卫计数。Scout 与 Nexus 均需更新并重启，不自动重跑历史任务。
+
+**发送层遗漏（cr-fda53518ee60，case-ed53e597）：**第 6 回合 tool/call 已有指向第 5 回合的完整 focus_ref，节点却返回 current_focus 缺少有效 focus_ref。代码确认 router_proxy 在正式封装 Execute 前再次调用 stamp_scheme_params → apply_focus_input，后者删除 focus_ref，导致调用日志与实际下发载荷不同。修复在发送边界保存上游已绑定引用，完成模式清洗后验证其精确运行前缀及数字步骤后恢复；非法引用在本地拒绝派发。模型参数首次清洗仍删除自带引用，继续由 bind_focus_ref 绑定，不能简单取消 apply_focus_input 的清洗保护。此项仅需更新并重启 Nexus，Scout 0.1.72 无需再次发版；不将此次错误归因为模型漏填或浏览器失焦。待新 Session 验收。
+
+验收要点：同一用例仅一次 lease_account；点击后优先输入；正式 Execute 仍携带上游已绑定且属于本次运行的 focus_ref；同一文档重渲染替换输入元素但当前仍可编辑时允许输入；body、只读/禁用/非文本控件不得写入；页面切换、同 URL 重载及已记录 frame 导航不得沿用旧点击上下文；iframe/开放 Shadow DOM 按实际焦点检查；首次焦点失效允许一次恢复点击通过守卫后输入；再次失效终止为焦点恢复耗尽；输入结果未确认前不得发码或提交。代码静态校验不能替代新 Session 运行验收。
+
+**同轮回看与下一动作（cr-1d02f28ca1a5，代码调整待新 Session 验收）：**三个用例均出现账号输入成功、回看 pass 后再次进入 input_text 引用检查。旧提示同时要求执行旧 active_focus 和回看通过后执行下一步，输入回看菜单也未明确区分成功后的发送验证码与失败后的重新定位。不能把正常流转改为“只回看一轮、再决策一轮”，也不能恢复已消费引用来允许重复写入。
+
+新增只读 review_transition：if_pass 描述通过后下一里程碑及可用能力，if_fail 描述失败后重做/恢复目标；active_milestone 明确标出 awaiting_review，不伪造已通过或提前修改真实状态。待回看菜单为两个分支加等待的并集。模型在同一个 tool call 给出 prior_status 和所选分支动作；程序先确认并推进，再校验分支与实际 in_progress 一致后同轮派发，记录 review/advance，不额外调用模型。输入回看 fail 且选择重新点击时，同轮设置一次恢复并执行点击；错误分支不执行，记录 contract/reask，不继续走过期焦点输入。无新截图、非法 prior_status、恢复耗尽等安全限制保留。
+
+程序专属里程碑（例如 get_otp）不加入模型可执行权限：通过分支标记 program_owned，模型仅借上一工具携带回看结论，程序丢弃占位动作后沿已有程序钩子接管。阶段结束同理，不重复下发、不跨阶段执行旧候选动作。去掉 settled 路径额外合成的“上一步已完成”think 事件，保留模型自身 thought 与 review/turn 日志，不以隐藏所有 think 掩盖实际执行。agent-vision-exec 升为 version 12，DOM 链路不变。验收要求 account_fill 回看 pass 与 send_code 点击在同一回合，fail 与恢复点击也在同一回合；菜单包含分支能力、程序钩子不重复调用、没有空转的合成 think。只需重启 Nexus，Scout 无需改版。
+
+**OTP 绑定与停滞窗口（cr-382e4667c67f，代码修复待新 Session 验收）：**case-ed53e597 第 10 回合 get_otp 成功，第 12 回合原始模型 input_text 未带 field，但执行载荷被归一化为 field=email 和租约邮箱；不是单纯日志标签错误。旧归一化只看登录方式，不看当前 otp_fill，于是将验证码候选覆盖成邮箱。当前 otp_fill 改为优先从本运行 picked_account.otp/sms_code 绑定 field/login_field=sms_code 与输入值，不再由 email 登录方式覆盖；缺少已获取验证码在 Nexus 本地阻塞，禁止回退邮箱、密码或模型猜测值。统一 otp 别名；密码和验证码各自取值，不能混用。
+
+case-e1835aa2 第 9 回合已成功 get_otp，第 11/12 回合第一次验证码输入却被 state_domination 拦截；原因是 note_submilestone_pass 只清计数，没有清历史界面/动作窗口，登录入口、填账号、发码、取码的同屏记录累计成“近 6 步仅 2 个状态”。修改为仅在已确认子里程碑进展时重置停滞窗口（_post_states、粗动作及 Web 粗动作历史），保留阶段累计熔断次数、原有步数规则、同一里程碑内的无进展/重复输入和恢复上限。不得通过取消熔断、换坐标或把工具 pass 全当业务 pass 规避。
+
+验收：OTP 输入 tool/call 为 sms_code 且值与本次 get_otp 一致（日志脱敏）；正常里程碑推进后首次填码不被旧同屏历史阻止；同里程碑真正停滞仍触发守卫。case-ed53e597 的最终失败实际是 otp_fill 恢复耗尽，case-e1835aa2 才是连续熔断，不混为同一终止原因。两项仅修改 Nexus，无需升级 Scout。
+
 ## 3. 统一执行与验收契约
 
 ### 3.1 收敛“成功”的定义与状态修改入口
@@ -508,11 +569,17 @@ V3 动作空间文档同时保留“点下去即成功”和“下一回合回�
 
 ### 3.6 断言严格解析与逐项验收
 
-**当前代码风险，不直接等同于已确认历史误通过。**
+**历史风险与当前整改，不直接等同于已确认历史误通过。**
 
-1. `ai/planner.py::_parse_assert_result` 使用 `bool(raw.get("passed"))`。Python 的非空字符串 `"false"` 会变为 True，JSON 格式合法不代表字段类型合法。
-2. evidence 为空只加入 parse_warnings；后续可仍按 passed 推进。模型 confidence 是自报分数，不是独立证据或经校准的准确率。
-3. `loop/vision_assert.py` 输入多检查点，但主要返回一个总 passed；`agent_loop.py` 通过后调用 `evaluate_milestones(..., programmatic_pass=True)`，`milestones.py` 可将剩余必要项目批量补 pass，没有强制逐项输出与覆盖校验。
+1. 旧解析曾使用 `bool(raw.get("passed"))`，非空字符串 `"false"` 可误变为 True；当前已严格要求 JSON 布尔值。
+2. 旧路径空 evidence 只记警告；当前不再允许空证据通过。模型 confidence 仍是自报分数，不是独立证据或经校准的准确率。
+3. 旧批量总 passed 可覆盖剩余检查点；当前已强制逐项 ID、布尔值及观察证据，不能总结果补绿。
+
+**2026-10-11，cr-d284bca36cd8 / case-ed53e597 的已确认误失败：**校验模型原始响应（ds-69ee3c08ec46）总体和 ck_s1_0 均为 passed=true，且有完整证据。vision_assert 将 seen 集合与 requested 字典直接比较，恒不相等，误报“逐项结果未覆盖全部校验点”并改成 false。已修正为与 set(requested) 比较，同时检查请求 ID 是否为空或重复；未知 ID、重复响应、缺项、非法布尔及无证据仍拒绝通过，保留合法逐项结果供诊断，不以丢空数组掩盖原因。
+
+**本轮代码变更，待新 Session 验收：**AssertResult 增加内部 error_kind；无截图、模型服务不可用/空响应、输出契约异常、检查点应用失败进入 blocked，记录 check/blocked 和 business_verdict=unknown，不再生成“页面预期未成立”。真实且完整的必选项不通过才判 fail。assert/vision、assert/dom 同时记录 status/error_kind，Session 归因同步读取；不改 Scout 协议或历史任务。
+
+整体通过由有效逐项结果中的 required 项计算；选填项仍须返回合法结果，选填不通过如实记录 failed，但不阻止必要检查点准出。DOM 不支持的检查、缺少参数或目标不唯一通过显式 CheckUnavailable 报校验未完成，而非页面失败；本轮不伪称实现了 DOM 居中样式等能力。结构化看图不再丢弃前后对比上下文，element/rules 仍是目标真源；历史上下文不是新增断言依据，单张截图无法证明完整过程。agent-vision-assert 提示词 version 3 统一 ai_reasoning/checkpoint_results 字段及必选聚合语义。上述代码校验不代替新任务运行验收。
 
 **目标规则：**
 
@@ -525,6 +592,14 @@ V3 动作空间文档同时保留“点下去即成功”和“下一回合回�
 
 ### 3.7 统一阻塞和无进展预算
 
+**2026-10-11，cr-910c49665426 冗余回合整改：**纯视觉登录提交已有真实派发记录、取得后续决策截图，且剩余必要项仅为 submit_login/login_state 时，直接复用本轮截图做登录结果校验。一次判定同时结算提交回看和登录态，不再让执行模型猜测重复点击或等待其他站点。相同提交 attempt 与相同截图复用校验结果；未知结果不当成功，等待有截止次数。必要的 prep 准出规划仍保留，避免跳过协议等尚未展开的前置；do 准出条件满足时同轮流转。
+
+发码回看通过且下一项为 get_otp 时，在本轮交接程序 hook，丢弃模型的占位点击，不重复设备动作；取消、失败和等待仍沿用明确状态。一般回看等待绑定派发 attempt，同一图连续等待第二次或总等待第三次进入 blocked，不再无限等待；合法 pass/fail 不被等待工具吞掉。提示词 v13 禁止臆造任务外登录/上传目标，不将关闭遮挡等同业务操作完成。
+
+check 阶段重试依据原始 image_base64 的内容指纹，不再比较缩略图 URL 与内联缩略图；同图或本次已校验过的图不再次调用模型，只有新画面才允许原有有界重试。以上待新 Session 验收，不改变测试 App、用例预期或历史数据。
+
+**2026-10-11，cr-2f0861667f43 / case-e1835aa2 整改：**第 16～472 轮把需要定位的 tap_element 当程序 hook 空参派发，连续 457 次失败才超时。runner 仅直接执行程序或本地能力，其余设备动作返回既有视觉/DOM 决策路径，不切换执行方案；程序 hook 合并自身里程碑参数，不再只从登录逻辑块取参数。普通 hook 失败明确 blocked 停止；已有取码专用有限重试保留。Session 记录 capability、error_kind 与不可重试原因。待新 Session 验收，不改历史记录。
+
 守卫返回统一 reason_code、缺失前置、可恢复性与建议处理；展示名称或 `flow_block:` 前缀不能改变其终止规则。状态机在“补前置 / 等待新事实 / 终止”中选择，不继续选择已知非法动作。
 
 无进展键至少包含步骤、动作意图、阻塞原因和状态版本。所有程序钩子、模型动作、宏、导航、恢复路径都受统一预算约束；计数不靠每个特例增加一条 if。
@@ -534,6 +609,8 @@ V3 动作空间文档同时保留“点下去即成功”和“下一回合回�
 保留局部动作重试预算，但从属于总体步骤预算。恢复过程不能反复重新获得完整预算。重复阻塞日志可保留首次、次数与最后事件，避免没有新信息的大量日志掩盖真正根因。
 
 ### 3.8 回看、动作身份与跳过规则
+
+**2026-10-11，cr-2f0861667f43 / case-3973849e 整改：**必要的 reload_page 因菜单未注册被 skipped，导致未刷新就进入校验。必要能力缺失现在保留 blocked 状态、禁止准出并终止，空菜单同样检查；只有 optional 项可以因未注册跳过。本轮不修改目录数据库，reload_page 仍须经 Console 配置可用的 Web 实现后才能执行，不能用重新打开 URL 冒充刷新。不修改用例预期，也不修改 case-ed53e597 的 App 行为。
 
 当前 `visual_review.py::apply_same_turn_prior` 在无待回看记录但模型返回 prior_status 时，可根据当前里程碑构造 prior。应删除这种从模型答案反推已执行事实的通道：没有已派发动作及有效待验证记录，就拒绝该回看结果，不能据此推进。
 

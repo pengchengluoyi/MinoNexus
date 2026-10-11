@@ -360,7 +360,16 @@ def record_llm(*, messages: list | None = None, parsed=None, raw_text: str = "",
     system_text, imgs_s = _clip_media(system, stem=f"{row_id}-s")
     input_text, imgs_u = _clip_media(user, stem=f"{row_id}-u")
     output_text, imgs_o = _clip_media(output, stem=f"{row_id}-o")
-    if str(job).startswith("assistant"):
+    raw_available = bool(raw_text or meta.get("tool_calls") or "content_len" in meta)
+    raw_redacted = str(job).startswith("assistant")
+    raw_response = None
+    raw_images: list[str] = []
+    if raw_available and not raw_redacted:
+        raw_response, raw_images = extract_media(
+            {"content": raw_text, "tool_calls": meta.get("tool_calls") or []},
+            stem=f"{row_id}-raw",
+        )
+    if raw_redacted:
         input_text = f"[redacted {len(str(input_text))} chars]"
         output_text = f"[redacted {len(str(output_text))} chars]"
     parsed_dict = parsed if isinstance(parsed, dict) else {}
@@ -385,7 +394,11 @@ def record_llm(*, messages: list | None = None, parsed=None, raw_text: str = "",
             "system_prompt": system_text,
             "input": input_text,
             "output": output_text,
-            "images": imgs_s + imgs_u + imgs_o,
+            "output_truncated": not raw_redacted and len(output_text) > _FIELD_CAP,
+            "raw_response": raw_response,
+            "raw_response_available": raw_available and not raw_redacted,
+            "raw_response_redacted": raw_redacted,
+            "images": imgs_s + imgs_u + imgs_o + raw_images,
             "engine": "llm" if not error or parsed is not None else (env.get("engine") or "llm"),
             "elapsed_ms": int(meta.get("elapsed_ms") or 0),
             "prompt_tokens": int(meta.get("prompt_tokens") or usage.get("prompt_tokens") or 0),

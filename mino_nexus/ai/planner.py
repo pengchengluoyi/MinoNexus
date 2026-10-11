@@ -536,7 +536,7 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
     elif prior_status in ("fail", "failed", "pending", "in_progress", "incomplete", "unfinished"):
         prior_status = "fail"
     elif prior_status:
-        prior_status = "fail"
+        warnings.append("prior_status 非法，应为 pass 或 fail")
     else:
         prior_status = ""
     return AgentDecision(
@@ -748,9 +748,6 @@ def vision_exec_turn(
     from mino_nexus.catalog.tool_schema import tools_chat_payload, tools_for_menu
 
     image_base64, image_mime = _llm_image(image_base64, image_mime)
-    tool_payload = tools_chat_payload(
-        tools_for_menu(menu, slim_envelope=True, include_control_tools=False)
-    )
     provider, gate = resolve_regression_provider(provider_id)
     if provider is None:
         return AgentDecision(
@@ -761,6 +758,7 @@ def vision_exec_turn(
     slots = assemble_vision_exec_slots(
         menu=menu,
         success_criteria=success_criteria,
+        correction_hint=str(getattr(cursor, "correction_hint", "") or ""),
         knowledge_hint=knowledge_hint,
         knowledge_body=knowledge_body,
         nav_assist=nav_assist,
@@ -769,6 +767,13 @@ def vision_exec_turn(
         image_base64=image_base64,
         image_mime=image_mime,
     )
+    criteria = json.loads(slots["success_criteria"])
+    tool_payload = tools_chat_payload(tools_for_menu(
+        menu,
+        slim_envelope=True,
+        include_control_tools=False,
+        require_prior_status=bool(criteria.get("prior_action")),
+    ))
     try:
         messages, job_meta = render("agent-vision-exec", slots)
     except JobRenderError as e:
