@@ -52,8 +52,8 @@ AI_PROVIDER_PRESETS: list[dict[str, Any]] = [
         "name": "火山引擎",
         "api_type": "openai",
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "default_model": "doubao-seed-2-0-lite-260215",
-        "model_options": ["doubao-seed-2-0-lite-260215"],
+        "default_model": "doubao-seed-2-0-lite-260428",
+        "model_options": ["doubao-seed-2-0-lite-260428"],
     },
 ]
 
@@ -197,13 +197,36 @@ def test_mail(to: str = "") -> dict[str, Any]:
     return {"to": dest}
 
 
-def _ai_root() -> dict[str, Any]:
-    root = _root()
-    ai = root.get("ai")
-    if not isinstance(ai, dict):
-        ai = {}
-        root["ai"] = ai
-    return ai
+def _ai_root(user_id: str | None = None) -> dict[str, Any]:
+    from mino_nexus.core.execution_user import require_user_id
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.settings import Settings
+    uid = require_user_id(user_id)
+    with session_scope() as db:
+        row = db.get(Settings, f"ai-user:{uid}")
+        return dict(row.payload or {}) if row and isinstance(row.payload, dict) else {}
+
+
+def _save_ai(ai: dict[str, Any], user_id: str | None = None) -> None:
+    from mino_nexus.core.execution_user import require_user_id
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.settings import Settings
+    uid = require_user_id(user_id)
+    with session_scope() as db:
+        db.merge(Settings(id=f"ai-user:{uid}", payload=ai))
+
+
+import threading
+from functools import wraps
+_ai_lock = threading.RLock()
+
+
+def _ai_write(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        with _ai_lock:
+            return fn(*args, **kwargs)
+    return wrapped
 
 
 def _provider_public(provider_id: str, raw: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -234,11 +257,12 @@ def _provider_public(provider_id: str, raw: Optional[dict[str, Any]] = None) -> 
         "plan_compress_ratio": float(raw.get("plan_compress_ratio") or 3.0),
         "web_compress_ratio": float(raw.get("web_compress_ratio") or 2.0),
         "android_compress_ratio": float(raw.get("android_compress_ratio") or 1.0),
+        "pc_compress_ratio": float(raw.get("pc_compress_ratio") or 1.0),
     }
 
 
-def get_ai_usage() -> dict[str, Any]:
-    usage = _ai_root().get("_usage") if isinstance(_ai_root().get("_usage"), dict) else {}
+def get_ai_usage(user_id: str | None = None) -> dict[str, Any]:
+    usage = _ai_root(user_id).get("_usage") if isinstance(_ai_root(user_id).get("_usage"), dict) else {}
     return {
         "copilot_enabled": bool(usage.get("copilot_enabled", False)),
         "case_execution_enabled": bool(usage.get("case_execution_enabled", False)),
@@ -248,8 +272,8 @@ def get_ai_usage() -> dict[str, Any]:
     }
 
 
-def list_ai_providers() -> dict[str, Any]:
-    ai = _ai_root()
+def list_ai_providers(user_id: str | None = None) -> dict[str, Any]:
+    ai = _ai_root(user_id)
     providers = [_provider_public(p["id"], ai.get(p["id"])) for p in AI_PROVIDER_PRESETS]
     custom_ids = [
         x for x in ai.keys()
@@ -263,16 +287,16 @@ def list_ai_providers() -> dict[str, Any]:
         "providers": providers,
         "presets": AI_PROVIDER_PRESETS,
         "default_provider": str(ai.get("_default_provider") or "openai"),
-        "usage": get_ai_usage(),
+        "usage": get_ai_usage(user_id),
     }
 
 
-def save_ai_provider(provider_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    pid = str(provider_id or "").strip()
-    if not pid:
+@_ai_write
+def save_ai_provider(provider_id: str, payload: dict[str, Any], user_id: str | None = None) -> dict[str, Any]:
+    pid = str(provider_id or "").strip().lower()
+    if not pid or pid.startswith("_") or len(pid) > 128:
         raise ValueError("缺少模型 id")
-    root = _root()
-    ai = root.setdefault("ai", {})
+    ai = _ai_root(user_id)
     row = ai.get(pid) if isinstance(ai.get(pid), dict) else {}
     if payload.get("clear_key"):
         row["api_key"] = ""
@@ -291,26 +315,29 @@ def save_ai_provider(provider_id: str, payload: dict[str, Any]) -> dict[str, Any
         row["web_compress_ratio"] = float(payload.get("web_compress_ratio") or 2)
     if "android_compress_ratio" in payload:
         row["android_compress_ratio"] = float(payload.get("android_compress_ratio") or 1)
+    if "pc_compress_ratio" in payload:
+        ratio = float(payload["pc_compress_ratio"])
+        if not 1.0 <= ratio <= 10.0:
+            raise ValueError("PC 压缩比必须在 1 到 10 之间")
+        row["pc_compress_ratio"] = ratio
     ai[pid] = row
     if payload.get("set_default"):
         ai["_default_provider"] = pid
-    root["ai"] = ai
-    _save(root)
+    _save_ai(ai, user_id)
     return _provider_public(pid, row)
 
 
-def delete_ai_provider(provider_id: str) -> None:
+@_ai_write
+def delete_ai_provider(provider_id: str, user_id: str | None = None) -> None:
     pid = str(provider_id or "").strip()
-    root = _root()
-    ai = root.get("ai") if isinstance(root.get("ai"), dict) else {}
+    ai = _ai_root(user_id)
     ai.pop(pid, None)
-    root["ai"] = ai
-    _save(root)
+    _save_ai(ai, user_id)
 
 
-def save_ai_usage(payload: dict[str, Any]) -> dict[str, Any]:
-    root = _root()
-    ai = root.setdefault("ai", {})
+@_ai_write
+def save_ai_usage(payload: dict[str, Any], user_id: str | None = None) -> dict[str, Any]:
+    ai = _ai_root(user_id)
     mode = payload.get("mode") or "local_first"
     if mode not in ("local_first", "ai_first"):
         mode = "local_first"
@@ -321,19 +348,21 @@ def save_ai_usage(payload: dict[str, Any]) -> dict[str, Any]:
         "mode": mode,
         "plan_compress_image": bool(payload.get("plan_compress_image", True)),
     }
-    root["ai"] = ai
-    _save(root)
-    return get_ai_usage()
+    _save_ai(ai, user_id)
+    return get_ai_usage(user_id)
 
 
-def get_ai_provider_credentials(provider_id: str | None = None) -> dict[str, Any]:
+def get_ai_provider_credentials(provider_id: str | None = None, user_id: str | None = None) -> dict[str, Any]:
     """给 LLM 调用层用，含明文 key，不要回给前端。"""
-    ai = _ai_root()
+    from mino_nexus.core.execution_user import require_user_id
+    uid = require_user_id(user_id)
+    ai = _ai_root(uid)
     pid = str(provider_id or "").strip().lower() or str(ai.get("_default_provider") or "openai").strip().lower()
     raw = ai.get(pid) if isinstance(ai.get(pid), dict) else {}
     preset = next((p for p in AI_PROVIDER_PRESETS if p["id"] == pid), None)
     api_key = str(raw.get("api_key") or "").strip()
     return {
+        "owner_user_id": uid,
         "id": pid,
         "name": raw.get("name") or (preset or {}).get("name") or pid,
         "configured": bool(api_key),
@@ -347,28 +376,29 @@ def get_ai_provider_credentials(provider_id: str | None = None) -> dict[str, Any
         "plan_compress_ratio": float(raw.get("plan_compress_ratio") or 3.0),
         "web_compress_ratio": float(raw.get("web_compress_ratio") or 2.0),
         "android_compress_ratio": float(raw.get("android_compress_ratio") or 1.0),
+        "pc_compress_ratio": float(raw.get("pc_compress_ratio") or 1.0),
     }
 
 
-def find_case_execution_provider_id() -> str:
-    usage = get_ai_usage()
+def find_case_execution_provider_id(user_id: str | None = None) -> str:
+    usage = get_ai_usage(user_id)
     usage_pid = str(usage.get("case_execution_provider_id") or "").strip().lower()
     if usage_pid:
-        cred = get_ai_provider_credentials(usage_pid)
+        cred = get_ai_provider_credentials(usage_pid, user_id)
         if cred.get("configured") and cred.get("enabled") and cred.get("case_execution_use"):
             return usage_pid
-    ai = _ai_root()
+    ai = _ai_root(user_id)
     for pid, raw in ai.items():
         if str(pid).startswith("_") or not isinstance(raw, dict):
             continue
-        cred = get_ai_provider_credentials(str(pid))
+        cred = get_ai_provider_credentials(str(pid), user_id)
         if cred.get("configured") and cred.get("enabled") and cred.get("case_execution_use"):
             return str(pid)
     return usage_pid
 
 
-def should_use_ai_planning(channel: str, provider_id: str | None = None) -> dict[str, Any]:
-    usage = get_ai_usage()
+def should_use_ai_planning(channel: str, provider_id: str | None = None, user_id: str | None = None) -> dict[str, Any]:
+    usage = get_ai_usage(user_id)
     normalized = (channel or "copilot").strip().lower()
     explicit = bool(str(provider_id or "").strip())
     if normalized in {"case", "case_execution", "regression", "feishu"}:
@@ -379,8 +409,8 @@ def should_use_ai_planning(channel: str, provider_id: str | None = None) -> dict
         scope_enabled = bool(usage.get("copilot_enabled"))
     selected = str(provider_id or "").strip() or None
     if normalized in {"case", "case_execution", "regression", "feishu"} and not selected:
-        selected = find_case_execution_provider_id() or None
-    provider = get_ai_provider_credentials(selected)
+        selected = find_case_execution_provider_id(user_id) or None
+    provider = get_ai_provider_credentials(selected, user_id)
     ok = bool(
         scope_enabled
         and provider.get("configured")

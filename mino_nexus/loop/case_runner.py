@@ -1,5 +1,7 @@
 """创建回归任务并落库。逐条执行在 case_exec。"""
 from __future__ import annotations
+from mino_nexus.core.execution_user import user_thread, owned_job, require_user_id
+
 
 import threading
 import time
@@ -160,7 +162,11 @@ def run_cases(
     def mark(name: str) -> None:
         phases.append((name, int((time.perf_counter() - t0) * 1000)))
 
+    require_user_id(plugin_user_id or None)
+    from mino_nexus.services.access_scope import require_owned_device
     device_sns = _normalize_sns(sn, sns)
+    for owned_sn in device_sns:
+        require_owned_device(owned_sn)
     cov = str(coverage or "").strip().lower()
     if cov not in ("", "once", "per_device"):
         raise ValueError("coverage 必须是 once 或 per_device")
@@ -190,35 +196,11 @@ def run_cases(
         _reject_uncoverable_cases(cases)
     mark("cases")
 
-    roster = ui_devices.ui_devices()
-
-    def platform_of(dsn: str) -> str:
-        for dev in roster:
-            if dev.get("sn") == dsn:
-                return device_platform_kind(str(dev.get("type") or ""), dev.get("channels"), sn=dsn)
-        return platform
-
-    platforms_by_sn: dict[str, str] = {dsn: platform_of(dsn) for dsn in device_sns}
-    running = run_store.running_index()
-    for dsn in device_sns:
-        from mino_nexus.runtime.run_context import is_web_slot
-
-        if is_web_slot(dsn, platforms_by_sn.get(dsn, "")):
-            _ensure_web_parallel_capacity(dsn)
-            continue
-        busy_ids = running.get(dsn) or []
-        if busy_ids:
-            raise DeviceBusy(dsn, busy_ids[0])
+    from mino_nexus.services.device_targets import select
+    device_sns, device_targets = select(app, device_sns, surface=env_surface, profile=env_profile,
+                                        headless=playwright_headless, action_scheme=action_scheme)
+    platforms_by_sn = {dsn: str(device_targets[dsn]["platform"]) for dsn in device_sns}
     mark("devices")
-
-    if not device_sns:
-        device_sns = [
-            str(d.get("sn") or "")
-            for d in roster
-            if d.get("status") == "online" and d.get("sn")
-        ][:1]
-
-    platforms_by_sn = {dsn: platform_of(dsn) for dsn in device_sns}
     task_platform = platform
     if device_sns and len(set(platforms_by_sn.values())) == 1:
         task_platform = platforms_by_sn[device_sns[0]]
@@ -235,7 +217,11 @@ def run_cases(
             env_doc = {}
     from mino_nexus.services.project_env import resolve_run_env_profile
 
-    plat_for_pkg = task_platform if task_platform in ("android", "ios", "web") else "android"
+    plat_for_pkg = task_platform
+    if task_platform == "desktop":
+        native_os = device_targets[device_sns[0]]["os"]
+        plat_for_pkg = {"macos": "mac", "windows": "pc", "linux": "linux"}[native_os]
+        env_surface = device_targets[device_sns[0]].get("target_surface") or env_surface
     resolved_env = resolve_run_env_profile(
         env_doc,
         requested=str(env_profile or "").strip(),
@@ -267,6 +253,9 @@ def run_cases(
             for i, c in enumerate(cases)
         ]
 
+    from mino_nexus.services.access_scope import require_owned_device
+    for owned_sn in device_sns:
+        require_owned_device(owned_sn)
     provider, gate = resolve_regression_provider(str(provider_id or "").strip() or None)
     mark("assembled")
     doc: dict[str, Any] = {
@@ -281,10 +270,12 @@ def run_cases(
         "coverage": cov,
         "platform": task_platform,
         "platforms_by_sn": platforms_by_sn,
+        "device_targets": device_targets,
         "env_profile": resolved_env,
         "env_surface": env_surface_id,
         "action_scheme": "dom" if str(action_scheme or "").strip().lower() == "dom" else "visual",
-        "plugin_user_id": str(plugin_user_id or "").strip(),
+        "owner_user_id": require_user_id(plugin_user_id or None),
+        "plugin_user_id": require_user_id(plugin_user_id or None),
         "package": package,
         "playbook": playbook if isinstance(playbook, dict) else {},
         "requirement_id": str(requirement_id or "").strip(),
@@ -334,7 +325,7 @@ def run_cases(
         persist_run_finish(finished)
         return run_store.to_task_json(finished)
 
-    worker = threading.Thread(
+    worker = user_thread(
         target=_run_in_background,
         kwargs={"run_id": run_id, "package": package, "playbook": playbook, "provider_id": doc["provider_id"]},
         daemon=True,
@@ -374,26 +365,26 @@ def run_explore(
     """发起应用探索：LLM 自由操作，被动采集拓展 Screen Atlas。"""
     from mino_nexus.loop.explore_case import build_explore_case
 
+    require_user_id(plugin_user_id or None)
+    from mino_nexus.services.access_scope import require_owned_device
     device_sns = _normalize_sns(sn, None)
-    if not device_sns:
-        device_sns = _pick_online_sns()[:1]
-    for dsn in device_sns:
-        from mino_nexus.runtime.run_context import is_web_slot
-
-        if is_web_slot(dsn, _platform_of(dsn, platform)):
-            _ensure_web_parallel_capacity(dsn)
-            continue
-        busy = run_store.busy_task_for_sn(dsn)
-        if busy:
-            raise DeviceBusy(dsn, busy)
-
+    for owned_sn in device_sns:
+        require_owned_device(owned_sn)
+    from mino_nexus.services.device_targets import select
+    device_sns, device_targets = select(app, device_sns, surface=env_surface, profile=env_profile,
+                                        headless=playwright_headless)
+    platform = str(device_targets[device_sns[0]]["platform"])
     explore_case = build_explore_case(
         instruction=str(instruction or "").strip(),
         max_steps=max_steps,
         max_idle_steps=max_idle_steps,
     )
     cfg = aas.get_automation_config(app)
-    plat_for_pkg = platform if platform in ("android", "ios", "web") else "android"
+    plat_for_pkg = platform
+    if platform == "desktop":
+        native_os = device_targets[device_sns[0]]["os"]
+        plat_for_pkg = {"macos": "mac", "windows": "pc", "linux": "linux"}[native_os]
+        env_surface = device_targets[device_sns[0]].get("target_surface") or env_surface
     resolved_env = str(env_profile or cfg.get("env_profile") or "test").strip()
     env_surface_id = str(env_surface or "").strip()
     package = aas.package_for_app(
@@ -405,6 +396,9 @@ def run_explore(
     playbook = aas.get_playbook(app)
     run_id = run_store.new_run_id()
     seeded = run_store.seed_case(run_id, explore_case, 0, sn=device_sns[0] if device_sns else "", coverage="once")
+    from mino_nexus.services.access_scope import require_owned_device
+    for owned_sn in device_sns:
+        require_owned_device(owned_sn)
     provider, gate = resolve_regression_provider(str(provider_id or "").strip() or None)
     doc: dict[str, Any] = {
         "run_id": run_id,
@@ -418,9 +412,12 @@ def run_explore(
         "sns": device_sns,
         "coverage": "once",
         "platform": platform,
+        "platforms_by_sn": {s: device_targets[s]["platform"] for s in device_sns},
+        "device_targets": device_targets,
         "env_profile": resolved_env,
         "env_surface": env_surface_id,
-        "plugin_user_id": str(plugin_user_id or "").strip(),
+        "owner_user_id": require_user_id(plugin_user_id or None),
+        "plugin_user_id": require_user_id(plugin_user_id or None),
         "package": package,
         "playbook": playbook if isinstance(playbook, dict) else {},
         "provider_id": (provider or {}).get("id") or gate.get("provider_id") or "",
@@ -462,7 +459,7 @@ def run_explore(
         persist_run_finish(finished)
         return run_store.to_task_json(finished)
 
-    worker = threading.Thread(
+    worker = user_thread(
         target=_run_in_background,
         kwargs={"run_id": run_id, "package": package, "playbook": playbook, "provider_id": doc["provider_id"]},
         daemon=True,

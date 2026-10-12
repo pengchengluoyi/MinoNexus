@@ -1,5 +1,7 @@
 """用例导入：preview / commit，冲突由用户决定覆盖或跳过。"""
 from __future__ import annotations
+from mino_nexus.core.execution_user import user_thread, owned_job, require_user_id
+
 
 import copy
 import threading
@@ -310,6 +312,7 @@ def preview_import(
 
     token = uuid.uuid4().hex
     _previews[token] = {
+        "owner_user_id": require_user_id(),
         "created_at": _now(),
         "project_id": pid,
         "requirement_id": rid,
@@ -319,7 +322,7 @@ def preview_import(
         "cancel": False,
         "batch_size": int(get_case_import_settings().get("preview_batch_size") or 5),
     }
-    threading.Thread(target=_compile_preview_batches, args=(token,), daemon=True).start()
+    user_thread(target=_compile_preview_batches, args=(token,), daemon=True).start()
     return {
         "preview_token": token,
         "project_id": pid,
@@ -337,7 +340,7 @@ def preview_import(
 
 def preview_status(preview_token: str) -> dict[str, Any] | None:
     doc = _previews.get(str(preview_token or ""))
-    if not doc:
+    if not doc or doc.get("owner_user_id") != require_user_id():
         return None
     rows = list(doc.get("rows") or [])
     parsed = sum(1 for row in rows if row.get("parse_status") != "pending")
@@ -353,7 +356,7 @@ def preview_status(preview_token: str) -> dict[str, Any] | None:
 
 def cancel_preview(preview_token: str) -> bool:
     doc = _previews.get(str(preview_token or ""))
-    if not doc:
+    if not doc or doc.get("owner_user_id") != require_user_id():
         return False
     doc["cancel"] = True
     for row in doc.get("rows") or []:
@@ -364,7 +367,7 @@ def cancel_preview(preview_token: str) -> bool:
 
 def retry_preview_row(preview_token: str, row_index: int) -> bool:
     doc = _previews.get(str(preview_token or ""))
-    if not doc:
+    if not doc or doc.get("owner_user_id") != require_user_id():
         return False
     found = False
     for row in doc.get("rows") or []:
@@ -380,13 +383,13 @@ def retry_preview_row(preview_token: str, row_index: int) -> bool:
     if not found:
         return False
     doc["cancel"] = False
-    threading.Thread(target=_compile_preview_batches, args=(str(preview_token),), daemon=True).start()
+    user_thread(target=_compile_preview_batches, args=(str(preview_token),), daemon=True).start()
     return True
 
 
 def _compile_preview_batches(token: str) -> None:
     doc = _previews.get(token)
-    if not doc:
+    if not doc or doc.get("owner_user_id") != require_user_id():
         return
     from mino_nexus.services.case_key_registry import import_row_key_summary
 
@@ -446,7 +449,7 @@ def commit_import(
     fill_plat = str(default_platform or "").strip()
     if preview_token:
         doc = _previews.get(str(preview_token))
-        if not doc:
+        if not doc or doc.get("owner_user_id") != require_user_id():
             raise ValueError("预览已过期，请重新解析")
         if str(doc.get("project_id") or "") != pid:
             raise ValueError("预览与项目不匹配")

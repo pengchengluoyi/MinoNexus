@@ -1,14 +1,39 @@
 id: device.list
-version: 1
-title: 在线设备
-description: 列出当前在线的测试设备。用户问设备在不在线、哪台空闲时用。
+version: 2
+title: 兼容设备列表
+description: 实时查询设备。为任务选设备必须传项目、应用和 env_surface，仅返回该渠道的可执行候选；不要复用历史设备列表。status 为 online/offline，ready
+  仅表示 desktop_state 桌面就绪。
 route: GET /case-runner/devices
 risk: read
 async: false
 params_schema:
   type: object
-  properties: {}
-param_resolvers: {}
+  properties:
+    project_id:
+      type: string
+      description: 用户明确指定的项目 id 或名称，用于限定应用和渠道
+    app_id:
+      type: string
+      description: 项目中的应用记录 id 或名称；Agent 等渠道别名应填 env_surface
+    env_surface:
+      type: string
+      description: 用户明确指定的应用渠道 id 或别名，例如 Agent/macagent；先确定渠道再筛选设备
+    env_profile:
+      type: string
+      description: 本次运行环境，例如 test/pre/prod
+    action_scheme:
+      type: string
+      enum:
+      - visual
+      - dom
+      description: 执行方案；原生 PC 应用仅支持 visual
+    only_online:
+      type: boolean
+      description: 普通设备查询是否只显示在线设备，默认为 true；指定应用渠道时单独列出不可用原因
+param_resolvers:
+  project_id: project.by_name
+  app_id: app.by_name
+  env_surface: channel.by_name
 result_pick:
 - data
 card: answer

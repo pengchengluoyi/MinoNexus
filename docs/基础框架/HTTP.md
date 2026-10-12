@@ -49,7 +49,7 @@ UI **只**打 MinoNexus。没有公网域名时用内网名 `mino.local`：Nexus
 
 安装包在 **Scout GitHub Release**，不进本仓数据目录，也不要在服务器上维护 zip / dmg / exe。
 
-Studio **只**拉 GitHub 公开 manifest，不经过本仓：
+发布清单由 Nexus 的 Scout 接入服务读取并用于确定实际可安装目标；Workbench 通过 Nexus 获取安装命令：
 
 ```
 https://github.com/<owner>/MinoScout/releases/latest/download/manifest.json
@@ -57,9 +57,11 @@ https://github.com/<owner>/MinoScout/releases/latest/download/manifest.json
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/runtime/nodes` | 当前用户可见的节点。`?studio_id=` 为本工作台 id。未归属仅管理员可见；离线节点仍列出 |
-| POST | `/runtime/nodes/install-token` | 短 TTL 节点凭证。Studio 写入 Scout 配置 |
-| PATCH | `/runtime/nodes/{node_id}` | **Console 管理员**：改 `owner_user_id` / `studio_id`（离线节点也生效） |
+| GET | `/runtime/nodes` | 当前账号归属的全部节点；管理员的已归属节点按本人 owner 过滤，另外可见未归属节点以便认领。`studio_id` 仅兼容、不授权。离线节点仍列出 |
+| POST | `/runtime/nodes/install-token` | 签发登录账号的 15 分钟单机安装凭证；返回 `install_id`、`expires_at`、`nexus_url`、实际发布 `targets` 和各系统 `commands`；`Cache-Control: no-store` |
+| GET | `/runtime/nodes/installations/{install_id}` | 仅签发账号可查询；不返回凭证。状态 `pending` / `expired` / `registered` / `revoked`，以及本次注册节点的名称和在线状态 |
+| POST | `/runtime/nodes/{node_id}/revoke-token` | 当前 owner 吊销本人单节点长期凭证并断开该连接；其他节点不受影响 |
+| PATCH | `/runtime/nodes/{node_id}` | 仅本人节点；拒绝转移 owner、共享节点或重新关联 studio，本轮不提供节点转移 |
 | POST | `/runtime/nodes/{node_id}/command` | Studio 对已连接节点下发 `stop` / `restart` / `update` / `sleep` / `wake`。离线 409。`start` 400（进程已退出时不能远程拉起） |
 | POST | `/runtime/nodes/{node_id}/plugins/config` | 把该节点的插件参数转到 Scout。body：`kind`、`plugin_id`、`values`、`clear`。Nexus 不落库。离线 409 |
 | POST | `/runtime/nodes/{node_id}/plugins/install` | 让 Scout 按发布清单安装 CLI / MCP。body：`kind`、`plugin_id` |
@@ -261,3 +263,47 @@ CLI 等价：`mino-nexus nav start|step|finish|draft-save|draft-promote|metrics 
 `nav_fsm_store.load()` —— 后者还会校验校准账号与本次租号一致（否则 hierarchy 是别的
 账号采的，`resource-id` 与控件态都可能不同）。所以「Studio 里能打开」不等于「跑批能用」，
 看 `runtime_ready`。
+
+## Workbench V4 增量接口
+
+- `POST /auth/register`：邮箱、密码即可；固定普通用户且邮箱未验证，不影响登录。`/auth/send-code` 的注册用途返回 410，现有 Studio / Console / Workbench 已核对无发码调用。
+- `GET /project/{project_id}/cases?limit=50&offset=0&app_id=...&search=...&module=...&result=all|failed|never`：分页摘要，不触发程序图编译。未指定 limit 时保留旧完整响应。app_id 必须属于当前项目，结果筛选必须提供 app_id。
+- `GET /project/{project_id}/case-modules`：独立模块计数。用例详情仍由 `GET /project/{project_id}/cases/{case_id}` 读取。
+- `GET /case-runner/tasks?app_id=...&limit=50&offset=0&summary=true`：仅任务摘要；不取完整轨迹。默认 summary=false 保留旧客户端响应。
+- `POST /case-runner/case-results`：`{app_id,case_ids}`，最多 200 个当前项目用例，返回 `items` 按用例 id 映射的最新状态、原因与时间，覆盖全部保留历史，不限最近 20 个任务。
+- `GET /runtime/nodes` 的 `im_channels` 与 `GET /assistant/status` 使用同一规范化渠道状态。助手状态只包含当前账号可见节点，逐渠道增加 `bound`，IM 和 `mcp_available` 分开聚合。
+- `GET/PUT /assistant/profile` 只读写 `persona/enabled`。旧默认字段通过 `extra=ignore` 明确忽略；数据库旧列保留。
+
+## Workbench V4 账号隔离
+
+上述客户端门禁之外仍须校验会话归属。Scout 节点、我的助手、模型密钥三页及其关联操作对管理员采用同一 owner 边界；请求体中伪造 `user_id` 不改变服务端执行账号。其他账号及无归属资源统一返回 404，未登录返回 401。节点插件、日志、设备设置、安装记录与远程操作在访问前验证 owner；不同账号上报相同设备 SN 不转移原归属或继承配置。
+
+| 方法 | 路径 | 账号边界 |
+| --- | --- | --- |
+| GET | `/settings/ai/providers` | 本人服务商配置、默认项和用途开关；Key 仅脱敏，新账号为未配置 |
+| PUT / DELETE | `/settings/ai/providers/{provider_id}` | 仅保存或删除会话账号的配置 |
+| POST | `/settings/ai/providers/{provider_id}/validate` | 使用本人已保存配置验证模型连接，实际模型调用也校验 owner |
+| PUT | `/settings/ai/usage` | 本人模型用途开关 |
+| GET | `/nodes`、`/devices`、`/capabilities`、`/runtime/*` | 必须登录，节点与设备按 owner 过滤 |
+| WS | `/ws?token=<session_token>` | 必须认证；快照和推送按用户过滤，每次请求/推送复核 token，吊销后关闭旧连接 |
+
+IM 回调由已认证 Scout 连接提供节点身份，校验实际机器人实例与持有权，再按 channel + instance + tenant + sender 解析本人绑定。绑定码仅本人节点可消费，限时且一次性；回调在执行前原子去重。历史消息必须同实例、租户、实际发送者且晚于当前绑定确认；每次模型调用、工具调用、通知与回复前复核绑定代次。解绑/重新绑定后旧请求、旧正文读取及旧通知失效。详情正文由 Scout 本地按 scope 现取，不在 Nexus 缓存。
+
+IM 工具 `device.list`、`case.run`、`app.explore` 支持 `project_id/app_id/env_surface/env_profile`。渠道别名按项目解析，多个渠道时先明确渠道，再询问该渠道兼容且可执行的本人设备。消息中明确指名项目和渠道时，本轮先查询实时候选，不复用历史设备清单；下发保留 `env_surface` 并重新校验设备准入。设备摘要将 `status=online/offline` 与 `desktop_state=ready` 分开显示，后者只表示“桌面就绪”。
+
+Scout `REGISTER.account_isolation_version=1` 才可接入；旧客户端在安装码消费前拒绝并提示升级。`REGISTERED.owner_user_id` 确认本地插件命名空间，不能用新账号或新服务继承旧凭据。
+
+
+## V4 Desktop 选择与管理员入口
+
+| 方法 | 路径 | 行为 |
+|---|---|---|
+| GET | `/case-runner/devices` | 默认 `only_online=false`、`compatible_only=false`，保留账号内离线/未就绪设备。可传 `app_id/env_surface/env_profile/action_scheme/playwright_headless`；逐行返回 `executable/blocking_code/blocked_reason`。`compatible_only=true` 且指定应用时只保留兼容该渠道的设备，未就绪原因仍可展示。原生 macOS/Windows/Linux 渠道要求同 OS Desktop；网站匹配 Web 槽。 |
+| POST | `/case-runner/run`、`/case-runner/explore` | 服务端再次核对 owner、Scout 事实与应用兼容性，在 SQLite 原子获取资源锁后建任务。忽略客户端平台对执行路由的影响；阻塞返回 409（错误详情含 sn、blocking_code、message），他人资源返回 404。 |
+| POST | `/runtime/nodes/{node_id}/claim` | 管理员将无归属历史节点认领到当前账号并关闭旧连接；普通用户 403，已有归属 409。长期凭证同步归属，下次重连仍可用。 |
+| GET | `/packs/desktop-paths` | 旧客户端兼容入口：返回空 changes 和 configuration_required=false；Desktop 工具从当前 Scout 设备清单生成，不写库。 |
+| POST | `/packs/desktop-paths` | 旧客户端兼容入口：返回空 configured 和 configuration_required=false；不修改目录，不要求管理员角色。 |
+
+`GET /runtime/nodes` 的每个节点新增宿主 `host` 摘要；设备保持 `platform/os/session_key/session_generation/desktop_state/capabilities/readiness`。管理员可查看未归属节点的宿主状态以便认领；已归属节点与任务设备仍按账号隔离。离线行不丢失这些字段。
+
+模型供应商的 `GET /settings/ai/providers` 与 `PUT /settings/ai/providers/{id}` 支持 `pc_compress_ratio`：默认 1，取值 1–10，禁止非有限数。字段仍按当前执行账号隔离存储，不新增共享密钥或配置表。旧客户端省略该字段时保留现有 PC 设置。Desktop 采集使用该比例，模型输入不再叠加 Plan 压缩；返回的捕获原始尺寸与 capture 引用仍用于坐标映射。

@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Optional
 
 from mino_nexus.core import protocol as P
-from mino_nexus.services.device_store import remember as remember_device
+from mino_nexus.services.device_store import remember as remember_device, get_device
 from mino_nexus.core.log import SLog
 from mino_nexus.services.node_store import get_node as stored_node, sanitize_id, upsert as persist_node
 from mino_nexus.runtime.run_context import (
@@ -41,6 +41,17 @@ def _channel_connected(channels: Any) -> bool:
     if not isinstance(channels, dict):
         return False
     return any(_channel_value(v) in _ONLINE_CHANNEL for v in channels.values())
+
+
+def _device_identity_valid(device: P.DeviceManifest, node_id: str, host_platform: str) -> bool:
+    """A node cannot move another account's host slot by reporting its SN."""
+    if device.platform == "desktop" or device.sn.startswith("desktop:"):
+        os_name = {"darwin": "macos", "macos": "macos", "windows": "windows", "win32": "windows", "linux": "linux"}.get(host_platform.lower())
+        return bool(device.platform == "desktop" and device.sn == f"desktop:{node_id}:console"
+                    and device.session_key == "console" and device.os == os_name)
+    if device.platform == "web" and device.sn.startswith("web") and not is_legacy_web_sn(device.sn):
+        return device.sn == f"web{node_id}"
+    return True
 
 
 _PLUGIN_CLASSES = frozenset({"cli", "mcp", "bot", "mail", "im"})
@@ -84,10 +95,17 @@ def _plugin_status(raw: Any) -> dict[str, Any]:
     except (TypeError, ValueError):
         last = 0
     out = {
-        "connected": bool(raw.get("connected")),
         "last_message_at": last,
         "error": str(raw.get("error") or "")[:200],
     }
+    if isinstance(raw.get("connected"), bool):
+        out["connected"] = raw["connected"]
+    if isinstance(raw.get("connection_verified"), bool):
+        out["connection_verified"] = raw["connection_verified"]
+    if raw.get("connection_source") in ("recent_message", "unconfirmed"):
+        out["connection_source"] = raw["connection_source"]
+    if raw.get("instance_id"):
+        out["instance_id"] = str(raw["instance_id"])[:128]
     if raw.get("account_id"):
         out["account_id"] = str(raw["account_id"])[:128]
     if "holding" in raw:
@@ -114,11 +132,8 @@ def _plugin_platforms(raw: Any) -> dict[str, Any]:
         except (TypeError, ValueError):
             last = 0
         out[key] = {
-            "enabled": bool(st.get("enabled")),
-            "holding": st.get("holding") is not False,
-            "connected": bool(st.get("connected")),
-            "last_message_at": last,
-            "error": str(st.get("error") or "")[:200],
+            **_plugin_status(st),
+            **({"enabled": st["enabled"]} if isinstance(st.get("enabled"), bool) else {}),
         }
     return out
 
@@ -291,6 +306,7 @@ class NodeSession:
             owner_user_id=self.owner_user_id,
             device_count=len(self.devices),
             last_seen=self.last_seen,
+            host=dict(self.host or {}),
         )
 
 
@@ -319,7 +335,10 @@ class NodeRegistry:
             if prev is not None:
                 SLog.i(TAG, f"节点 {reg.node_id} 重新注册（覆盖上一次会话）")
 
-            incoming = {d.sn: d for d in reg.devices}
+            accepted_devices = [d for d in reg.devices if _device_identity_valid(d, reg.node_id, reg.platform)]
+            if len(accepted_devices) != len(reg.devices):
+                warnings.append("已拒绝与节点身份或宿主系统不匹配的设备槽")
+            incoming = {d.sn: d for d in accepted_devices}
             has_new_web = any(is_per_node_web_sn(sn) for sn in incoming)
             self._retire_legacy_web_slot(reg.node_id, has_new_web)
 
@@ -330,10 +349,9 @@ class NodeRegistry:
                         continue
                     if is_legacy_web_sn(sn):
                         continue
-                    stale = P.DeviceManifest(
-                        sn=old.sn, platform=old.platform, model=old.model,
-                        channels={ch: "disconnected" for ch in (old.channels or {})},
-                    )
+                    if self._owner.get(sn, reg.node_id) != reg.node_id:
+                        continue
+                    stale = replace(old, channels={ch: "disconnected" for ch in (old.channels or {})})
                     devices[sn] = stale
 
             studio_id = sanitize_id(getattr(reg, "studio_id", "") or "")
@@ -358,14 +376,17 @@ class NodeRegistry:
                 hostname=hostname,
                 studio_id=studio_id,
                 owner_user_id=owner,
+                host=dict(getattr(reg, "host", {}) or {}),
                 plugins=sanitize_plugins(getattr(reg, "plugins", None)),
                 runtime_capabilities=getattr(reg, "runtime_capabilities", None),
             )
             self._nodes[reg.node_id] = session
             session.persist_snapshot()
 
-            for d in reg.devices:
+            for d in accepted_devices:
                 self._place_device(d.sn, reg.node_id, device=d, session=session)
+                if d.sn not in session.devices and "部分设备归属未确认或不属于当前账号，已忽略" not in warnings:
+                    warnings.append("部分设备归属未确认或不属于当前账号，已忽略")
             self._purge_orphaned_legacy_web_slots()
 
         avail = session.available_executors()
@@ -418,6 +439,7 @@ class NodeRegistry:
             owner_name=owner_name,
             channels=dict(device.channels or {}),
             status=status,
+            metadata={k: getattr(device, k) for k in ("os", "session_key", "session_generation", "desktop_state", "blocked_reason", "capabilities", "readiness")},
         )
 
     def _place_device(
@@ -429,7 +451,25 @@ class NodeRegistry:
         session: NodeSession | None = None,
     ) -> None:
         """当前位置跟当前 Scout；账号归属由 device_store 按首次出现锁定。"""
+        node = session or self._nodes.get(node_id)
+        persisted = get_device(sn)
+        if persisted is not None:
+            uid = str(persisted.get("owner_user_id") or "")
+            if not uid:
+                previous_node = stored_node(str(persisted.get("current_scout_id") or "")) or {}
+                uid = str(previous_node.get("owner_user_id") or "")
+            if node is None or not uid or uid != node.owner_user_id:
+                if node is not None:
+                    node.devices.pop(sn, None)
+                SLog.w(TAG, "忽略未确认或其他账号的设备上报")
+                return
         prev = self._owner.get(sn)
+        current = prev or str((persisted or {}).get("current_scout_id") or "")
+        if current and current != node_id and device is not None and not _channel_connected(device.channels):
+            # 设备移到 B 后，A 迟到的 device_lost/离线心跳不能抢回当前位置。
+            if node is not None:
+                node.devices.pop(sn, None)
+            return
         if prev and prev != node_id:
             other = self._nodes.get(prev)
             if other is not None and sn in other.devices:
@@ -464,6 +504,8 @@ class NodeRegistry:
             node.busy = hb.busy
             node.active_runs = list(hb.active_runs or [])
             node.device_workload = list(hb.device_workload or [])
+            for executor in getattr(hb, "executors", None) or []:
+                node.executors[executor.id] = executor
             host = getattr(hb, "host", None)
             node.host = dict(host) if isinstance(host, dict) else {}
             reported = getattr(hb, "plugins", None)
@@ -476,13 +518,16 @@ class NodeRegistry:
             if ver:
                 node.scout_version = ver
             for d in hb.device_delta or []:
+                if not _device_identity_valid(d, hb.node_id, node.platform):
+                    SLog.w(TAG, "拒绝心跳中与节点身份不匹配的设备槽")
+                    continue
                 if is_legacy_web_sn(d.sn) and not _channel_connected(d.channels):
                     node.devices.pop(d.sn, None)
                     if self._owner.get(d.sn) == hb.node_id:
                         self._owner.pop(d.sn, None)
                     continue
                 if d.sn in node.devices:
-                    node.devices[d.sn].channels.update(d.channels or {})
+                    node.devices[d.sn] = d
                     self._place_device(d.sn, hb.node_id, device=node.devices[d.sn], session=node)
                 else:
                     node.devices[d.sn] = d
@@ -603,13 +648,16 @@ class NodeRegistry:
             ).start()
         return interrupted
 
-    def disconnect(self, node_id: str) -> list[str]:
+    def disconnect(self, node_id: str, *, send: Callable[..., Any] | None = None) -> list[str]:
         """连接断了。**不清除设备归属** —— 否则 UI 上的设备会闪现闪灭
         （NODE_REGISTRY.md §2）。只把连通性标为不可用。
 
         返回断开时仍挂在该节点上的 run_id，调用方应立刻判失败，不要干等超时。
         """
         with self._lock:
+            current = self._nodes.get(node_id)
+            if send is not None and current is not None and current.send != send:
+                return []
             node = self._nodes.pop(node_id, None)
             runs = list(node.active_runs) if node is not None else []
             if node is not None:
@@ -679,6 +727,7 @@ class NodeRegistry:
                         "model": d.model if d else "",
                         "channels": dict(d.channels) if d else {},
                         "last_seen": node.last_seen if node else 0,
+                        **({k: getattr(d, k) for k in ("os", "session_key", "session_generation", "desktop_state", "blocked_reason", "capabilities", "readiness")} if d else {}),
                     }
                 )
         return out

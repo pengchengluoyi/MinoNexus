@@ -1,5 +1,5 @@
 id: assistant-route
-version: 1
+version: 3
 label: 助手意图路由
 summary: 把一句话收成工具调用、追问或直接回答
 engine: text_chat
@@ -12,9 +12,6 @@ slots:
 - name: persona_block
   kind: text
   required: true
-- name: user_profile
-  kind: text
-  required: false
 - name: recent_turns
   kind: text
   required: false
@@ -33,10 +30,6 @@ system:
 - id: rules
   file: system/20-rules.md
 user:
-- id: profile
-  slot: user_profile
-  heading: 【用户】
-  skip_if_empty: true
 - id: history
   slot: recent_turns
   heading: 【最近对话】

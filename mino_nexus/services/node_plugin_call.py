@@ -27,16 +27,20 @@ class PluginCallError(Exception):
 
 
 def node_for_plugin(kind: str, plugin_id: str, node_id: str = ""):
+    from mino_nexus.core.execution_user import require_user_id
+    uid = require_user_id()
     reg = get_registry()
     want = str(node_id or "").strip()
     if want:
         node = reg.get_node(want)
-        if node is None or not node.alive or node.send is None:
+        if node is None or node.owner_user_id != uid:
+            raise PluginCallError("没有这个节点")
+        if not node.alive or node.send is None:
             raise PluginCallError("节点离线，无法调用插件")
         return node
     hits = []
     for node in reg.nodes():
-        if not node.alive or node.send is None or node.plugins is None:
+        if node.owner_user_id != uid or not node.alive or node.send is None or node.plugins is None:
             continue
         for row in node.plugins:
             row_kind = str(row.get("class") or "")

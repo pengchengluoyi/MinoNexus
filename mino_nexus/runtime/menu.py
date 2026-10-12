@@ -52,11 +52,20 @@ def available_capabilities(
     tool_kinds: Optional[list[str]] = None,
 ) -> list[Capability]:
     plat = str(platform or getattr(ctx, "platform", "") or "").strip()
-    return plugin_registry.filter_capabilities(
-        ctx.connectivity_flags,
-        kinds=phase_kinds(phase, tool_kinds=tool_kinds),
+    kinds = phase_kinds(phase, tool_kinds=tool_kinds)
+    flags = ctx.connectivity_flags
+    available = plugin_registry.filter_capabilities(
+        flags,
+        kinds=kinds,
         platform=plat,
     )
+    if plat == "desktop":
+        from mino_nexus.services.desktop_catalog import CAPABILITY_IDS, capabilities
+
+        available = [cap for cap in available if cap.id not in CAPABILITY_IDS]
+        if flags.get("desktop") and "generic" in kinds:
+            available.extend(capabilities(ctx.desktop_capabilities, ctx.desktop_os))
+    return available
 
 
 def available_menu_brief(
@@ -75,7 +84,8 @@ def available_menu_brief(
     from mino_nexus.catalog.skill_channel import menu_caller_ok
 
     out: list[dict[str, Any]] = []
-    for cap in available_capabilities(ctx, phase=phase, platform=plat, tool_kinds=tool_kinds):
+    available = available_capabilities(ctx, phase=phase, platform=plat, tool_kinds=tool_kinds)
+    for cap in available:
         if audience == "case" and not menu_caller_ok(cap, phase):
             continue
         if not _visible_to(cap, audience):
@@ -84,6 +94,9 @@ def available_menu_brief(
         summary = _cap_summary(cap)
         if summary:
             row["summary"] = summary
+        parameters = getattr(cap, "parameters", None)
+        if isinstance(parameters, dict):
+            row["parameters"] = parameters
         out.append(row)
     seen = {str(row.get("id") or "") for row in out}
     for eid in extra_ids or []:
@@ -91,6 +104,12 @@ def available_menu_brief(
         if not cap_id or cap_id in seen:
             continue
         cap = plugin_registry.get_capability(cap_id)
+        if plat == "desktop":
+            from mino_nexus.services.desktop_catalog import CAPABILITY_IDS, capabilities
+
+            if cap_id in CAPABILITY_IDS:
+                native = capabilities(ctx.desktop_capabilities, ctx.desktop_os) if ctx.connectivity_flags.get("desktop") else []
+                cap = next((candidate for candidate in native if candidate.id == cap_id), None)
         if cap is None:
             continue
         from mino_nexus.catalog.skill_channel import capability_dispatch_ok
@@ -103,6 +122,9 @@ def available_menu_brief(
         summary = _cap_summary(cap)
         if summary:
             row["summary"] = summary
+        parameters = getattr(cap, "parameters", None)
+        if isinstance(parameters, dict):
+            row["parameters"] = parameters
         out.append(row)
         seen.add(cap.id)
     return out

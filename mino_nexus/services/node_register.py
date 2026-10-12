@@ -1,4 +1,4 @@
-"""REGISTER 时的 node_id 分配（与 install-token 归属冲突时重发号）。"""
+"""REGISTER 时复用本机身份，归属冲突必须显式拒绝。"""
 from __future__ import annotations
 
 import secrets
@@ -11,6 +11,7 @@ def resolve_register_node_id(
     *,
     is_install_token: bool,
     user_id: str,
+    stored: dict | None = None,
 ) -> tuple[str, list[str]]:
     warnings: list[str] = []
     nid = sanitize_id(requested)
@@ -24,9 +25,11 @@ def resolve_register_node_id(
 
     owner = sanitize_id(user_id)
     if is_install_token and owner:
-        stored = get_node(nid) or {}
+        if stored is None:
+            stored = get_node(nid) or {}
         prev_owner = sanitize_id(str(stored.get("owner_user_id") or ""))
         if prev_owner and prev_owner != owner:
-            nid = secrets.token_hex(8)
-            warnings.append(f"node_id 已被其他用户占用，已分配 {nid}")
+            raise PermissionError("本机 Scout 已绑定其他账号，请由管理员处理归属后再安装")
+        if stored and not prev_owner:
+            raise PermissionError("历史节点尚未归属，请先由管理员认领")
     return nid, warnings

@@ -94,3 +94,26 @@ class AssistantMcpToken(Base):
     created_at = Column(Integer, default=0)
     last_used_at = Column(Integer, default=0)
     revoked = Column(Boolean, default=False)
+
+
+class ImRouteIdentity(Base):
+    """验证了节点/机器人实例的路由；历史 im_identities 不参与在线执行。"""
+    __tablename__ = "im_route_identities"
+    __table_args__ = (UniqueConstraint("channel", "instance_id", "tenant", "sender_id", name="uq_im_route_identity"),)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, index=True, nullable=False)
+    node_id = Column(String, nullable=False)
+    channel = Column(String, nullable=False)
+    instance_id = Column(String, nullable=False)
+    tenant = Column(String, default="", nullable=False)
+    sender_id = Column(String, nullable=False)
+    bound_at = Column(Integer, default=0)
+    binding_key = Column(String, nullable=False, default="")
+
+
+class ImInboundClaim(Base):
+    """所有有效回调（包括绑定指令）先原子抢占，避免并发/重放重复执行。"""
+    __tablename__ = "im_inbound_claims"
+    key = Column(String, primary_key=True)
+    owner_user_id = Column(String, index=True, nullable=False)
+    created_at = Column(Integer, index=True, nullable=False)

@@ -1,6 +1,7 @@
 """Session Event Log 持久化。"""
 from __future__ import annotations
 
+from mino_nexus.core.execution_user import current_user_id, require_user_id
 from datetime import datetime
 from typing import Any
 
@@ -27,6 +28,7 @@ def open_meta(
         if row is None:
             row = SessionMeta(
                 session_id=session_id,
+                owner_user_id=require_user_id(),
                 run_id=run_id,
                 case_id=case_id,
                 app_id=app_id,
@@ -179,6 +181,8 @@ def list_sessions(
     db = SessionLocal()
     try:
         q = db.query(SessionMeta)
+        if current_user_id():
+            q = q.filter(SessionMeta.owner_user_id == current_user_id())
         aid = str(app_id or "").strip()
         rid = str(run_id or "").strip()
         cid = str(case_id or "").strip()
@@ -215,7 +219,7 @@ def get_meta(session_id: str) -> dict[str, Any] | None:
     db = SessionLocal()
     try:
         row = db.query(SessionMeta).filter(SessionMeta.session_id == sid).first()
-        if row is None:
+        if row is None or (current_user_id() and row.owner_user_id != current_user_id()):
             return None
         return _meta_dict(row)
     finally:
@@ -264,7 +268,7 @@ def read_events(
     from mino_nexus.core.database import SessionLocal, ensure_db
 
     sid = str(session_id or "").strip()
-    if not sid:
+    if not sid or (current_user_id() and get_meta(sid) is None):
         return []
     ensure_db()
     db = SessionLocal()

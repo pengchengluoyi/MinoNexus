@@ -75,7 +75,7 @@ def _root() -> dict[str, Any]:
     db = SessionLocal()
     try:
         users = [dict(u.extra or {}) or {
-            "user_id": u.user_id, "username": u.username, "name": u.name,
+            "user_id": u.user_id, "username": u.username, "email": u.email or "", "name": u.name,
             "role": u.role, "password_hash": u.password_hash,
         } for u in db.query(User).all()]
         sessions = [dict(s.extra or {}) or {
@@ -109,6 +109,7 @@ def _save(root: dict[str, Any]) -> None:
             db.merge(User(
                 user_id=uid,
                 username=str(row.get("username") or ""),
+                email=_norm_email(row.get("email") or "") or None,
                 name=str(row.get("name") or ""),
                 role=str(row.get("role") or "user"),
                 password_hash=str(row.get("password_hash") or row.get("password") or ""),
@@ -229,8 +230,9 @@ def session_of(token: str) -> Optional[dict[str, Any]]:
 
 
 def _issue_session(user: dict[str, Any]) -> dict[str, Any]:
-    root = _root()
-    _purge(root)
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.auth import AuthSession
+
     token = secrets.token_hex(24)
     pub = _public_user(user)
     sess = {
@@ -244,13 +246,12 @@ def _issue_session(user: dict[str, Any]) -> dict[str, Any]:
         "expires_at": _now() + _SESSION_TTL,
     }
     uid = pub["user_id"]
-    kept = [s for s in (root.get("sessions") or []) if isinstance(s, dict) and str(s.get("user_id") or "") != uid]
-    mine = [s for s in (root.get("sessions") or []) if isinstance(s, dict) and str(s.get("user_id") or "") == uid]
-    mine.append(sess)
-    if len(mine) > _MAX_SESSIONS_PER_USER:
-        mine = mine[-_MAX_SESSIONS_PER_USER:]
-    root["sessions"] = kept + mine
-    _save(root)
+    with session_scope() as db:
+        db.query(AuthSession).filter(AuthSession.expires_at <= _now()).delete(synchronize_session=False)
+        mine = db.query(AuthSession).filter(AuthSession.user_id == uid).order_by(AuthSession.expires_at).all()
+        for old in mine[:max(0, len(mine) - _MAX_SESSIONS_PER_USER + 1)]:
+            db.delete(old)
+        db.add(AuthSession(token=token, user_id=uid, extra=sess, expires_at=sess["expires_at"]))
     return {**pub, "token": token, "ws_token": token, "expires_at": sess["expires_at"]}
 
 
@@ -434,21 +435,26 @@ def register(email: str = "", password: str = "", name: str = "", username: str 
     while any(_norm_username(u.get("username") or "") == uname for u in users()):
         n += 1
         uname = f"{base}{n}"
-    # 首个邮箱账号若尚无用户则升管理员；否则一律普通用户。种子 admin 通常已存在。
-    role = "admin" if not users() else "user"
-    root = _root()
     user = {
         "id": secrets.token_hex(8),
         "email": em,
         "username": uname,
         "name": display,
         "password_hash": _hash_password(pwd),
-        "email_verified": True,
-        "role": role,
+        "email_verified": False,
+        "role": "user",
         "created_at": _now(),
     }
-    root["users"] = [*(root.get("users") or []), user]
-    _save(root)
+    from sqlalchemy.exc import IntegrityError
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.auth import User
+
+    try:
+        with session_scope() as db:
+            db.add(User(user_id=user["id"], email=em, username=uname, name=display,
+                        role="user", password_hash=user["password_hash"], extra=user))
+    except IntegrityError as exc:
+        raise ValueError("这个邮箱已经注册") from exc
     return _issue_session(user)
 
 
@@ -618,7 +624,7 @@ def api_session_for(user_id: str) -> Optional[dict[str, Any]]:
                 "name": pub["name"],
                 "username": pub["username"],
                 "role": pub["role"],
-                "email_verified": True,
+                "email_verified": pub["email_verified"],
                 "expires_at": _now() + 60,
             }
     return None

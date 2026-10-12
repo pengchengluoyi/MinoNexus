@@ -9,7 +9,8 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from mino_nexus.routers.deps import current_session
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -133,6 +134,9 @@ class ExecuteBody(BaseModel):
 def create_app() -> FastAPI:
     app = FastAPI(title="MinoNexus", version=NEXUS_VERSION, lifespan=lifespan)
 
+    from mino_nexus.core.execution_user import ExecutionUserMiddleware
+
+    app.add_middleware(ExecutionUserMiddleware)
     app.add_middleware(ClientGateMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -189,16 +193,18 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/nodes")
-    def nodes() -> dict[str, Any]:
-        return {"nodes": [n.brief() for n in get_registry().nodes()]}
+    def nodes(sess: dict = Depends(current_session)) -> dict[str, Any]:
+        from mino_nexus.services.node_store import filter_nodes
+        return {"nodes": filter_nodes([n.brief() for n in get_registry().nodes()], sess)}
 
     @app.get("/devices")
-    def devices() -> dict[str, Any]:
+    def devices(sess: dict = Depends(current_session)) -> dict[str, Any]:
         """连通性来自 Scout 上报，不是 Nexus 自己探的（CLAUDE.md §6）。"""
-        return {"devices": get_registry().devices()}
+        from mino_nexus.services.ui_devices import ui_devices
+        return {"devices": ui_devices()}
 
     @app.get("/capabilities")
-    def capabilities(sn: str = "") -> dict[str, Any]:
+    def capabilities(sn: str = "", sess: dict = Depends(current_session)) -> dict[str, Any]:
         """能力菜单 = Nexus 目录 ∩ 该节点上报的 executor。
 
         不带 sn 时返回目录全集；带 sn 时返回这台设备实际能干什么。
@@ -212,6 +218,8 @@ def create_app() -> FastAPI:
                     for c in caps
                 ],
             }
+        from mino_nexus.services.access_scope import require_owned_device
+        require_owned_device(sn)
         node, why = get_registry().resolve(sn)
         if node is None:
             raise HTTPException(status_code=409, detail=why)

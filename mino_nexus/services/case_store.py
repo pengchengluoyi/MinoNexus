@@ -52,6 +52,58 @@ def allocate_case_id(project_id: str) -> str:
     raise ValueError("无法分配用例编号")
 
 
+def get_case_ids(project_id: str, case_ids: list[str]) -> list[str]:
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.case import ProjectCase
+
+    with session_scope() as db:
+        return [row[0] for row in db.query(ProjectCase.case_id).filter(
+            ProjectCase.project_id == project_id, ProjectCase.case_id.in_(case_ids)).all()]
+
+
+def list_case_page(project_id: str, *, limit: int, offset: int = 0, search: str = "", module: str = "",
+                   app_id: str = "", result: str = "all") -> dict[str, Any]:
+    from sqlalchemy import func, or_
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.case import ProjectCase
+    from mino_nexus.services.run_store import last_case_results
+
+    results = last_case_results(app_id) if result != "all" else {}
+    with session_scope() as db:
+        base = db.query(ProjectCase).filter(ProjectCase.project_id == project_id)
+        query = base
+        if search:
+            query = query.filter(or_(ProjectCase.case_id.contains(search, autoescape=True),
+                                     ProjectCase.name.contains(search, autoescape=True),
+                                     ProjectCase.module.contains(search, autoescape=True),
+                                     ProjectCase.precondition.contains(search, autoescape=True)))
+        if module:
+            query = query.filter(func.coalesce(func.nullif(func.trim(ProjectCase.module), ""), "未分组") == module)
+        if result == "failed":
+            ids = [cid for cid, row in results.items() if str(row["status"] or "").lower() in ("fail", "failed", "error", "exception")]
+            query = query.filter(ProjectCase.case_id.in_(ids))
+        elif result == "never":
+            query = query.filter(ProjectCase.case_id.not_in(list(results)))
+        total = query.count()
+        rows = query.order_by(ProjectCase.sort_index, ProjectCase.pk).limit(limit).offset(offset).all()
+        cases = [{"case_id": row.case_id, "title": row.name or row.case_id, "name": row.name or row.case_id,
+                  "module": row.module or "", "platform": row.platform or "", "precondition": (row.precondition or "")[:300],
+                  "steps": [str(value)[:300] for value in (row.steps or [])[:3]],
+                  "expected": [str(value)[:300] for value in (row.expected or [])[:3]]} for row in rows]
+        return {"cases": cases, "total": total, "limit": limit, "offset": offset, "project_id": project_id}
+
+
+def case_modules(project_id: str) -> dict[str, Any]:
+    from sqlalchemy import func
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.case import ProjectCase
+
+    module = func.coalesce(func.nullif(func.trim(ProjectCase.module), ""), "未分组")
+    with session_scope() as db:
+        rows = db.query(module, func.count()).filter(ProjectCase.project_id == project_id).group_by(module).all()
+        return {"items": [{"name": name, "count": count} for name, count in rows], "total": sum(row[1] for row in rows)}
+
+
 def count_cases(project_id: str, requirement_id: str = "") -> int:
     from mino_nexus.core.database import SessionLocal, ensure_db
     from mino_nexus.models.case import ProjectCase

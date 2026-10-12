@@ -53,70 +53,120 @@ def create_bind_code(user_id: str) -> dict[str, Any]:
     return {"code": code, "expires_in": BIND_CODE_TTL}
 
 
-def consume_bind_code(code: str, *, channel: str, tenant: str, sender_id: str) -> Optional[str]:
-    """码有效则把这个 IM 账号绑到码的主人，返回 user_id；无效返回 None。码只能用一次。"""
-    from mino_nexus.models.assistant import ImBindCode, ImIdentity
+def _route_args(channel: str, instance_id: str, node_id: str) -> str:
+    from mino_nexus.core.execution_user import require_user_id
+    from mino_nexus.services.access_scope import node_owner_id
+    uid = require_user_id()
+    if not channel or not instance_id or not node_id or node_owner_id(node_id) != uid:
+        raise PermissionError("渠道来源或归属无效")
+    return uid
 
-    code = str(code or "").strip()
+
+def consume_bind_code(code: str, *, channel: str, tenant: str, sender_id: str,
+                      instance_id: str = "", node_id: str = "") -> Optional[str]:
+    """同一事务校验归属、条件删除一次性码并创建映射；不可覆盖其他主人。"""
+    from mino_nexus.models.assistant import ImBindCode, ImRouteIdentity
+    from sqlalchemy import delete
+    from sqlalchemy.exc import IntegrityError
+    uid = _route_args(channel, instance_id, node_id)
     now = _now()
+    try:
+        with session_scope() as db:
+            # DELETE RETURNING 同时校验与抢占。跨账号尝试不消耗该码。
+            owner = db.execute(delete(ImBindCode).where(
+                ImBindCode.code == str(code or "").strip(), ImBindCode.user_id == uid,
+                ImBindCode.expires_at > now).returning(ImBindCode.user_id)).scalar_one_or_none()
+            if not owner:
+                return None
+            existing = db.query(ImRouteIdentity).filter_by(
+                channel=channel, instance_id=instance_id, tenant=tenant, sender_id=sender_id).first()
+            if existing is not None:
+                if existing.user_id != uid or existing.node_id != node_id:
+                    raise PermissionError("该身份无法绑定")
+            else:
+                db.add(ImRouteIdentity(user_id=uid, channel=channel, instance_id=instance_id,
+                                       tenant=tenant, node_id=node_id, sender_id=sender_id, bound_at=now, binding_key=uuid.uuid4().hex))
+        return uid
+    except (IntegrityError, PermissionError):
+        return None
+
+
+def bind_identity(user_id: str, *, channel: str, tenant: str, sender_id: str,
+                  instance_id: str = "", node_id: str = "") -> str:
+    """只用于明确维护操作，无法改写既有身份归属。在线入站不自动绑定。"""
+    from mino_nexus.models.assistant import ImRouteIdentity
+    if _route_args(channel, instance_id, node_id) != user_id:
+        raise PermissionError("该身份无法绑定")
     with session_scope() as db:
-        row = db.get(ImBindCode, code)
-        if row is None or int(row.expires_at or 0) < now:
-            if row is not None:
-                db.delete(row)
-            return None
-        user_id = row.user_id
-        db.delete(row)
-        exist = (
-            db.query(ImIdentity)
-            .filter(ImIdentity.channel == channel, ImIdentity.tenant == tenant, ImIdentity.sender_id == sender_id)
-            .first()
-        )
-        if exist is not None:
-            exist.user_id = user_id
-            exist.bound_at = now
-        else:
-            db.add(ImIdentity(user_id=user_id, channel=channel, tenant=tenant, sender_id=sender_id, bound_at=now))
-        return user_id
-
-
-def bind_identity(user_id: str, *, channel: str, tenant: str, sender_id: str) -> str:
-    """直接把一个 IM 账号绑到用户（不经绑定码）。已绑给别人则不覆盖，返回现有主人。"""
-    from mino_nexus.models.assistant import ImIdentity
-
-    with session_scope() as db:
-        row = (
-            db.query(ImIdentity)
-            .filter(ImIdentity.channel == channel, ImIdentity.tenant == tenant, ImIdentity.sender_id == sender_id)
-            .first()
-        )
+        row = db.query(ImRouteIdentity).filter_by(channel=channel, instance_id=instance_id,
+                                                tenant=tenant, sender_id=sender_id).first()
         if row is not None:
-            return row.user_id
-        db.add(ImIdentity(user_id=user_id, channel=channel, tenant=tenant, sender_id=sender_id, bound_at=_now()))
+            if row.user_id != user_id or row.node_id != node_id:
+                raise PermissionError("该身份无法绑定")
+            return user_id
+        db.add(ImRouteIdentity(user_id=user_id, channel=channel, instance_id=instance_id,
+                               tenant=tenant, node_id=node_id, sender_id=sender_id, bound_at=_now(), binding_key=uuid.uuid4().hex))
         return user_id
 
 
-def find_identity(channel: str, tenant: str, sender_id: str) -> Optional[str]:
-    from mino_nexus.models.assistant import ImIdentity
-
+def find_route_identity(channel: str, tenant: str, sender_id: str, *, instance_id: str = "",
+                        node_id: str = "") -> Optional[dict[str, Any]]:
+    from mino_nexus.models.assistant import ImRouteIdentity
+    if not instance_id or not node_id or not sender_id:
+        return None
     with session_scope() as db:
-        row = (
-            db.query(ImIdentity)
-            .filter(ImIdentity.channel == channel, ImIdentity.tenant == tenant, ImIdentity.sender_id == sender_id)
-            .first()
-        )
-        return row.user_id if row else None
+        row = db.query(ImRouteIdentity).filter_by(channel=channel, instance_id=instance_id,
+            tenant=tenant, sender_id=sender_id, node_id=node_id).first()
+        return {"user_id": row.user_id, "binding_key": row.binding_key,
+                "bound_at": int(row.bound_at or 0)} if row else None
+
+
+def find_identity(channel: str, tenant: str, sender_id: str, *, instance_id: str = "",
+                  node_id: str = "") -> Optional[str]:
+    row = find_route_identity(channel, tenant, sender_id, instance_id=instance_id, node_id=node_id)
+    return row["user_id"] if row else None
+
+
+def require_im_binding(user_id: str, channel: str, node_id: str, reply_ctx: dict[str, Any]) -> None:
+    """每次模型、工具和发送前复核同一绑定；解绑再绑定也不能复活旧请求。"""
+    from mino_nexus.core.execution_user import require_user_id
+    from mino_nexus.services.assistant_gateway import validated_source
+    require_user_id(user_id)
+    instance = str(reply_ctx.get("instance_id") or "")
+    row = find_route_identity(channel, str(reply_ctx.get("tenant") or ""),
+        str(reply_ctx.get("sender_id") or ""), instance_id=instance, node_id=node_id)
+    if (not row or row["user_id"] != user_id or not reply_ctx.get("binding_key")
+            or row["binding_key"] != reply_ctx["binding_key"]
+            or validated_source({"channel": channel, "node_id": node_id,
+                "instance_id": instance, "reply_ctx": reply_ctx}) != user_id):
+        raise PermissionError("社交绑定已失效")
+
+
+def claim_inbound(key: str, owner_user_id: str) -> bool:
+    from sqlalchemy.dialects.sqlite import insert
+    from mino_nexus.models.assistant import ImInboundClaim
+    from mino_nexus.core.execution_user import require_user_id
+    uid = require_user_id(owner_user_id)
+    if not key:
+        return False
+    with session_scope() as db:
+        result = db.execute(insert(ImInboundClaim).values(key=key, owner_user_id=uid, created_at=_now())
+                            .on_conflict_do_nothing(index_elements=["key"]))
+        return result.rowcount == 1
 
 
 def list_identities(user_id: str) -> list[dict[str, Any]]:
-    from mino_nexus.models.assistant import ImIdentity
+    from mino_nexus.models.assistant import ImRouteIdentity
 
     with session_scope() as db:
-        rows = db.query(ImIdentity).filter(ImIdentity.user_id == user_id).order_by(ImIdentity.id).all()
+        rows = db.query(ImRouteIdentity).filter(ImRouteIdentity.user_id == user_id).order_by(ImRouteIdentity.id).all()
         return [
             {
                 "id": r.id,
                 "channel": r.channel,
+                "node_id": r.node_id,
+                "instance_id": r.instance_id,
+                "status": "active",
                 "sender_id_masked": mask_id(r.sender_id),
                 "tenant": r.tenant or "",
                 "bound_at": int(r.bound_at or 0),
@@ -126,15 +176,18 @@ def list_identities(user_id: str) -> list[dict[str, Any]]:
 
 
 def delete_identity(user_id: str, identity_id: int) -> bool:
-    from mino_nexus.models.assistant import ImIdentity
+    from mino_nexus.models.assistant import ImRouteIdentity
 
     with session_scope() as db:
-        row = db.get(ImIdentity, identity_id)
+        row = db.get(ImRouteIdentity, identity_id)
         if row is None or row.user_id != user_id:
             return False
+        from mino_nexus.models.assistant import AssistantSubscription
+        db.query(AssistantSubscription).filter_by(user_id=user_id, channel=row.channel,
+            sender_id=row.sender_id, node_id=row.node_id, status="active").update({"status": "cancelled"})
         db.delete(row)
         db.flush()
-        left = db.query(ImIdentity.id).filter(ImIdentity.user_id == user_id).first()
+        left = db.query(ImRouteIdentity.id).filter(ImRouteIdentity.user_id == user_id).first()
     if left is None:
         revoke_assistant_token(user_id)
     return True
@@ -150,14 +203,12 @@ def get_profile(user_id: str) -> dict[str, Any]:
         row = db.get(AssistantProfile, user_id)
         if row is None:
             return {
-                "user_id": user_id, "persona": "", "default_app_id": "", "default_sn": "",
+                "user_id": user_id, "persona": "",
                 "enabled": True, "project_id": "",
             }
         return {
             "user_id": row.user_id,
             "persona": row.persona or "",
-            "default_app_id": row.default_app_id or "",
-            "default_sn": row.default_sn or "",
             "enabled": row.enabled is not False,
             "project_id": row.project_id or "",
         }
@@ -173,10 +224,6 @@ def save_profile(user_id: str, patch: dict[str, Any]) -> dict[str, Any]:
             db.add(row)
         if "persona" in patch and patch["persona"] is not None:
             row.persona = str(patch["persona"])[:2000]
-        if "default_app_id" in patch and patch["default_app_id"] is not None:
-            row.default_app_id = str(patch["default_app_id"]).strip()
-        if "default_sn" in patch and patch["default_sn"] is not None:
-            row.default_sn = str(patch["default_sn"]).strip()
         if "enabled" in patch and patch["enabled"] is not None:
             row.enabled = bool(patch["enabled"])
     return get_profile(user_id)
@@ -237,7 +284,7 @@ def _turn_public(r) -> dict[str, Any]:
         "completion_tokens": int(r.completion_tokens or 0),
         "elapsed_ms": int(r.elapsed_ms or 0),
         "created_at": int(r.created_at or 0),
-        "detail": dict(r.detail_json or {}),
+        "detail": {k: v for k, v in dict(r.detail_json or {}).items() if not k.startswith("_")},
     }
 
 
@@ -265,6 +312,7 @@ def get_turn(user_id: str, turn_id: str) -> Optional[dict[str, Any]]:
         out["_channel"] = r.channel or ""
         out["_chat_id"] = r.chat_id or ""
         out["_node_id"] = r.node_id or ""
+        out["_im_route"] = dict((r.detail_json or {}).get("_im_route") or {})
         return out
 
 
@@ -282,6 +330,10 @@ def add_subscription(sub: dict[str, Any]) -> int:
                 AssistantSubscription.kind == sub.get("kind", "run_done"),
                 AssistantSubscription.target_id == sub.get("target_id", ""),
                 AssistantSubscription.chat_id == sub.get("chat_id", ""),
+                AssistantSubscription.channel == sub.get("channel", ""),
+                AssistantSubscription.node_id == sub.get("node_id", ""),
+                AssistantSubscription.sender_id == sub.get("sender_id", ""),
+                AssistantSubscription.reply_ctx == dict(sub.get("reply_ctx") or {}),
                 AssistantSubscription.status == "active",
             )
             .first()

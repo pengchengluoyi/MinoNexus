@@ -1,7 +1,7 @@
 """Scout 节点归属落盘。活连接仍在 NodeRegistry；这里记住离线后还能列出的那一行。
 
-未归属（无 owner_user_id 且无 studio_id）只给管理员看。
-管理员可见全部节点。其他用户只见 owner_user_id=自己，或 studio_id=本工作台。
+无账号归属的历史节点只给管理员看。
+管理员可见全部节点。其他用户只见 owner_user_id=自己。
 """
 from __future__ import annotations
 
@@ -90,24 +90,24 @@ def upsert(node_id: str, **fields: Any) -> dict[str, Any]:
     nid = sanitize_id(node_id)
     if not nid:
         return {}
-    root = _root()
-    prev = root["nodes"].get(nid) if isinstance(root["nodes"].get(nid), dict) else {}
-    row = dict(prev)
-    row["node_id"] = nid
-    for key, value in fields.items():
-        if key in ("studio_id", "owner_user_id"):
-            cleaned = sanitize_id(str(value or ""))
-            if cleaned or key not in row:
-                row[key] = cleaned
-            continue
-        if value is None:
-            continue
-        row[key] = value
-    if not row.get("first_seen"):
-        row["first_seen"] = prev.get("first_seen") or _now_iso()
-    row["updated_at"] = _now_iso()
-    root["nodes"][nid] = row
-    _save(root)
+    from sqlalchemy import text
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.node import Node
+
+    with session_scope() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        existing = db.get(Node, nid)
+        row = dict(existing.extra or {}) if existing is not None else {}
+        if existing is not None:
+            row.update(studio_id=existing.studio_id, owner_user_id=existing.owner_user_id,
+                       first_seen=existing.first_seen)
+        row["node_id"] = nid
+        for key, value in fields.items():
+            if value is not None:
+                row[key] = sanitize_id(str(value)) if key in ("studio_id", "owner_user_id") else value
+        row["first_seen"] = row.get("first_seen") or _now_iso()
+        row["updated_at"] = _now_iso()
+        db.merge(_node_row(nid, row))
     sid = sanitize_id(str(row.get("studio_id") or ""))
     if sid:
         remember_studio(
@@ -202,33 +202,22 @@ def is_admin(sess: dict[str, Any] | None) -> bool:
 
 
 def node_visible(row: dict[str, Any], sess: dict[str, Any] | None, studio_id: str = "") -> bool:
-    """未归属仅管理员；管理员可见全部；其他人只见自己的账号或本工作台。"""
+    """账号是可见性依据；studio_id 仅保留为兼容元信息。"""
     sess = sess or {}
     owner = sanitize_id(str(row.get("owner_user_id") or ""))
-    sid = sanitize_id(str(row.get("studio_id") or ""))
     uid = sanitize_id(str(sess.get("user_id") or ""))
-    want_studio = sanitize_id(studio_id)
-    if not owner and not sid:
-        return is_admin(sess)
-    if uid and owner == uid:
-        return True
-    if want_studio and sid == want_studio:
-        return True
-    return is_admin(sess)
+    return bool(uid and owner == uid)
 
 
 def ownership_label(row: dict[str, Any], *, studio_id: str = "", user_id: str = "") -> str:
     owner = sanitize_id(str(row.get("owner_user_id") or ""))
     sid = sanitize_id(str(row.get("studio_id") or ""))
     uid = sanitize_id(user_id)
-    want_studio = sanitize_id(studio_id)
     name = str(row.get("owner_name") or "").strip()
-    if not owner and not sid:
+    if not owner:
         return "未归属"
     if uid and owner == uid:
         return name or "当前账号"
-    if want_studio and sid == want_studio:
-        return "本工作台"
     if name:
         return name
     if sid:
@@ -244,7 +233,10 @@ def filter_nodes(
     uid = str((sess or {}).get("user_id") or "")
     out: list[dict[str, Any]] = []
     for row in rows:
-        if not node_visible(row, sess, studio_id):
+        # List-only exception for administrator legacy claiming. Node commands,
+        # logs, plugins and owned devices continue using node_visible/owner.
+        unclaimed = not sanitize_id(str(row.get("owner_user_id") or ""))
+        if not node_visible(row, sess, studio_id) and not (is_admin(sess) and unclaimed):
             continue
         item = dict(row)
         item["ownership"] = ownership_label(item, studio_id=studio_id, user_id=uid)

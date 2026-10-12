@@ -1,5 +1,5 @@
 id: case.run
-version: 1
+version: 2
 title: 跑用例
 description: 在指定设备上执行用例，返回任务 id。用户说跑一下、执行、回归时用。
 route: POST /case-runner/run
@@ -8,9 +8,18 @@ async: true
 params_schema:
   type: object
   properties:
+    project_id:
+      type: string
+      description: 用户明确指定的项目 id 或名称，用于限定应用和渠道
     app_id:
       type: string
       description: 应用 id 或应用名
+    env_surface:
+      type: string
+      description: 用户明确指定的应用渠道 id 或别名，例如 Agent/macagent；先确定渠道再筛选设备
+    env_profile:
+      type: string
+      description: 本次运行环境，例如 test/pre/prod
     sn:
       type: string
       description: 设备序列号或别名
@@ -19,10 +28,18 @@ params_schema:
       items:
         type: string
       description: 用例 id，可省略
+    action_scheme:
+      type: string
+      enum:
+      - visual
+      - dom
+      description: 执行方案；原生 PC 应用仅支持 visual
   required:
   - app_id
 param_resolvers:
+  project_id: project.by_name
   app_id: app.by_name
+  env_surface: channel.by_name
   sn: device.by_alias
 result_pick:
 - data.task_id

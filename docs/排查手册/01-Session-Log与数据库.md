@@ -84,6 +84,16 @@ export MINO_NEXUS_DATA_DIR=/path/to/data
 
 完整类型表：[9月8日_Session_Event_Log.md §4.2](../9月8日_Session_Event_Log.md)。
 
+### 3.3.1 Scout 执行信息（2026-10-12）
+
+Scout 经 `RESULT` 返回的执行状态、摘要、错误和耗时已写入 `tool/result`，执行参数在配对的 `tool/call`。这不是 Scout stdout/stderr 的全文镜像。当前历史记录只有基本字段；新增字段只对更新 Nexus 后的新任务生效，不回填旧库。
+
+新增 `tool/result` 字段：`scout` 包含服务端确认的 node_id、设备 sn、platform/os、scout_version、run_id 和 step_idx；`attempts` 包含执行器尝试、状态、耗时和精简错误；`desktop` 包含 capture_id、session_generation 和动作 effect/route/delivery/error.code/escalation。不把图片 base64、输入正文、token 或 SDK 原始 JSON 复制进诊断字段；截图仍由 `observe/screen` 的缩略图与 hash 查看。
+
+Session Log 的事件接口与 turns 投影保留上述字段；Workbench 会话详情的原始事件可展开 payload 查看。Scout 本地 `RESULT` 日志使用相同 run_id/step_idx/sn 关联。进程启动、注册拒绝、断线重连等没有任务上下文的日志仍看节点日志；它们不会凭空成为某个会话事件。
+
+例如按已有 session_id 查询 `tool/result`，检查 `json_extract(payload, '$.scout.node_id')`、`json_extract(payload, '$.attempts')` 与 `json_extract(payload, '$.desktop.action.effect')`。旧记录返回 NULL 不代表 Scout 没执行，而是旧版未持久化这些诊断字段。读取仍受 session 的 owner_user_id 授权约束。
+
 ### 3.4 `app_regression_runs`
 
 - `run_id`：任务 ID（`cr-` + 12 位 hex）。

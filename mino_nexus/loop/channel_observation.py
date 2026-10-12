@@ -97,7 +97,10 @@ def android_page_key(nodes: list[dict[str, Any]] | None) -> str:
 
 def page_key(ctx: Any, nodes: list[dict[str, Any]] | None = None) -> str:
     rows = _nodes(nodes if nodes is not None else getattr(ctx, "nav_hierarchy_nodes", None))
-    if ui_channel_from_ctx(ctx) == UiChannel.WEB:
+    channel = ui_channel_from_ctx(ctx)
+    if channel == UiChannel.DESKTOP:
+        return f"desktop|{getattr(ctx, 'desktop_os', '')}|{getattr(ctx, 'target_package', '')}"
+    if channel == UiChannel.WEB:
         return web_page_key(ctx, rows)
     return android_page_key(rows)
 
@@ -158,6 +161,9 @@ def read_field(
     focus_val = str(focus.get("value") or "").strip()
     channel = ui_channel_from_ctx(ctx)
 
+    if channel == UiChannel.DESKTOP:
+        return ""
+
     if channel == UiChannel.WEB:
         from mino_nexus.loop.ui_dom import find_dom_email_field, find_dom_phone_field
 
@@ -204,7 +210,11 @@ def capture_decision_frame(proxy: Any, ctx: Any, *, hierarchy: bool = True) -> t
     from mino_nexus.loop.observe.agent_stream import make_thumb
     from mino_nexus.loop.hierarchy_slots import capture
 
-    snap = capture(proxy, turn_id=0) if hierarchy else None
+    desktop = ui_channel_from_ctx(ctx) == UiChannel.DESKTOP
+    if desktop:
+        setattr(ctx, "nav_hierarchy_nodes", [])
+        setattr(ctx, "web_focus", {})
+    snap = capture(proxy, turn_id=0) if hierarchy and not desktop else None
     if snap is not None and getattr(snap, "ok", False):
         setattr(
             ctx,
@@ -243,7 +253,7 @@ def read_field_after_input(ctx: Any, proxy: Any, field: str) -> str | None:
     scheme = str(
         getattr(proxy, "action_scheme", "") or getattr(ctx, "action_scheme", "") or ""
     ).strip().lower()
-    if scheme == "visual":
+    if scheme == "visual" or ui_channel_from_ctx(ctx) == UiChannel.DESKTOP:
         return None
     bind_fresh_observation(ctx, proxy)
     return read_field(ctx, getattr(ctx, "nav_hierarchy_nodes", None), field)
@@ -252,6 +262,8 @@ def read_field_after_input(ctx: Any, proxy: Any, field: str) -> str | None:
 def bind_fresh_observation(ctx: Any, proxy: Any) -> None:
     """动作后再取一帧 hierarchy，把节点和 web_focus 写回 ctx。"""
     if ctx is None or proxy is None:
+        return
+    if ui_channel_from_ctx(ctx) == UiChannel.DESKTOP:
         return
     from mino_nexus.loop.hierarchy_slots import capture
 
@@ -265,7 +277,7 @@ def bind_fresh_observation(ctx: Any, proxy: Any) -> None:
 def attach_input_readback(ctx: Any, params: dict[str, Any] | None) -> dict[str, Any]:
     """输入回看只认节点里的字。不改派给设备的原参数，也不用焦点回显。"""
     out = dict(params or {})
-    if ctx is None:
+    if ctx is None or ui_channel_from_ctx(ctx) == UiChannel.DESKTOP:
         return out
     field = str(out.get("field") or "")
     rows = _nodes(getattr(ctx, "nav_hierarchy_nodes", None))

@@ -2,6 +2,8 @@
 # -*-coding:utf-8 -*-
 """调度日志：每次大模型调用和流水线 Job 落盘，给设置页「调度」查看。"""
 from __future__ import annotations
+from mino_nexus.core.execution_user import current_user_id
+
 
 import base64
 import contextvars
@@ -308,6 +310,7 @@ def _write(row: dict) -> dict:
         with session_scope() as db:
             db.merge(DispatchCall(
                 id=str(row["id"]),
+                owner_user_id=current_user_id(),
                 at=str(row.get("at") or ""),
                 kind=str(row.get("kind") or ""),
                 trigger=str(row.get("trigger") or ""),
@@ -497,6 +500,8 @@ def list_calls(
     db = SessionLocal()
     try:
         q = db.query(DispatchCall)
+        if current_user_id():
+            q = q.filter(DispatchCall.owner_user_id == current_user_id())
         if kind:
             q = q.filter(DispatchCall.kind == kind)
         if role:
@@ -538,7 +543,7 @@ def get_call(call_id: str) -> Optional[dict]:
     db = SessionLocal()
     try:
         item = db.get(DispatchCall, cid)
-        if item is None:
+        if item is None or (current_user_id() and item.owner_user_id != current_user_id()):
             return None
         payload = dict(item.payload_json or {})
         payload.setdefault("id", item.id)

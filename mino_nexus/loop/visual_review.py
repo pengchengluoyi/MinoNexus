@@ -10,7 +10,9 @@ from typing import Any
 
 _REVIEW_CAPS = frozenset({
     "tap_element",
+    "tap_xy",
     "input_text",
+    "press_key",
     "swipe_direction",
     "reload_page",
 })

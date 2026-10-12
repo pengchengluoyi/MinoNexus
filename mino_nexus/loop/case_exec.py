@@ -1,5 +1,7 @@
 """按任务文档逐条执行用例。任务的创建和落库在 case_runner。"""
 from __future__ import annotations
+from mino_nexus.core.execution_user import user_thread, owned_job, require_user_id
+
 
 import threading
 from typing import Any
@@ -104,6 +106,13 @@ def _run_case_list(
             break
         cid = str(case.get("case_id") or "")
         sn = str(case.get("sn") or doc.get("sn") or "")
+        from mino_nexus.runtime.platform_gate import bind_case_execution_target
+
+        case = bind_case_execution_target(
+            case, (doc.get("device_targets") or {}).get(sn) or {},
+            surface=str(doc.get("env_surface") or ""),
+            action_scheme=str(doc.get("action_scheme") or "visual"), package=package,
+        )
         run_store.patch_case(run_id, cid, status="running")
         emit_testing_task({
             "event": "case_running",
@@ -358,6 +367,7 @@ def _run_case_list(
                 release_device_lease(sn, str(package or ""), run_id)
 
 
+@owned_job()
 def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id: str) -> None:
     from mino_nexus.loop.case_runner import _worker_sns_for_cases
 
@@ -385,7 +395,7 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
                 subset = [c for c in cases if str(c.get("sn") or "").strip() == sn]
                 if not subset:
                     continue
-                t = threading.Thread(
+                t = user_thread(
                     target=_run_case_list,
                     kwargs={**list_kwargs, "cases": subset},
                     daemon=True,
@@ -443,4 +453,3 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
             sns=sns,
             platforms_by_sn=latest.get("platforms_by_sn") if isinstance(latest.get("platforms_by_sn"), dict) else {},
         )
-

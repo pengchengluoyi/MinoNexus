@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from mino_nexus.services import auth_store as auth
@@ -44,6 +44,8 @@ def auth_status(
 
 @router.post("/send-code")
 def auth_send_code(body: SendCodeBody):
+    if body.purpose.strip().lower() == "register":
+        raise HTTPException(status_code=410, detail="注册只需要邮箱和密码，无需验证码")
     try:
         data = auth.send_code(body.email, purpose=body.purpose)
     except Exception as e:

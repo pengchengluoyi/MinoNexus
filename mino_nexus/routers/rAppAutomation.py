@@ -1,5 +1,7 @@
 """应用配置 / 用例草稿 / qa-process / Figma 同步。"""
 from __future__ import annotations
+from mino_nexus.core.execution_user import user_thread, owned_job, require_user_id
+
 
 import threading
 from typing import Any, Optional
@@ -229,7 +231,7 @@ def qa_tick(app_id: str, body: QaProcessTickBody, _sess: dict = Depends(current_
     job.report(phase="queued", label="已排队")
     seed = dict(cfg.get("qa_process") or {})
     job.save(seed)
-    threading.Thread(
+    user_thread(
         target=_tick_in_background,
         kwargs={
             "project_id": str(app.get("project_id") or ""),
@@ -503,4 +505,3 @@ def figma_apply(app_id: str, body: FigmaApplyLogicBody, _sess: dict = Depends(cu
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return ok(result, msg="已从 Figma 学习应用逻辑")
-

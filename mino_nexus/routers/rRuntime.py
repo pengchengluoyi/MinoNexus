@@ -4,17 +4,19 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 from mino_nexus.services import auth_store
 from mino_nexus.core import protocol as P
 from mino_nexus.core.http_util import client_header, ok
 from mino_nexus.services.node_registry import get_registry
-from mino_nexus.services.node_store import filter_nodes, get_node as stored_node, node_visible
+from mino_nexus.services.node_store import filter_nodes, get_node as stored_node, is_admin, node_visible
 from mino_nexus.routers.deps import current_session, require_packs_writer
 from mino_nexus.services.node_store import sanitize_id, upsert
 from mino_nexus.services.runtime_tokens import issue
+from mino_nexus.services.runtime_tokens import installation_status, revoke_node_credential
+from mino_nexus.services.scout_install import install_commands, installation_release, public_nexus_url
 from mino_nexus.services.ui_devices import ui_assets, ui_devices, ui_nodes
 from mino_nexus.services.node_workload import workload_for_node_id
 
@@ -73,16 +75,16 @@ def list_runtime_assets(
 ):
     data = ui_assets()
     scouts = data.get("scouts") or []
-    if client != "console":
-        scouts = filter_nodes(scouts, sess, studio_id=studio_id)
-        seen_studio = {str(row.get("studio_id") or "") for row in scouts if row.get("studio_id")}
-        data["studios"] = [s for s in (data.get("studios") or []) if s.get("studio_id") in seen_studio]
-    else:
-        for row in scouts:
-            uid = str(row.get("owner_user_id") or "")
-            pub = auth_store.public_user_by_id(uid) if uid else None
-            if pub:
-                row["owner_name"] = pub.get("name") or pub.get("username") or ""
+    scouts = filter_nodes(scouts, sess, studio_id=studio_id)
+    # studio 元信息也可能夹带其他账号设备；只根据本人 Scout 重建关联清单。
+    owned_ids = {str(row.get("node_id") or "") for row in scouts}
+    visible_studios = []
+    for studio in data.get("studios") or []:
+        devices = [d for d in studio.get("devices") or [] if str(d.get("node_id") or d.get("current_scout_id") or "") in owned_ids]
+        if str(studio.get("owner_user_id") or "") != str(sess.get("user_id") or ""):
+            continue
+        visible_studios.append({**studio, "devices": devices, "device_count": len(devices)})
+    data["studios"] = visible_studios
     data["scouts"] = scouts
     data["scout_count"] = len(scouts)
     data["studio_count"] = len(data.get("studios") or [])
@@ -100,41 +102,75 @@ def list_runtime_assets(
 
 
 @router.post("/nodes/install-token")
-def create_install_token(request: Request, sess: dict = Depends(current_session)):
+def create_install_token(request: Request, response: Response, sess: dict = Depends(current_session)):
+    base = public_nexus_url(request)
+    release = installation_release()
     tok = issue(user_id=str(sess.get("user_id") or ""))
-    base = str(request.base_url).rstrip("/")
-    return ok({**tok, "nexus_url": base})
+    response.headers["Cache-Control"] = "no-store"
+    return ok({**tok, "nexus_url": base, "targets": release["targets"],
+               "commands": install_commands(release, token=tok["token"], nexus_url=base)})
+
+
+@router.get("/nodes/installations/{install_id}")
+def get_installation_status(install_id: str, sess: dict = Depends(current_session)):
+    status = installation_status(install_id, user_id=str(sess.get("user_id") or ""))
+    if status is None:
+        raise HTTPException(status_code=404, detail="没有本次安装记录")
+    node_id = status["node_id"]
+    live = get_registry().get_node(node_id) if node_id else None
+    status["online"] = bool(live and live.alive and not live.draining)
+    status["hostname"] = live.hostname if live else str((stored_node(node_id) or {}).get("hostname") or "")
+    return ok(status)
+
+
+async def _close_node_connection(node_id: str, *, reason: str = "节点凭证已吊销") -> None:
+    live = get_registry().get_node(node_id)
+    connection = getattr(live.send, "__self__", None) if live else None
+    if connection is not None and hasattr(connection, "ws"):
+        connection.close()
+        await connection.ws.close(code=1008, reason=reason)
+
+
+@router.post("/nodes/{node_id}/revoke-token")
+async def revoke_node_token(node_id: str, sess: dict = Depends(current_session)):
+    nid = sanitize_id(node_id)
+    row = stored_node(nid)
+    if row is None or not node_visible(row, sess):
+        raise HTTPException(status_code=404, detail="没有这个节点")
+    revoke_node_credential(nid)
+    await _close_node_connection(nid)
+    return ok({"node_id": nid, "revoked": True})
 
 
 @router.patch("/nodes/{node_id}")
-def patch_node(
+async def patch_node(
     node_id: str,
     body: NodePatchBody,
     sess: dict = Depends(current_session),
 ):
-    require_packs_writer(sess)
     nid = sanitize_id(node_id)
-    if not nid:
-        raise HTTPException(status_code=400, detail="node_id 无效")
-    snap = stored_node(nid)
-    live = get_registry().get_node(nid)
-    if snap is None and live is None:
-        raise HTTPException(status_code=404, detail="没有这个节点")
-    fields: dict[str, str] = {}
-    if body.owner_user_id is not None:
-        fields["owner_user_id"] = body.owner_user_id
+    _node_row_for_session(nid, studio_id="", sess=sess)
+    # 本轮没有节点转移/共享流程，不能通过 PATCH 继承旧账号本地社交凭据。
+    if body.owner_user_id is not None and body.owner_user_id != str(sess.get("user_id") or ""):
+        raise HTTPException(status_code=409, detail="本版本不支持节点转移账号")
     if body.studio_id is not None:
-        fields["studio_id"] = body.studio_id
-    if not fields:
-        raise HTTPException(status_code=400, detail="至少提供 owner_user_id 或 studio_id")
-    row = upsert(nid, **fields)
+        raise HTTPException(status_code=409, detail="本版本不支持变更节点关联")
+    return ok({"node": stored_node(nid)})
+
+
+@router.post("/nodes/{node_id}/claim")
+async def claim_legacy_node(node_id: str, sess: dict = Depends(current_session)):
+    from mino_nexus.services.node_claim import claim
+    nid = sanitize_id(node_id)
+    claim(nid, sess)
+    # Re-register with the persisted credential owner; previous plugin state is
+    # not accepted as proof of an account identity.
+    live = get_registry().get_node(nid)
     if live is not None:
-        if "owner_user_id" in fields:
-            live.owner_user_id = sanitize_id(fields["owner_user_id"])
-        if "studio_id" in fields:
-            live.studio_id = sanitize_id(fields["studio_id"])
-        live.persist_snapshot()
-    return ok({"node": row})
+        live.owner_user_id = str(sess["user_id"])
+    await _close_node_connection(nid, reason="历史节点已认领，请重新注册")
+    return ok({"node": stored_node(nid)})
+
 
 
 def _node_row_for_session(
@@ -283,6 +319,7 @@ async def config_node_plugin(
     studio_id: str = Query(default=""),
     sess: dict = Depends(current_session),
 ):
+    _node_row_for_session(node_id, studio_id=studio_id, sess=sess)
     kind = str(body.kind or "").strip()
     plugin_id = str(body.plugin_id or "").strip()
     if not kind or not plugin_id:
@@ -307,6 +344,7 @@ async def install_node_plugin(
     studio_id: str = Query(default=""),
     sess: dict = Depends(current_session),
 ):
+    _node_row_for_session(node_id, studio_id=studio_id, sess=sess)
     kind = str(body.kind or "").strip()
     plugin_id = str(body.plugin_id or "").strip()
     if kind not in ("cli", "mcp", "im"):
@@ -329,6 +367,7 @@ async def remove_node_plugin(
     studio_id: str = Query(default=""),
     sess: dict = Depends(current_session),
 ):
+    _node_row_for_session(node_id, studio_id=studio_id, sess=sess)
     kind = str(body.kind or "").strip()
     plugin_id = str(body.plugin_id or "").strip()
     live = _require_live_node(node_id, sess, studio_id)
@@ -357,6 +396,7 @@ async def call_node_plugin(
     studio_id: str = Query(default=""),
     sess: dict = Depends(current_session),
 ):
+    _node_row_for_session(node_id, studio_id=studio_id, sess=sess)
     cap = str(body.capability_id or "").strip()
     if cap not in _PLUGIN_CALLS:
         raise HTTPException(status_code=400, detail="不支持的插件调用")
@@ -388,6 +428,7 @@ async def command_node(
     studio_id: str = Query(default=""),
     sess: dict = Depends(current_session),
 ):
+    _node_row_for_session(node_id, studio_id=studio_id, sess=sess)
     cmd = str(body.command or "").strip().lower()
     if cmd == "start":
         raise HTTPException(status_code=400, detail="离线专机无法远程启动")

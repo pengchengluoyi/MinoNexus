@@ -1,39 +1,7 @@
-"""LLM provider 凭据的**唯一读取入口** —— 转发 `settings_store` + 支持环境变量覆盖。
-
-## 为什么有两个 settings 模块
-
-| 模块 | 角色 |
-|---|---|
-| `settings_store.py` | **唯一真源。** UI（`rSettings`）读写，落 `settings` 表。含 6 个 provider 预设、邮件、Figma、role prompt override、`case_execution_use` 等业务开关 |
-| `settings.py`（本文件） | **只做两件事**：① 环境变量覆盖 ② 转发给 `settings_store`。**自己不存任何配置。** |
-
-`llm_client` 与 `runtime/run_context` 只 import 本模块，于是"key 从哪来"这件事收在一处。
-
-## 修正记录（重要）
-
-搬迁初期本模块自己读 `ai_providers.json` + env，**和 UI 写的 settings 表是两套**，
-后果是：在设置页填了 key，`llm_client` 却读不到，所有 LLM 调用报"未配置 provider"。
-
-更隐蔽的第二层：`llm_client` 会检查 `provider["case_execution_use"]`（"这个 provider
-允许用于跑用例"的开关），而当时本模块**根本不返回这个 key** → `.get()` 得到 None →
-即使读对了文件也会被拒。
-
-所以现在的铁律：**provider 字段的形状由 `settings_store.get_ai_provider_credentials`
-定义，本模块不得自行拼装**。env 覆盖也必须在它的返回值上做叠加，不能另起一个 dict。
-行为契约见本模块 docstring 与 `settings_store.get_ai_provider_credentials` 的字段形状。
-
-## 环境变量（给 CI 和本地调试用，不经 UI）
-
-    MINO_AI_PROVIDER   provider id，默认 openai
-    MINO_AI_API_KEY    有它才触发覆盖
-    MINO_AI_BASE_URL   缺省用 settings_store 预设里的
-    MINO_AI_MODEL      缺省同上
-    MINO_EMBEDDING_MODEL  文档库向量模型（可选，火山方舟常填接入点 ep-… 或 doubao-embedding）
-"""
+"""模型配置唯一读取入口，按执行账号转发 settings_store，无共享密钥回退。"""
 from __future__ import annotations
 
 import contextvars
-import os
 from typing import Any, Optional
 
 from mino_nexus.services import settings_store
@@ -42,56 +10,21 @@ from mino_nexus.core.log import SLog
 TAG = "Settings"
 
 
-def _env_override() -> tuple[str, dict[str, str]]:
-    """返回 (provider_id, 要叠加的字段)。没配 MINO_AI_API_KEY 就返回空。"""
-    key = os.environ.get("MINO_AI_API_KEY", "").strip()
-    if not key:
-        return "", {}
-    pid = (os.environ.get("MINO_AI_PROVIDER") or "openai").strip().lower()
-    patch = {"api_key": key}
-    for env_name, field in (
-        ("MINO_AI_BASE_URL", "base_url"),
-        ("MINO_AI_MODEL", "model"),
-        ("MINO_EMBEDDING_MODEL", "embedding_model"),
-    ):
-        val = os.environ.get(env_name, "").strip()
-        if val:
-            patch[field] = val
-    return pid, patch
-
-
 def default_provider_id() -> str:
-    pid, _ = _env_override()
-    if pid:
-        return pid
     return str(settings_store.list_ai_providers().get("default_provider") or "openai").lower()
 
 
 def get_ai_provider_credentials(provider_id: Optional[str] = None) -> dict[str, Any]:
-    """含明文 key，**只给 LLM 调用层**，不要回给前端。
-
-    形状完全由 `settings_store` 决定（含 `case_execution_use` / `api_type` /
-    `plan_compress_ratio` 等 llm_client 会读的字段），本模块只叠加 env 覆盖。
-    """
-    env_pid, patch = _env_override()
-    pid = str(provider_id or "").strip().lower() or env_pid or default_provider_id()
-
-    cred = dict(settings_store.get_ai_provider_credentials(pid))
-
-    if patch and pid == env_pid:
-        cred.update(patch)
-        # env 里配了 key 就是"我要用它跑"，把三个开关一并打开 ——
-        # 否则 llm_client 的 configured / enabled / case_execution_use 三道检查过不去。
-        cred["configured"] = True
-        cred["enabled"] = True
-        cred["case_execution_use"] = True
-        if not cred.get("base_url"):
-            SLog.w(TAG, f"env 覆盖了 {pid} 的 key，但没有 base_url —— 设 MINO_AI_BASE_URL")
-        cred["source"] = "env"
-    else:
-        cred["source"] = "settings_store"
-
+    """只读取当前执行账号；不回退到全局、管理员或环境变量 Key。"""
+    cred = dict(settings_store.get_ai_provider_credentials(provider_id))
+    cred["source"] = "settings_store"
     return cred
+
+
+def validate_provider_owner(provider: dict[str, Any]) -> None:
+    from mino_nexus.core.execution_user import require_user_id
+    if str(provider.get("owner_user_id") or "") != require_user_id():
+        raise PermissionError("模型配置不属于执行账号")
 
 
 def _compress_ratio(raw: Any, default: float) -> float:
@@ -99,7 +32,7 @@ def _compress_ratio(raw: Any, default: float) -> float:
         value = float(raw)
     except (TypeError, ValueError):
         return default
-    if 1.0 <= value <= 8.0:
+    if 1.0 <= value <= 10.0:
         return value
     return default
 
@@ -121,6 +54,12 @@ def get_ai_android_compress_ratio(provider_id: Optional[str] = None) -> float:
     return _compress_ratio(raw, 1.0)
 
 
+def get_ai_pc_compress_ratio(provider_id: Optional[str] = None) -> float:
+    """PC 采集压缩比；1.0 保留原图尺寸，不叠加 Plan 压缩。"""
+    raw = _provider_for_ratio(provider_id).get("pc_compress_ratio")
+    return _compress_ratio(raw, 1.0)
+
+
 def get_ai_plan_compress_ratio(provider_id: Optional[str] = None) -> float:
     """喂给大模型的统一压缩比；1.0=不缩小，默认 3.0。各渠道都转 JPEG。
 
@@ -133,93 +72,56 @@ def get_ai_plan_compress_ratio(provider_id: Optional[str] = None) -> float:
 _channel_capture_ratio: contextvars.ContextVar[float] = contextvars.ContextVar(
     "mino_channel_capture_ratio", default=1.0
 )
+_channel_capture_authoritative: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "mino_channel_capture_authoritative", default=False
+)
 
 
-def note_channel_capture_ratio(ratio: float) -> None:
+def note_channel_capture_ratio(ratio: float, *, authoritative: bool = False) -> None:
     """记下这张截图在采集端用过的压缩比。调用方线程上记，给后面的喂模缩图用。"""
     try:
         value = float(ratio)
     except (TypeError, ValueError):
         value = 1.0
     _channel_capture_ratio.set(value if value > 0 else 1.0)
+    _channel_capture_authoritative.set(authoritative)
 
 
 def llm_shrink_after_capture() -> float:
     """渠道压缩和 plan_compress_ratio 不叠加。
 
-    采集已经按 web_compress_ratio / android_compress_ratio 缩小过（比 > 1）时，喂模只转 JPEG，不再除以 3。
+    采集已经按渠道压缩比缩小过（比 > 1）时，喂模只转 JPEG，不再除以 3。
+    PC 的独立压缩设置始终优先，设为 1 时也不叠加 Plan 压缩。
     采集没缩（比 = 1）时，才用 plan_compress_ratio。
     """
-    if _channel_capture_ratio.get() > 1.0:
+    if _channel_capture_authoritative.get() or _channel_capture_ratio.get() > 1.0:
         return 1.0
     return get_ai_plan_compress_ratio()
 
 
 def channel_screenshot_compress_ratio(platform: str, provider_id: Optional[str] = None) -> float:
-    """采集端按渠道锁定压缩比。Web 用 web_compress_ratio，安卓用 android_compress_ratio。"""
+    """采集端按 Web、安卓、PC 渠道读取各自的压缩比。"""
     plat = str(platform or "").strip().lower()
     if plat in ("web", "browser", "playwright"):
         return get_ai_web_compress_ratio(provider_id)
     if plat in ("android", "adb"):
         return get_ai_android_compress_ratio(provider_id)
+    if plat in ("desktop", "pc", "macos", "windows"):
+        return get_ai_pc_compress_ratio(provider_id)
     return 1.0
 
 
 def find_case_execution_provider_id() -> str:
-    """跑用例该用哪个 provider。env 覆盖优先，否则问 settings_store。"""
-    env_pid, _ = _env_override()
-    if env_pid:
-        return env_pid
     return settings_store.find_case_execution_provider_id()
 
 
 def should_use_ai_planning(channel: str, provider_id: Optional[str] = None) -> dict[str, Any]:
-    """这条通道现在能不能用大模型。
-
-    `settings_store` 的版本除了看 provider 本身，还看 `ai_usage` 里的
-    「使用大模型能力」总开关（`case_execution_enabled` / `copilot_enabled`）——
-    那是 UI 上的勾选。env 覆盖的语义是"我要用它跑"，所以**连总开关一起认为已开**，
-    否则本地/CI 配了 key 仍然会被这道闸门拦住。
-    """
-    env_pid, patch = _env_override()
-    gate = dict(settings_store.should_use_ai_planning(channel, provider_id=provider_id))
-    if not patch:
-        return gate
-
-    pid = str(provider_id or "").strip().lower() or env_pid
-    if pid != env_pid:
-        return gate
-
-    cred = get_ai_provider_credentials(pid)
-    gate["enabled"] = True
-    gate["reason"] = ""
-    gate["provider"] = {k: v for k, v in cred.items() if k != "api_key"}
-    gate["source"] = "env"
-    return gate
+    return settings_store.should_use_ai_planning(channel, provider_id=provider_id)
 
 
 def summary() -> dict[str, Any]:
-    """给 /health 用，**不含明文 key**。"""
-    listing = settings_store.list_ai_providers()
-    env_pid, patch = _env_override()
-    out: dict[str, Any] = {
-        "default": default_provider_id(),
-        "source": "env" if patch else "settings_store",
-        "providers": {
-            str(p.get("id")): {
-                "configured": bool(p.get("configured")),
-                "enabled": bool(p.get("enabled")),
-                "case_execution_use": bool(p.get("case_execution_use")),
-                "model": p.get("model") or "",
-            }
-            for p in listing.get("providers") or []
-        },
-    }
-    if patch:
-        row = out["providers"].setdefault(env_pid, {})
-        row.update({"configured": True, "enabled": True, "case_execution_use": True,
-                    "model": patch.get("model") or row.get("model") or "", "via": "env"})
-    return out
+    """公共健康状态不披露任何账号的配置。"""
+    return {"source": "user_scoped", "providers": [p["id"] for p in settings_store.AI_PROVIDER_PRESETS]}
 
 
 # ---------------- 未知属性透明转发 ----------------

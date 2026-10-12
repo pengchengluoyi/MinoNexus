@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from mino_nexus.core.http_util import ok
@@ -114,9 +114,31 @@ def preview_resource_key(project_id: str, body: ResourceKeyPreviewBody, _sess: d
 
 
 @router.get("/{project_id}/cases")
-def list_project_cases(project_id: str, _sess: dict = Depends(current_session)):
+def list_project_cases(project_id: str, limit: int | None = Query(None, ge=1, le=200), offset: int = Query(0, ge=0),
+                       search: str = "", module: str = "", app_id: str = "", result: str = "all",
+                       _sess: dict = Depends(current_session)):
     _project(project_id)
+    if limit is not None:
+        if result not in ("all", "failed", "never"):
+            raise HTTPException(status_code=400, detail="未知结果筛选")
+        if app_id:
+            app = ps.find_app(app_id)
+            if not app or str(app.get("project_id") or "") != project_id:
+                raise HTTPException(status_code=400, detail="应用不属于当前项目")
+        elif result != "all":
+            raise HTTPException(status_code=400, detail="结果筛选需要 app_id")
+        from mino_nexus.services.case_store import list_case_page
+
+        return ok(list_case_page(project_id, limit=limit, offset=offset, search=search, module=module, app_id=app_id, result=result))
     return ok(cim.cases_payload(project_id))
+
+
+@router.get("/{project_id}/case-modules")
+def list_case_modules(project_id: str, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.case_store import case_modules
+
+    return ok(case_modules(project_id))
 
 
 @router.get("/{project_id}/cases/{case_id}")

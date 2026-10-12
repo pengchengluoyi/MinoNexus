@@ -244,6 +244,7 @@ def try_dispatch_block_hook(
         status=st,
         summary=hook_summary,
         executor_used=executor_used,
+        result=res,
     )
     if ok:
         note_tool_pass_milestone(
@@ -373,6 +374,7 @@ def _dispatch_email_fill(
         status="pass" if ok else "fail",
         summary=summ,
         executor_used="internal",
+        result=res,
     )
     if ok:
         cursor.step_intents_done.add("login_email")
@@ -419,6 +421,17 @@ def _dispatch_otp_fill(
     from mino_nexus.loop.milestones import milestone_by_id, read_state
     from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
 
+    if ui_channel_from_ctx(ctx) == UiChannel.DESKTOP:
+        from mino_nexus.loop.program_device_fallback import vision_fallback_result
+
+        return vision_fallback_result(
+            capability_id="input_text",
+            params={"field": "sms_code", "text": code, "mode": "replace", "focus_ref": "previous_focus_action"},
+            reason="otp_fill",
+            milestone_id=mid,
+            block_id=block_id,
+            step_id=mid,
+        )
     state = read_state(cursor)
     otp_field_row = milestone_by_id(state, "otp_field")
     if otp_field_row is not None and str(otp_field_row.get("status") or "") not in (
@@ -527,6 +540,7 @@ def _dispatch_otp_fill(
         status="pass" if ok else "fail",
         summary=summ,
         executor_used="internal",
+        result=res,
     )
     streak = int(getattr(cursor, "otp_fill_device_fail_streak", 0) or 0)
     if ok:

@@ -74,6 +74,8 @@ class RecoveryOutcome:
     advice: str = ""
     error: str = ""
     evidence: str = ""
+    execution_metadata: dict[str, Any] = field(default_factory=dict)
+    executor_used: str = ""
 
     def summary(self) -> str:
         if self.mode == "advise":
@@ -188,6 +190,23 @@ def _fill_foreground_from_get_app(
     except Exception:
         return
     raw = _payload_dict(result)
+    if str(getattr(ctx, "platform", "")) == "desktop":
+        ev.raw = raw
+        if getattr(result.status, "value", result.status) != "pass":
+            ev.error = result.error or result.summary
+            return
+        matched = raw.get("target_active")
+        foreground = str(raw.get("foreground_package") or "").strip()
+        if matched is True and pkg:
+            ev.app_foreground = "yes"
+            ev.foreground_pkg = pkg
+            ev.top_window_pkg = pkg
+            ev.target_alive = "yes"
+        elif matched is False and foreground:
+            ev.app_foreground = "no"
+            ev.foreground_pkg = foreground
+            ev.top_window_pkg = foreground
+        return
     fg_pkg = str(raw.get("package") or "").strip()
     if not _looks_like_android_pkg(fg_pkg):
         return
@@ -215,6 +234,10 @@ def collect_evidence(ctx, router, *, target_package: str = "") -> Evidence:
             return ev
     except Exception:
         pass
+    if str(getattr(ctx, "platform", "")) == "desktop":
+        ev = Evidence()
+        _fill_foreground_from_get_app(ev, router, ctx, target_package=pkg)
+        return ev
     event = PlanEvent(
         seq=0,
         capability_id="probe_device_state",
@@ -300,7 +323,7 @@ def resolve_app_foreground_guard(
     nodes: list[Any] | None,
     target_package: str = "",
 ) -> dict[str, str]:
-    """hierarchy / DOM guard +（仅安卓）get_foreground_app，减少 app_foreground=unknown。"""
+    """hierarchy / DOM guard + 原生前台查询，减少 app_foreground=unknown。"""
     pkg = str(target_package or getattr(ctx, "target_package", "") or "").strip()
     plat = str(getattr(ctx, "platform", "") or "")
     from mino_nexus.runtime.run_context import is_web_slot
@@ -611,6 +634,10 @@ def ensure_target_app_foreground(
     shot: Any = None,
 ) -> Optional[RecoveryOutcome]:
     """Case 开环：前台不是被测 App 时 launch 目标包/网址（不处理锁屏/黑屏 advise）。"""
+    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+
+    if ui_channel_from_ctx(ctx) == UiChannel.DESKTOP:
+        return None
     pkg = target_package or str(getattr(ctx, "target_package", "") or "")
     web_slot = False
     try:
@@ -658,7 +685,9 @@ def ensure_target_app_foreground(
     res = _dispatch(router, ctx, event, agent_turn=0, action_idx=1)
     status = getattr(res.status, "value", res.status)
     ok = str(status) in (EventStatus.PASS.value, "pass")
-    out = RecoveryOutcome(rule_id="bring_target_app_foreground", mode="execute")
+    from mino_nexus.loop.observe.execution_diagnostics import execution_result_metadata
+    out = RecoveryOutcome(rule_id="bring_target_app_foreground", mode="execute",
+                          executor_used=res.executor_used, execution_metadata=execution_result_metadata(res))
     out.applied = True
     out.recovered = ok
     out.attempts = 1

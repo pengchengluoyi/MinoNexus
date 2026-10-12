@@ -11,6 +11,7 @@ class DocSource(Base):
     __tablename__ = "doc_sources"
 
     id = Column(String, primary_key=True)
+    owner_user_id = Column(String, default="", index=True)
     app_id = Column(String, index=True, default="")
     project_id = Column(String, index=True, default="")
     title = Column(String, default="")

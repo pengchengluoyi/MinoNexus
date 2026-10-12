@@ -21,6 +21,8 @@ def channel_supports_capability(ctx: Any, capability_id: str) -> bool:
     if not cap:
         return True
     ch = ui_channel_from_ctx(ctx)
+    if ch == UiChannel.DESKTOP and cap in {"reset_native_app_before_case", "clear_app_cache", "force_stop_app"}:
+        return False
     if ch == UiChannel.WEB and cap in _NATIVE_ONLY_CAPS:
         return False
     return True
@@ -35,7 +37,7 @@ def maybe_recover_foreground(
     nodes: list[dict[str, Any]] | None,
 ) -> Optional[dict[str, Any]]:
     """hierarchy 错前台时程序拉起；Web 槽直接跳过。"""
-    if ui_channel_from_ctx(ctx) == UiChannel.WEB:
+    if ui_channel_from_ctx(ctx) in (UiChannel.WEB, UiChannel.DESKTOP):
         return None
     from mino_nexus.loop.android.app_env import launch_if_hierarchy_away
 

@@ -53,6 +53,10 @@ class RunContext:
     hitl: dict[str, Any] = field(default_factory=dict)
     ios: dict[str, Any] = field(default_factory=dict)
     playwright: dict[str, Any] = field(default_factory=dict)
+    desktop: dict[str, Any] = field(default_factory=dict)
+    desktop_os: str = ""
+    desktop_capabilities: list[str] = field(default_factory=list)
+    session_generation: str = ""
 
     # AI provider hints
     provider_id: str = ""
@@ -115,6 +119,7 @@ class RunContext:
             "remote": _ok(self.remote),
             "ios_wda": _ok(self.ios),
             "playwright": _ok(self.playwright),
+            "desktop": _ok(self.desktop),
             "vlm": _ok(self.vlm),
             "hitl": _ok(self.hitl),
             "ai_persona": _ok(self.vlm),   # 拟人化依赖 VLM
@@ -124,7 +129,7 @@ class RunContext:
     @property
     def has_control_channel(self) -> bool:
         flags = self.connectivity_flags
-        return any(flags.get(k) for k in ("adb", "remote", "ios_wda", "playwright"))
+        return any(flags.get(k) for k in ("adb", "remote", "ios_wda", "playwright", "desktop"))
 
     def to_prompt_brief(self, *, app_cache_cleared: bool = False) -> dict[str, Any]:
         """注入到 PLAN_OVERVIEW / decide prompt 的 connectivity_brief 区段。"""
@@ -177,7 +182,7 @@ def from_node(
     if is_web_slot(sn, platform):
         platform = "web"
     elif not platform:
-        platform = "android"
+        platform = "unknown"
     ctx = RunContext(
         sn=sn,
         platform=platform,
@@ -209,6 +214,10 @@ def from_node(
     ctx.remote = _state_for("remote", "remote")
     ctx.ios = _state_for("ios", "ios_wda")
     ctx.playwright = _state_for("playwright", "playwright")
+    ctx.desktop = _state_for("desktop", "desktop")
+    ctx.desktop_os = str(getattr(dev, "os", "") or "")
+    ctx.desktop_capabilities = list(getattr(dev, "capabilities", None) or [])
+    ctx.session_generation = str(getattr(dev, "session_generation", "") or "")
 
     if platform == "web":
         ctx.remote = _channel("not_applicable", reason="web slot")
@@ -327,11 +336,14 @@ def device_platform_kind(device_type: str = "", channels: Any = None, sn: str = 
     dt = str(device_type or "").lower()
     if dt in ("web", "browser", "playwright"):
         return "web"
+    if dt == "desktop":
+        return "desktop"
     if _looks_ios_token(dt) or _looks_ios_token(sn):
         return "ios"
-    if isinstance(channels, dict) and str((channels.get("ios") or {}).get("state") or "") == "connected":
+    ios_channel = (channels or {}).get("ios") if isinstance(channels, dict) else None
+    if isinstance(ios_channel, dict) and str(ios_channel.get("state") or "") == "connected":
         return "ios"
-    return "android"
+    return "android" if dt in ("android", "adb") else "unknown"
 
 
 def version_from_execute_result(raw: dict[str, Any] | None) -> str:

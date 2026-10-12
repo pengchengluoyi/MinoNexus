@@ -1,4 +1,4 @@
-"""UI 观察者：`WS /ws`。登录页会连，没有 token 也要收下，否则一直重连。"""
+"""用户实时通道：认证连接、归属过滤、吊销后不再发送。"""
 from __future__ import annotations
 
 import asyncio
@@ -17,7 +17,7 @@ from mino_nexus.websocket.node import NEXUS_VERSION
 
 TAG = "Observers"
 
-_CLIENTS: set[WebSocket] = set()
+_CLIENTS: dict[WebSocket, tuple[str, str]] = {}
 _LOOP: Optional[asyncio.AbstractEventLoop] = None
 
 
@@ -28,6 +28,9 @@ def set_loop(loop: asyncio.AbstractEventLoop) -> None:
 
 def broadcast_sync(payload: dict[str, Any]) -> None:
     """从执行线程把 agent_step / testing_task 推给 Studio。"""
+    from mino_nexus.core.execution_user import current_user_id
+    payload = dict(payload)
+    payload["_execution_owner"] = current_user_id()
     loop = _LOOP
     if loop is None or not loop.is_running():
         return
@@ -37,16 +40,38 @@ def broadcast_sync(payload: dict[str, Any]) -> None:
         SLog.d(TAG, f"broadcast_sync failed: {exc}")
 
 
+def _event_owner(payload: dict[str, Any]) -> str:
+    from mino_nexus.services import run_store
+    from mino_nexus.services.access_scope import node_owner_id, device_owner_id
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    rid = str(data.get("task_id") or data.get("run_id") or "").split("::", 1)[0]
+    if rid:
+        doc = run_store.get(rid)
+        return str((doc or {}).get("owner_user_id") or "")
+    if data.get("node_id"):
+        return node_owner_id(str(data["node_id"]))
+    if data.get("sn"):
+        return device_owner_id(str(data["sn"]))
+    return str(payload.get("_execution_owner") or "")
+
+
 async def _broadcast(payload: dict[str, Any]) -> None:
-    text = json.dumps(payload, ensure_ascii=False, default=str)
-    dead: list[WebSocket] = []
-    for ws in list(_CLIENTS):
+    owner = _event_owner(payload)
+    if not owner:
+        return  # 无法确定归属的执行事件不能广播。
+    public = {k: v for k, v in payload.items() if k != "_execution_owner"}
+    text = json.dumps(public, ensure_ascii=False, default=str)
+    for ws, (token, uid) in list(_CLIENTS.items()):
         try:
-            await ws.send_text(text)
+            sess = auth_store.session_of(token)
+            if not sess or sess.get("user_id") != uid:
+                _CLIENTS.pop(ws, None)
+                await ws.close(code=1008, reason="登录已失效")
+                continue
+            if owner == uid:
+                await ws.send_text(text)
         except Exception:
-            dead.append(ws)
-    for ws in dead:
-        _CLIENTS.discard(ws)
+            _CLIENTS.pop(ws, None)
 
 
 def _reply(req_id: str, action: str, data: Any = None, *, code: int = 200, msg: str = "") -> dict[str, Any]:
@@ -59,7 +84,8 @@ def _reply(req_id: str, action: str, data: Any = None, *, code: int = 200, msg: 
 
 
 def _server_info() -> dict[str, Any]:
-    nodes = get_registry().nodes()
+    from mino_nexus.core.execution_user import current_user_id
+    nodes = [n for n in get_registry().nodes() if n.owner_user_id == current_user_id()]
     urls = public_urls()
     return {
         "hostname": platform.node(),
@@ -77,26 +103,18 @@ def _server_info() -> dict[str, Any]:
     }
 
 
-def _node_status() -> dict[str, Any]:
-    nodes = get_registry().nodes()
-    alive = sum(1 for n in nodes if n.alive)
-    return {
-        "role": "nexus",
-        "connected": True,
-        "is_master": True,
-        "candidates": [],
-        "sn": "",
-        "node_count": len(nodes),
-        "nodes_alive": alive,
-        "nodes": ui_nodes(),
-    }
+def _node_status(sess: dict[str, Any]) -> dict[str, Any]:
+    from mino_nexus.services.node_store import filter_nodes
+    nodes = filter_nodes(ui_nodes(), sess)
+    return {"role": "nexus", "connected": True, "is_master": True, "candidates": [], "sn": "",
+            "node_count": len(nodes), "nodes_alive": sum(bool(n.get("online")) for n in nodes), "nodes": nodes}
 
 
-def handle_action(action: str, payload: dict[str, Any]) -> dict[str, Any]:
+def handle_action(action: str, payload: dict[str, Any], sess: dict[str, Any]) -> dict[str, Any]:
     if action == "get_server_info":
         return {"code": 200, "data": _server_info()}
     if action == "get_node_status":
-        return {"code": 200, "data": _node_status()}
+        return {"code": 200, "data": _node_status(sess)}
     if action == "get_device_list":
         return {"code": 200, "data": ui_devices()}
     if action in ("join_cluster", "leave_cluster", "update_server_config"):
@@ -109,7 +127,11 @@ def register_routes(app: Any) -> None:
     async def ui_endpoint(websocket: WebSocket, token: str = Query(default="")) -> None:
         await websocket.accept()
         sess = auth_store.session_of(token)
-        _CLIENTS.add(websocket)
+        if not sess or not sess.get("user_id"):
+            await websocket.close(code=1008, reason="请先登录")
+            return
+        uid = str(sess["user_id"])
+        _CLIENTS[websocket] = (token, uid)
         SLog.i(TAG, f"UI 连入 logged_in={bool(sess)}")
         try:
             while True:
@@ -123,7 +145,13 @@ def register_routes(app: Any) -> None:
                     continue
                 req_id = str(msg.get("req_id") or "")
                 action = str(msg.get("action") or msg.get("type") or "")
-                result = handle_action(action, msg)
+                sess = auth_store.session_of(token)
+                if not sess or str(sess.get("user_id") or "") != uid:
+                    await websocket.close(code=1008, reason="登录已失效")
+                    break
+                from mino_nexus.core.execution_user import execution_user
+                with execution_user(uid):
+                    result = handle_action(action, msg, sess)
                 await websocket.send_text(json.dumps(
                     _reply(req_id, action, result.get("data"), code=int(result.get("code") or 200), msg=str(result.get("msg") or "")),
                     ensure_ascii=False,
@@ -133,4 +161,4 @@ def register_routes(app: Any) -> None:
         except Exception as exc:
             SLog.e(TAG, f"UI 连接异常: {type(exc).__name__}: {exc}")
         finally:
-            _CLIENTS.discard(websocket)
+            _CLIENTS.pop(websocket, None)

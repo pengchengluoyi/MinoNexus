@@ -174,6 +174,16 @@ def _collect(kind: str) -> list[dict[str, Any]]:
         db.close()
 
 
+@router.get("/desktop-paths")
+def desktop_paths_preview(sess: dict = Depends(current_session)):
+    return ok({"changes": [], "mode": "scout_manifest", "configuration_required": False})
+
+
+@router.post("/desktop-paths")
+def desktop_paths_apply(sess: dict = Depends(current_session)):
+    return ok({"configured": [], "mode": "scout_manifest", "configuration_required": False})
+
+
 @router.get("/kinds")
 def list_kinds(_sess: dict = Depends(current_session)):
     out = []

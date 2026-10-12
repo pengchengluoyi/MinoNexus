@@ -46,6 +46,7 @@ class AIProviderSaveBody(BaseModel):
     plan_compress_ratio: float = 3.0
     web_compress_ratio: float = 2.0
     android_compress_ratio: float = 1.0
+    pc_compress_ratio: float = Field(default=1.0, ge=1.0, le=10.0, allow_inf_nan=False)
     case_execution_use: bool = False
 
 
@@ -106,13 +107,31 @@ def test_mail(body: MailTestBody, _sess: dict = Depends(current_session)):
 
 @router.get("/ai/providers")
 def list_ai_providers(_sess: dict = Depends(current_session)):
-    return ok(ss.list_ai_providers())
+    return ok(ss.list_ai_providers(user_id=_plugin_user(_sess)))
+
+
+@router.post("/ai/providers/{provider_id}/validate")
+def validate_ai_provider(provider_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.services import settings
+    from mino_nexus.ai.llm_client import _post_chat_completions
+    provider = settings.get_ai_provider_credentials(provider_id)
+    if not provider.get("configured"):
+        raise HTTPException(status_code=409, detail="当前账号尚未配置模型 Key")
+    response, meta = _post_chat_completions(provider=provider,
+        messages=[{"role": "user", "content": "Reply OK."}], max_tokens=16,
+        timeout_sec=15, max_attempts=1, stream=False)
+    if response is None:
+        raise HTTPException(status_code=502, detail="模型连接验证失败，请检查当前账号的配置")
+    return ok({"provider_id": provider["id"], "connected": True, "elapsed_ms": meta.get("elapsed_ms", 0)})
 
 
 @router.put("/ai/providers/{provider_id}")
 def save_ai_provider(provider_id: str, body: AIProviderSaveBody, _sess: dict = Depends(current_session)):
     try:
-        data = ss.save_ai_provider(provider_id, body.model_dump())
+        payload = body.model_dump()
+        if "pc_compress_ratio" not in body.model_fields_set:
+            payload.pop("pc_compress_ratio", None)
+        data = ss.save_ai_provider(provider_id, payload, user_id=_plugin_user(_sess))
     except Exception as e:
         http_error(e)
     return ok(data, msg="已保存")
@@ -120,13 +139,13 @@ def save_ai_provider(provider_id: str, body: AIProviderSaveBody, _sess: dict = D
 
 @router.delete("/ai/providers/{provider_id}")
 def delete_ai_provider(provider_id: str, _sess: dict = Depends(current_session)):
-    ss.delete_ai_provider(provider_id)
+    ss.delete_ai_provider(provider_id, user_id=_plugin_user(_sess))
     return ok(msg="已删除")
 
 
 @router.put("/ai/usage")
 def save_ai_usage(body: AIUsageSaveBody, _sess: dict = Depends(current_session)):
-    return ok(ss.save_ai_usage(body.model_dump()), msg="已保存")
+    return ok(ss.save_ai_usage(body.model_dump(), user_id=_plugin_user(_sess)), msg="已保存")
 
 
 @router.get("/ai/roles")

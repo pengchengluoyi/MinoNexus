@@ -13,10 +13,12 @@ def log_program_tool(
     summary: str,
     executor_used: str = "internal",
     source: str = "flow_block",
+    result: Any = None,
 ) -> None:
     if writer is None:
         return
     cap = str(capability_id or "").strip()
+    from mino_nexus.loop.observe.execution_diagnostics import execution_result_metadata
     writer.append(
         "tool/call",
         {
@@ -31,8 +33,9 @@ def log_program_tool(
             "capability_id": cap,
             "status": str(status or ""),
             "summary": str(summary or "")[:800],
-            "error": "",
-            "executor_used": executor_used,
+            "error": str(getattr(result, "error", "") or "")[:800],
+            "executor_used": str(getattr(result, "executor_used", "") or executor_used),
             "source": source,
+            **execution_result_metadata(result),
         },
     )

@@ -13,6 +13,7 @@ class UiChannel(str, Enum):
     ANDROID = "android"
     IOS = "ios"
     WEB = "web"
+    DESKTOP = "desktop"
 
 
 def ui_channel_from_ctx(ctx: Any | None) -> UiChannel:
@@ -24,15 +25,19 @@ def ui_channel_from_ctx(ctx: Any | None) -> UiChannel:
     plat = str(getattr(ctx, "platform", "") or "").strip().lower()
     if is_web_slot(sn, plat) or plat in ("web", "playwright"):
         return UiChannel.WEB
+    if plat == "desktop":
+        return UiChannel.DESKTOP
     if plat == "ios":
         return UiChannel.IOS
     return UiChannel.ANDROID
 
 
 def ui_channel_label(channel: UiChannel | str) -> str:
-    c = str(channel or UiChannel.ANDROID.value).strip().lower()
+    c = str(getattr(channel, "value", channel) or UiChannel.ANDROID.value).strip().lower()
     if c == UiChannel.WEB.value:
         return "web_dom"
+    if c == UiChannel.DESKTOP.value:
+        return "desktop_visual"
     if c == UiChannel.IOS.value:
         return "ios"
     return "android_hierarchy"

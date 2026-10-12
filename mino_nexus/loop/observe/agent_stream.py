@@ -1,5 +1,7 @@
 """Agent 步骤缓冲：进程内存，供 Studio AgentRun 回填。重启即丢，批次结论在 app_regression_runs。"""
 from __future__ import annotations
+from mino_nexus.core.execution_user import user_thread, current_user_id
+
 
 import base64
 import copy
@@ -25,6 +27,7 @@ def _buffer(data: dict[str, Any]) -> None:
         run = _RUNS.get(run_id)
         if run is None:
             run = {
+                "owner_user_id": current_user_id(),
                 "run_id": run_id,
                 "case_id": data.get("case_id", ""),
                 "goal": data.get("goal", ""),
@@ -73,6 +76,7 @@ def list_recent_runs() -> list[dict[str, Any]]:
                 "view_id": r.get("view_id") or "",
             }
             for r in reversed(_RUNS.values())
+            if not current_user_id() or r.get("owner_user_id") == current_user_id()
         ]
 
 
@@ -95,6 +99,8 @@ def get_run_events(run_id: str) -> dict[str, Any] | None:
                 if str(key).startswith(prefix):
                     hit = _RUNS[key]
                     break
+        if hit and current_user_id() and hit.get("owner_user_id") != current_user_id():
+            return None
         return copy.deepcopy(hit) if hit else None
 
 
@@ -211,6 +217,12 @@ def emit_testing_task(data: dict[str, Any]) -> None:
 
             from mino_nexus.services.assistant_notify import on_run_finished
 
-            threading.Thread(target=on_run_finished, args=(payload,), name="assistant-notify", daemon=True).start()
+            from mino_nexus.services import run_store
+            from mino_nexus.core.execution_user import execution_user
+            doc = run_store.get(str(payload.get("run_id") or payload.get("task_id") or "")) or {}
+            owner = str(doc.get("owner_user_id") or "")
+            if owner:
+                with execution_user(owner):
+                    user_thread(target=on_run_finished, args=(payload,), name="assistant-notify", daemon=True).start()
     except Exception as exc:
         SLog.d(TAG, f"emit_testing_task broadcast failed: {exc}")

@@ -25,15 +25,6 @@ def _persona(profile: dict[str, Any]) -> str:
     return "你是 Mino 的测试助手。"
 
 
-def _profile_text(profile: dict[str, Any]) -> str:
-    parts = []
-    if profile.get("default_app_id"):
-        parts.append(f"默认应用 {profile.get('default_app_id')}")
-    if profile.get("default_sn"):
-        parts.append(f"默认设备 {profile.get('default_sn')}")
-    return "；".join(parts)
-
-
 def _history_text(turns: list[dict[str, Any]] | None) -> str:
     lines = []
     for row in turns or []:
@@ -107,10 +98,15 @@ def handle_utterance(
     node_id: str = "",
     reply_ctx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from mino_nexus.core.execution_user import require_user_id
+    require_user_id(user_id)
+    def check_binding() -> None:
+        if channel:
+            store.require_im_binding(user_id, channel, node_id, reply_ctx or {})
+    check_binding()
     profile = store.get_profile(user_id)
     messages, _meta = render("assistant-route", {
         "persona_block": _persona(profile),
-        "user_profile": _profile_text(profile),
         "recent_turns": _history_text(recent_turns),
         "utterance": text,
     })
@@ -118,7 +114,30 @@ def handle_utterance(
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
     last_outcome: ToolOutcome | None = None
     answer = ""
-    for _ in range(MAX_STEPS):
+    from mino_nexus.services.assistant_targets import named_target
+
+    target = named_target(text)
+    if target:
+        facts: dict[str, Any] = {"execution_target": target}
+        if target.get("app_id") and target.get("env_surface"):
+            check_binding()
+            device_spec = tool_by_function_name("device_list")
+            if device_spec is not None:
+                device_args = {k: target[k] for k in ("project_id", "app_id", "env_surface")}
+                probe = run_tool(device_spec, device_args, user_id=user_id, target=target)
+                last_outcome = probe
+                steps.append({"tool": "device.list", "label": device_spec.get("title") or "兼容设备",
+                    "status": "ok" if probe.ok else ("ask" if probe.ask else "fail"),
+                    "ms": probe.elapsed_ms, "args_brief": json.dumps(device_args, ensure_ascii=False)[:180]})
+                facts["current_devices"] = probe.data
+                if not probe.ok:
+                    answer = probe.ask or probe.summary
+        messages.append({"role": "system", "content": "以下是本条用户消息明确指名的目标，以及本次实时查询结果。"
+            "设备选择仅使用 current_devices.items；unavailable 中的设备不能用于本次任务。"
+            "禁止复用历史设备清单。status 表示 online/offline，desktop_state 单独表示桌面就绪。数据："
+            + json.dumps(facts, ensure_ascii=False)})
+    for _ in range(0 if answer else MAX_STEPS):
+        check_binding()
         reply, calls, meta = _call_model(messages)
         usage["prompt_tokens"] += int(meta.get("prompt_tokens") or 0)
         usage["completion_tokens"] += int(meta.get("completion_tokens") or 0)
@@ -142,7 +161,8 @@ def handle_utterance(
             if spec is None:
                 messages.append({"role": "tool", "tool_call_id": call.get("id") or name, "content": "没有这个工具"})
                 continue
-            outcome = run_tool(spec, args, user_id=user_id, profile=profile)
+            check_binding()
+            outcome = run_tool(spec, args, user_id=user_id, target=target)
             last_outcome = outcome
             steps.append({
                 "tool": spec.get("id"),
@@ -160,12 +180,14 @@ def handle_utterance(
                     outcome.data.get("task_id") or outcome.data.get("run_id") or ""
                 )
                 if task_id and channel and chat_id:
+                    check_binding()
                     store.add_subscription({
                         "user_id": user_id,
                         "kind": "run_done",
                         "target_id": str(task_id),
                         "channel": channel,
                         "chat_id": chat_id,
+                        "sender_id": str((reply_ctx or {}).get("sender_id") or ""),
                         "node_id": node_id,
                         "reply_ctx": reply_ctx or {},
                     })

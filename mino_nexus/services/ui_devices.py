@@ -75,16 +75,26 @@ def _last_online(ts: Any) -> str:
     return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
 
 
-def ui_devices(registry: Optional[NodeRegistry] = None) -> list[dict[str, Any]]:
+def ui_devices(
+    registry: Optional[NodeRegistry] = None, *, account_scoped: bool = True,
+    include_history: bool = True,
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    for row in (registry or get_registry()).devices():
+    node_snapshots = stored_nodes()
+    reg = registry or get_registry()
+    live_nodes = {node.node_id: node for node in reg.nodes()}
+    for row in reg.devices():
         raw = row.get("channels") if isinstance(row.get("channels"), dict) else {}
         channels = _ui_channels(raw)
         online = device_ui_online(bool(row.get("node_alive")), channels)
         sn = row.get("sn") or ""
         secrets = lock_password_public(sn)
         persisted = get_device(sn) or {}
-        owner_id = str(persisted.get("owner_user_id") or "")
+        from mino_nexus.services.access_scope import device_owner_id
+        from mino_nexus.core.execution_user import current_user_id
+        owner_id = device_owner_id(sn, str(row.get("node_id") or persisted.get("current_scout_id") or ""))
+        if account_scoped and current_user_id() and owner_id != current_user_id():
+            continue
         owner_name = str(persisted.get("owner_name") or "").strip()
         if owner_id and not owner_name:
             pub = auth_store.public_user_by_id(owner_id)
@@ -105,22 +115,46 @@ def ui_devices(registry: Optional[NodeRegistry] = None) -> list[dict[str, Any]]:
             "owner_user_id": owner_id,
             "owner_name": owner_name,
             "first_scout_id": persisted.get("first_scout_id") or "",
-            "current_scout_id": persisted.get("current_scout_id") or row.get("node_id") or "",
+            "current_scout_id": row.get("node_id") or persisted.get("current_scout_id") or "",
+            "node_alive": bool(row.get("node_alive")),
+            "node_name": str((node_snapshots.get(str(row.get("node_id") or "")) or {}).get("hostname") or row.get("node_id") or ""),
+            **{k: row.get(k, persisted.get(k)) for k in ("os", "session_key", "session_generation", "desktop_state", "blocked_reason", "capabilities", "readiness")},
         })
-    return out
+    seen = {row["sn"] for row in out}
+    from mino_nexus.core.execution_user import current_user_id
+    from mino_nexus.services.access_scope import device_owner_id
+    for persisted in (stored_devices().values() if include_history else []):
+        sn = str(persisted.get("sn") or "")
+        if not sn or sn in seen:
+            continue
+        if account_scoped and current_user_id() and device_owner_id(sn) != current_user_id():
+            continue
+        node_id = str(persisted.get("current_scout_id") or "")
+        node = live_nodes.get(node_id)
+        offline = _offline_device_row(
+            persisted,
+            node_alive=bool(node and node.alive),
+            node_name=str((node_snapshots.get(node_id) or {}).get("hostname") or node_id),
+        )
+        out.append(offline)
+    from mino_nexus.services.device_targets import evaluate
+    return [evaluate(row) for row in out]
 
 
-def _offline_device_row(persisted: dict[str, Any]) -> dict[str, Any]:
+def _offline_device_row(persisted: dict[str, Any], *, node_alive: bool = False, node_name: str = "") -> dict[str, Any]:
     row = public_device(persisted)
-    owner_id = str(row.get("owner_user_id") or "")
+    from mino_nexus.services.access_scope import device_owner_id
+    owner_id = device_owner_id(str(row.get("sn") or ""), str(row.get("current_scout_id") or ""))
     owner_name = str(row.get("owner_name") or "").strip()
     if owner_id and not owner_name:
         pub = auth_store.public_user_by_id(owner_id)
         if pub:
             owner_name = str(pub.get("name") or pub.get("username") or "")
-    return {
+    from mino_nexus.services.device_targets import evaluate
+    return evaluate({
         "sn": row.get("sn") or "",
         "node_id": row.get("current_scout_id") or "",
+        "node_name": node_name or str(row.get("current_scout_id") or ""),
         "type": _type_of(str(row.get("platform") or "")),
         "model": row.get("model") or "",
         "ip": "",
@@ -134,7 +168,9 @@ def _offline_device_row(persisted: dict[str, Any]) -> dict[str, Any]:
         "owner_name": owner_name,
         "first_scout_id": row.get("first_scout_id") or "",
         "current_scout_id": row.get("current_scout_id") or "",
-    }
+        "node_alive": node_alive,
+        **{k: row.get(k) for k in ("os", "session_key", "session_generation", "desktop_state", "blocked_reason", "capabilities", "readiness")},
+    })
 
 
 def _iso(ts: Any) -> str:
@@ -146,19 +182,10 @@ def _iso(ts: Any) -> str:
 
 def _offline_row(snap: dict[str, Any]) -> dict[str, Any]:
     nid = str(snap.get("node_id") or "")
-    devices: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for persisted in stored_devices().values():
-        sn = str(persisted.get("sn") or "")
-        if not sn or sn in seen:
-            continue
-        if str(persisted.get("current_scout_id") or "") != nid:
-            continue
-        devices.append(_offline_device_row(persisted))
-        seen.add(sn)
     return {
         "node_id": nid,
         "scout_id": nid,
+        "host": snap.get("host") or {},
         "hostname": snap.get("hostname") or "",
         "platform": snap.get("platform") or "",
         "arch": snap.get("arch") or "",
@@ -170,8 +197,8 @@ def _offline_row(snap: dict[str, Any]) -> dict[str, Any]:
         "draining": False,
         "active_runs": [],
         "executors": {},
-        "devices": devices,
-        "device_count": len(devices) or int(snap.get("device_count") or 0),
+        "devices": [],
+        "device_count": 0,
         "last_seen": snap.get("last_seen") or 0,
         "last_heartbeat": _iso(snap.get("last_seen") or snap.get("updated_at") or ""),
         "last_seen_ago_sec": None,
@@ -200,6 +227,8 @@ def _web_parallel_snapshot(session: NodeSession) -> dict[str, Any]:
 
 
 def ui_nodes(registry: Optional[NodeRegistry] = None) -> list[dict[str, Any]]:
+    from mino_nexus.services.im_status import normalize_im_channels
+
     reg = registry or get_registry()
     live = {n.node_id: n for n in reg.nodes()}
     stored = stored_nodes()
@@ -209,7 +238,9 @@ def ui_nodes(registry: Optional[NodeRegistry] = None) -> list[dict[str, Any]]:
         session = live.get(nid)
         snap = stored.get(nid) or {}
         if session is None:
-            out.append(_offline_row(snap))
+            row = _offline_row(snap)
+            row["im_channels"] = normalize_im_channels(snap.get("plugins"))
+            out.append(row)
             continue
         devices = ui_devices_for_node(session, registry=reg)
         mode = str((session.host or {}).get("mode") or "")
@@ -221,27 +252,25 @@ def ui_nodes(registry: Optional[NodeRegistry] = None) -> list[dict[str, Any]]:
             "hostname": session.hostname or snap.get("hostname") or "",
             "status": "asleep" if asleep else ("online" if session.alive else "offline"),
             "online": session.alive,
-            "device_count": len(session.devices),
+            "device_count": len(devices),
             "last_heartbeat": _iso(session.last_seen),
             "devices": devices,
+            "im_channels": normalize_im_channels(session.plugins),
             "web_playwright_parallel": _web_parallel_snapshot(session),
         })
     return out
 
 
 def ui_devices_for_node(node: NodeSession, registry: Optional[NodeRegistry] = None) -> list[dict[str, Any]]:
-    nid = node.node_id
-    live = [d for d in ui_devices(registry) if d.get("node_id") == nid or d.get("current_scout_id") == nid]
-    seen = {str(d.get("sn") or "") for d in live}
-    for persisted in stored_devices().values():
-        sn = str(persisted.get("sn") or "")
-        if not sn or sn in seen:
-            continue
-        if str(persisted.get("current_scout_id") or "") != nid:
-            continue
-        live.append(_offline_device_row(persisted))
-        seen.add(sn)
-    return live
+    if not node.alive:
+        return []
+    # 当前 Registry 路由是唯一实时归属；first_scout_id 和历史落盘不授权。
+    # 宿主 Desktop/Web 槽仍显示阻塞原因，移动设备仅显示当前连接的设备。
+    return [
+        d for d in ui_devices(registry, account_scoped=False, include_history=False)
+        if d.get("node_id") == node.node_id
+        and (d.get("platform") in ("desktop", "web") or device_channels_online(d.get("channels")))
+    ]
 
 
 def _append_unique_devices(bucket: dict[str, Any], incoming: list[dict[str, Any]]) -> None:
@@ -286,14 +315,6 @@ def ui_assets(registry: Optional[NodeRegistry] = None) -> dict[str, Any]:
         pub = auth_store.public_user_by_id(uid) if uid else None
         if pub:
             row["owner_name"] = pub.get("name") or pub.get("username") or ""
-        if not row.get("devices"):
-            nid = str(row.get("node_id") or "")
-            extras = [
-                _offline_device_row(persisted)
-                for persisted in stored_devices().values()
-                if str(persisted.get("current_scout_id") or "") == nid
-            ]
-            row["devices"] = extras
         row["device_count"] = len(row.get("devices") or [])
 
     studio_rows: dict[str, dict[str, Any]] = {}

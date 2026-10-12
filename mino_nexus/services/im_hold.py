@@ -16,38 +16,62 @@ from mino_nexus.services.node_registry import get_registry
 
 TAG = "ImHold"
 _lock = threading.Lock()
-_pinned: dict[str, str] = {}  # 渠道 → 手动指定的持有节点
+_pinned: dict[tuple[str, str, str], str] = {}  # 渠道 → 手动指定的持有节点
 
 
-def _holders() -> dict[str, list[str]]:
-    held: dict[str, list[str]] = {}
+def _scope(node, channel: str) -> tuple[str, str, str] | None:
+    if not node or not node.owner_user_id:
+        return None
+    for row in node.plugins or []:
+        if channel == "wechat" and row.get("id") == "wechat":
+            status = row.get("status") or {}
+        elif channel.startswith("langbot:") and row.get("id") == "langbot":
+            status = (row.get("platforms") or {}).get(channel.split(":", 1)[1]) or {}
+        else:
+            continue
+        instance = str(status.get("instance_id") or "")
+        if instance:
+            return str(node.owner_user_id), channel, instance
+    return None
+
+
+def _holders() -> dict[tuple[str, str, str], list[str]]:
+    held: dict[tuple[str, str, str], list[str]] = {}
+    from mino_nexus.core.execution_user import current_user_id
     for node in get_registry().nodes():
-        if not node.alive or node.send is None:
+        if current_user_id() and node.owner_user_id != current_user_id():
+            continue
+        if not node.alive or node.send is None or not node.owner_user_id:
             continue
         for row in node.plugins or []:
-            pid = str(row.get("id") or "")
-            if pid == "wechat":
-                st = row.get("status") or {}
-                if st.get("connected") and st.get("holding") is not False:
-                    held.setdefault("wechat", []).append(node.node_id)
-            elif pid == "langbot":
-                for plat, st in (row.get("platforms") or {}).items():
-                    if st.get("enabled") and st.get("holding") is not False:
-                        held.setdefault(f"langbot:{plat}", []).append(node.node_id)
+            channels = {"wechat": row.get("status") or {}} if row.get("id") == "wechat" else {
+                f"langbot:{plat}": st for plat, st in (row.get("platforms") or {}).items()}
+            for channel, status in channels.items():
+                active = status.get("connected") if channel == "wechat" else status.get("enabled")
+                scope = _scope(node, channel)
+                if active and status.get("holding") is not False and scope:
+                    held.setdefault(scope, []).append(node.node_id)
     return held
 
 
 def pin(channel: str, node_id: str) -> None:
+    from mino_nexus.services.access_scope import require_owned_node
+    require_owned_node(node_id)
+    scope = _scope(get_registry().get_node(node_id), channel)
+    if scope is None:
+        raise ValueError("机器人实例尚未确认")
     with _lock:
-        _pinned[channel] = node_id
+        _pinned[scope] = node_id
 
 
-def _winner(channel: str, nodes: list[str]) -> str:
-    want = _pinned.get(channel)
+def _winner(scope: tuple[str, str, str], nodes: list[str]) -> str:
+    want = _pinned.get(scope)
     return want if want in nodes else sorted(nodes)[0]
 
 
 def push_hold(node_id: str, channel: str, hold: bool) -> None:
+    from mino_nexus.services.access_scope import require_owned_node
+    require_owned_node(node_id)
     _push(node_id, channel, hold)
 
 
@@ -81,13 +105,13 @@ def arbitrate() -> list[tuple[str, str]]:
     """返回本次让出的 (渠道, 节点)。"""
     yielded: list[tuple[str, str]] = []
     with _lock:
-        for channel, nodes in _holders().items():
+        for scope, nodes in _holders().items():
             if len(nodes) < 2:
                 continue
-            keep = _winner(channel, nodes)
+            keep = _winner(scope, nodes)
             for nid in nodes:
                 if nid != keep:
-                    yielded.append((channel, nid))
+                    yielded.append((scope[1], nid))
     for channel, nid in yielded:
         _push(nid, channel, False)
     return yielded

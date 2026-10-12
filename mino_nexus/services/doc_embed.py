@@ -32,7 +32,7 @@ _warned_providers: set[str] = set()
 
 def _resolve_provider() -> dict[str, Any] | None:
     from mino_nexus.services.settings import get_ai_provider_credentials
-    from mino_nexus.services.settings_store import find_case_execution_provider_id
+    from mino_nexus.services.settings import find_case_execution_provider_id
 
     pid = find_case_execution_provider_id()
     if not pid:
@@ -68,7 +68,7 @@ def _embedding_candidates(provider: dict[str, Any]) -> list[str]:
 
 
 def _disable_provider(provider: dict[str, Any], models: list[str], detail: str) -> None:
-    pid = str(provider.get("id") or "").strip() or "unknown"
+    pid = str(provider.get("owner_user_id") or "") + ":" + (str(provider.get("id") or "").strip() or "unknown")
     _disabled_providers.add(pid)
     if pid in _warned_providers:
         return
@@ -101,7 +101,7 @@ def _post_embeddings(
             msg = ""
             if isinstance(err, dict):
                 msg = str(err.get("message") or err.get("code") or err)
-            return False, [], msg or str(data)[:200]
+            return False, [], f"embedding HTTP {resp.status_code}"
         items = sorted(data.get("data") or [], key=lambda x: int(x.get("index") or 0))
         vecs: list[list[float]] = []
         for item in items:
@@ -122,7 +122,9 @@ def embed_texts(texts: list[str], *, provider: dict[str, Any] | None = None) -> 
     prov = provider or _resolve_provider()
     if prov is None:
         return [[] for _ in rows]
-    pid = str(prov.get("id") or "").strip()
+    from mino_nexus.services.settings import validate_provider_owner
+    validate_provider_owner(prov)
+    pid = str(prov.get("owner_user_id") or "") + ":" + str(prov.get("id") or "").strip()
     if pid in _disabled_providers:
         return [[] for _ in rows]
 

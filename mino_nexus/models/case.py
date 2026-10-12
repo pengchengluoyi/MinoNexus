@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from sqlalchemy import JSON, Column, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Column, Index, Integer, String, Text, UniqueConstraint
 
 from mino_nexus.core.database import Base
 
 
 class ProjectCase(Base):
     __tablename__ = "project_cases"
-    __table_args__ = (UniqueConstraint("project_id", "case_id", name="uq_project_case"),)
+    __table_args__ = (UniqueConstraint("project_id", "case_id", name="uq_project_case"),
+                      Index("ix_project_cases_page", "project_id", "sort_index", "pk"))
 
     pk = Column(Integer, primary_key=True, autoincrement=True)
     case_id = Column(String, nullable=False, index=True)

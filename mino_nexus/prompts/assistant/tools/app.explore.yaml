@@ -1,5 +1,5 @@
 id: app.explore
-version: 1
+version: 2
 title: 探索应用
 description: 在一台设备上探索一个应用并采集页面。用户说探索、逛一下这个应用时用。
 route: POST /case-runner/explore
@@ -8,16 +8,27 @@ async: true
 params_schema:
   type: object
   properties:
+    project_id:
+      type: string
+      description: 用户明确指定的项目 id 或名称，用于限定应用和渠道
     app_id:
       type: string
       description: 应用 id 或应用名
+    env_surface:
+      type: string
+      description: 用户明确指定的应用渠道 id 或别名，例如 Agent/macagent；先确定渠道再筛选设备
+    env_profile:
+      type: string
+      description: 本次运行环境，例如 test/pre/prod
     sn:
       type: string
       description: 设备序列号或别名
   required:
   - app_id
 param_resolvers:
+  project_id: project.by_name
   app_id: app.by_name
+  env_surface: channel.by_name
   sn: device.by_alias
 result_pick:
 - data.task_id

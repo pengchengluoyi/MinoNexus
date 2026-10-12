@@ -11,6 +11,7 @@ class DispatchCall(Base):
     __tablename__ = "dispatch_calls"
 
     id = Column(String, primary_key=True)
+    owner_user_id = Column(String, default="", index=True)
     at = Column(String, default="", index=True)
     kind = Column(String, default="", index=True)
     trigger = Column(String, default="", index=True)

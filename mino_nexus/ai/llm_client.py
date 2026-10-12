@@ -584,6 +584,8 @@ def _post_chat_completions(
     对限流 / 网关抖动 / 读超时做指数退避重试（`_RETRY_STATUS`）；业务错误不重试。
     provider 不认 `response_format` / `stream` 时（400/422）自动摘掉该字段重试一次。
     """
+    from mino_nexus.services.settings import validate_provider_owner
+    validate_provider_owner(provider)
     base = str(provider.get("base_url") or "").rstrip("/")
     api_key = str(provider.get("api_key") or "").strip()
     model = str(provider.get("model") or "").strip()
@@ -710,7 +712,7 @@ def _post_chat_completions(
                 time.sleep(_backoff_delay(attempt))
                 continue
             meta["elapsed_ms"] = int((time.time() - started) * 1000)
-            meta["error"] = f"http: {e!s}"[:240]
+            meta["error"] = f"模型请求失败：{type(e).__name__}（HTTP {meta['http_status']}）"
             SLog.w(
                 TAG,
                 f"chat call failed provider={pid} model={model} attempts={attempt}: {meta['error']}",

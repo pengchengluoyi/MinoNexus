@@ -71,6 +71,8 @@ class RouterProxy:
         target_package: str = "",
         playwright_headless: bool = True,
     ):
+        from mino_nexus.services.access_scope import require_owned_device
+        require_owned_device(sn)
         self.sn = sn
         self.run_id = run_id
         self.task_id = str(task_id or "").strip()
@@ -120,23 +122,30 @@ class RouterProxy:
         compress_ratio: float | None = None,
     ) -> CapturedScreen:
         """替代上游的 `capture_screen(ctx, ...)`，返回值保持 CapturedScreen 形状。"""
+        plat = ""
         if kind == "screenshot":
             from mino_nexus.services.settings import (
                 channel_screenshot_compress_ratio,
                 note_channel_capture_ratio,
             )
 
+            node, _why = get_registry().resolve(self.sn)
+            plat = _device_platform(self.sn, node) if node is not None else ""
             if compress_ratio is None:
-                node, _why = get_registry().resolve(self.sn)
-                plat = _device_platform(self.sn, node) if node is not None else ""
                 compress_ratio = channel_screenshot_compress_ratio(plat)
-            note_channel_capture_ratio(float(compress_ratio or 1.0))
-        return _run_sync(
+            note_channel_capture_ratio(float(compress_ratio or 1.0), authoritative=plat == "desktop")
+        shot = _run_sync(
             self.observe_async(
                 kind, prefer=prefer, force_fresh=force_fresh,
                 timeout_sec=timeout_sec, compress_ratio=compress_ratio,
             )
         )
+        if kind == "screenshot":
+            note_channel_capture_ratio(
+                float((shot.remote_detail or {}).get("compress_ratio") or compress_ratio or 1.0),
+                authoritative=plat == "desktop",
+            )
+        return shot
 
     def notify_scout_cancel_run(self, run_id: str = "") -> None:
         """通知 Scout 结束 run：清幂等缓存并回收 Web 环境（best-effort）。"""
@@ -229,6 +238,13 @@ class RouterProxy:
         if node is None:
             return _fail(event, started, t0, why, executor_used="router_proxy")
 
+        if _device_platform(self.sn, node) == "desktop":
+            from mino_nexus.services.device_admission import owns_desktop
+            dev = node.devices.get(self.sn)
+            hint = self._device_hint(node)
+            task_id = self.task_id or (run_id or self.run_id).split("::", 1)[0]
+            if not dev or dev.desktop_state != "ready" or hint.get("session_generation") != dev.session_generation or not owns_desktop(task_id, node.node_id):
+                return _fail(event, started, t0, "桌面未就绪、会话已变化或没有独占租约", executor_used="router_proxy", local_reason="desktop_not_admitted")
         try:
             order, impl = self._plan_route(event, node)
         except NoRouteError as exc:
@@ -283,6 +299,8 @@ class RouterProxy:
                     local_reason="focus_reference_invalid",
                 )
             params["focus_ref"] = focus_ref
+        if _device_platform(self.sn, node) == "desktop" and event.capability_id in ("tap_element", "tap_xy"):
+            params["focus_ref"] = f"focus:{run_id or self.run_id}:{event.seq}"
         event.params = params
 
         req = P.Execute(
@@ -306,8 +324,9 @@ class RouterProxy:
                 event, started, t0,
                 f"scout timeout（node={node.node_id}，重发一次仍无 RESULT）",
                 executor_used="router_proxy",
+                raw_response={"scout": _request_metadata(node, req)},
             )
-        return _event_result_from(event, res, started)
+        return _event_result_from(event, res, started, node=node, request=req)
 
     async def _dispatch_host_plugin(
         self,
@@ -348,8 +367,9 @@ class RouterProxy:
                 event, started, t0,
                 f"scout timeout（node={node.node_id}，重发一次仍无 RESULT）",
                 executor_used="router_proxy",
+                raw_response={"scout": _request_metadata(node, req)},
             )
-        return _event_result_from(event, res, started)
+        return _event_result_from(event, res, started, node=node, request=req)
 
     async def observe_async(
         self,
@@ -376,7 +396,7 @@ class RouterProxy:
         if kind == "screenshot":
             from mino_nexus.services.settings import note_channel_capture_ratio
 
-            note_channel_capture_ratio(float(compress_ratio or 1.0))
+            note_channel_capture_ratio(float(compress_ratio or 1.0), authoritative=plat == "desktop")
         family = set(executors_for_platform(plat))
         device_order = executors_for_device(self.sn, node)
         if prefer is None:
@@ -432,6 +452,11 @@ class RouterProxy:
             elapsed_ms=res.elapsed_ms,
             remote_detail={**dict(res.extra or {}), **data},
         )
+        if kind == "screenshot":
+            note_channel_capture_ratio(
+                float((shot.remote_detail or {}).get("compress_ratio") or compress_ratio or 1.0),
+                authoritative=plat == "desktop",
+            )
         scout_ms = int(res.elapsed_ms or 0)
         if scout_ms and scout_ms < 5000:
             SLog.d(TAG, f"[{(self.run_id or '')[:8]}] observe ok scout={scout_ms}ms cap={cap}")
@@ -451,7 +476,17 @@ class RouterProxy:
           3. 该 cap 在目录里允许的其它 executor
         再按 **这台 sn 已连通且类型匹配的通道** 过滤。
         """
+        plat = _device_platform(self.sn, node)
         cap = catalog.get_capability(event.capability_id)
+        if plat == "desktop":
+            from mino_nexus.services.desktop_catalog import CAPABILITY_IDS, capabilities
+
+            if event.capability_id in CAPABILITY_IDS:
+                dev = node.devices.get(self.sn)
+                reported = list(getattr(dev, "capabilities", None) or [])
+                os_name = str(getattr(dev, "os", "") or "")
+                cap = next((candidate for candidate in capabilities(reported, os_name)
+                            if candidate.id == event.capability_id), None)
         if cap is None:
             raise NoRouteError(
                 f"能力目录里没有 cap={event.capability_id}"
@@ -509,6 +544,18 @@ class RouterProxy:
         hint: dict[str, Any] = {"platform": plat}
         if self.target_package:
             hint["target_package"] = self.target_package
+        if plat == "desktop":
+            from mino_nexus.services import run_store
+            from mino_nexus.services.device_admission import owns_desktop
+            task_id = self.task_id or self.run_id.split("::", 1)[0]
+            task = run_store.get(task_id) if task_id else None
+            target = (task or {}).get("device_targets", {}).get(self.sn) or {}
+            hint["session_generation"] = target.get("session_generation") or (dev.session_generation if dev else "")
+            hint["os"] = dev.os if dev else ""
+            hint["session_key"] = dev.session_key if dev else ""
+            if task and owns_desktop(task_id, node.node_id):
+                hint["desktop_lease"] = task_id
+            return hint
         if plat in ("web", "browser", "playwright"):
             hint["headless"] = self.playwright_headless
             return hint
@@ -559,7 +606,11 @@ def executors_for_platform(platform: str) -> tuple[str, ...]:
         return ("playwright",)
     if plat in ("ios",):
         return ("ios_wda", "remote")
-    return ("adb", "remote")
+    if plat == "desktop":
+        return ("desktop",)
+    if plat == "android":
+        return ("adb", "remote")
+    return ()
 
 
 def _device_platform(sn: str, node: NodeSession) -> str:
@@ -571,10 +622,10 @@ def _device_platform(sn: str, node: NodeSession) -> str:
     plat = str(getattr(dev, "platform", "") or "").strip().lower()
     if plat:
         return plat
-    return "android"
+    return "unknown"
 
 
-_CHANNEL_EXEC = (("playwright", "playwright"), ("adb", "adb"), ("remote", "remote"), ("ios", "ios_wda"))
+_CHANNEL_EXEC = (("desktop", "desktop"), ("playwright", "playwright"), ("adb", "adb"), ("remote", "remote"), ("ios", "ios_wda"))
 _ONLINE = frozenset({"connected", "online", "available", "authenticated"})
 
 
@@ -601,6 +652,8 @@ def executors_for_device(sn: str, node: NodeSession) -> list[str]:
                 continue
             if _channel_state((dev.channels or {}).get(ch)) in _ONLINE:
                 connected.append(ex)
+    if plat == "desktop":
+        return [ex for ex in ordered if ex in connected] if dev and dev.desktop_state == "ready" else []
     if connected:
         return [ex for ex in ordered if ex in set(connected)] or list(connected)
     return ordered
@@ -635,9 +688,10 @@ def _fail(
     *,
     executor_used: str,
     local_reason: str = "",
+    raw_response: dict[str, Any] | None = None,
 ) -> EventResult:
     SLog.w(TAG, msg)
-    raw: dict[str, Any] = {}
+    raw: dict[str, Any] = dict(raw_response or {})
     if local_reason:
         raw["local_reason"] = local_reason
     return EventResult(
@@ -649,14 +703,23 @@ def _fail(
         ai_reasoning=event.ai_reasoning or "",
         plan_event=event.model_dump(exclude_none=True),
         started_at=started, finished_at=_now_iso(),
-        raw_response=raw or None,
+        raw_response=raw,
     )
 
 
-def _event_result_from(event: PlanEvent, res: P.Result, started: str) -> EventResult:
+def _request_metadata(node, request) -> dict[str, Any]:
+    return {"node_id": node.node_id, "scout_version": node.scout_version,
+            "sn": request.sn, "platform": request.platform,
+            "os": str((request.device_hint or {}).get("os") or ""),
+            "run_id": request.run_id, "step_idx": request.step_idx}
+
+
+def _event_result_from(event: PlanEvent, res: P.Result, started: str, *, node=None, request=None) -> EventResult:
     raw = dict(res.extra or {})
     if res.data:
         raw = {**raw, **dict(res.data), "data": dict(res.data)}
+    if node is not None and request is not None:
+        raw["scout"] = _request_metadata(node, request)
     return EventResult(
         seq=event.seq, capability_id=event.capability_id,
         event_kind=event.event_kind or event.capability_id,

@@ -99,6 +99,8 @@ def _kind_of(sn: str, platform: str = "") -> str:
     plat = str(platform or "").strip().lower()
     if sid.startswith("web"):
         return "web"
+    if plat == "desktop":
+        return "desktop"
     if plat in ("ios", "wda") or "ios" in sid:
         return "ios"
     if plat in ("android", "adb") or sid:
@@ -136,6 +138,7 @@ def remember(
     owner_name: str = "",
     channels: dict[str, Any] | None = None,
     status: str = "",
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """按 SN upsert。owner_user_id 只在空的时候写入。"""
     sid = str(sn or "").strip()
@@ -145,6 +148,8 @@ def remember(
     prev = root["devices"].get(sid) if isinstance(root["devices"].get(sid), dict) else {}
     row = dict(prev)
     row["sn"] = sid
+    if isinstance(metadata, dict):
+        row.update({k: metadata[k] for k in ("os", "session_key", "session_generation", "desktop_state", "blocked_reason", "capabilities", "readiness") if k in metadata})
     if platform:
         row["platform"] = str(platform)
     if model:

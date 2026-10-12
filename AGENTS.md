@@ -197,14 +197,14 @@ app.include_router(r)
 | 模块 | 角色 | 落盘 |
 |---|---|---|
 | `services/settings_store.py` | **唯一真源。** UI（`rSettings`）读写；落在 `settings` 表 | `mino.db` |
-| `services/settings.py` | **只做 env 覆盖 + 转发。自己不存任何配置。** | 无 |
+| `services/settings.py` | **只按执行账号转发。自己不存任何配置，不回退到共享或环境 Key。** | 无 |
 
 `llm_client` 与 `runtime/run_context` **只 import `mino_nexus.services.settings`** —— "key 从哪来"收在一处。
 
 ### 铁律
 
 **provider 字段的形状由 `settings_store.get_ai_provider_credentials` 定义，
-`settings.py` 不得自行拼装。** env 覆盖必须叠加在它的返回值上。
+`settings.py` 不得自行拼装。** 执行账号来自认证会话、已验证绑定或持久任务 owner。
 
 踩过的坑（两层）：
 
@@ -213,17 +213,11 @@ app.include_router(r)
 2. 更隐蔽：`llm_client` 会检查 `provider["case_execution_use"]`（"允许用于跑用例"），
    而当时 `settings.py` **根本不返回这个 key** → `.get()` 得到 `None` → 即使读对文件也被拒。
 
-`settings_store.get_ai_provider_credentials` 定义 provider 字段形状；`settings.py` 只做 env 覆盖与转发。
+`settings_store.get_ai_provider_credentials` 定义 provider 字段形状；`settings.py` 只做账号校验与转发。
 `summary()` 不得泄明文 key。
 
-### 环境变量（CI / 本地调试，不经 UI）
+### 执行账号与密钥隔离
 
-```
-MINO_AI_PROVIDER   provider id，默认 openai
-MINO_AI_API_KEY    有它才触发覆盖
-MINO_AI_BASE_URL   缺省用预设
-MINO_AI_MODEL      缺省用预设
-```
+线上用户、助手与后台任务必须携带明确的执行账号。模型配置按 `settings.id=ai-user:<uid>` 持久化；只共享不含密钥的服务商预设。后台线程创建时捕获身份，任务恢复时使用固化的 owner；缺归属则拒绝模型调用。请求体 `user_id` 不能决定归属。
 
-配了 `MINO_AI_API_KEY` 就视为"我要用它跑"，`configured` / `enabled` /
-`case_execution_use` 三个开关一并置真 —— 否则 `llm_client` 三道检查过不去。
+`MINO_AI_API_KEY` 等历史环境覆盖不再参与用户执行。无 Key 的账号明确报未配置，不使用管理员、其他用户、全局或共享环境 Key。独立联调使用临时 `MINO_NEXUS_DATA_DIR`，通过该测试账号配置模型服务；不要写真实业务数据库。

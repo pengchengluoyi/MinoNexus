@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any, Optional
 
 COORD = {
@@ -633,7 +634,7 @@ def tools_for_menu(
         tool = openai_tool(
             cid,
             str(row.get("summary") or cid),
-            params_schema_for(cid, catalog_params),
+            deepcopy(row["parameters"]) if isinstance(row.get("parameters"), dict) else params_schema_for(cid, catalog_params),
             slim=slim_envelope,
         )
         if slim_envelope:

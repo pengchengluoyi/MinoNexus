@@ -132,6 +132,17 @@ class NodeConnection:
         if env.v != P.PROTOCOL_VERSION:
             raise RuntimeError(f"Scout 用了协议 v{env.v}，本 Nexus 是 v{P.PROTOCOL_VERSION}")
 
+        if not self.node_id and env.type is not P.MsgType.REGISTER:
+            await self.ws.close(code=1008, reason="必须先注册节点")
+            self.close()
+            return
+        if self.node_id and env.type is not P.MsgType.REGISTER:
+            live = get_registry().get_node(self.node_id)
+            if live is None or live.send != self.request:
+                await self.ws.close(code=1008, reason="节点会话已失效")
+                self.close()
+                return
+
         # RESULT 是应答，交给等待者
         if env.type is P.MsgType.RESULT:
             fut = self._waiters.pop(env.reply_to or "", None)
@@ -188,55 +199,37 @@ class NodeConnection:
             ))
             return
 
-        if not _token_ok(req.token):
-            await self._reply(env, P.Registered(
-                accepted=False, nexus_version=NEXUS_VERSION,
-                reason="配对 token 无效",
-            ))
-            SLog.w(TAG, f"拒绝注册 node={req.node_id}：token 无效")
+        if req.account_isolation_version != 1:
+            await self._reply(env, P.Registered(accepted=False, nexus_version=NEXUS_VERSION,
+                reason="请升级 Scout：当前客户端未支持账号隔离，旧插件配置不能继承"))
+            await self.ws.close(code=1008, reason="Scout 需要升级账号隔离支持")
+            self.close()
             return
 
         from dataclasses import replace
+        from mino_nexus.services.runtime_tokens import authenticate_registration
 
-        from mino_nexus.services.node_register import resolve_register_node_id
-        from mino_nexus.services.runtime_tokens import (
-            consume_install_token,
-            issue_node_credential,
-            peek_node_token,
-            peek_token,
-        )
-
-        install_info = peek_token(req.token)
-        node_info = peek_node_token(req.token) if install_info is None else None
-        owner_user_id = str((install_info or node_info or {}).get("user_id") or "")
-        assigned, id_warnings = resolve_register_node_id(
-            req.node_id,
-            is_install_token=install_info is not None,
-            user_id=owner_user_id,
-        )
-        if node_info:
-            from mino_nexus.services.node_store import sanitize_id
-
-            cred_nid = sanitize_id(str(node_info.get("node_id") or ""))
-            if cred_nid and cred_nid != assigned:
-                id_warnings.append(f"node_id 已与凭证绑定为 {cred_nid}")
-                assigned = cred_nid
+        try:
+            identity = authenticate_registration(req.token, req.node_id)
+        except PermissionError as exc:
+            await self._reply(env, P.Registered(
+                accepted=False, nexus_version=NEXUS_VERSION,
+                reason=str(exc),
+            ))
+            SLog.w(TAG, f"拒绝注册 node={req.node_id}：token 无效")
+            await self.ws.close(code=1008, reason="节点凭证或归属无效")
+            self.close()
+            return
+        owner_user_id = identity["user_id"]
+        assigned = identity["node_id"]
         reg_req = replace(req, node_id=assigned) if assigned != req.node_id else req
         self.node_id = assigned
-
-        warnings = list(id_warnings)
+        warnings = list(identity["warnings"])
         warnings.extend(reg.register(reg_req, send=self.request, owner_user_id=owner_user_id))
 
         issued_node_id = ""
-        issued_node_token = ""
         if assigned != req.node_id:
             issued_node_id = assigned
-        if install_info is not None:
-            consume_install_token(req.token)
-            issued_node_token = issue_node_credential(
-                node_id=assigned,
-                user_id=owner_user_id,
-            )
 
         await self._reply(env, P.Registered(
             accepted=True,
@@ -245,7 +238,8 @@ class NodeConnection:
             heartbeat_interval_sec=HEARTBEAT_INTERVAL_SEC,
             warnings=warnings,
             node_id=issued_node_id,
-            node_token=issued_node_token,
+            node_token=identity["node_token"],
+            owner_user_id=owner_user_id,
         ))
 
     async def _reply_result(self, req_env: P.Envelope, payload: P.Result) -> None:
@@ -263,39 +257,19 @@ class NodeConnection:
         await self.ws.send_text(json.dumps(P.dumps(env), ensure_ascii=False))
 
     def close(self) -> None:
+        if self._closed:
+            return
         self._closed = True
         for fut in self._waiters.values():
             if not fut.done():
                 fut.cancel()
         self._waiters.clear()
         if self.node_id:
-            runs = get_registry().disconnect(self.node_id)
+            runs = get_registry().disconnect(self.node_id, send=self.request)
             if runs:
                 from mino_nexus.services.run_store import interrupt_runs
 
                 interrupt_runs(runs, reason=f"节点 {self.node_id} 断开")
-
-
-def _token_ok(token: str) -> bool:
-    """配对 token 校验。
-
-    顺序：Studio 领取的短 TTL 安装凭证 → 环境变量 `MINO_NEXUS_NODE_TOKEN` →
-    本地开发时任意非空 token。多节点上线前必须换成每节点独立、可吊销、与
-    node_id 绑定（docs/NODE_REGISTRY.md §6）。
-    """
-    import os
-
-    tok = str(token or "").strip()
-    if not tok:
-        return False
-    from mino_nexus.services.runtime_tokens import install_token_ok, node_token_ok
-
-    if install_token_ok(tok) or node_token_ok(tok):
-        return True
-    expect = os.environ.get("MINO_NEXUS_NODE_TOKEN", "")
-    if expect:
-        return tok == expect
-    return True
 
 
 # ---------------- FastAPI 路由 ----------------
@@ -311,7 +285,7 @@ def register_routes(app: Any) -> None:
         conn = NodeConnection(ws)
         SLog.i(TAG, "Scout 连入，等 REGISTER")
         try:
-            while True:
+            while not conn._closed:
                 raw = await ws.receive_text()
                 await conn.on_text(raw)
         except WebSocketDisconnect:

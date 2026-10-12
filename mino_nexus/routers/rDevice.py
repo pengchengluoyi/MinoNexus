@@ -9,6 +9,7 @@ from mino_nexus.services.device_secrets import set_lock_password
 from mino_nexus.core.http_util import http_error, ok
 from mino_nexus.routers.deps import current_session
 from mino_nexus.services.ui_devices import ui_devices
+from mino_nexus.services.access_scope import require_owned_device
 
 router = APIRouter(prefix="/device", tags=["Device"])
 
@@ -30,6 +31,7 @@ def send_command(_sess: dict = Depends(current_session)):
 
 @router.post("/set_password")
 def set_password(body: SetPasswordBody, _sess: dict = Depends(current_session)):
+    require_owned_device(body.sn)
     try:
         return ok(set_lock_password(body.sn, body.password), msg="已保存")
     except ValueError as exc:
@@ -39,6 +41,7 @@ def set_password(body: SetPasswordBody, _sess: dict = Depends(current_session)):
 @router.post("/{sn}/ime/adbkeyboard")
 async def switch_adb_keyboard(sn: str, _sess: dict = Depends(current_session)):
     """经 Scout 将 Android 设备默认输入法切到 ADB Keyboard。"""
+    require_owned_device(sn)
     try:
         data = await dim.ensure_adb_keyboard(sn)
     except ValueError as exc:
@@ -58,6 +61,7 @@ async def switch_adb_keyboard(sn: str, _sess: dict = Depends(current_session)):
 @router.post("/{sn}/ime/system")
 async def restore_system_ime(sn: str, _sess: dict = Depends(current_session)):
     """经 Scout 关闭 ADB Keyboard，切回系统输入法。"""
+    require_owned_device(sn)
     try:
         data = await dim.restore_system_input_method(sn)
     except ValueError as exc:

@@ -21,8 +21,6 @@ router = APIRouter(prefix="/assistant", tags=["Assistant"])
 class ProfileBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    default_app_id: Optional[str] = None
-    default_sn: Optional[str] = None
     persona: Optional[str] = None
     enabled: Optional[bool] = None
 
@@ -47,26 +45,22 @@ def _mcp_url(request: Request) -> str:
     return str(request.base_url).rstrip("/") + "/mcp"
 
 
-def _im_nodes() -> list[dict[str, Any]]:
+def _im_nodes(sess: dict[str, Any]) -> list[dict[str, Any]]:
+    from mino_nexus.services.im_status import identity_channel
+    from mino_nexus.services.node_store import filter_nodes
+    from mino_nexus.services.ui_devices import ui_nodes
+
+    bound = {(row["node_id"], identity_channel(row["channel"]), row["instance_id"])
+             for row in store.list_identities(_uid(sess))}
     out: list[dict[str, Any]] = []
-    for node in get_registry().nodes():
-        channels = []
-        for row in node.plugins or []:
-            if row.get("class") not in ("bot", "im"):
-                continue
-            st = row.get("status")
-            if not isinstance(st, dict):
-                continue
-            channels.append({
-                "channel": str(row.get("id") or ""),
-                "connected": bool(st.get("connected")),
-                "last_message_at": int(st.get("last_message_at") or 0),
-            })
+    for node in filter_nodes(ui_nodes(), sess):
+        channels = [{**row, "bound": (node["node_id"], identity_channel(row["channel"]), row.get("instance_id") or "") in bound}
+                    for row in node.get("im_channels") or []]
         if channels:
             out.append({
-                "node_id": node.node_id,
-                "name": node.hostname or node.node_id,
-                "alive": bool(node.alive),
+                "node_id": node["node_id"],
+                "name": node.get("hostname") or node["node_id"],
+                "alive": bool(node.get("alive")),
                 "channels": channels,
             })
     return out
@@ -75,11 +69,14 @@ def _im_nodes() -> list[dict[str, Any]]:
 @router.get("/status")
 def status(request: Request, sess: dict = Depends(current_session)):
     uid = _uid(sess)
-    nodes = _im_nodes()
-    online = any(n["alive"] and any(c["connected"] for c in n["channels"]) for n in nodes)
+    nodes = _im_nodes(sess)
+    enabled = store.get_profile(uid)["enabled"]
+    online = enabled and any(n["alive"] and any(c["connected"] is True and c["holding"] is not False and c["bound"]
+                                               and c["connection_state"] == "connected" for c in n["channels"]) for n in nodes)
     return ok({
-        "enabled": store.get_profile(uid)["enabled"],
+        "enabled": enabled,
         "online": online,
+        "mcp_available": enabled,
         "mcp_url": _mcp_url(request),
         "im_nodes": nodes,
     })
@@ -87,32 +84,9 @@ def status(request: Request, sess: dict = Depends(current_session)):
 
 def _profile_view(uid: str) -> dict[str, Any]:
     prof = store.get_profile(uid)
-    app_name = ""
-    if prof["default_app_id"]:
-        try:
-            from mino_nexus.services import project_store as ps
-
-            app_name = str((ps.find_app(prof["default_app_id"]) or {}).get("name") or "")
-        except Exception:
-            app_name = ""
-    device_name = ""
-    if prof["default_sn"]:
-        try:
-            from mino_nexus.services.ui_devices import ui_devices
-
-            for d in ui_devices():
-                if str(d.get("sn") or "") == prof["default_sn"]:
-                    device_name = str(d.get("model") or d.get("sn") or "")
-                    break
-        except Exception:
-            device_name = ""
     return {
         "user_id": uid,
         "persona": prof["persona"],
-        "default_app_id": prof["default_app_id"],
-        "default_app_name": app_name,
-        "default_sn": prof["default_sn"],
-        "default_device_name": device_name,
         "enabled": prof["enabled"],
     }
 
@@ -181,6 +155,13 @@ def turn_messages(turn_id: str, sess: dict = Depends(current_session)):
     if row["surface"] != "im" or not channel or not chat_id:
         return ok({"available": False, "reason": "这条记录没有对话正文", "messages": []})
     from mino_nexus.services.node_plugin_call import PluginCallError, call_plugin
+    ctx = row["_im_route"]
+    try:
+        store.require_im_binding(_uid(sess), channel, node_id, ctx)
+    except PermissionError:
+        return ok({"available": False, "reason": "该会话绑定已失效", "messages": []})
+    binding = store.find_route_identity(channel, str(ctx.get("tenant") or ""), str(ctx.get("sender_id") or ""),
+        instance_id=str(ctx.get("instance_id") or ""), node_id=node_id)
 
     try:
         data = call_plugin(
@@ -188,12 +169,19 @@ def turn_messages(turn_id: str, sess: dict = Depends(current_session)):
             plugin_id=channel,
             node_id=node_id,
             capability_id="plugin.im.history",
-            params={"channel": channel, "chat_id": chat_id, "limit": 40},
+            params={"channel": channel, "chat_id": chat_id, "limit": 40, "reply_ctx": ctx,
+                    "sender_id": ctx["sender_id"], "after_ts": binding["bound_at"]},
             timeout=15,
         )
     except PluginCallError:
         return ok({"available": False, "reason": "节点离线，正文暂不可见", "messages": []})
-    msgs = data.get("messages") if isinstance(data.get("messages"), list) else []
+    try:
+        store.require_im_binding(_uid(sess), channel, node_id, ctx)
+    except PermissionError:
+        return ok({"available": False, "reason": "该会话绑定已失效", "messages": []})
+    from mino_nexus.services.assistant_gateway import confirmed_history
+    raw = data.get("messages") if isinstance(data.get("messages"), list) else []
+    msgs = confirmed_history({**ctx, "recent_turns": raw}, binding, limit=40, text_limit=4000)
     return ok({"available": True, "reason": "", "messages": msgs})
 
 
@@ -229,12 +217,10 @@ def delete_subscription(sub_id: int, sess: dict = Depends(current_session)):
 
 @router.post("/im-hold")
 def set_im_hold(body: ImHoldBody, sess: dict = Depends(current_session)):
-    """手动指定某个对话渠道由哪台节点持有，其余节点让出。只有管理员能改。"""
-    from mino_nexus.services import auth_store
+    """当前账号只能调整自己节点的机器人持有权。"""
     from mino_nexus.services import im_hold
-
-    if not auth_store.is_admin_role(str(sess.get("role") or "")):
-        raise HTTPException(status_code=403, detail="需要管理员才能改持有节点")
+    from mino_nexus.services.access_scope import require_owned_node
+    require_owned_node(body.node_id.strip())
     channel = body.channel.strip()
     if channel != "wechat" and not channel.startswith("langbot:"):
         raise HTTPException(status_code=400, detail="渠道只能是 wechat 或 langbot:<平台>")

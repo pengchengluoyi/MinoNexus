@@ -6,6 +6,8 @@
 
 ## 1. 三层抽象
 
+Desktop 基础 UI 工具是设备运行时适配：根据当前已认证 Scout 的设备清单，为该 PC 的模型菜单和 EXECUTE 路由生成点击、输入、按键、启动应用、读取前台应用。只提供 Scout 已实现且本设备已上报的工具；macOS/Windows 的按键参数分别匹配当前系统。此过程不写 catalog_entries，不要求管理员配置，也不跨设备继承能力。已有同名目录行的停用、废弃和 UI 覆盖限制仍保留。截图继续走 observe 协议，捕获引用与会话有效性由 Scout 校验。业务能力仍经 Console 管理。
+
 ```
 abstract_cap                抽象能力全集（system_shell / ui_native_input / ...）
         ▲ provides
@@ -155,4 +157,3 @@ Agent 在 prep/do 菜单里也可主动调 `recover_<规则id>`（prep 阶段已
 | `request_sms_code` | 登录步且块已展开（与 macro 隐藏一致） |
 
 通用 `tap_element` / `input_text` 仍由 LLM 决策。块定义、HTTP、`steps_json` v2、check `mino.checkpoints.v1` 见 [FLOW_BLOCKS.md](FLOW_BLOCKS.md)。
-

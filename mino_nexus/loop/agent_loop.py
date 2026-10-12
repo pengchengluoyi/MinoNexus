@@ -25,11 +25,12 @@ from mino_nexus.runtime.session_gate import (
     ensure_case_scene,
     is_login_module_case,
 )
-from mino_nexus.runtime.platform_gate import platform_skip_reason
+from mino_nexus.runtime.platform_gate import bind_case_execution_target, platform_skip_reason
 from mino_nexus.loop.sop_runtime import merge_phase_tool_kinds, normalize_inspections, normalize_phases, phase_for_id
 from mino_nexus.core.log import SLog
 from mino_nexus.loop.observe.agent_stream import emit_agent_event, make_thumb
 from mino_nexus.loop.observe.session_log import SessionWriter, bind_writer, open_session
+from mino_nexus.loop.observe.execution_diagnostics import execution_result_metadata
 from mino_nexus.loop.local_executors import dispatch_local, is_local_cap
 from mino_nexus.loop.nav_runtime import NavRuntime
 from mino_nexus.loop.recovery import apply_rule, ensure_target_app_foreground, recover_if_needed, RuleMatch
@@ -240,6 +241,8 @@ def _program_executor(ctx: Any) -> str:
     channel = ui_channel_from_ctx(ctx)
     if channel == UiChannel.WEB:
         return "playwright"
+    if channel == UiChannel.DESKTOP:
+        return "desktop"
     if channel == UiChannel.IOS:
         return "ios_wda"
     return "adb"
@@ -254,6 +257,7 @@ def _log_program_tool(
     summary: str,
     executor_used: str = "program",
     source: str = "program",
+    execution_metadata: dict[str, Any] | None = None,
 ) -> None:
     if writer is None:
         return
@@ -270,6 +274,7 @@ def _log_program_tool(
             "error": "",
             "executor_used": executor_used,
             "source": source,
+            **(execution_metadata or {}),
         },
     )
 
@@ -434,6 +439,10 @@ def run_case(
             ctx.action_scheme = (
                 "dom" if str(_doc.get("action_scheme") or "").strip().lower() == "dom" else "visual"
             )
+            case = bind_case_execution_target(
+                case, (_doc.get("device_targets") or {}).get(sn) or {},
+                surface=ctx.env_surface, action_scheme=ctx.action_scheme, package=package,
+            )
             ctx.plugin_user_id = str(_doc.get("plugin_user_id") or getattr(ctx, "plugin_user_id", "") or "")
             # GuardGate stop 时 ask_human 还是 give_up 取决于它（设计稿 §11.5）
             run_type = str(_doc.get("run_type") or "manual").lower()
@@ -441,6 +450,7 @@ def run_case(
                 is_explore_case = True
     except Exception:
         pass
+    bind_run_case(case)
     ctx.case_id = cid
     try:
         from mino_nexus.services.account_lease import restore_lease_for_run
@@ -515,6 +525,10 @@ def run_case(
             "goal": overview,
             "seq_node_count": len(build_seq_nodes(case)),
             "sop_orchestration": sop_orchestration,
+            "device_platform": ctx.platform,
+            "device_os": ctx.desktop_os,
+            "env_surface": ctx.env_surface,
+            "case_platform": str(case.get("platform") or ""),
             **({"parent_session_id": parent_session_id} if parent_session_id else {}),
             **({"fork_from_turn": fork_state.get("fork_from_turn")} if fork_state else {}),
         },
@@ -522,9 +536,11 @@ def run_case(
     if fork_state and writer:
         writer.append("session/fork", dict(fork_state))
     outcome: dict[str, Any] = {"status": "fail", "summary": "未开始", "steps": steps}
-    plat_skip = platform_skip_reason(case, str(getattr(ctx, "platform", "") or "android"))
+    plat_skip = platform_skip_reason(case, ctx.platform, device_os=ctx.desktop_os)
     try:
         with bind_writer(writer):
+            if isinstance(case.get("execution_target"), dict):
+                writer.append("platform/bind", dict(case["execution_target"]))
             if plat_skip:
                 def _skip_emit(phase: str, **extra: Any) -> None:
                     payload = {
@@ -540,7 +556,9 @@ def run_case(
                 _record(steps, history, 0, capability_id="signal_skip", status="skip", summary=plat_skip, thought=plat_skip)
                 writer.append(
                     "platform/skip",
-                    {"reason": plat_skip, "device_platform": getattr(ctx, "platform", "")},
+                    {"reason": plat_skip, "device_platform": ctx.platform,
+                     "device_os": ctx.desktop_os, "case_platform": case.get("platform"),
+                     "env_surface": ctx.env_surface},
                 )
                 _skip_emit("start", thought="渠道校验", step=0, goal=overview)
                 outcome = _finish(_skip_emit, status="skip", summary=plat_skip, steps=steps, t0=t0)
@@ -775,7 +793,7 @@ def _login_chain_guard(
     return ""
 
 
-def _ensure_web_page(proxy: RouterProxy, ctx, *, run_id: str, case_seq: int = 0) -> Optional[dict[str, Any]]:
+def _ensure_web_page(proxy: RouterProxy, ctx, *, run_id: str, case_seq: int = 0, writer=None) -> Optional[dict[str, Any]]:
     from mino_nexus.runtime.run_context import is_web_slot
 
     if not is_web_slot(str(getattr(ctx, "sn", "") or ""), str(getattr(ctx, "platform", "") or "")):
@@ -790,6 +808,8 @@ def _ensure_web_page(proxy: RouterProxy, ctx, *, run_id: str, case_seq: int = 0)
         label="打开页面",
         expected_executor="playwright",
     )
+    if writer:
+        writer.append("tool/call", {"capability_id": event.capability_id, "params": event.params})
     result = proxy.dispatch(event, run_id=run_id, step_idx=frame_step(case_seq, 1))
     status_val = result.status.value if hasattr(result.status, "value") else str(result.status)
     err = result.error or result.summary or ""
@@ -802,6 +822,31 @@ def _ensure_web_page(proxy: RouterProxy, ctx, *, run_id: str, case_seq: int = 0)
         "error": result.error or "",
         "executor_used": result.executor_used or "playwright",
         "fatal": fatal,
+        "execution_metadata": execution_result_metadata(result),
+        "params": event.params,
+        "thought": event.ai_reasoning,
+    }
+
+
+def _ensure_desktop_window(proxy: RouterProxy, ctx, *, run_id: str, case_seq: int = 0, writer=None) -> Optional[dict[str, Any]]:
+    if _program_executor(ctx) != "desktop":
+        return None
+    package = str(getattr(ctx, "target_package", "") or "").strip()
+    event = PlanEvent(
+        seq=0, capability_id="launch_app", event_kind="launch_app", params={"package": package},
+        ai_reasoning="PC 首张截图前先启动或激活被测应用并绑定窗口", label="准备被测窗口",
+        expected_executor="desktop",
+    )
+    if writer:
+        writer.append("tool/call", {"capability_id": event.capability_id, "params": event.params})
+    # Slot 4 is distinct from reset/cold-start (1..3) and app-version (1).
+    result = proxy.dispatch(event, run_id=run_id, step_idx=frame_step(case_seq, 4))
+    status = result.status.value if hasattr(result.status, "value") else str(result.status)
+    return {
+        "status": status, "summary": result.summary or "准备被测窗口",
+        "error": result.error or "", "executor_used": result.executor_used or "desktop",
+        "fatal": status != "pass", "execution_metadata": execution_result_metadata(result),
+        "params": event.params, "thought": event.ai_reasoning,
     }
 
 
@@ -1103,7 +1148,7 @@ def _run_loop(
         getattr(ctx, "case_scene", None),
         str(case.get("precondition") or ""),
     )
-    cold_started = reset_native_app_before_case(
+    cold_started = False if _program_executor(ctx) == "desktop" else reset_native_app_before_case(
         proxy,
         ctx,
         run_id=scout_run_id,
@@ -1125,22 +1170,18 @@ def _run_loop(
         from mino_nexus.loop.launch_grace import stamp_launch_grace
 
         stamp_launch_grace(ctx)
-    opened = _ensure_web_page(proxy, ctx, run_id=scout_run_id, case_seq=case_seq)
+    opened = _ensure_desktop_window(proxy, ctx, run_id=scout_run_id, case_seq=case_seq, writer=writer)
+    if opened is None:
+        opened = _ensure_web_page(proxy, ctx, run_id=scout_run_id, case_seq=case_seq, writer=writer)
     if opened:
-        if writer:
-            writer.append(
-                "tool/call",
-                {
-                    "capability_id": "launch_app",
-                    "params": {"url": str(getattr(ctx, "target_package", "") or "")},
-                },
-            )
+        opening_thought = str(opened.get("thought") or "打开被测应用")
+        opening_params = dict(opened.get("params") or {})
         rec(
             0,
             capability_id="launch_app",
             status=str(opened.get("status") or "pass"),
             summary=str(opened.get("summary") or "打开页面"),
-            thought="Web 槽截图前先打开被测页",
+            thought=opening_thought,
             error=str(opened.get("error") or ""),
             executor_used=str(opened.get("executor_used") or "playwright"),
         )
@@ -1152,12 +1193,15 @@ def _run_loop(
                     "status": str(opened.get("status") or "pass"),
                     "summary": str(opened.get("summary") or ""),
                     "error": str(opened.get("error") or ""),
+                    "executor_used": str(opened.get("executor_used") or "playwright"),
+                    **opened.get("execution_metadata", {}),
                 },
             )
         if opened.get("fatal"):
-            summary = opened.get("summary") or "打开页面失败"
-            emit("observe", thought=summary, step=0, status="fail")
-            return _leave(status="fail", summary=summary)
+            summary = opened.get("summary") or "打开被测应用失败"
+            opening_status = "blocked" if opened.get("status") == "blocked" else "fail"
+            emit("observe", thought=summary, step=0, status=opening_status)
+            return _leave(status=opening_status, summary=summary)
         if str(opened.get("status") or "") in ("pass", "ok", "success"):
             setattr(ctx, "app_launch_confirmed", True)
             rec(
@@ -1165,30 +1209,30 @@ def _run_loop(
                 capability_id="launch_app",
                 status="pass",
                 summary=str(opened.get("summary") or "打开页面"),
-                thought="打开被测页",
+                thought=opening_thought,
                 executor_used=str(opened.get("executor_used") or ""),
             )
             emit(
                 "think",
-                thought="打开被测页",
+                thought=opening_thought,
                 step=0,
                 capability_id="launch_app",
                 status="continue",
             )
             emit(
                 "step",
-                thought="打开被测页",
+                thought=opening_thought,
                 step=0,
                 capability_id="launch_app",
                 status="continue",
                 action={
                     "capability_id": "launch_app",
-                    "params": {"url": str(getattr(ctx, "target_package", "") or "")},
+                    "params": opening_params,
                 },
             )
             emit(
                 "result",
-                thought="打开被测页",
+                thought=opening_thought,
                 step=0,
                 capability_id="launch_app",
                 status="pass",
@@ -1450,6 +1494,12 @@ def _run_loop(
                     "thumb_len": len(thumb or ""),
                     "screenshot_hash": str(getattr(ctx, "decision_screenshot_hash", "") or ""),
                     "raw_image_hash": hashlib.sha256(str(shot.image_base64).encode("ascii", errors="ignore")).hexdigest()[:20],
+                    **{k: str((shot.remote_detail or {}).get(k) or "")[:128] for k in ("capture_id", "session_generation", "snapshot_id", "capture_scope")},
+                    **{k: (shot.remote_detail or {})[k] for k in ("capture_width", "capture_height", "compress_ratio",
+                                                                "pid", "window_id", "native_width", "native_height", "screenshot_scale")
+                       if isinstance((shot.remote_detail or {}).get(k), (int, float))},
+                    "source": shot.source,
+                    "original_mime": shot.image_mime,
                 },
             )
         pending_step = getattr(ctx, "pending_result_step", None)
@@ -1681,7 +1731,8 @@ def _run_loop(
                     params={"package": target_pkg},
                     status=fg_st,
                     summary=fg_summ,
-                    executor_used=_program_executor(ctx),
+                    executor_used=fg_turn.executor_used or _program_executor(ctx),
+                    execution_metadata=fg_turn.execution_metadata,
                 )
                 rec(
                     seq,
@@ -4775,6 +4826,7 @@ def _run_loop(
                 "error": error,
                 "executor_used": executor_used,
                 "elapsed_ms": elapsed_ms,
+                **execution_result_metadata(result),
             }
             if isinstance(raw_resp, dict) and raw_resp.get("nav_attempt"):
                 payload["nav_attempt"] = raw_resp.get("nav_attempt")
@@ -4805,7 +4857,8 @@ def _run_loop(
         if isinstance(raw_resp, dict) and raw_resp.get("nav_attempt"):
             extra = {**(extra or {}), "nav_attempt": raw_resp.get("nav_attempt")}
         redo_turn = bool(getattr(cursor, "visual_turn_pending", False))
-        shown_status = "pending" if redo_turn and status_val == "pass" else status_val
+        verification_pending = isinstance(raw_resp, dict) and raw_resp.get("verification_required") is True
+        shown_status = "pending" if (redo_turn or verification_pending) and status_val == "pass" else status_val
         rec(
             seq,
             capability_id=event.capability_id, status=shown_status,

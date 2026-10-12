@@ -11,6 +11,7 @@ class SessionMeta(Base):
     __tablename__ = "session_meta"
 
     session_id = Column(String(128), primary_key=True)
+    owner_user_id = Column(String, default="", index=True)
     run_id = Column(String(64), nullable=False, index=True)
     case_id = Column(String(128), default="", index=True)
     app_id = Column(String(64), default="", index=True)

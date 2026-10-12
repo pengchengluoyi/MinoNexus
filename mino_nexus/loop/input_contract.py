@@ -36,6 +36,8 @@ def _executor_for(ctx: Any) -> tuple[str, str]:
     channel = ui_channel_from_ctx(ctx)
     if channel == UiChannel.WEB:
         return "playwright", "web"
+    if channel == UiChannel.DESKTOP:
+        return "desktop", "desktop"
     if channel == UiChannel.IOS:
         return "ios_wda", "ios"
     return "adb", "android"

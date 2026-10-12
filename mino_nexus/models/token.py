@@ -12,6 +12,11 @@ class InstallToken(Base):
     user_id = Column(String, default="")
     expires_at = Column(Integer, default=0)
     created_at = Column(Integer, default=0)
+    install_id = Column(String, default="", index=True)
+    requested_node_id = Column(String, default="")
+    node_id = Column(String, default="")
+    registered_at = Column(Integer, default=0)
+    credential_digest = Column(String, default="")
 
 
 class NodeCredential(Base):
@@ -23,3 +28,4 @@ class NodeCredential(Base):
     token = Column(String, nullable=False, index=True)
     user_id = Column(String, default="")
     created_at = Column(Integer, default=0)
+    revoked_at = Column(Integer, default=0)

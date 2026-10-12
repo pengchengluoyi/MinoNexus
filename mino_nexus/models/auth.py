@@ -10,6 +10,7 @@ class User(Base):
 
     user_id = Column(String, primary_key=True)
     username = Column(String, default="")
+    email = Column(String, nullable=True, unique=True)
     name = Column(String, default="")
     role = Column(String, default="user")
     password_hash = Column(Text, default="")

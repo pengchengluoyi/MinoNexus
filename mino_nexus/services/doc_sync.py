@@ -18,7 +18,7 @@ def list_due_feishu_sources(*, limit: int = _TICK_LIMIT) -> list[dict[str, Any]]
     rows = ds.list_feishu_sync_candidates()
     due: list[dict[str, Any]] = []
     for row in rows:
-        if int(row.get("auto_sync") or 0) != 1:
+        if not row.get("owner_user_id") or int(row.get("auto_sync") or 0) != 1:
             continue
         interval = max(_MIN_INTERVAL, int(row.get("sync_interval_sec") or 3600))
         if int(row.get("updated_at") or 0) + interval > now:
@@ -53,7 +53,9 @@ def doc_sync_tick(*, limit: int = _TICK_LIMIT) -> int:
     for row in list_due_feishu_sources(limit=limit):
         sid = str(row.get("id") or "")
         try:
-            sync_source_now(sid)
+            from mino_nexus.core.execution_user import execution_user
+            with execution_user(str(row.get("owner_user_id") or "")):
+                sync_source_now(sid)
             done += 1
             SLog.i(TAG, f"synced {sid} ({row.get('title') or ''})")
         except Exception as exc:

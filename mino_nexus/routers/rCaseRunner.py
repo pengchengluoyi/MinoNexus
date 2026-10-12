@@ -4,7 +4,8 @@ from __future__ import annotations
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
+from mino_nexus.services.device_admission import ResourceBusy
+from pydantic import BaseModel, ConfigDict, Field
 
 from mino_nexus.services import project_store as ps
 from mino_nexus.services import run_store
@@ -17,6 +18,23 @@ from mino_nexus.services.ui_devices import ui_devices
 from mino_nexus.runtime.run_context import WEB_PLAYWRIGHT_PARALLEL_LANES
 
 router = APIRouter(prefix="/case-runner", tags=["CaseRunner"])
+
+
+class CaseResultsBody(BaseModel):
+    app_id: str
+    case_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
+@router.post("/case-results")
+def case_results(body: CaseResultsBody, _sess: dict = Depends(current_session)):
+    try:
+        app = ps.require_app(body.app_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="App not found") from exc
+    from mino_nexus.services.case_store import get_case_ids
+
+    allowed = set(get_case_ids(str(app.get("project_id") or ""), body.case_ids))
+    return ok({"items": run_store.last_case_results(body.app_id, [cid for cid in body.case_ids if cid in allowed])})
 
 
 def _plugin_user(sess: dict[str, Any]) -> str:
@@ -96,8 +114,27 @@ class TaskAccountTemplateStateBody(BaseModel):
 
 
 @router.get("/devices")
-def list_devices(only_online: bool = Query(True), _sess: dict = Depends(current_session)):
-    items = ui_devices()
+def list_devices(only_online: bool = Query(False), compatible_only: bool = False, app_id: str = "", env_surface: str = "", env_profile: str = "", action_scheme: str = "visual", playwright_headless: bool = True, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.device_targets import evaluate
+    app = None
+    if app_id:
+        try:
+            app = ps.require_app(app_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="App not found") from exc
+    rows = ui_devices()
+    if compatible_only and app is not None:
+        from mino_nexus.services.device_targets import target_channel
+
+        compatible = []
+        for row in rows:
+            try:
+                target_channel(app, row, surface=env_surface, profile=env_profile)
+            except (ValueError, KeyError):
+                continue
+            compatible.append(row)
+        rows = compatible
+    items = [evaluate(row, app=app, surface=env_surface, profile=env_profile, headless=playwright_headless, action_scheme=action_scheme) for row in rows]
     if only_online:
         items = [d for d in items if d.get("status") == "online"]
     running = run_store.running_index()
@@ -154,7 +191,7 @@ def run_cases(body: RunRequest, sess: dict = Depends(current_session)):
             plugin_user_id=_plugin_user(sess),
         )
         return ok(snapshot, msg="AI-led 回归任务已启动")
-    except cr.DeviceBusy as exc:
+    except (cr.DeviceBusy, ResourceBusy) as exc:
         raise HTTPException(
             status_code=409,
             detail={"message": "device busy", "busy_task_id": exc.busy_task_id, "sn": exc.sn},
@@ -202,7 +239,7 @@ def run_explore(body: ExploreRequest, sess: dict = Depends(current_session)):
             plugin_user_id=_plugin_user(sess),
         )
         return ok(snapshot, msg="应用探索已启动")
-    except cr.DeviceBusy as exc:
+    except (cr.DeviceBusy, ResourceBusy) as exc:
         raise HTTPException(
             status_code=409,
             detail={"message": "device busy", "busy_task_id": exc.busy_task_id, "sn": exc.sn},
@@ -247,9 +284,10 @@ def list_tasks(
     status: str = "",
     limit: int = 50,
     offset: int = 0,
+    summary: bool = False,
     _sess: dict = Depends(current_session),
 ):
-    return ok(run_store.list_tasks(app_id=app_id, status=status, limit=limit, offset=offset))
+    return ok(run_store.list_tasks(app_id=app_id, status=status, limit=limit, offset=offset, summary=summary))
 
 
 @router.get("/tasks/{task_id}")
@@ -427,7 +465,7 @@ def retry_failed_cases(task_id: str, body: Optional[RetryFailedRequest] = None, 
                 raise HTTPException(status_code=409, detail={"message": "device busy", "busy_task_id": busy, "sn": sn})
     try:
         result = cr.retry_failed(task_id, sn=sn)
-    except cr.DeviceBusy as exc:
+    except (cr.DeviceBusy, ResourceBusy) as exc:
         raise HTTPException(
             status_code=409,
             detail={"message": "device busy", "busy_task_id": exc.busy_task_id, "sn": exc.sn},

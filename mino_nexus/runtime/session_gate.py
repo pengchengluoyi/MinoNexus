@@ -28,7 +28,7 @@ _LOGIN_TEST_STEP_RE = re.compile(
 _SESSION_PREP = frozenset({"relogin", "logout", "skip"})
 _REQUIRED = frozenset({"logged_in", "guest", "any"})
 _DEVICE_NEED = frozenset({"app", "web", "app_web", "ab_pair"})
-_SCENE_PLATFORM = frozenset({"android", "ios", "web", "any"})
+_SCENE_PLATFORM = frozenset({"android", "ios", "web", "desktop", "mac", "macos", "pc", "windows", "linux", "any"})
 PREP_KINDS = frozenset({
     "clear_cache",
     "check_sim",

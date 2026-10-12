@@ -55,6 +55,18 @@ def on_run_finished(run_doc: dict[str, Any]) -> None:
         seen: set[int] = set()
         for key in keys:
             for sub in store.active_subscriptions_for("run_done", key):
+                from mino_nexus.core.execution_user import current_user_id
+                from mino_nexus.services.assistant_gateway import validated_source
+                if sub.get("user_id") != current_user_id() or doc.get("owner_user_id") != current_user_id():
+                    continue
+                ctx = sub.get("reply_ctx") or {}
+                instance = str(ctx.get("instance_id") or ctx.get("bot_uuid") or "")
+                source = {**sub, "instance_id": instance}
+                if validated_source(source) != current_user_id():
+                    continue
+                if store.find_identity(str(sub.get("channel") or ""), str(ctx.get("tenant") or ""),
+                    str(sub.get("sender_id") or ""), instance_id=instance, node_id=str(sub.get("node_id") or "")) != current_user_id():
+                    continue
                 sid = int(sub.get("id") or 0)
                 if sid in seen:
                     continue
@@ -63,6 +75,8 @@ def on_run_finished(run_doc: dict[str, Any]) -> None:
                     from mino_nexus.services.assistant_gateway import send_to_chat
 
                     for text in messages:
+                        store.require_im_binding(current_user_id(), str(sub.get("channel") or ""),
+                            str(sub.get("node_id") or ""), ctx)
                         send_to_chat(
                             channel=str(sub.get("channel") or ""),
                             node_id=str(sub.get("node_id") or ""),

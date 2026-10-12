@@ -1,6 +1,7 @@
 """覆盖生成的异步任务：进度、取消。任务挂在进程内存，flush 回写 qa_process。"""
 from __future__ import annotations
 
+from mino_nexus.core.execution_user import current_user_id, require_user_id
 import contextvars
 import threading
 import time
@@ -10,7 +11,7 @@ from typing import Any, Callable, Optional
 _JOB: contextvars.ContextVar[Optional["CoverJob"]] = contextvars.ContextVar("qa_cover_job", default=None)
 _LOCK = threading.Lock()
 _JOBS: dict[str, "CoverJob"] = {}
-_APP_RUNNING: dict[str, str] = {}
+_APP_RUNNING: dict[tuple[str, str], str] = {}
 _TTL_SEC = 2 * 60 * 60
 _MAX = 64
 
@@ -21,6 +22,7 @@ class Cancelled(Exception):
 
 class CoverJob:
     def __init__(self, *, app_id: str, requirement_id: str = "", jobs: list | None = None):
+        self.owner_user_id = require_user_id()
         self.id = uuid.uuid4().hex[:16]
         self.app_id = str(app_id or "")
         self.requirement_id = str(requirement_id or "")
@@ -115,6 +117,7 @@ class CoverJob:
     def public(self) -> dict:
         with self._lock:
             return {
+                "owner_user_id": self.owner_user_id,
                 "job_id": self.id,
                 "app_id": self.app_id,
                 "requirement_id": self.requirement_id,
@@ -135,13 +138,13 @@ def _gc_locked() -> None:
     dead = [jid for jid, job in _JOBS.items() if now - job.updated_at > _TTL_SEC]
     for jid in dead:
         job = _JOBS.pop(jid, None)
-        if job and _APP_RUNNING.get(job.app_id) == jid:
-            _APP_RUNNING.pop(job.app_id, None)
+        if job and _APP_RUNNING.get((job.owner_user_id, job.app_id)) == jid:
+            _APP_RUNNING.pop((job.owner_user_id, job.app_id), None)
     while len(_JOBS) > _MAX:
         oldest = min(_JOBS.values(), key=lambda j: j.updated_at)
         _JOBS.pop(oldest.id, None)
-        if _APP_RUNNING.get(oldest.app_id) == oldest.id:
-            _APP_RUNNING.pop(oldest.app_id, None)
+        if _APP_RUNNING.get((oldest.owner_user_id, oldest.app_id)) == oldest.id:
+            _APP_RUNNING.pop((oldest.owner_user_id, oldest.app_id), None)
 
 
 class JobConflict(Exception):
@@ -154,22 +157,23 @@ def create(*, app_id: str, requirement_id: str = "", jobs: list | None = None) -
     job = CoverJob(app_id=app_id, requirement_id=requirement_id, jobs=jobs)
     with _LOCK:
         _gc_locked()
-        running = _APP_RUNNING.get(job.app_id)
+        running = _APP_RUNNING.get((job.owner_user_id, job.app_id))
         if running and running in _JOBS and _JOBS[running].status == "running":
             raise JobConflict(_JOBS[running])
         _JOBS[job.id] = job
-        _APP_RUNNING[job.app_id] = job.id
+        _APP_RUNNING[(job.owner_user_id, job.app_id)] = job.id
     return job
 
 
 def get(job_id: str) -> Optional[CoverJob]:
     with _LOCK:
-        return _JOBS.get(str(job_id or ""))
+        job = _JOBS.get(str(job_id or ""))
+        return job if job and job.owner_user_id == require_user_id() else None
 
 
 def running_for(app_id: str) -> Optional[CoverJob]:
     with _LOCK:
-        jid = _APP_RUNNING.get(str(app_id or ""))
+        jid = _APP_RUNNING.get((require_user_id(), str(app_id or "")))
         job = _JOBS.get(jid or "")
         if job and job.status == "running":
             return job
@@ -178,8 +182,8 @@ def running_for(app_id: str) -> Optional[CoverJob]:
 
 def release(job: CoverJob) -> None:
     with _LOCK:
-        if _APP_RUNNING.get(job.app_id) == job.id:
-            _APP_RUNNING.pop(job.app_id, None)
+        if _APP_RUNNING.get((job.owner_user_id, job.app_id)) == job.id:
+            _APP_RUNNING.pop((job.owner_user_id, job.app_id), None)
 
 
 def bind(job: Optional[CoverJob]):

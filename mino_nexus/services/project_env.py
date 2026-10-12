@@ -20,13 +20,13 @@ ENV_PROFILE_LABELS = {
 }
 
 CHANNEL_KINDS = ("app", "web", "server")
-CHANNEL_PLATFORMS = ("android", "ios", "web", "pc", "mac", "server")
+CHANNEL_PLATFORMS = ("android", "ios", "web", "pc", "mac", "macos", "windows", "linux", "server")
 
 DEFAULT_CHANNELS = [
     {"id": "android", "kind": "app", "platform": "android", "alias": "", "third_party": False, "label": "安卓", "field": "package", "placeholder": "com.example.app"},
     {"id": "ios", "kind": "app", "platform": "ios", "alias": "", "third_party": False, "label": "iOS", "field": "bundle", "placeholder": "com.example.app"},
     {"id": "web", "kind": "web", "platform": "web", "alias": "", "third_party": False, "label": "Web", "field": "base_url", "placeholder": "https://test.example.com"},
-    {"id": "pc", "kind": "app", "platform": "pc", "alias": "", "third_party": False, "label": "PC", "field": "path", "placeholder": "安装路径或启动命令"},
+    {"id": "pc", "kind": "app", "platform": "pc", "alias": "", "third_party": False, "label": "PC", "field": "path", "placeholder": "完整 EXE 路径或 AUMID"},
     {"id": "mac", "kind": "app", "platform": "mac", "alias": "", "third_party": False, "label": "Mac", "field": "bundle", "placeholder": "com.example.desktop"},
     {"id": "server", "kind": "server", "platform": "server", "alias": "", "third_party": False, "label": "Server", "field": "base_url", "placeholder": "https://api.example.com"},
 ]
@@ -1041,6 +1041,8 @@ def target_id_from_snapshot(snap: dict, platform: str = "android", surface: str 
     if plat in ("ios", "iphone", "ipad"):
         ios = data.get("ios") if isinstance(data.get("ios"), dict) else {}
         return str(ios.get("bundle") or ios.get("bundle_id") or "").strip()
+    if plat not in ("android", "adb"):
+        return ""
     android = data.get("android") if isinstance(data.get("android"), dict) else {}
     pkg = str(android.get("package") or "").strip()
     if pkg:

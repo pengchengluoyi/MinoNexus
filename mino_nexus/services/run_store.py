@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from mino_nexus.core.execution_user import current_user_id
 import json
 import re
 import threading
@@ -84,6 +85,9 @@ def _fetch_payloads(
     ensure_db()
     where = " WHERE 1=1"
     params: dict[str, Any] = {}
+    if current_user_id():
+        where += " AND owner_user_id = :owner"
+        params["owner"] = current_user_id()
     if run_id:
         where += " AND run_id = :run_id"
         params["run_id"] = run_id
@@ -134,6 +138,9 @@ def _count_runs(*, app_id: str = "", status: str = "") -> int:
     ensure_db()
     sql = "SELECT COUNT(*) FROM app_regression_runs WHERE 1=1"
     params: dict[str, Any] = {}
+    if current_user_id():
+        sql += " AND owner_user_id = :owner"
+        params["owner"] = current_user_id()
     if app_id:
         sql += " AND app_id = :app_id"
         params["app_id"] = app_id
@@ -152,7 +159,7 @@ def _distinct_app_ids() -> list[str]:
     ensure_db()
     with engine.connect() as conn:
         rows = conn.execute(
-            text("SELECT DISTINCT app_id FROM app_regression_runs WHERE app_id != ''")
+            text("SELECT DISTINCT app_id FROM app_regression_runs WHERE app_id != '' AND (:owner = '' OR owner_user_id = :owner)"), {"owner": current_user_id()}
         ).fetchall()
     return [str(r[0]) for r in rows if r and r[0]]
 
@@ -160,7 +167,11 @@ def _distinct_app_ids() -> list[str]:
 def _upsert_run(doc: dict[str, Any]) -> None:
     from mino_nexus.core.database import session_scope
 
+    from sqlalchemy import text
+    from mino_nexus.services.device_admission import admit_in_transaction
     with session_scope() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        admit_in_transaction(db, doc)
         db.merge(_run_row(doc))
 
 
@@ -176,7 +187,7 @@ def _trim_runs(keep: int = _KEEP_RUNS) -> None:
         if extra <= 0:
             return
         old = conn.execute(
-            text("SELECT run_id FROM app_regression_runs ORDER BY started_at ASC LIMIT :n"),
+            text("SELECT run_id FROM app_regression_runs WHERE status NOT IN ('running', 'queued') ORDER BY started_at ASC LIMIT :n"),
             {"n": extra},
         ).fetchall()
         ids = [str(r[0]) for r in old if r and r[0]]
@@ -195,6 +206,7 @@ def _run_row(row: dict) -> Any:
 
     return AppRegressionRun(
         run_id=str(row["run_id"]),
+        owner_user_id=str(row.get("owner_user_id") or row.get("plugin_user_id") or ""),
         app_id=str(row.get("app_id") or ""),
         run_type=str(row.get("run_type") or "manual"),
         sn=str(row.get("sn") or ""),
@@ -435,8 +447,8 @@ def put(doc: dict[str, Any]) -> dict[str, Any]:
     doc = _slim_doc(_recompute(doc))
     rid = str(doc.get("run_id") or "")
     with _LOCK:
-        _LIVE[rid] = doc
         _upsert_run(doc)
+        _LIVE[rid] = doc
         _trim_runs()
     return copy.deepcopy(doc)
 
@@ -447,7 +459,10 @@ def get(run_id: str) -> Optional[dict[str, Any]]:
         return None
     with _LOCK:
         if rid in _LIVE:
-            return copy.deepcopy(_LIVE[rid])
+            doc = _LIVE[rid]
+            if current_user_id() and doc.get("owner_user_id") != current_user_id():
+                return None
+            return copy.deepcopy(doc)
     rows = _fetch_payloads(limit=1, run_id=rid)
     return copy.deepcopy(rows[0]) if rows else None
 
@@ -486,13 +501,81 @@ def list_runs(
     return out[:cap] if off == 0 else out
 
 
-def list_tasks(app_id: str = "", status: str = "", limit: int = 50, offset: int = 0) -> dict[str, Any]:
+def _task_summaries(app_id: str, status: str, limit: int, offset: int) -> list[dict[str, Any]]:
+    from sqlalchemy import text
+    from mino_nexus.core.database import engine, ensure_db
+
+    ensure_db()
+    where = "WHERE 1=1"
+    params = {"limit": limit, "offset": offset}
+    if current_user_id():
+        where += " AND owner_user_id = :owner"
+        params["owner"] = current_user_id()
+    if app_id:
+        where += " AND app_id = :app_id"
+        params["app_id"] = app_id
+    if status:
+        where += " AND status = :status"
+        params["status"] = status
+    statement = text(f"""
+        SELECT run_id AS task_id, run_id, app_id, status, total, passed, failed,
+               sn, platform, started_at, finished_at,
+               json_extract(payload, '$.title') AS title,
+               json_extract(payload, '$.cases[0].name') AS first_case_name,
+               json_extract(payload, '$.cases[0].case_id') AS first_case_id
+        FROM app_regression_runs {where}
+        ORDER BY started_at DESC, run_id DESC LIMIT :limit OFFSET :offset
+    """)
+    with engine.connect() as conn:
+        rows = [dict(row) for row in conn.execute(statement, params).mappings()]
+    for row in rows:
+        first = row.pop("first_case_name") or row.pop("first_case_id", "") or row["task_id"]
+        row.pop("first_case_id", None)
+        row["title"] = row["title"] or (f"{first} 等 {int(row['total'])} 条" if row["total"] > 1 else first)
+    return rows
+
+
+def last_case_results(app_id: str, case_ids: list[str] | None = None) -> dict[str, dict[str, Any]]:
+    from sqlalchemy import bindparam, text
+    from mino_nexus.core.database import engine, ensure_db
+
+    ensure_db()
+    if case_ids == []:
+        return {}
+    case_filter = " AND json_extract(item.value, '$.case_id') IN :case_ids" if case_ids is not None else ""
+    statement = text(f"""
+        WITH history AS (
+            SELECT json_extract(item.value, '$.case_id') AS case_id,
+                   COALESCE(json_extract(item.value, '$.status'), json_extract(item.value, '$.overall_status')) AS status,
+                   COALESCE(json_extract(item.value, '$.fail_reason'), json_extract(item.value, '$.failure'),
+                            json_extract(item.value, '$.error'), json_extract(item.value, '$.summary'), '') AS reason,
+                   COALESCE(json_extract(item.value, '$.finished_at'), run.finished_at, run.started_at) AS at,
+                   ROW_NUMBER() OVER (PARTITION BY json_extract(item.value, '$.case_id')
+                                      ORDER BY run.started_at DESC, run.run_id DESC) AS position
+            FROM app_regression_runs AS run, json_each(run.payload, '$.cases') AS item
+            WHERE run.app_id = :app_id AND (:owner = '' OR run.owner_user_id = :owner) {case_filter}
+        )
+        SELECT case_id, status, reason, at FROM history WHERE position = 1 AND case_id IS NOT NULL
+    """)
+    params: dict[str, Any] = {"app_id": app_id, "owner": current_user_id()}
+    if case_ids is not None:
+        statement = statement.bindparams(bindparam("case_ids", expanding=True))
+        params["case_ids"] = list(dict.fromkeys(case_ids))
+    with engine.connect() as conn:
+        return {row["case_id"]: {"status": row["status"], "reason": str(row["reason"] or ""), "at": row["at"] or ""}
+                for row in conn.execute(statement, params).mappings()}
+
+
+def list_tasks(app_id: str = "", status: str = "", limit: int = 50, offset: int = 0, summary: bool = False) -> dict[str, Any]:
     want = str(status or "").strip().lower()
     offset = max(0, int(offset or 0))
     limit = max(0, int(limit or 50))
     total = _count_runs(app_id=app_id, status=want)
-    rows = list_runs(limit=limit, offset=offset, app_id=app_id, status=want)
-    tasks = [to_task_json(r, include_cases=False) for r in rows]
+    if summary:
+        tasks = _task_summaries(app_id, want, min(limit, 200), offset)
+    else:
+        rows = list_runs(limit=limit, offset=offset, app_id=app_id, status=want)
+        tasks = [to_task_json(r, include_cases=False) for r in rows]
     return {
         "items": tasks,
         "total": total,

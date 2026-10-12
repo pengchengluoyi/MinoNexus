@@ -335,7 +335,9 @@ def package_for_app(
     profile = env_profile or cfg.get("env_profile")
     name = resolve_profile_name(env_doc, profile)
     snap = profile_snapshot(env_doc, name)
-    want = "web" if plat in ("web", "browser", "playwright") else ("ios" if plat in ("ios", "iphone", "ipad") else "android")
+    want = "web" if plat in ("web", "browser", "playwright") else ("ios" if plat in ("ios", "iphone", "ipad") else plat)
+    if want not in ("android", "ios", "web", "mac", "macos", "pc", "windows", "linux"):
+        return ""
     sid = str(surface or "").strip()
     if sid:
         tid = target_id_from_snapshot(snap, want, surface=sid)

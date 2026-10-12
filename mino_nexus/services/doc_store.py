@@ -1,5 +1,7 @@
 """文档库：上传、分片、FTS 全文检索。"""
 from __future__ import annotations
+from mino_nexus.core.execution_user import current_user_id, require_user_id
+
 
 import hashlib
 import re
@@ -72,6 +74,7 @@ def _to_public_source(row: DocSource) -> dict[str, Any]:
         "source_url": row.source_url or "",
         "feishu_bot_id": row.feishu_bot_id or "",
         "auto_sync": int(row.auto_sync or 0),
+        "owner_user_id": str(row.owner_user_id or ""),
         "sync_interval_sec": int(row.sync_interval_sec or 3600),
         "created_at": int(row.created_at or 0),
         "updated_at": int(row.updated_at or 0),
@@ -96,7 +99,7 @@ def list_sources(*, app_id: str, project_id: str = "") -> list[dict[str, Any]]:
         return []
     ensure_fts()
     with session_scope() as db:
-        q = db.query(DocSource).filter(DocSource.app_id == aid)
+        q = db.query(DocSource).filter(DocSource.app_id == aid, DocSource.owner_user_id == require_user_id())
         pid = str(project_id or "").strip()
         if pid:
             q = q.filter(DocSource.project_id == pid)
@@ -112,10 +115,12 @@ def find_source_by_url(*, app_id: str, source_url: str) -> dict[str, Any] | None
     with session_scope() as db:
         row = (
             db.query(DocSource)
-            .filter(DocSource.app_id == aid, DocSource.source_url == url)
+            .filter(DocSource.app_id == aid, DocSource.source_url == url, DocSource.owner_user_id == require_user_id())
             .order_by(DocSource.updated_at.desc())
             .first()
         )
+        if row and row.owner_user_id != require_user_id():
+            return None
         return _to_public_source(row) if row else None
 
 
@@ -125,7 +130,7 @@ def touch_source(source_id: str) -> None:
         return
     with session_scope() as db:
         row = db.get(DocSource, sid)
-        if row:
+        if row and row.owner_user_id == require_user_id():
             row.updated_at = int(time.time())
 
 
@@ -140,7 +145,7 @@ def set_sync_settings(
         return None
     with session_scope() as db:
         row = db.get(DocSource, sid)
-        if not row:
+        if not row or row.owner_user_id != require_user_id():
             return None
         if auto_sync is not None:
             row.auto_sync = 1 if auto_sync else 0
@@ -167,6 +172,8 @@ def get_source(source_id: str) -> dict[str, Any] | None:
         return None
     with session_scope() as db:
         row = db.get(DocSource, sid)
+        if row and row.owner_user_id != require_user_id():
+            return None
         return _to_public_source(row) if row else None
 
 
@@ -179,7 +186,8 @@ def list_chunks(source_id: str, *, offset: int = 0, limit: int = 50) -> list[dic
     with session_scope() as db:
         rows = (
             db.query(DocChunk)
-            .filter(DocChunk.source_id == sid)
+            .join(DocSource, DocSource.id == DocChunk.source_id)
+            .filter(DocChunk.source_id == sid, DocSource.owner_user_id == require_user_id())
             .order_by(DocChunk.chunk_index.asc())
             .offset(off)
             .limit(lim)
@@ -196,7 +204,7 @@ def reindex_source(source_id: str) -> dict[str, Any]:
     ensure_fts()
     with session_scope() as db:
         source = db.get(DocSource, sid)
-        if not source:
+        if not source or source.owner_user_id != require_user_id():
             raise ValueError("文档不存在")
         chunks = (
             db.query(DocChunk)
@@ -235,7 +243,7 @@ def delete_source(source_id: str) -> bool:
     ensure_fts()
     with session_scope() as db:
         row = db.get(DocSource, sid)
-        if not row:
+        if not row or row.owner_user_id != require_user_id():
             return False
         app_id = row.app_id or ""
         chunk_ids = [
@@ -265,9 +273,11 @@ def _purge_source_id(source_id: str, app_id: str = "") -> None:
         return
     aid = str(app_id or "").strip()
     with session_scope() as db:
+        db_row = db.get(DocSource, sid)
+        if not db_row or db_row.owner_user_id != require_user_id():
+            return
         chunk_ids = [c.id for c in db.query(DocChunk).filter(DocChunk.source_id == sid).all()]
         db.query(DocChunk).filter(DocChunk.source_id == sid).delete()
-        db_row = db.get(DocSource, sid)
         if db_row:
             aid = aid or str(db_row.app_id or "")
             db.delete(db_row)
@@ -288,6 +298,7 @@ def ingest_upload(
     source_url: str = "",
     feishu_bot_id: str = "",
 ) -> dict[str, Any]:
+    require_user_id()
     aid = str(app_id or "").strip()
     if not aid:
         raise ValueError("app_id 不能为空")
@@ -312,10 +323,10 @@ def ingest_upload(
         to_drop: list[DocSource] = []
         if src_url:
             to_drop.extend(
-                db.query(DocSource).filter(DocSource.app_id == aid, DocSource.source_url == src_url).all()
+                db.query(DocSource).filter(DocSource.app_id == aid, DocSource.source_url == src_url, DocSource.owner_user_id == require_user_id()).all()
             )
         to_drop.extend(
-            db.query(DocSource).filter(DocSource.app_id == aid, DocSource.content_hash == content_hash).all()
+            db.query(DocSource).filter(DocSource.app_id == aid, DocSource.content_hash == content_hash, DocSource.owner_user_id == require_user_id()).all()
         )
         seen: set[str] = set()
         for row in to_drop:
@@ -331,6 +342,7 @@ def ingest_upload(
     original_path.write_bytes(data)
 
     source = DocSource(
+        owner_user_id=require_user_id(),
         id=source_id,
         app_id=aid,
         project_id=str(project_id or "").strip(),
@@ -406,6 +418,9 @@ def _embed_source_chunks(source_id: str) -> None:
     sid = str(source_id or "").strip()
     if not sid:
         return
+    source = get_source(sid)
+    if not source or source.get("owner_user_id") != require_user_id():
+        raise PermissionError("文档任务缺少有效归属")
     with session_scope() as db:
         rows = (
             db.query(DocChunk)
@@ -522,12 +537,13 @@ def search_documents(
             bm25(doc_chunks_fts) AS rank
         FROM doc_chunks_fts
         WHERE doc_chunks_fts MATCH :q AND app_id = :app_id
+          AND source_id IN (SELECT id FROM doc_sources WHERE owner_user_id=:owner)
         ORDER BY rank
         LIMIT :lim
         """
     )
     with engine.connect() as conn:
-        fts_rows = conn.execute(sql, {"q": query, "app_id": aid, "lim": fetch_lim}).mappings().all()
+        fts_rows = conn.execute(sql, {"q": query, "app_id": aid, "lim": fetch_lim, "owner": require_user_id()}).mappings().all()
     rows = list(fts_rows)
     seen_chunks = {str(r.get("chunk_id") or "") for r in rows}
     for row in _overlap_search_rows(q=q, app_id=aid, limit=fetch_lim):
@@ -588,7 +604,7 @@ def _overlap_search_rows(
         rows = (
             db.query(DocChunk, DocSource)
             .join(DocSource, DocSource.id == DocChunk.source_id)
-            .filter(DocSource.app_id == aid, DocSource.status == "ok")
+            .filter(DocSource.app_id == aid, DocSource.status == "ok", DocSource.owner_user_id == require_user_id())
             .order_by(DocSource.updated_at.desc(), DocChunk.chunk_index.asc())
             .limit(500)
             .all()
@@ -626,7 +642,8 @@ def _chunk_embeddings(chunk_ids: list[str]) -> dict[str, list[float]]:
         return {}
     out: dict[str, list[float]] = {}
     with session_scope() as db:
-        rows = db.query(DocChunk).filter(DocChunk.id.in_(ids)).all()
+        rows = db.query(DocChunk).join(DocSource, DocSource.id == DocChunk.source_id).filter(
+            DocChunk.id.in_(ids), DocSource.owner_user_id == require_user_id()).all()
         for row in rows:
             vec = row.embedding_json
             if isinstance(vec, list) and vec:
@@ -639,5 +656,6 @@ def _chunk_detail(chunk_id: str) -> dict[str, Any] | None:
     if not cid:
         return None
     with session_scope() as db:
-        row = db.get(DocChunk, cid)
+        row = db.query(DocChunk).join(DocSource, DocSource.id == DocChunk.source_id).filter(
+            DocChunk.id == cid, DocSource.owner_user_id == require_user_id()).first()
         return _to_public_chunk(row) if row else None
