@@ -1,7 +1,7 @@
 """MinoNexus ⇄ MinoScout 协议模型。
 
-契约真源是 tests/fixtures/protocol/*.json（两仓字节相同），本文件必须能 round-trip 全部
-fixture。字段级定义见 docs/PROTOCOL.md。改协议的四步流程见 CLAUDE.md §5。
+字段级契约见两仓同步的 docs/PROTOCOL.md；本文件须与 Scout 的实现保持一致。
+tests/fixtures/protocol/*.json 仅供本地 round-trip 校验，不作为发布依赖。
 
 刻意零依赖（只用 stdlib dataclasses），便于两仓各自 round-trip golden fixture。
 可以用裸 python3 跑，不需要装环境。

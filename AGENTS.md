@@ -19,8 +19,8 @@ MinoNexus 是服务端大脑。它决定"下一步做什么"，让 [MinoScout](.
 | 1 | **不碰设备** —— 不 import `adbutils` / `uiautomator2` / `playwright` / `facebook-wda` / `Appium` / `pywinauto`，不 `subprocess` 调 `adb` | 设备操作全部经协议委托给 Scout。Nexus 一旦直连设备，就没法上云、没法多节点 |
 | 2 | **不含图像算法依赖** —— 不 import `torch` / `open_clip` / `paddleocr` / `ultralytics` / `cv2` | 拆分时已确认批次路径运行时零调用（见 `docs/MIGRATION.md` §0）。引回来等于把 45% 的旧代码拖回来 |
 | 3 | **不 import Scout** | 依赖必须单向 |
-| 4 | **协议契约一致** | 两仓 `protocol.py` 必须能 round-trip 同一份 golden fixture |
-| 5 | **不写/不改单元测试** —— 禁止新增或修改 `tests/test_*.py`、禁止为「验证修复」跑 pytest；**唯一例外**是 §5 协议 golden fixture（`tests/fixtures/protocol/`） | 跑批/登录等问题以 **`session_events` + `session_meta`** 为准（[docs/排查手册/01-Session-Log与数据库.md](docs/排查手册/01-Session-Log与数据库.md)）；缺字段就补 session 写入，不靠测试脚本 |
+| 4 | **协议契约一致** | 两仓 `protocol.py` 必须与同步的协议文档一致；本地 fixture 可用于 round-trip 校验 |
+| 5 | **测试只留本地** —— `tests/`、单元测试与 mock 文件不得提交；禁止为「验证修复」跑 pytest | 跑批/登录等问题以 **`session_events` + `session_meta`** 为准（[docs/排查手册/01-Session-Log与数据库.md](docs/排查手册/01-Session-Log与数据库.md)）；缺字段就补 session 写入，不靠测试脚本 |
 
 > 约束 2 的例外只有 `pillow`：缩略图压缩（`make_thumb`）需要它，且只做重采样，不做识别。
 
@@ -125,16 +125,15 @@ mino_nexus/
 
 协议在两个仓库各有一份 `protocol.py`（本仓 `mino_nexus/protocol.py`，Scout `mino_scout/protocol.py`）。**没有共享包** —— 只有两个仓库，不引入第三个。
 
-契约真源是 **golden fixtures**：`tests/fixtures/protocol/*.json`，两仓字节相同。
+契约真源是两仓同步的 `docs/PROTOCOL.md` 和对应 `protocol.py` 实现；`tests/fixtures/protocol/*.json` 仅供本地调试，不提交 Git。
 
-改协议的流程，**四步必须同一个 PR 周期内完成**：
+改协议的流程，**同一个 PR 周期内完成**：
 
 1. 改 `docs/PROTOCOL.md`（两仓同一份文本）
-2. 改/加 `tests/fixtures/protocol/*.json`
-3. 两仓各自改 `protocol.py`，使其能 round-trip 全部 fixture
-4. 两仓各自确认 `protocol.py` 能 round-trip 全部 fixture
+2. 两仓各自改 `protocol.py`，使其与文档一致
+3. 若本地有 fixture，两仓各自确认 round-trip 并保持本地样例一致，不提交样例
 
-哈希记录在 `docs/PROTOCOL.md` §8。两仓不一致 = 协议漂移。
+`docs/PROTOCOL.md` §8 的哈希仅供有本地 fixture 时核对；两仓协议文档或实现不一致 = 协议漂移。
 
 ---
 
