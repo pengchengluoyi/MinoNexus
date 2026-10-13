@@ -409,6 +409,7 @@ def run_vision_plan_turn_if_enabled(
     inspect_slots: dict[str, str],
     provider_id: str = "",
     review_program_fail: str = "",
+    send_image: bool = True,
 ) -> Optional[VisionPlanDecision]:
     if not vision_plan_v1_enabled():
         return None
@@ -441,7 +442,7 @@ def run_vision_plan_turn_if_enabled(
         height=int(getattr(shot, "height", None) or 1920),
         image_base64=(
             str(getattr(shot, "image_base64", "") or "")
-            if callable(getattr(shot, "has_image", None)) and shot.has_image()
+            if send_image and callable(getattr(shot, "has_image", None)) and shot.has_image()
             else ""
         ),
         image_mime=str(getattr(shot, "image_mime", "") or "image/png"),
@@ -454,6 +455,13 @@ def run_vision_plan_turn_if_enabled(
         provider_id=provider_id or None,
         review_program_fail=review,
     )
+    if plan.blocked_error:
+        if writer is not None:
+            writer.append("model/blocked", {k: plan.blocked_error.get(k) for k in
+                ("error", "http_status", "provider_error_code", "provider_error_param", "provider_request_id", "fail_kind", "dispatch_id")})
+        return plan
+    if handle_screen_obstacle(cursor, ctx, plan, writer=writer):
+        return plan
     apply_vision_plan_to_cursor(cursor, plan, writer=writer, ctx=ctx)
     if review:
         apply_failure_verdict_from_plan(cursor, plan, writer=writer)
@@ -476,3 +484,74 @@ def run_vision_plan_turn_if_enabled(
         except Exception:  # noqa: BLE001
             pass
     return plan
+
+
+def handle_screen_obstacle(cursor: Any, ctx: Any, plan: VisionPlanDecision, *, writer: Any = None) -> bool:
+    """挡屏先进入独立恢复，不能把恢复点击算成业务操作，也不能按已完成前置准出。"""
+    from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
+    from mino_nexus.catalog.skill_channel import case_menu_ids, milestone_caps_registered
+    from mino_nexus.loop.fuse.interrupt_stack import push_interrupt, stack_depth
+    obstacle = plan.screen_obstacle
+    kind = str(obstacle.get("kind") or "").strip().lower()
+    state = _sync_scope(cursor, read_state(cursor))
+    if kind not in {"consent", "permission", "overlay", "loading"}:
+        state.pop("screen_obstacle", None)
+        write_state(cursor, state)
+        return False
+    reason = str(obstacle.get("summary") or "当前画面被弹窗或加载层遮挡")[:300]
+    previous_obstacle = state.get("screen_obstacle") or {}
+    recovery_ids = list(previous_obstacle.get("recovery_ids") or []) if previous_obstacle.get("kind") == kind else []
+    state["screen_obstacle"] = {"kind": kind, "summary": reason, "recovery_ids": recovery_ids}
+    state["exit_allowed"] = False
+    write_state(cursor, state)
+    plan.exit_allowed = False
+    plan.step_requirements_complete = False
+    focus = in_progress_milestone(state)
+    if writer:
+        writer.append("screen/obstacle", {"kind": kind, "summary": reason, "focus_id": (focus or {}).get("id", "")})
+    if kind == "consent" and focus and (
+        _row_cap_ids(focus) == {"accept_legal_consent"}
+        or str(focus.get("id") or "") in recovery_ids
+    ):
+        return False
+    steps: list[dict[str, Any]] = []
+    if kind in {"consent", "overlay", "loading"}:
+        from mino_nexus.loop.interrupt_recovery import resolve_interrupt_steps
+        steps = resolve_interrupt_steps(cursor, ctx, router=getattr(ctx, "router", None),
+                                        reason=reason, allow_fallback=False)
+        if not steps and kind == "consent" and not stack_depth(cursor):
+            steps = [{"id": "interrupt_accept_consent", "title": "确认当前应用协议弹窗，使弹窗关闭并恢复被遮挡页面",
+                      "kind": "visual_tap", "hook_cap": "tap_element", "optional": False}]
+        if not steps and kind == "loading" and not stack_depth(cursor):
+            steps = [{"id": "interrupt_screen_ready", "title": "等待当前页面加载完成", "kind": "hook",
+                      "hook_cap": "wait_screen_ready", "optional": False}]
+    _, phase = step_scope_key(cursor)
+    menu = case_menu_ids(ctx, phase)
+    steps = [step for step in steps if milestone_caps_registered(step, menu)] if menu else []
+    if steps and not stack_depth(cursor):
+        if focus:
+            inserted = push_interrupt(cursor, ctx, parent_step_id=str(focus["id"]), reason=reason, steps=steps, writer=writer)
+        else:
+            rows = list(state.get("milestones") or [])
+            inserted = bool(_append_rows(rows, {str(row.get("id")): row for row in rows}, steps, source="screen_recovery"))
+            state["milestones"] = rows
+            if inserted:
+                state["status"] = "in_progress"
+            write_state(cursor, state)
+        if inserted:
+            state = read_state(cursor)
+            state["screen_obstacle"]["recovery_ids"] = [str(step["id"]) for step in steps]
+            write_state(cursor, state)
+            if writer:
+                writer.append("screen/recovery", {"kind": kind, "summary": reason,
+                              "milestone_ids": state["screen_obstacle"]["recovery_ids"]})
+            setattr(cursor, "milestone_hold_exec", True)
+            return True
+    if kind == "consent":
+        remedy = "协议自动确认未能完成，请查看报告中的恢复动作及截图，检查当前渠道的点击能力和协议恢复规则。"
+    elif kind == "permission":
+        remedy = "请确认本次测试需要的权限，或配置相应的权限处理步骤后再执行。"
+    else:
+        remedy = "当前没有能处理此挡屏的有效恢复规则，请查看报告中的截图并配置对应恢复动作。"
+    plan.blocked_error = {"source": "screen", "fail_kind": "screen_obstacle_" + kind, "error": reason.rstrip("。.!！ ") + "。" + remedy}
+    return True

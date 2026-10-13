@@ -152,16 +152,26 @@ def find_similar_case(
     name = str(row.get("name") or "").strip()
     if not name:
         return None
+    from sqlalchemy import func, or_
+    from mino_nexus.core.database import SessionLocal, ensure_db
+    from mino_nexus.models.case import ProjectCase
+
     module = str(row.get("module") or "").strip()
     rid = str(requirement_id or "").strip()
-    for ex in list_cases(project_id, rid):
-        if str(ex.get("name") or "").strip() != name:
-            continue
-        ex_mod = str(ex.get("module") or "").strip()
-        if module and ex_mod and ex_mod != module:
-            continue
-        return ex
-    return None
+    ensure_db()
+    database = SessionLocal()
+    try:
+        case_name = func.coalesce(func.nullif(ProjectCase.name, ""), func.nullif(ProjectCase.extra["name"].as_string(), ""), ProjectCase.case_id)
+        query = database.query(ProjectCase).filter(ProjectCase.project_id == str(project_id or "").strip(), func.trim(case_name) == name)
+        if rid:
+            query = query.filter(ProjectCase.requirement_id == rid)
+        if module:
+            case_module = func.trim(func.coalesce(func.nullif(ProjectCase.module, ""), ProjectCase.extra["module"].as_string(), ""))
+            query = query.filter(or_(case_module == "", case_module == module))
+        match = query.order_by(ProjectCase.sort_index, ProjectCase.pk).first()
+        return _public(match) if match else None
+    finally:
+        database.close()
 
 
 def get_case(project_id: str, case_id: str) -> dict[str, Any] | None:
@@ -192,6 +202,7 @@ def _row_fields(
     requirement_id: str,
     sort_index: int,
     force_recompile_resource_key: bool = False,
+    compiled: bool = False,
 ) -> dict[str, Any]:
     from mino_nexus.services.case_resource_claim import sync_case_resource_metadata
 
@@ -202,7 +213,8 @@ def _row_fields(
     )
     from mino_nexus.services.case_step_key_compiler import sync_case_step_program_keys
 
-    raw = sync_case_step_program_keys(raw)
+    if not compiled:
+        raw = sync_case_step_program_keys(raw)
     cid = str(raw.get("case_id") or "").strip()
     extra = dict(raw)
     return dict(
@@ -315,6 +327,7 @@ def apply_import_row(
     row: dict[str, Any],
     *,
     on_conflict: ConflictAction = "skip",
+    compiled: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
     """导入单行。返回 (created|updated|skipped, case_dict)。"""
     from mino_nexus.core.database import session_scope
@@ -345,6 +358,7 @@ def apply_import_row(
             project_id=pid,
             requirement_id=rid,
             sort_index=int(payload.get("index") or existing.get("index") or 0),
+            compiled=compiled,
         )
         with session_scope() as db:
             obj = (
@@ -363,6 +377,7 @@ def apply_import_row(
         project_id=pid,
         requirement_id=rid,
         sort_index=int(payload.get("index") or 0),
+        compiled=compiled,
     )
     with session_scope() as db:
         db.add(ProjectCase(**fields))

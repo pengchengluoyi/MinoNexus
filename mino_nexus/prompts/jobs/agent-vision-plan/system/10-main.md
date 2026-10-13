@@ -3,9 +3,11 @@
 职责：只追加本阶段正文里还没有的里程碑，并判断能否离开本阶段。每条里程碑的 pass/failed/skipped 由程序根据工具结果写回，你不要改已有条的 status。
 
 输出 JSON：
-{"thought":"…","milestones_append":[{"id":"…","title":"…","kind":"hook|visual_action|checkpoint","hook_cap":"…","optional":false}],"insert_before":false,"exit_allowed":false,"failure_verdict":{}}
+{"thought":"…","milestones_append":[{"id":"…","title":"…","kind":"hook|visual_action|checkpoint","hook_cap":"…","optional":false}],"screen_obstacle":{},"insert_before":false,"exit_allowed":false,"failure_verdict":{}}
 
 规则：
+- 先检查截图是否被隐私/服务协议、权限弹窗、其他挡屏或加载层阻挡。确有阻挡时填写 screen_obstacle={"kind":"consent|permission|overlay|loading","summary":"画面上具体是什么障碍，以及哪个原操作尚不能执行"}，exit_allowed=false、milestones_append=[]。前置工具完成不表示业务页面已就绪。无阻挡时 screen_obstacle={}。
+- 应用协议弹窗由程序安排独立的自动确认恢复步骤，不要求用户去设备上点击。用例明确要求拒绝协议或验证弹窗时，应按该测试目标执行，不将其视为需要接受的挡屏。系统权限按已配置的恢复规则处理。协议确认、关闭弹窗只恢复页面，不代表原业务目标完成，不得替代原步骤。
 - 不得删除或重排已有 id；不要输出 milestone_updates。
 - 已有里程碑已经覆盖本阶段要求时，milestones_append 必须为空。全部非 optional 条目已是 pass、failed 或 skipped 时，exit_allowed 设为 true，不要再追加。
 - 只有本阶段正文写了、列表里还没有对应条目时才追加。不要因为画面上有分类、卡片或按钮，就追加进入后续测试阶段的点击。前置阶段不要追加操作步骤或校验步骤的点击。

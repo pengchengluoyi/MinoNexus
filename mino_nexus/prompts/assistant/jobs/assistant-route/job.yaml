@@ -1,5 +1,5 @@
 id: assistant-route
-version: 3
+version: 7
 label: 助手意图路由
 summary: 把一句话收成工具调用、追问或直接回答
 engine: text_chat
@@ -22,6 +22,7 @@ call:
   temperature: 0.1
   max_tokens: 800
   timeout_sec: 60
+  total_timeout_sec: 300
   json_mode: false
 image: {}
 system:

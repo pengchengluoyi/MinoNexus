@@ -15,7 +15,10 @@ _ALLOWED = frozenset({
     "plugin.bot.wechat",
     "plugin.gmail.fetch_otp",
     "plugin.im.send",
+    "plugin.im.stream",
     "plugin.im.history",
+    "plugin.im.ack",
+    "plugin.im.attachment",
     "plugin.im.upload_image",
 })
 

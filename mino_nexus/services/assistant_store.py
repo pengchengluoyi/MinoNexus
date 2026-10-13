@@ -142,6 +142,13 @@ def require_im_binding(user_id: str, channel: str, node_id: str, reply_ctx: dict
         raise PermissionError("社交绑定已失效")
 
 
+def legacy_inbound_claimed(key: str) -> bool:
+    from mino_nexus.models.assistant import ImInboundClaim
+    from mino_nexus.core.execution_user import require_user_id
+    with session_scope() as db:
+        return db.query(ImInboundClaim.key).filter(ImInboundClaim.key == key, ImInboundClaim.owner_user_id == require_user_id()).first() is not None
+
+
 def claim_inbound(key: str, owner_user_id: str) -> bool:
     from sqlalchemy.dialects.sqlite import insert
     from mino_nexus.models.assistant import ImInboundClaim
@@ -249,6 +256,16 @@ def msg_seen(msg_key: str) -> bool:
 def save_turn(turn: dict[str, Any]) -> None:
     from mino_nexus.models.assistant import AssistantTurn
 
+    import hashlib
+    # IM/MCP 会话轨迹仅保留结构与摘要哈希，卡片回复与工具参数不落 Nexus。
+    steps = []
+    for step in turn.get("steps") or []:
+        safe = {k: step.get(k) for k in ("tool", "label", "status", "ms")}
+        safe["args_sha256"] = hashlib.sha256(str(step.get("args_brief") or "").encode()).hexdigest()
+        steps.append(safe)
+    card = turn.get("card") or {}
+    safe_card = {k: card.get(k) for k in ("template", "status", "card_type")}
+    safe_card["body_redacted"] = True
     with session_scope() as db:
         db.merge(AssistantTurn(
             turn_id=turn["turn_id"],
@@ -260,8 +277,8 @@ def save_turn(turn: dict[str, Any]) -> None:
             msg_key=turn.get("msg_key", ""),
             status=turn.get("status", "ok"),
             intent=turn.get("intent", ""),
-            steps_json=list(turn.get("steps") or []),
-            card_json=dict(turn.get("card") or {}),
+            steps_json=steps,
+            card_json=safe_card,
             detail_json=dict(turn.get("detail") or {}),
             prompt_tokens=int(turn.get("prompt_tokens") or 0),
             completion_tokens=int(turn.get("completion_tokens") or 0),
@@ -278,8 +295,8 @@ def _turn_public(r) -> dict[str, Any]:
         "chat_id_masked": mask_id(r.chat_id),
         "status": r.status or "ok",
         "intent": r.intent or "",
-        "steps": list(r.steps_json or []),
-        "card": dict(r.card_json or {}) or None,
+        "steps": [{k: v for k, v in step.items() if k in ("tool", "label", "status", "ms", "args_sha256")} for step in (r.steps_json or []) if isinstance(step, dict)],
+        "card": {"template": (r.card_json or {}).get("template"), "status": (r.card_json or {}).get("status"), "card_type": (r.card_json or {}).get("card_type", "notification"), "body_redacted": True} if r.card_json else None,
         "prompt_tokens": int(r.prompt_tokens or 0),
         "completion_tokens": int(r.completion_tokens or 0),
         "elapsed_ms": int(r.elapsed_ms or 0),

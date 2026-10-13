@@ -1,5 +1,7 @@
 # prompt 改造方案
 
+> **2026-10-12 规范关系**：本目录的现行约束及文档覆盖关系见 [V4 索引](README.md)。方案描述目标，开发记录描述已实现及验收边界；早期段落不得覆盖后续明确修订。代码修改通过隔离验收不等于真实模型、IM 或桌面实机验收。
+
 > **状态**：已按本方案落地（导出、核对、改读取、删补丁链）。社交助手目录只留了空位，不在这次实现。§9 三件事仍待确认。
 > **要回答的事**：prompt 从数据库（`llm_jobs` / `skills` / `settings`）搬到 Nexus 仓库，用 git 管版本。具体包括：目录怎么分；文件里怎么写版本号；怎样先把库里的内容完整取出、核对无误后再删 ORM；哪些旧 job 可以趁机删掉；对各模块的影响。
 > **关联**：[PROMPTS](../../基础框架/PROMPTS.md)（本方案落地后需要重写）、[mino 接入社交软件实现 24 小时在线](mino接入社交软件实现24小时在线.md)（assistant 的 prompt、工具表、卡片模板都按本方案放文件）。
@@ -11,7 +13,7 @@
 
 | 题 | 决定 |
 |---|---|
-| 真源 | **`mino_nexus/prompts/` 下的文件 + git 历史。** 数据库里不再存任何 prompt 正文、技能程序、角色和编排 |
+| 真源 | **`mino_nexus/prompts/` 下的文件 + git 历史。** 数据库不再作为可编辑的 prompt、技能程序、角色或编排真源；仅允许保存调用审计所用的不可变模板证据 |
 | 目录放哪 | 放在 `mino_nexus/` 下，但**只新增一个 `prompts/` 目录**，五个分类作为它的子目录，不在包根上平铺五个目录（§2.1） |
 | 分类 | `assistant/`（独立）、`jobs/`（对应 Workbench `/jobs` 页）、`skills/`、`roles/`、`stack/`（编排） |
 | 版本号 | 每个文件头写 `version: <整数>`，改了内容必须加 1。`dispatch_log` 同时记下内容哈希（运行时现算），用来精确对应到文件内容（§4） |
@@ -248,8 +250,8 @@ def fingerprint(kind, id) -> (version, sha)
 
 ### 6.1 第一步：全量导出（只读，不改库）
 
-1. **备份库**：复制一份 `mino.db.bak-prompt-export-<日期>`，与现有 `mino.db.bak-*` 的命名一致。不对 `mino.db` 做任何写入。
-2. **原始导出**：`scripts/export_prompts_from_db.py` 以只读方式打开库（`?immutable=1`），把以下内容**原样**导出到 `docs/prompts/db-export-<日期>/`，每张表、每个 key 一个 JSON 文件：
+1. **一致快照备份**：以 `mode=ro` 打开源连接，通过 SQLite backup API 写到新文件 `mino.db.bak-prompt-export-<日期时间>`，不覆盖已有备份，不向源库执行更新或 checkpoint。不直接复制正在运行的 `mino.db`，不删除或遗漏其 WAL / SHM；记录实例、时间和构建，并核验快照可读及完整性。失败则停止后续迁移。
+2. **原始导出**：`scripts/export_prompts_from_db.py` 只读打开上述已完成快照（`mode=ro`、`PRAGMA query_only=ON`），所有导出和旧新渲染对照使用同一快照，不再次读取变化中的运行库；不得用 `immutable=1` 读取运行库。把以下内容**原样**导出到 `docs/prompts/db-export-<日期>/`，每张表、每个 key 一个 JSON 文件：
    - `llm_jobs` 全部行、全部列，包括 `overrides_json` 里的修订历史；
    - `skills` 全部行，包括已废弃的 `system_prompt` 列；
    - `settings` 中的 `ai._role_prompts`、`layer_stack`；
@@ -350,7 +352,15 @@ def fingerprint(kind, id) -> (version, sha)
 
 ## 10. 实施归属
 
-本方案**由其他人负责开发**，不在 V4 社交接入的开发范围内。V4 开发期间对 prompt 的处理约定：
+按 [V4 索引](README.md) 的交付顺序协作。当前工作树已有 `prompt_repo` 与 `prompts/assistant/`，旧版“先落到库 / 代码、不建 prompts/”的过渡约定不再适用。
 
-- V4 的 assistant job、工具表、卡片模板，**先按现状落在 `llm_jobs` / 代码里**，把内容集中放在一个位置（便于之后整体搬进 `prompts/assistant/`），不抢先建 `prompts/` 目录。
-- 不改动 `llm_jobs`、`skills`、`job_store`、`skill_store`、`job_upgrades`、`roles_catalog`、`layer_stack`，避免和正在进行的改造冲突。
+- assistant job、工具表和卡片模板按文件真源维护；业务状态仍进 SQLite，静态审计快照按 §13 单独处理。
+- 多人修改同一加载链路前先确认工作树及责任范围，不把未提交修改视为线上版本。迁移保留旧库快照；回滚按一组代码与模板版本恢复，不恢复旧配置与新代码混用的双真源。
+
+## 13. 2026-10-12 调用证据与热加载修订
+
+运行配置真源始终为包内 prompts/。数据库 prompt_evidence 是只追加的静态模板快照，不包含本次 slot 值，运行读取不使用该表。首次渲染按模板 sha 原子 INSERT，重复版本不覆盖；记录 job/version/模板，解决仅有哈希而不能还原未提交模板的问题。实际渲染变量按现有 Session 脱敏与摘要规则处理，助手聊天正文不保存在证据表。
+
+模型调用开始前绑定 prompt_version、prompt_sha 和调用参数，账本、dispatch 与 Session 复用这些元数据，不在调用结束后补一个与 dispatch 脱节的版本。assistant-route 的 temperature/max_tokens/timeout 从文件读取，实时目标说明也移回规则文件。模型配置可显式覆盖允许的参数，记录最终温度、输出预算、thinking、stream，不能覆盖 Key、provider、endpoint 或日志策略。
+
+开发热加载以文件路径和内容摘要判断变化，可检测删除、保留旧时间戳的恢复及非最大 mtime 文件修改。生产默认仍重启加载；新模板解析失败不自动继续执行模型请求。模板版本须递增，sha 表示内容而非“版本号已校验”。

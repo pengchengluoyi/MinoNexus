@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from mino_nexus.core.http_util import http_error, ok
@@ -40,6 +40,11 @@ class AIProviderSaveBody(BaseModel):
     api_key: str = ""
     base_url: str = ""
     model: str = ""
+    sdk_provider: str = ""
+    embedding_model: str = ""
+    model_parameters: dict[str, Any] = Field(default_factory=dict)
+    pricing: dict[str, float | None] = Field(default_factory=dict)
+    embedding_pricing: dict[str, float | None] = Field(default_factory=dict)
     enabled: bool = True
     clear_key: bool = False
     set_default: bool = False
@@ -110,6 +115,27 @@ def list_ai_providers(_sess: dict = Depends(current_session)):
     return ok(ss.list_ai_providers(user_id=_plugin_user(_sess)))
 
 
+@router.get("/ai/models")
+def list_sdk_models(sdk_provider: str = "openai", _sess: dict = Depends(current_session)):
+    from mino_nexus.ai.model_sdk import catalog
+    try:
+        return ok(catalog(sdk_provider))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/ai/costs")
+def list_model_costs(task_id: str = "", case_id: str = "", session_id: str = "", step_index: int | None = Query(default=None, ge=0),
+                     group_by: str = "task", start: str = "", end: str = "", offset: int = Query(default=0, ge=0),
+                     limit: int = Query(default=100, ge=1, le=500), _sess: dict = Depends(current_session)):
+    from mino_nexus.services.model_usage import query_usage
+    try:
+        return ok(query_usage(task_id=task_id, case_id=case_id, session_id=session_id, step_index=step_index,
+                             group_by=group_by, start=start, end=end, offset=offset, limit=limit))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/ai/providers/{provider_id}/validate")
 def validate_ai_provider(provider_id: str, _sess: dict = Depends(current_session)):
     from mino_nexus.services import settings
@@ -117,18 +143,31 @@ def validate_ai_provider(provider_id: str, _sess: dict = Depends(current_session
     provider = settings.get_ai_provider_credentials(provider_id)
     if not provider.get("configured"):
         raise HTTPException(status_code=409, detail="当前账号尚未配置模型 Key")
-    response, meta = _post_chat_completions(provider=provider,
-        messages=[{"role": "user", "content": "Reply OK."}], max_tokens=16,
-        timeout_sec=15, max_attempts=1, stream=False)
+    from mino_nexus.ai.model_sdk import config_fingerprint
+    from datetime import datetime, timezone
+    from mino_nexus.ai import dispatch_log
+    fingerprint = config_fingerprint(provider)
+    token = dispatch_log.bind(job="connection-validation", source="settings_model_validation")
+    try:
+        probe = {**provider, "model_parameters": {k: v for k, v in (provider.get("model_parameters") or {}).items() if k != "max_tokens"}}
+        response, meta = _post_chat_completions(provider=probe,
+            messages=[{"role": "user", "content": "Reply OK."}], max_tokens=16,
+            timeout_sec=15, max_attempts=1, stream=False)
+    finally:
+        dispatch_log.reset(token)
+    result = {"status": "verified" if response is not None else "failed", "at": datetime.now(timezone.utc).isoformat(),
+              "model": provider.get("model"), **{k: meta.get(k) for k in ("http_status", "error", "provider_error_code", "provider_error_param", "provider_request_id")}}
+    stored = ss.record_ai_validation(provider["id"], fingerprint, result, user_id=_plugin_user(_sess))
     if response is None:
-        raise HTTPException(status_code=502, detail="模型连接验证失败，请检查当前账号的配置")
-    return ok({"provider_id": provider["id"], "connected": True, "elapsed_ms": meta.get("elapsed_ms", 0)})
+        raise HTTPException(status_code=502, detail=result["error"] or "模型连接验证失败")
+    return ok({"provider_id": provider["id"], "connected": True, "validation_stored": stored,
+               "validation": result, "elapsed_ms": meta.get("elapsed_ms", 0), "estimated_cost_usd": meta.get("estimated_cost_usd")})
 
 
 @router.put("/ai/providers/{provider_id}")
 def save_ai_provider(provider_id: str, body: AIProviderSaveBody, _sess: dict = Depends(current_session)):
     try:
-        payload = body.model_dump()
+        payload = body.model_dump(exclude_unset=True)
         if "pc_compress_ratio" not in body.model_fields_set:
             payload.pop("pc_compress_ratio", None)
         data = ss.save_ai_provider(provider_id, payload, user_id=_plugin_user(_sess))

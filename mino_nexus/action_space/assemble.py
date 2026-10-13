@@ -78,4 +78,7 @@ def assemble_execute_params(
         from mino_nexus.action_space.visual import bind_focus_ref
 
         out = bind_focus_ref(out, ctx)
+        if out.get("target_mode") == "current_focus" and ui_channel_from_ctx(ctx) == UiChannel.ANDROID:
+            # ADB 当前焦点只实现 append（Scout input_contract），replace 会被节点拒绝。
+            out["mode"] = "append"
     return out

@@ -67,6 +67,8 @@ def get_call_page(
             "id", "at", "job", "model", "provider_id", "status", "error",
             "prompt_version", "prompt_sha", "elapsed_ms", "total_tokens",
             "used_tool_calls", "tool_name", "tools_downgraded", "finish_reason", "fail_kind",
+            "sdk_provider", "http_status", "provider_error_code", "provider_error_param", "provider_request_id", "retryable",
+            "usage_status", "estimated_cost_usd", "cost_status", "cost_source", "pricing_version", "usage_attempt_ids", "cost_tracking_error", "call_parameters", "stream_structure", "response_trace", "raw_response_source",
         )
     }
     raw_available = bool(row.get("raw_response_available"))

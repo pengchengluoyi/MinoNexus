@@ -46,7 +46,13 @@ def owned_job(owner_field: str = "owner_user_id"):
                     run_store.finish(doc["run_id"], status="failed", error="历史任务缺少归属，已拒绝执行")
                 raise PermissionError("缺少执行账号，已拒绝执行")
             with execution_user(owner):
-                return fn(*args, **kwargs)
+                from mino_nexus.ai import dispatch_log
+                token = dispatch_log.bind(task_id=str(doc.get("run_id") or kwargs.get("run_id") or ""),
+                                          trigger="case_run", source="case_run", job="case-initialization")
+                try:
+                    return fn(*args, **kwargs)
+                finally:
+                    dispatch_log.reset(token)
         return wrapped
     return decorate
 

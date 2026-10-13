@@ -64,6 +64,7 @@ def normalize_im_channels(plugins: Any) -> list[dict[str, Any]]:
                 "connection_state": connection_state,
                 "connection_verified": reported and verified,
                 "connection_source": str(state.get("connection_source") or ""),
+                "capabilities": state.get("capabilities") if isinstance(state.get("capabilities"), dict) else {},
                 "error": error,
                 "last_message_at": last_message,
             })

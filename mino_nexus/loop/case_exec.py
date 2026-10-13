@@ -106,6 +106,9 @@ def _run_case_list(
             break
         cid = str(case.get("case_id") or "")
         sn = str(case.get("sn") or doc.get("sn") or "")
+        from mino_nexus.ai import dispatch_log
+        dispatch_log.bind(task_id=run_id, case_id=cid, case_step_index=0,
+                          session_id=str(case.get("report_run_id") or run_store.report_run_id(run_id, cid, sn=sn, coverage=str(case.get("coverage") or ""))))
         from mino_nexus.runtime.platform_gate import bind_case_execution_target
 
         case = bind_case_execution_target(

@@ -244,9 +244,10 @@ def validate_case_step_keys(
     app_id: str = "",
     known_blocks: dict[str, str] | None = None,
     known_screens: dict[str, str] | None = None,
+    compiled_case: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """保存/导入前校验：未知块、Nav 屏、fallback 行、建议补 key。"""
-    synced = sync_case_step_program_keys(dict(case))
+    synced = compiled_case if compiled_case is not None else sync_case_step_program_keys(dict(case))
     warnings = list((synced.get("meta") or {}).get("key_compile_warnings") or [])
     block_map = known_blocks if known_blocks is not None else flow_block_key_refs()
     screen_map = known_screens if known_screens is not None else nav_screen_key_refs(app_id)
@@ -426,7 +427,7 @@ def stored_preview_lines(case: dict[str, Any] | None) -> tuple[list[str], list[s
     return preview_lines_from_plans(spk)
 
 
-def compile_preview_view(case: dict[str, Any] | None) -> dict[str, Any]:
+def compile_preview_view(case: dict[str, Any] | None, *, compiled_case: dict[str, Any] | None = None) -> dict[str, Any]:
     """导入预览：把程序图和未映射句编成步骤/预期/备注文案。"""
     if not isinstance(case, dict):
         return {
@@ -437,7 +438,7 @@ def compile_preview_view(case: dict[str, Any] | None) -> dict[str, Any]:
         }
     from mino_nexus.services.case_step_key_compiler import sync_case_step_program_keys
 
-    synced = sync_case_step_program_keys(dict(case))
+    synced = compiled_case if compiled_case is not None else sync_case_step_program_keys(dict(case))
     meta = synced.get("meta") if isinstance(synced.get("meta"), dict) else {}
     ua = ui_automation_summary(synced)
     spk = meta.get("step_program_keys") if isinstance(meta.get("step_program_keys"), dict) else {}
@@ -468,17 +469,72 @@ def compile_preview_view(case: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def import_row_key_summary(row: dict[str, Any], *, app_id: str = "") -> dict[str, Any]:
+def _import_automation_details(case: dict[str, Any], env_doc: dict[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
+    from mino_nexus.services.case_resource_claim import compile_resource_key_from_precondition
+
+    details: dict[str, list[dict[str, Any]]] = {"pre": [], "op": [], "ex": []}
+    automation = ui_automation_summary(case)
+    for index, line in enumerate(str(case.get("precondition") or "").splitlines(), 1):
+        text = re.sub(r"^\s*\d+[.)、．]\s*", "", line).strip()
+        if not text:
+            continue
+        claim = compile_resource_key_from_precondition(text, env_doc=env_doc, platform=str(case.get("platform") or ""))
+        requirements = claim.get("account", {}).get("requirements", {})
+        value = re.split(r"[：:]", text, maxsplit=1)[-1].strip()
+        coverable = bool(
+            claim.get("case_scene", {}).get("required_session") != "any"
+            or claim.get("device_app", {}).get("prep")
+            or requirements.get("all") or requirements.get("prefer")
+            or value in ("无", "无需", "不限", "任意")
+        )
+        blockers = [item for item in automation.get("blocked_by") or [] if item.get("phase") == "prep" and item.get("source_clause") == text]
+        reason = "已映射为登录态、账号筛选或环境准备条件" if coverable else "未映射为可执行的准备条件，需要人工准备或补充资源规则"
+        if blockers:
+            coverable = False
+            reason = str(blockers[0].get("user_message") or blockers[0].get("detail") or reason)
+        elif value in ("无", "无需", "不限", "任意"):
+            reason = "无额外准备要求"
+        details["pre"].append({"step": index, "text": text, "coverable": coverable, "reason": reason})
+    bundles = (case.get("meta") or {}).get("step_program_keys") or {}
+    for key, bundle in bundles.items():
+        for kind, plan_key, items_key, phase in (("op", "do_program_plan", "steps", "do"), ("ex", "check_program_plan", "checkpoints", "check")):
+            plan = bundle.get(plan_key) or {}
+            blockers = [item for item in automation.get("blocked_by") or [] if item.get("phase") == phase and str(item.get("case_step")) == str(key)]
+            used: set[int] = set()
+            for item in plan.get(items_key) or []:
+                text = str(item.get("source_clause") or item.get("source_line") or item.get("title") or "")
+                matches = [(index, blocked) for index, blocked in enumerate(blockers) if not blocked.get("source_clause") or blocked.get("source_clause") in text or text in str(blocked.get("source_clause"))]
+                used.update(index for index, _blocked in matches)
+                reason = _format_plan_line(item, case_step=int(key)).split(". ", 1)[-1]
+                if matches:
+                    reason = "；".join(str(blocked.get("user_message") or blocked.get("detail") or _block_reason_zh(blocked.get("reason"))) for _index, blocked in matches)
+                details[kind].append({"step": int(key), "text": text, "coverable": not matches, "reason": reason})
+            for index, blocked in enumerate(blockers):
+                if index not in used:
+                    details[kind].append({"step": int(key), "text": str(blocked.get("source_clause") or plan.get("source") or ""), "coverable": False, "reason": str(blocked.get("user_message") or blocked.get("detail") or _block_reason_zh(blocked.get("reason")))})
+    return details
+
+
+def import_row_key_summary(row: dict[str, Any], *, app_id: str = "", env_doc: dict[str, Any] | None = None) -> dict[str, Any]:
     case_like = {
+        **row,
+        "app_id": app_id or row.get("app_id") or "",
         "precondition": row.get("precondition") or "",
         "steps": row.get("steps") or [],
         "expected": row.get("expected") or [],
         "steps_raw": row.get("steps_raw") or "",
         "expected_raw": row.get("expected_raw") or "",
     }
-    v = validate_case_step_keys(case_like, app_id=app_id)
-    view = compile_preview_view(case_like)
+    synced = sync_case_step_program_keys(case_like)
+    v = validate_case_step_keys(case_like, app_id=app_id, compiled_case=synced)
+    view = compile_preview_view(case_like, compiled_case=synced)
     ua = view.get("ui_automation") or {}
+    details = _import_automation_details(synced, env_doc)
+    for item in details["pre"]:
+        if not item["coverable"]:
+            ua["coverable"] = False
+            ua.setdefault("blocked_by", []).append({"phase": "prep", "case_step": 0, "source_clause": item["text"], "reason": "unmapped", "user_message": item["reason"]})
+    synced["meta"]["ui_automation"] = ua
     return {
         "telemetry": "red" if v.get("issues") or not ua.get("coverable", True) else "green",
         "fallback_count": v.get("fallback_count"),
@@ -490,4 +546,6 @@ def import_row_key_summary(row: dict[str, Any], *, app_id: str = "") -> dict[str
         "steps_parsed": list(view.get("steps_parsed") or []),
         "expected_parsed": list(view.get("expected_parsed") or []),
         "remark": str(view.get("remark") or ""),
+        "compiled_meta": synced.get("meta") or {},
+        "automation_details": details,
     }

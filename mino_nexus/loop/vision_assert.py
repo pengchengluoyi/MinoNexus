@@ -220,7 +220,10 @@ def checkpoints_from_milestones(cursor: Any) -> list[dict[str, Any]]:
         if isinstance(assert_payload.get("bind"), dict):
             item["bind"] = assert_payload["bind"]
         if not element and not rules:
-            item["expectation"] = str(assert_payload.get("expectation") or row.get("title") or "")
+            # title 可能只是分类名（如「导航」），用例原句才是要判的预期
+            item["expectation"] = str(
+                assert_payload.get("expectation") or row.get("source_clause") or row.get("title") or ""
+            )
         out.append(item)
     from mino_nexus.loop.structured_check import hydrate_bound_text
 

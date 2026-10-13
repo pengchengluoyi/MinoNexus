@@ -468,6 +468,7 @@ def run_case(
         task_id=run_id,
         target_package=package,
         playwright_headless=playwright_headless,
+        run_context=ctx,
     )
     proxy.action_scheme = str(getattr(ctx, "action_scheme", "") or "visual")
     history: list[str] = []
@@ -502,6 +503,8 @@ def run_case(
         app_id=app_id,
         app_name=app_name,
         pipeline_id=stream_id,
+        task_id=run_id, case_id=cid, session_id=stream_id,
+        case_step_index=0,
     )
     sop_orchestration: dict[str, Any] = {}
     if not is_explore_case:
@@ -834,7 +837,7 @@ def _ensure_desktop_window(proxy: RouterProxy, ctx, *, run_id: str, case_seq: in
     package = str(getattr(ctx, "target_package", "") or "").strip()
     event = PlanEvent(
         seq=0, capability_id="launch_app", event_kind="launch_app", params={"package": package},
-        ai_reasoning="PC 首张截图前先启动或激活被测应用并绑定窗口", label="准备被测窗口",
+        ai_reasoning="PC 首张截图前先启动被测应用并确认目标窗口绑定", label="准备被测窗口",
         expected_executor="desktop",
     )
     if writer:
@@ -884,18 +887,12 @@ def _run_action(*, event: PlanEvent, shot, proxy: RouterProxy, ctx, scout_run_id
             target_package=str(getattr(ctx, "target_package", "") or ""),
             agent_turn=seq,
         )
-    if is_local_cap(cap):
-        return dispatch_local(
-            event,
-            shot=shot,
-            ctx=ctx,
-            router=proxy,
-            target_package=str(getattr(ctx, "target_package", "") or ""),
-        )
     return proxy.dispatch(
         event,
         run_id=scout_run_id,
         step_idx=agent_step_idx(case_seq, seq),
+        ctx=ctx,
+        shot=shot,
     )
 
 
@@ -919,6 +916,7 @@ def _run_loop(
     run_env_brief: str = "",
     run_type: str = "manual",
 ) -> dict[str, Any]:
+    from mino_nexus.ai import dispatch_log as dispatch
     from mino_nexus.runtime.menu import available_menu_brief
     from mino_nexus.services.skill_store import get_skill
 
@@ -1268,7 +1266,7 @@ def _run_loop(
         from mino_nexus.runtime.run_context import is_web_slot
 
         if not is_web_slot(str(getattr(ctx, "sn", "") or ""), str(getattr(ctx, "platform", "") or "")):
-            preflight_shot = proxy.observe("screenshot", force_fresh=True)
+            preflight_shot = proxy.observe("screenshot", force_fresh=True, diagnostic_purpose="preflight")
     except Exception:
         preflight_shot = None
 
@@ -1338,7 +1336,14 @@ def _run_loop(
     if fg_out:
         _log_preflight_recovery(fg_out, source="preflight_fg")
 
-    if not str(getattr(ctx, "app_version", "") or "").strip() and target_pkg:
+    from mino_nexus.loop.channel_program_recovery import channel_supports_capability
+
+    version_supported = channel_supports_capability(ctx, "get_app_version")
+    if target_pkg and not version_supported:
+        SLog.i(TAG, f"[{scout_run_id}] get_app_version skipped platform={ctx.platform} reason=not_reported_by_device")
+        if writer:
+            writer.append("app/version", {"status": "skipped", "reason": "not_reported_by_device", "platform": ctx.platform})
+    if not str(getattr(ctx, "app_version", "") or "").strip() and target_pkg and version_supported:
         from mino_nexus.runtime.run_context import (
             execute_result_ok,
             stamp_app_version,
@@ -1353,7 +1358,7 @@ def _run_loop(
             ai_reasoning="prep：记录被测应用版本供导航视图与采集分桶",
             label="读取应用版本",
         )
-        ver_result = proxy.dispatch(ver_event, run_id=scout_run_id, step_idx=frame_step(case_seq, 1))
+        ver_result = proxy.dispatch(ver_event, run_id=scout_run_id, step_idx=frame_step(case_seq, 1), diagnostic_purpose="app_version")
         raw_ver = ver_result.raw_response if isinstance(getattr(ver_result, "raw_response", None), dict) else {}
         ver = version_from_execute_result(raw_ver) if execute_result_ok(ver_result) else ""
         if ver:
@@ -1418,6 +1423,7 @@ def _run_loop(
         turn_decision_cap = ""
         turn_decision_status = ""
         cur_node = cursor.current()
+        dispatch.bind(case_step_index=0 if cursor.phase == "prep" else (cur_node.n if cur_node else 0), turn=seq)
         if writer:
             writer.set_turn(seq)
             writer.set_phase(cursor.phase)
@@ -1448,7 +1454,9 @@ def _run_loop(
             if cancel_check and cancel_check():
                 _log_turn_end(writer, cap="", status="cancelled")
                 return _leave(status="cancelled", summary="任务已取消")
-            display_guard.wait_ready(timeout=60.0)
+            if not display_guard.wait_ready(timeout=60.0):
+                _log_turn_end(writer, cap="wait_screen_ready", status="blocked")
+                return _leave(status="blocked", summary="设备屏幕未就绪或屏幕守护失败，已暂停执行。请检查设备的亮屏、解锁和截图状态。")
 
         setattr(ctx, "decision_screenshot_hash", "")
         from mino_nexus.loop.observe.session_log import set_screenshot_hash
@@ -2962,7 +2970,7 @@ def _run_loop(
             )
 
             cp_block = cursor.prompt_block()
-            if should_withhold_llm_image(ctx):
+            if should_withhold_llm_image(ctx, shot=shot):
                 cp_block = f"{cp_block}\n{WITHHOLD_HINT}"
 
             from mino_nexus.loop.llm_step_context import (
@@ -3020,7 +3028,7 @@ def _run_loop(
                 )
 
             def _decide_gated() -> AgentDecision:
-                send_first = not should_withhold_llm_image(ctx)
+                send_first = not should_withhold_llm_image(ctx, shot=shot)
                 dec = _decide(send_image=send_first)
                 apply_allow_foreign_flag(ctx, dec)
                 if not send_first and parse_allow_foreign_flag(dec) is True:
@@ -3250,7 +3258,7 @@ def _run_loop(
                 merge_program_vision_fallback_slots(cursor, inspect_slots)
                 if getattr(ctx, "router", None) is None:
                     setattr(ctx, "router", proxy)
-                send_first = not should_withhold_llm_image(ctx)
+                send_first = not should_withhold_llm_image(ctx, shot=shot)
                 orch = run_vision_orchestrated_turn(
                     cursor=cursor,
                     ctx=ctx,
@@ -3264,11 +3272,19 @@ def _run_loop(
                     in_prep=str(cursor.phase or "") == "prep",
                     in_check=str(cursor.phase or "") == "check",
                 )
+                if orch.blocked_error:
+                    source = "screen" if orch.blocked_error.get("source") == "screen" else "model"
+                    kind = str(orch.blocked_error.get("fail_kind") or "request")
+                    return _leave_execution_blocked(seq, source, str(orch.blocked_error.get("error") or "模型不可用"),
+                                                    kind if source == "screen" else "model_" + kind)
                 if orch.phase_transition:
                     _log_turn_end(writer, cap="phase_transition", status="continue")
                     continue
                 if orch.decision is not None:
                     decision = orch.decision
+                    if "visual_observation_unavailable" in decision.parse_warnings:
+                        _log_turn_end(writer, cap="", status="blocked")
+                        return _leave(status="blocked", summary=decision.thought)
                     if orch.plan_only and not (decision.action and decision.action.capability_id):
                         if str(decision.status or "") in ("fail", "give_up"):
                             summary = decision.thought or "里程碑失败，已停止空转"
@@ -3287,6 +3303,10 @@ def _run_loop(
                     cursor.plan_only_streak = 0
             if decision is None:
                 decision = _decide_gated()
+            model_meta = (decision.raw_llm or {}).get("meta") or {}
+            if model_meta.get("error") and not (decision.raw_llm or {}).get("llm_output"):
+                return _leave_execution_blocked(seq, "model", str(model_meta["error"]),
+                                                "model_" + str(model_meta.get("fail_kind") or "request"))
             # 点名了知识就展开正文重决策一次。只一次 —— 展开后再点名一律忽略。
             body, named = expand_named_knowledge(decision, know_rows, ctx=ctx)
             if body:
@@ -5032,7 +5052,12 @@ def _run_loop(
                 or tap_field in ("email", "login_email", "sms_code", "otp", "phone", "password")
                 or str(tap_target.get("role") or "").strip().lower() in ("input", "textbox", "searchbox")
             )
-            setattr(ctx, "focus_action_ref", f"focus:{scout_run_id}:{seq}" if input_click else "")
+            # ADB Scout 以 EXECUTE.step_idx（agent_step_idx）作为 tap 的 focus 编号并精确比对，
+            # 不是回合号 seq；用 seq 会让 input_text 报「焦点点击引用失效」。
+            setattr(
+                ctx, "focus_action_ref",
+                f"focus:{scout_run_id}:{agent_step_idx(case_seq, seq)}" if input_click else "",
+            )
             setattr(ctx, "focus_action_field", tap_field if input_click else "")
         if status_val == "pass" and cap_id in (
             "launch_app", "open_url", "open_app", "fsm_navigate", "reload_page", "back", "switch_window",

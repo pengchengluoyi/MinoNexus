@@ -1,16 +1,15 @@
-"""一句话 → assistant-route → 工具 → 卡片。最多 4 轮。"""
+"""一句话 → assistant-route → 工具 → 卡片。结果先行，追问可续接。"""
 from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any
 
 from mino_nexus.ai.prompt_render import render
 from mino_nexus.services import assistant_store as store
 from mino_nexus.services.assistant_cards import build_card, render_wechat_text
 from mino_nexus.services.assistant_tools import ToolOutcome, openai_tools, run_tool, tool_by_function_name
-
-MAX_STEPS = 4
 
 
 def _persona(profile: dict[str, Any]) -> str:
@@ -62,7 +61,7 @@ def _started_summary(answer: str, task_id: str, steps: list[dict[str, Any]]) -> 
     return "\n".join(lines).strip()
 
 
-def _call_model(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+def _call_model(messages: list[dict[str, Any]], job_meta: dict | None = None) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
     from mino_nexus.ai import dispatch_log as dispatch
     from mino_nexus.ai.llm_client import call_chat_plain
     from mino_nexus.ai.llm_client import resolve_regression_provider
@@ -71,16 +70,20 @@ def _call_model(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any
     if not provider:
         reason = (gate or {}).get("reason") or "没有可用的大模型"
         return "", [], {"error": reason}
-    token = dispatch.bind(job="assistant-route", trigger="im", source="assistant", role="assistant")
+    job_meta = job_meta or {}
+    call = job_meta.get("call") or {}
+    token = dispatch.bind(job="assistant-route", trigger="im", source="assistant", role="assistant",
+                          prompt_version=job_meta.get("prompt_version"), prompt_sha=job_meta.get("prompt_sha"), call_parameters=call)
     try:
         text, meta = call_chat_plain(
             provider=provider,
             messages=messages,
-            temperature=0.1,
-            max_tokens=800,
-            timeout_sec=60,
-            # 非流式：流式响应里多数服务商不带 usage，会让会话记录的 token 全是 0
-            extra_payload={"tools": openai_tools(), "tool_choice": "auto", "stream": False},
+            temperature=float(call.get("temperature", 0.1)),
+            max_tokens=int(call.get("max_tokens", 800)),
+            timeout_sec=float(call.get("timeout_sec", 60)),
+            max_attempts=1,
+            on_text=dispatch.ctx().get("assistant_stream_callback"),
+            extra_payload={"tools": openai_tools(), "tool_choice": "auto", "stream": bool(dispatch.ctx().get("assistant_stream_callback"))},
         )
     finally:
         dispatch.reset(token)
@@ -97,6 +100,7 @@ def handle_utterance(
     chat_id: str = "",
     node_id: str = "",
     reply_ctx: dict[str, Any] | None = None,
+    inbound: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from mino_nexus.core.execution_user import require_user_id
     require_user_id(user_id)
@@ -104,64 +108,115 @@ def handle_utterance(
         if channel:
             store.require_im_binding(user_id, channel, node_id, reply_ctx or {})
     check_binding()
+    from mino_nexus.services import assistant_conversation as conversation
+    from mino_nexus.services.assistant_runtime import route_control, continue_request, result_for
+    origin = conversation.origin_for(channel, chat_id, node_id, reply_ctx or {})
+    control = route_control(text, origin, inbound or {})
+    if control is not None:
+        return control
+    pending = conversation.pending_for(origin, reply_to=str((inbound or {}).get("reply_to") or ""))
+    if pending:
+        question = pending.get("question") or {}
+        candidates = question.get("candidates") or []
+        chosen = None
+        raw = text.strip()
+        if raw.isdigit() and 0 < int(raw) <= len(candidates):
+            chosen = candidates[int(raw) - 1]["value"]
+        else:
+            matches = [row for row in candidates if raw in (str(row["value"]), str(row["label"]), str(row["label"]).split("（", 1)[0])]
+            if len(matches) == 1:
+                chosen = matches[0]["value"]
+        if chosen is not None:
+            try:
+                return continue_request(pending["id"], pending["revision"], {question["field"]: chosen}, origin=origin)
+            except ValueError:
+                return result_for(answer="这条追问已被处理或内容已变化，请查看最新请求。", origin=origin)
     profile = store.get_profile(user_id)
     messages, _meta = render("assistant-route", {
         "persona_block": _persona(profile),
         "recent_turns": _history_text(recent_turns),
         "utterance": text,
     })
+    preferences = conversation.preferences(user_id)
+    if preferences:
+        messages.append({"role": "system", "content": json.dumps({"display_preferences": preferences}, ensure_ascii=False)})
     steps: list[dict[str, Any]] = []
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    model_error = ""
     last_outcome: ToolOutcome | None = None
     answer = ""
     from mino_nexus.services.assistant_targets import named_target
 
+    call_config = _meta.get("call") or {}
+    deadline = time.monotonic() + max(1.0, float(call_config.get("total_timeout_sec", 300)))
     target = named_target(text)
     if target:
-        facts: dict[str, Any] = {"execution_target": target}
-        if target.get("app_id") and target.get("env_surface"):
-            check_binding()
-            device_spec = tool_by_function_name("device_list")
-            if device_spec is not None:
-                device_args = {k: target[k] for k in ("project_id", "app_id", "env_surface")}
-                probe = run_tool(device_spec, device_args, user_id=user_id, target=target)
-                last_outcome = probe
-                steps.append({"tool": "device.list", "label": device_spec.get("title") or "兼容设备",
-                    "status": "ok" if probe.ok else ("ask" if probe.ask else "fail"),
-                    "ms": probe.elapsed_ms, "args_brief": json.dumps(device_args, ensure_ascii=False)[:180]})
-                facts["current_devices"] = probe.data
-                if not probe.ok:
-                    answer = probe.ask or probe.summary
-        messages.append({"role": "system", "content": "以下是本条用户消息明确指名的目标，以及本次实时查询结果。"
-            "设备选择仅使用 current_devices.items；unavailable 中的设备不能用于本次任务。"
-            "禁止复用历史设备清单。status 表示 online/offline，desktop_state 单独表示桌面就绪。数据："
-            + json.dumps(facts, ensure_ascii=False)})
-    for _ in range(0 if answer else MAX_STEPS):
+        messages.append({"role": "system", "content": json.dumps({"execution_target": target}, ensure_ascii=False)})
+    # 查询轮数不代表任务复杂度；按墙钟预算和相同查询无新结果判断。
+    seen: dict[str, str] = {}
+    runtime_stop = ""
+
+    def submit(spec_id: str, args: dict[str, Any]) -> dict[str, Any]:
+        from mino_nexus.services.assistant_runtime import execute_request
         check_binding()
-        reply, calls, meta = _call_model(messages)
+        request = conversation.create(spec_id, {**target, **args}, target, {}, origin, state="resolving")
+        result = execute_request(request)
+        result["usage"] = usage
+        result["steps"] = steps + result.get("steps", [])
+        return result
+
+    while not answer:
+        check_binding()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            runtime_stop = "deadline"
+            break
+        # 模型单次超时服从剩余预算；禁用调用层的隐藏重试。
+        model_meta = {**_meta, "call": {**call_config, "timeout_sec": min(float(call_config.get("timeout_sec", 60)), remaining)}}
+        reply, calls, meta = _call_model(messages, model_meta)
+        usage["available"] = usage.get("available", True) and bool(meta.get("usage_available", not meta.get("stream")))
         usage["prompt_tokens"] += int(meta.get("prompt_tokens") or 0)
         usage["completion_tokens"] += int(meta.get("completion_tokens") or 0)
         if meta.get("error") and not reply and not calls:
-            answer = "大模型暂时不可用。"
+            if time.monotonic() >= deadline:
+                runtime_stop = "deadline"
+            else:
+                answer = "大模型暂时不可用。"
+                model_error = str(meta["error"])
             break
         if not calls:
             answer = reply or "我没能理解这句话。"
             break
+        if time.monotonic() >= deadline:
+            runtime_stop = "deadline"
+            break
         messages.append({"role": "assistant", "content": reply or "", "tool_calls": calls})
         done = False
         for call in calls:
+            if time.monotonic() >= deadline:
+                runtime_stop = "deadline"
+                done = True
+                break
             fn = (call.get("function") or {}) if isinstance(call, dict) else {}
             name = str(fn.get("name") or "")
             args = _parse_args(fn.get("arguments"))
             if name == "reply":
-                answer = str(args.get("text") or reply or "")
+                answer = str(args.get("text") or reply or "我没能理解这句话。")
                 done = True
                 break
             spec = tool_by_function_name(name)
+            signature = json.dumps([spec.get("id") if spec else name, {**target, **args}], ensure_ascii=False, sort_keys=True)
             if spec is None:
+                if signature in seen:
+                    runtime_stop = "no_progress"
+                    done = True
+                    break
+                seen[signature] = "unknown_tool"
                 messages.append({"role": "tool", "tool_call_id": call.get("id") or name, "content": "没有这个工具"})
                 continue
             check_binding()
+            if spec.get("risk") == "write":
+                return submit(spec["id"], args)
             outcome = run_tool(spec, args, user_id=user_id, target=target)
             last_outcome = outcome
             steps.append({
@@ -171,26 +226,24 @@ def handle_utterance(
                 "ms": outcome.elapsed_ms,
                 "args_brief": json.dumps(args, ensure_ascii=False)[:180],
             })
-            if outcome.ask:
-                answer = outcome.ask
+            # 先保留真实失败/追问；不得用运行预算覆盖它们。
+            if outcome.ask or not outcome.ok:
+                answer = outcome.ask or outcome.summary
                 done = True
                 break
-            if spec.get("id") == "case.run" and outcome.ok and isinstance(outcome.data, (str, dict)):
-                task_id = outcome.data if isinstance(outcome.data, str) else (
-                    outcome.data.get("task_id") or outcome.data.get("run_id") or ""
-                )
-                if task_id and channel and chat_id:
-                    check_binding()
-                    store.add_subscription({
-                        "user_id": user_id,
-                        "kind": "run_done",
-                        "target_id": str(task_id),
-                        "channel": channel,
-                        "chat_id": chat_id,
-                        "sender_id": str((reply_ctx or {}).get("sender_id") or ""),
-                        "node_id": node_id,
-                        "reply_ctx": reply_ctx or {},
-                    })
+            if time.monotonic() >= deadline:
+                runtime_stop = "deadline"
+                done = True
+                break
+            if outcome.args.get("intent") == "execute_test":
+                return submit("case.run", outcome.args)
+            observed = json.dumps({"summary": outcome.summary, "data": outcome.data, "args": outcome.args},
+                                  ensure_ascii=False, sort_keys=True, default=str)
+            if seen.get(signature) == observed:
+                runtime_stop = "no_progress"
+                done = True
+                break
+            seen[signature] = observed
             messages.append({
                 "role": "tool",
                 "tool_call_id": call.get("id") or name,
@@ -198,42 +251,7 @@ def handle_utterance(
             })
         if done:
             break
-    else:
-        answer = answer or "步骤太多，先停在这里。"
     if not answer and last_outcome is not None:
         answer = last_outcome.summary
-    template = "answer"
-    if last_outcome and last_outcome.tool_id:
-        spec = tool_by_function_name(str(last_outcome.tool_id).replace(".", "_")) or {}
-        template = str(spec.get("card") or "answer")
-        if last_outcome.ask or not last_outcome.ok:
-            template = "answer"  # 没真正执行成功就别套「已开始」之类的卡片
-    if template == "case_run_started":
-        task_data = last_outcome.data if last_outcome else None
-        task_id = task_data if isinstance(task_data, str) else (
-            task_data.get("task_id") or task_data.get("run_id") or ""
-            if isinstance(task_data, dict) else ""
-        )
-        answer = _started_summary(answer, str(task_id), steps)
-        answer = re.sub(r"^已开始(?:任务)?\s*(?:的)?\s*", "", answer).strip()
-        if not answer:
-            answer = last_outcome.summary if last_outcome and last_outcome.summary else "任务已提交，完成后会发送执行结果。"
-    card = build_card(
-        template_id=template,
-        title="助手",
-        summary=answer,
-        data=last_outcome.data if last_outcome else None,
-        intent="",  # 意图只进会话记录；卡片里已有调用轨迹，再写一遍会重复
-        steps=steps,
-        status="done" if not last_outcome or last_outcome.ok or last_outcome.ask else "failed",
-    )
-    if template == "case_run_started" and task_id and str(task_id) in answer:
-        card["blocks"] = [block for block in card["blocks"] if block.get("type") != "kv"]
-    return {
-        "answer": answer,
-        "intent": " → ".join(str(s.get("label") or s.get("tool")) for s in steps),
-        "text": render_wechat_text(card),
-        "card": card,
-        "steps": steps,
-        "usage": usage,
-    }
+    return result_for(answer=answer, outcome=last_outcome, origin=origin, steps=steps,
+                      target=target, usage=usage, model_error=model_error, runtime_stop=runtime_stop)

@@ -1,5 +1,5 @@
 id: agent-vision-exec
-version: 13
+version: 17
 label: 看图执行
 summary: 按 plan_digest 输出单步 capability；里程碑由 agent-vision-plan 维护
 engine: vision_decide

@@ -29,18 +29,65 @@ def named_target(text: str) -> dict[str, Any]:
                     if _mentioned(text, str(c.get(k) or ""))), default=0), c) for c in channels]
     longest = max((score for score, _ in scored), default=0)
     hits = [c for score, c in scored if score == longest and score > 0]
+    from mino_nexus.services.project_env import resolve_profile_name
+    document = ps.project_env(str(project["id"]))
+    profiles = [row for row in document.get("environments") or [] if
+                _mentioned(text, str(row.get("key") or "")) or
+                (str(row.get("label") or "") not in ("测试", "") and _mentioned(text, str(row.get("label") or ""))) or
+                (str(row.get("label") or "") and str(row["label"]) + "环境" in text)]
+    environment = {"env_profile": str(profiles[0]["key"])} if len(profiles) == 1 else {}
     if len(hits) != 1:
-        return {"project_id": project["id"], "project_name": project.get("name") or ""}
+        return {"project_id": project["id"], "project_name": project.get("name") or "", **environment}
     channel = hits[0]
     apps = project.get("apps") or []
     explicit = [a for a in apps if any(_mentioned(text, str(a.get(k) or "")) for k in ("id", "name"))]
     selected = explicit if explicit else apps
-    out = {"project_id": project["id"], "project_name": project.get("name") or "",
+    out = {"project_id": project["id"], "project_name": project.get("name") or "", **environment,
            "env_surface": channel["id"], "channel_label": channel.get("alias") or channel.get("label") or channel["id"],
            "target_platform": channel.get("platform") or ""}
     if len(selected) == 1:
         out.update(app_id=selected[0]["id"], app_name=selected[0].get("name") or "")
     return out
+
+
+def channel_candidates(args: dict[str, Any], user_id: str, *, require_available: bool = True) -> dict[str, Any]:
+    from mino_nexus.services import project_store as ps
+    from mino_nexus.services.project_env import profile_snapshot, resolve_profile_name
+    from mino_nexus.services.assistant_tools import _visible_devices
+
+    app = ps.require_app(str(args["app_id"])) if args.get("app_id") else None
+    pid = str((app or {}).get("project_id") or args.get("project_id") or "")
+    doc = ps.project_env(pid)
+    requested = str(args.get("env_profile") or "")
+    environments = doc.get("environments") or []
+    if requested:
+        matched = [row for row in environments if requested in (str(row.get("key") or ""), str(row.get("label") or ""))]
+        if len(matched) != 1:
+            raise ValueError("本次环境不存在，请选择项目已经配置的运行环境。")
+        requested = str(matched[0]["key"])
+    profile = resolve_profile_name(doc, requested)
+    snapshot = (doc.get("profiles") or {}).get(profile) or {}
+    choices, unavailable = [], []
+    devices = _visible_devices(user_id) if require_available and app else []
+    for channel in doc.get("channels") or []:
+        cid, field = str(channel["id"]), str(channel.get("field") or "value")
+        value = str((snapshot.get(cid) or {}).get(field) or "").strip()
+        label = str(channel.get("alias") or channel.get("label") or cid)
+        row = {"id": cid, "label": label, "profile": profile, "configured": bool(value)}
+        if not value:
+            unavailable.append({**row, "reason": "当前环境尚未配置应用地址或标识"})
+        elif channel.get("kind") == "server" or channel.get("platform") == "server":
+            unavailable.append({**row, "reason": "当前 UI 测试不支持 Server 渠道"})
+        elif require_available and app:
+            compatible = compatible_devices({**args, "env_surface": cid, "env_profile": profile}, devices)
+            if any(device.get("executable") for device in compatible):
+                choices.append(row)
+            else:
+                reasons = list(dict.fromkeys(str(device.get("blocked_reason") or "设备未就绪") for device in compatible))
+                unavailable.append({**row, "reason": "；".join(reasons) if reasons else "没有兼容的在线设备"})
+        else:
+            choices.append(row)
+    return {"items": choices, "unavailable": unavailable, "env_profile": profile}
 
 
 def compatible_devices(args: dict[str, Any], devices: list[dict[str, Any]]) -> list[dict[str, Any]]:

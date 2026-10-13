@@ -397,11 +397,13 @@ class VisionPlanDecision(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     thought: str = ""
+    blocked_error: dict[str, Any] = Field(default_factory=dict)
     milestones: list[dict[str, Any]] = Field(
         default_factory=list,
         description="兼容：新 id 视为 milestones_append",
     )
     milestones_append: list[dict[str, Any]] = Field(default_factory=list)
+    screen_obstacle: dict[str, Any] = Field(default_factory=dict)
     flow_block_ops: list[dict[str, Any]] = Field(default_factory=list)
     hook_calls: list[dict[str, Any]] = Field(default_factory=list)
     checkpoints_plan: list[dict[str, Any]] = Field(default_factory=list)

@@ -12,6 +12,28 @@ from mino_nexus.loop.vision_flags import vision_exec_v1_enabled
 __all__ = ["run_vision_exec_turn", "vision_exec_v1_enabled"]
 
 
+def visual_execution_block_reason(shot: Any, inspect_slots: dict[str, str], *, send_image: bool) -> str:
+    """视觉执行和绑定重放共用准入；程序动作另走原有路径。"""
+    if not send_image:
+        return "foreground_image_withheld"
+    from mino_nexus.loop.screen_capture import shot_usable
+
+    if not shot_usable(shot) and not str(inspect_slots.get("hierarchy_text") or "").strip():
+        return "screen_unreadable"
+    return ""
+
+
+def blocked_visual_decision(reason: str, writer: Any = None) -> AgentDecision:
+    message = (
+        "当前无法确认被测应用在前台，截图未获准送入执行模型，已暂停视觉操作。请检查应用前台状态或跨应用截图授权。"
+        if reason == "foreground_image_withheld"
+        else "当前截图不可读，且没有可用的控件信息，已暂停视觉操作。请检查设备亮屏、解锁和截图状态。"
+    )
+    if writer is not None:
+        writer.append("exec/observation_blocked", {"reason": reason, "model_called": False})
+    return AgentDecision(status="give_up", thought=message, parse_warnings=["visual_observation_unavailable"])
+
+
 def run_vision_exec_turn(
     *,
     cursor: Any,
@@ -27,11 +49,16 @@ def run_vision_exec_turn(
     send_image: bool = True,
     exec_mode: str = "",
 ) -> AgentDecision:
+    reason = visual_execution_block_reason(shot, inspect_slots, send_image=send_image)
+    if reason:
+        return blocked_visual_decision(reason, writer)
     from mino_nexus.loop.vision_observation import apply_vision_observation_slots
+    from mino_nexus.loop.screen_capture import shot_usable
 
     apply_vision_observation_slots(inspect_slots, cursor, writer=writer)
+    setattr(cursor, "run_context", ctx)
     case_step, phase = step_scope_key(cursor)
-    has_img = bool(callable(getattr(shot, "has_image", None)) and shot.has_image())
+    has_img = shot_usable(shot)
     img_b64 = str(getattr(shot, "image_base64", "") or "") if send_image and has_img else ""
     decision = vision_exec_turn(
         run_context=ctx,

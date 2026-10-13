@@ -298,6 +298,8 @@ def extract_chat_content(resp_json: dict[str, Any]) -> tuple[str, dict[str, Any]
         raw_calls = message.get("tool_calls")
         if isinstance(raw_calls, list) and raw_calls:
             tool_calls = raw_calls
+        elif isinstance(message.get("function_call"), dict):
+            tool_calls = [{"id": "", "type": "function", "function": message["function_call"]}]
     if not content:
         content = choice.get("text") or ""
     content = repair_utf8_mojibake(str(content or ""))
@@ -453,15 +455,17 @@ def _consume_sse_chat(
     *,
     started: float,
     timeout_sec: float,
+    on_text=None,
 ) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
     """读 OpenAI-compatible SSE。空白熔断 / 墙钟超时立刻关连接，避免等满 max_tokens。"""
     text = ""
     finish_reason = ""
     usage: Any = None
     first_token_at: Optional[float] = None
-    deadline = started + max(float(timeout_sec or 90), 30.0)
+    deadline = started + max(float(timeout_sec or 90), 1.0)
     aborted = ""
     tool_acc: list[dict[str, Any]] = []
+    structure = {"chunks": 0, "tool_delta_chunks": 0, "legacy_delta_chunks": 0, "message_chunks": 0}
     try:
         for raw in _iter_sse_text_lines(resp):
             now = time.time()
@@ -493,6 +497,7 @@ def _consume_sse_chat(
                 continue
             if not isinstance(chunk, dict):
                 continue
+            structure["chunks"] += 1
             if chunk.get("usage"):
                 usage = chunk.get("usage")
             choices = chunk.get("choices") or []
@@ -502,12 +507,23 @@ def _consume_sse_chat(
                 from mino_nexus.catalog.tool_schema import merge_tool_call_deltas
 
                 merge_tool_call_deltas(tool_acc, delta.get("tool_calls"))
-            msg = choice.get("message") if isinstance(choice.get("message"), dict) else {}
-            if msg.get("tool_calls"):
+                structure["tool_delta_chunks"] += 1
+            elif isinstance(delta.get("function_call"), dict):
                 from mino_nexus.catalog.tool_schema import merge_tool_call_deltas
 
-                merge_tool_call_deltas(tool_acc, msg.get("tool_calls"))
+                merge_tool_call_deltas(tool_acc, [{"index": 0, "function": delta["function_call"]}])
+                structure["legacy_delta_chunks"] += 1
+            msg = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+            if msg.get("tool_calls"):
+                # message 是完整快照，不能把 arguments 再追加到已收到的 delta 后。
+                tool_acc = [dict(row) for row in msg["tool_calls"] if isinstance(row, dict)]
+                structure["message_chunks"] += 1
+            elif isinstance(msg.get("function_call"), dict):
+                tool_acc = [{"id": "", "type": "function", "function": dict(msg["function_call"])}]
+                structure["message_chunks"] += 1
             piece = _delta_text(delta)
+            if not piece and msg:
+                piece = _delta_text(msg)
             if not piece:
                 piece = _delta_text(choice)
             has_tool = bool(tool_acc) and any(
@@ -517,12 +533,14 @@ def _consume_sse_chat(
                 if first_token_at is None:
                     first_token_at = now
                 text += piece
-                if not has_tool and looks_like_output_melt(text):
+                if on_text is not None and not has_tool:
+                    on_text(text)
+                if meta.get("expect_json") and not has_tool and looks_like_output_melt(text):
                     aborted = "melt"
                     meta["error"] = "模型输出空白/无 JSON 键，已中止以免卡死"
                     break
                 if (
-                    not has_tool
+                    meta.get("expect_json") and not has_tool
                     and first_token_at
                     and (now - first_token_at) >= _MELT_KEY_DEADLINE_SEC
                     and len(text) >= 40
@@ -551,6 +569,11 @@ def _consume_sse_chat(
             f"chat stream aborted kind={aborted} provider={meta.get('provider_id')} "
             f"len={len(text)} preview={text[:120]!r}",
         )
+    meta["usage_available"] = bool(usage)
+    meta["stream_structure"] = {**structure, "finish_reason": finish_reason,
+        "calls": [{"name_present": bool((row.get("function") or {}).get("name")),
+                   "arguments_chars": len(str((row.get("function") or {}).get("arguments") or ""))}
+                  for row in tool_acc[:16]]}
     message: dict[str, Any] = {"content": text}
     if tool_acc and any(str((t.get("function") or {}).get("name") or "") for t in tool_acc):
         message["tool_calls"] = tool_acc
@@ -565,164 +588,118 @@ def _consume_sse_chat(
 
 
 def _post_chat_completions(
-    *,
-    provider: dict[str, Any],
-    messages: list[dict[str, str]],
-    temperature: float = 0.1,
-    max_tokens: Optional[int] = 4096,
-    timeout_sec: int = 90,
-    extra_payload: Optional[dict[str, Any]] = None,
-    json_mode: bool = False,
-    response_schema: Optional[dict[str, Any]] = None,
-    allow_tools_downgrade: bool = True,
-    max_attempts: int = _MAX_ATTEMPTS,
-    stream: bool = True,
+    *, provider: dict[str, Any], messages: list[dict[str, Any]],
+    temperature: float = 0.1, max_tokens: Optional[int] = 4096, timeout_sec: int = 90,
+    extra_payload: Optional[dict[str, Any]] = None, json_mode: bool = False,
+    response_schema: Optional[dict[str, Any]] = None, allow_tools_downgrade: bool = True,
+    max_attempts: int = _MAX_ATTEMPTS, stream: bool = True, on_text=None,
 ) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
-    """OpenAI-compatible /chat/completions HTTP 调用。成功返回 (resp_json, meta)，失败 (None, meta)。
-
-    默认走 SSE：空白熔断可在几百毫秒内掐掉，不必等满 max_tokens。
-    对限流 / 网关抖动 / 读超时做指数退避重试（`_RETRY_STATUS`）；业务错误不重试。
-    provider 不认 `response_format` / `stream` 时（400/422）自动摘掉该字段重试一次。
-    """
+    """所有文本/视觉/function calling 通过 LiteLLM；400 不删参、不重试。"""
+    from mino_nexus.ai.model_sdk import sdk, connection, model_info, error_meta, ChatStream, ChatResponseTrace
+    from mino_nexus.services.model_usage import begin_attempt, record_attempt
     from mino_nexus.services.settings import validate_provider_owner
     validate_provider_owner(provider)
-    base = str(provider.get("base_url") or "").rstrip("/")
-    api_key = str(provider.get("api_key") or "").strip()
-    model = str(provider.get("model") or "").strip()
-    pid = str(provider.get("id") or "")
-    meta: dict[str, Any] = {
-        "provider_id": pid,
-        "model": model,
-        "http_status": 0,
-        "elapsed_ms": 0,
-        "error": "",
-        "attempts": 0,
-        "retry_reasons": [],
-        "json_mode_downgraded": False,
-        "tools_downgraded": False,
-        "used_tool_calls": False,
-        "tool_name": "",
-        "stream": False,
-    }
-    if not base or not api_key or not model:
-        meta["error"] = f"provider not configured (base={bool(base)}, key={bool(api_key)}, model={bool(model)})"
-        return None, meta
-
+    model = str(provider.get("model") or "")
+    meta = {"provider_id": provider.get("id"), "model": model, "http_status": None,
+            "elapsed_ms": 0, "error": "", "attempts": 0, "retry_reasons": [],
+            "json_mode_downgraded": False, "tools_downgraded": False,
+            "stream": bool(stream), "expect_json": bool(json_mode or response_schema)}
     try:
-        import requests
-    except Exception as e:
-        meta["error"] = f"requests import failed: {e}"
+        config = connection(provider)
+        native = config["custom_llm_provider"]
+        meta["sdk_provider"] = native
+        info = model_info(native, model)
+        extra = dict(extra_payload or {})
+        reserved = {"api_key", "api_base", "base_url", "model", "custom_llm_provider", "num_retries", "max_retries", "fallbacks", "metadata", "logger_fn", "success_callback", "failure_callback"}
+        if reserved.intersection(extra):
+            raise ValueError("调用参数不能覆盖账号连接或 SDK 日志策略")
+        has_image = any(isinstance(m.get("content"), list) and any(isinstance(x, dict) and x.get("type") in ("image_url", "image") for x in m["content"]) for m in messages)
+        if info.get("supports_vision") is False and has_image:
+            raise ValueError("SDK 注册模型不支持图片输入，请选择视觉模型")
+        if info.get("supports_function_calling") is False and extra.get("tools"):
+            raise ValueError("SDK 注册模型不支持工具调用，请选择支持 tools 的模型")
+        if info.get("mode") == "embedding":
+            raise ValueError("向量模型不能用于对话或 UI 执行")
+        supported = sdk().get_supported_openai_params(model=model, custom_llm_provider=native) or []
+        params = {"messages": messages, "stream": bool(extra.pop("stream", stream))}
+        if "temperature" in supported:
+            params["temperature"] = temperature
+        if max_tokens is not None and int(max_tokens) > 0:
+            params["max_tokens"] = int(max_tokens)
+        if extra.get("tools"):
+            json_mode, response_schema = False, None
+        fmt = _response_format(json_mode, response_schema)
+        if fmt and "response_format" in supported:
+            params["response_format"] = fmt
+        elif fmt:
+            meta["json_mode_downgraded"] = True  # SDK 预先声明不支持，仍用现有文本 JSON 解析
+        if native == "volcengine":
+            params.update(_volcengine_extras(str(provider.get("id") or ""), model))
+        params.update(provider.get("model_parameters") or {})
+        params.update(extra)
+        omitted_parameters = []
+        if params.get("parallel_tool_calls") is False and "parallel_tool_calls" not in supported:
+            params.pop("parallel_tool_calls")
+            omitted_parameters.append("parallel_tool_calls")
+        if params["stream"] and "stream_options" in supported:
+            params["stream_options"] = {"include_usage": True}
+        meta["stream"] = params["stream"]
+        meta["call_parameters"] = {k: params[k] for k in ("temperature", "max_tokens", "top_p", "thinking", "stream", "stream_options", "parallel_tool_calls", "tool_choice") if k in params}
+        if params.get("tools"):
+            meta["call_parameters"]["tool_count"] = len(params["tools"])
+        if params.get("response_format"):
+            meta["call_parameters"]["response_format"] = params["response_format"].get("type")
+        if omitted_parameters:
+            meta["call_parameters"]["omitted_parameters"] = omitted_parameters
+    except Exception as exc:
+        meta.update(error_meta(exc, provider))
         return None, meta
-
-    extra = dict(extra_payload or {})
-    if extra.get("tools"):
-        json_mode = False
-        response_schema = None
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        **_volcengine_extras(pid, model),
-    }
-    if max_tokens is not None and int(max_tokens) > 0:
-        payload["max_tokens"] = int(max_tokens)
-    fmt = _response_format(json_mode, response_schema)
-    if fmt:
-        payload["response_format"] = fmt
-    want_stream = bool(stream)
-    if want_stream:
-        payload["stream"] = True
-    if extra:
-        payload.update(extra)
-        if extra.get("stream") is False:
-            want_stream = False
-            payload.pop("stream", None)
-
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    url = f"{base}/chat/completions"
     started = time.time()
-    attempt = 0
-    while attempt < max(1, max_attempts):
-        attempt += 1
+    if on_text is not None:
+        max_attempts = 1
+    for attempt in range(1, max(1, max_attempts) + 1):
         meta["attempts"] = attempt
-        meta["stream"] = want_stream
-        timeout = (
-            _CONNECT_TIMEOUT_SEC,
-            _stream_idle_timeout(timeout_sec) if want_stream else _read_timeout(max_tokens, timeout_sec),
-        )
+        response = None
+        meta["error"] = ""
+        meta["retryable"] = False
+        for key in ("provider_error_code", "provider_error_param", "provider_request_id"):
+            meta.pop(key, None)
+        meta.pop("fail_kind", None)
+        meta.pop("usage", None)
+        attempt_start = time.time()
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=timeout, stream=want_stream)
-            meta["http_status"] = resp.status_code
-            if resp.status_code in (400, 422):
-                dropped = ""
-                if want_stream and payload.get("stream"):
-                    payload.pop("stream", None)
-                    want_stream = False
-                    dropped = "stream"
-                elif "response_format" in payload:
-                    payload.pop("response_format", None)
-                    meta["json_mode_downgraded"] = True
-                    dropped = "response_format"
-                elif "parallel_tool_calls" in payload and "tools" in payload:
-                    payload.pop("parallel_tool_calls", None)
-                    dropped = "parallel_tool_calls"
-                elif "tools" in payload:
-                    if not allow_tools_downgrade:
-                        meta["error"] = "provider 不支持 function calling，已中止（未降级为 JSON）"
-                        meta["fail_kind"] = "tools_unsupported"
-                        meta["tools_downgraded"] = False
-                        meta["elapsed_ms"] = int((time.time() - started) * 1000)
-                        SLog.w(
-                            TAG,
-                            f"provider={pid} model={model} 不支持 tools，"
-                            "agent-decide 禁止降级，已中止",
-                        )
-                        try:
-                            resp.close()
-                        except Exception:
-                            pass
-                        return None, meta
-                    payload.pop("tools", None)
-                    payload.pop("tool_choice", None)
-                    payload.pop("parallel_tool_calls", None)
-                    meta["tools_downgraded"] = True
-                    dropped = "tools"
-                if dropped:
-                    meta["retry_reasons"].append(f"{resp.status_code}:{dropped}_unsupported")
-                    SLog.w(TAG, f"provider={pid} model={model} 不支持 {dropped}，已降级重试")
-                    try:
-                        resp.close()
-                    except Exception:
-                        pass
-                    attempt -= 1
-                    continue
-            if resp.status_code in _RETRY_STATUS and attempt < max_attempts:
-                meta["retry_reasons"].append(str(resp.status_code))
-                time.sleep(_backoff_delay(attempt))
-                continue
-            resp.raise_for_status()
-            if want_stream:
-                return _consume_sse_chat(resp, meta, started=started, timeout_sec=timeout_sec)
-            meta["elapsed_ms"] = int((time.time() - started) * 1000)
-            return resp.json(), meta
-        except Exception as e:
-            transient = isinstance(e, (requests.Timeout, requests.ConnectionError))
-            if transient and attempt < max_attempts:
-                meta["retry_reasons"].append(type(e).__name__)
-                time.sleep(_backoff_delay(attempt))
-                continue
-            meta["elapsed_ms"] = int((time.time() - started) * 1000)
-            meta["error"] = f"模型请求失败：{type(e).__name__}（HTTP {meta['http_status']}）"
-            SLog.w(
-                TAG,
-                f"chat call failed provider={pid} model={model} attempts={attempt}: {meta['error']}",
-            )
+            call_id = begin_attempt(provider=provider, meta=meta, attempt=attempt)
+        except Exception as exc:
+            meta.update(error="模型用量账本暂不可写，已阻塞调用", fail_kind="usage_storage", cost_tracking_error=type(exc).__name__)
             return None, meta
-
-    meta["elapsed_ms"] = int((time.time() - started) * 1000)
-    meta["error"] = meta["error"] or f"exhausted {max_attempts} attempts: {meta['retry_reasons']}"
+        trace = ChatResponseTrace(params.get("tools"))
+        try:
+            import httpx
+            result = sdk().completion(**config, **params,
+                logger_fn=trace.logger,
+                timeout=httpx.Timeout(float(timeout_sec), connect=min(_CONNECT_TIMEOUT_SEC, float(timeout_sec)),
+                                      read=min(_STREAM_IDLE_TIMEOUT_SEC, float(timeout_sec)) if params["stream"] else float(timeout_sec)))
+            meta["http_status"] = 200
+            if params["stream"]:
+                response, meta = _consume_sse_chat(ChatStream(result, trace), meta, started=attempt_start, timeout_sec=timeout_sec, on_text=on_text)
+            else:
+                response = result.model_dump(exclude_none=True)
+        except Exception as exc:
+            meta.update(error_meta(exc, provider))
+        trace.finish(response, meta, stream=params["stream"])
+        meta["elapsed_ms"] = int((time.time() - attempt_start) * 1000)
+        meta["usage_available"] = bool((response or {}).get("usage"))
+        try:
+            record_attempt(provider=provider, meta=meta, response=response, attempt=attempt, call_id=call_id)
+        except Exception as exc:
+            meta["cost_tracking_error"] = type(exc).__name__
+            SLog.w(TAG, f"模型调用账本写入失败 provider={provider.get('id')} kind={type(exc).__name__}")
+        if response is not None or not meta.get("retryable") or attempt >= max_attempts:
+            meta["elapsed_ms"] = int((time.time() - started) * 1000)
+            return response, meta
+        meta["retry_reasons"].append(str(meta.get("http_status") or meta.get("fail_kind")))
+        time.sleep(_backoff_delay(attempt))
     return None, meta
-
 
 def _backoff_delay(attempt: int) -> float:
     """1s、3s 起步，带抖动 —— 并发分片同时撞限流时不要一起重试。"""
@@ -737,6 +714,8 @@ def call_chat_plain(
     max_tokens: Optional[int] = 2048,
     timeout_sec: int = 90,
     extra_payload: Optional[dict[str, Any]] = None,
+    on_text=None,
+    max_attempts: int = _MAX_ATTEMPTS,
 ) -> tuple[str, dict[str, Any]]:
     """纯文本对话。返回 (assistant_text, meta)，失败时文本为空且 meta.error 有值。"""
     resp_json, meta = _post_chat_completions(
@@ -746,12 +725,16 @@ def call_chat_plain(
         max_tokens=max_tokens,
         timeout_sec=timeout_sec,
         extra_payload=extra_payload,
+        on_text=on_text,
+        max_attempts=max_attempts,
     )
     if resp_json is None:
         _safe_record_llm(messages=messages, meta=meta)
         return "", meta
     content, parse_meta = extract_chat_content(resp_json)
     meta.update(parse_meta)
+    from mino_nexus.ai.model_sdk import record_decoded_response_trace
+    record_decoded_response_trace(meta, parse_meta)
     if not content:
         meta["error"] = meta.get("error") or meta.get("reason") or "empty assistant content"
     _safe_record_llm(messages=messages, raw_text=content, meta=meta)
@@ -773,6 +756,8 @@ def _parse_chat_json(
     aborted_err = str(meta.get("error") or "")
     content, parse_meta = extract_chat_content(resp_json)
     meta.update(parse_meta)
+    from mino_nexus.ai.model_sdk import record_decoded_response_trace
+    record_decoded_response_trace(meta, parse_meta)
     meta["truncated"] = str(meta.get("finish_reason") or "") == "length"
     meta["salvaged"] = False
     meta["used_tool_calls"] = False
@@ -808,6 +793,8 @@ def _parse_chat_json(
                 meta["error"] = "输出被 max_tokens 截断且没有 tool_calls"
             elif preview.startswith("{"):
                 meta["error"] = "模型写了 JSON 正文，没有 function call"
+            elif meta.get("finish_reason") in ("tool_calls", "function_call"):
+                meta["error"] = "模型响应标记了工具调用，但没有可执行的操作内容；本轮未下发设备操作"
             else:
                 meta["error"] = "模型没有返回 tool_calls"
         SLog.w(
@@ -918,13 +905,28 @@ def call_chat_text(
     rounds = 1 + max(0, int(parse_retries))
 
     for round_i in range(rounds):
+        retry_nonstream = round_i > 0 and require_tool_calls and str(meta.get("fail_kind") or "") == "no_tool_calls"
+        round_payload = dict(extra_payload or {})
+        if retry_nonstream:
+            # 使用已有解析重试额度；保留 tools/tool_choice/schema，避免正文降级执行。
+            round_payload["stream"] = False
+            if str(meta.get("finish_reason") or "") in ("tool_calls", "function_call"):
+                # 火山等：finish_reason=tool_calls 但 tool_calls 为空（provider 侧解析丢了，completion_tokens 却已消耗）。
+                # 同参数 + 低温重打是确定性复现（cr-f15eb6081870 两轮 dispatch 完全一致），
+                # 所以放宽 tool_choice 并抬温度换一条采样路径，仍保留 tools 不降级成正文执行。
+                if round_payload.get("tool_choice") == "required":
+                    round_payload["tool_choice"] = "auto"
+                temperature = max(float(temperature), 0.4)
+                if max_tokens is not None:
+                    max_tokens = max(int(max_tokens), 1536)
+                meta["empty_tool_calls_retry"] = True
         resp_json, round_meta = _post_chat_completions(
             provider=provider,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             timeout_sec=timeout_sec,
-            extra_payload=extra_payload,
+            extra_payload=round_payload,
             json_mode=json_mode,
             response_schema=response_schema,
             max_attempts=max_attempts,
@@ -937,7 +939,7 @@ def call_chat_text(
             return None, meta
 
         req_tools = require_tool_calls
-        if round_i > 0 and str(meta.get("fail_kind") or "") == "no_tool_calls":
+        if round_i > 0 and allow_tools_downgrade and str(meta.get("fail_kind") or "") == "no_tool_calls":
             # 火山等：finish_reason=tool_calls 但无有效 tool_calls；第二轮允许正文 JSON 降级
             req_tools = False
             meta["tools_downgraded"] = True
@@ -954,7 +956,7 @@ def call_chat_text(
             break
 
         meta["retry_reasons"] = list(meta.get("retry_reasons") or []) + [
-            "no_tool_calls" if kind == "no_tool_calls" else "parse"
+            "no_tool_calls_nonstream" if kind == "no_tool_calls" and require_tool_calls else "parse"
         ]
         SLog.w(
             TAG,

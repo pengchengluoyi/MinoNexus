@@ -29,8 +29,22 @@ def foreign_foreground_active(ctx: Any) -> bool:
     return fg == "no"
 
 
-def should_withhold_llm_image(ctx: Any) -> bool:
+def should_withhold_llm_image(ctx: Any, *, shot: Any = None) -> bool:
     if case_foreign_image_policy(ctx) == "allow_always":
+        return False
+    detail = dict(getattr(shot, "remote_detail", None) or {})
+    target = detail.get("target") if isinstance(detail.get("target"), dict) else {}
+    generation = str(getattr(ctx, "session_generation", "") or "")
+    identity = (detail.get("pid"), detail.get("window_id"))
+    if (
+        getattr(shot, "source", "") == "desktop"
+        and callable(getattr(shot, "has_image", None)) and shot.has_image()
+        and detail.get("capture_scope") == "window"
+        and generation and detail.get("session_generation") == generation
+        and target.get("kind") == "window"
+        and identity == (target.get("pid"), target.get("window_id"))
+        and all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in identity)
+    ):
         return False
     if not foreign_foreground_active(ctx):
         return False

@@ -243,7 +243,8 @@ SIGNAL_DONE = "signal_done"
 SIGNAL_GIVE_UP = "signal_give_up"
 SIGNAL_ASK_HUMAN = "signal_ask_human"
 SIGNAL_SKIP = "signal_skip"
-CONTROL_TOOL_NAMES = frozenset({SIGNAL_DONE, SIGNAL_GIVE_UP, SIGNAL_ASK_HUMAN, SIGNAL_SKIP})
+CONFIRM_ACTION_RESULT = "confirm_action_result"
+CONTROL_TOOL_NAMES = frozenset({SIGNAL_DONE, SIGNAL_GIVE_UP, SIGNAL_ASK_HUMAN, SIGNAL_SKIP, CONFIRM_ACTION_RESULT})
 
 _TOOL_META_PROPS: dict[str, Any] = {
     "thought": {
@@ -610,6 +611,7 @@ def tools_for_menu(
     slim_envelope: bool = False,
     include_control_tools: bool = True,
     require_prior_status: bool = False,
+    include_review_confirmation: bool = False,
 ) -> list[dict[str, Any]]:
     """当前 Run 可用能力；可选控制信号。assert / 资源网关能力不进 tools。"""
     tools: list[dict[str, Any]] = []
@@ -648,6 +650,15 @@ def tools_for_menu(
         tools.append(tool)
     if include_control_tools and not slim_envelope:
         tools.extend(CONTROL_TOOLS)
+    if include_review_confirmation and require_prior_status:
+        tools.append(openai_tool(
+            CONFIRM_ACTION_RESULT,
+            "确认已执行动作的可见结果，不操作设备；画面已证明 prior_action.expected 达成时调用。",
+            {"type": "object", "properties": {
+                "prior_status": {"type": "string", "enum": ["pass"]},
+            }, "required": ["thought", "prior_status"], "additionalProperties": False},
+            slim=True,
+        ))
     return tools
 
 
@@ -821,6 +832,7 @@ def merge_tool_call_deltas(acc: list[dict[str, Any]], deltas: Any) -> None:
         fn = raw.get("function") if isinstance(raw.get("function"), dict) else {}
         dest = row.setdefault("function", {"name": "", "arguments": ""})
         if fn.get("name"):
-            dest["name"] = str(fn.get("name") or "")
+            name, existing = str(fn.get("name") or ""), str(dest.get("name") or "")
+            dest["name"] = name if not existing or name.startswith(existing) else existing if existing.startswith(name) else existing + name
         if fn.get("arguments"):
             dest["arguments"] = str(dest.get("arguments") or "") + str(fn.get("arguments") or "")

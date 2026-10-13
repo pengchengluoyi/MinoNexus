@@ -1,5 +1,5 @@
 id: case-step-compile
-version: 3
+version: 4
 label: 用例步骤拆解
 summary: 按目录闭集把一段编号步拆成摘录和槽
 engine: json_chat

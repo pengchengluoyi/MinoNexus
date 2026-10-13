@@ -343,13 +343,20 @@ def milestone_caps_registered(
     menu_ids: set[str],
     *,
     allow_program: bool = False,
+    platform: str = "",
+    phase: str = "",
 ) -> bool:
     allowed = set(menu_ids)
 
     def _cap_ok(cap: str) -> bool:
         if cap in allowed:
             return True
-        return bool(allow_program and is_program_caller(cap))
+        return bool(
+            allow_program and is_program_caller(cap)
+            and capability_dispatch_ok(cap)
+            and channel_supports(cap, platform)
+            and (not phase or phase_allows(cap, phase))
+        )
 
     primary: list[str] = []
     for key in ("hook_cap", "device_cap", "cap"):

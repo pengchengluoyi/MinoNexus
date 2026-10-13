@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import hashlib
+import os
 from typing import Any
 
 from fastapi import APIRouter, Header, Request
@@ -70,8 +72,12 @@ def _call(uid: str, name: str, args: dict[str, Any]) -> dict[str, Any]:
 def _handle(uid: str, msg: dict[str, Any]) -> dict[str, Any] | None:
     method = str(msg.get("method") or "")
     rid = msg.get("id")
+    if msg.get("jsonrpc") != "2.0" or not method or ("params" in msg and not isinstance(msg["params"], dict)) or isinstance(rid, bool) or (rid is not None and not isinstance(rid, (str, int))):
+        return _rpc_error(None, -32600, "无效的 JSON-RPC 2.0 请求")
     if rid is None and method.startswith("notifications/"):
         return None
+    if rid is None:
+        return _rpc_error(None, -32600, "工具请求必须包含稳定的 id")
     if method == "initialize":
         return {"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": PROTOCOL,
@@ -88,8 +94,27 @@ def _handle(uid: str, msg: dict[str, Any]) -> dict[str, Any] | None:
     return _rpc_error(rid, -32601, f"不支持的方法 {method}")
 
 
+def _handle_owned(uid: str, msg: dict, token_scope: str):
+    from mino_nexus.core.execution_user import execution_user
+    from mino_nexus.ai import dispatch_log
+    with execution_user(uid):
+        token = dispatch_log.bind(assistant_mutation_scope=f"mcp:{token_scope}:{msg.get('id')}")
+        try:
+            return _handle(uid, msg)
+        finally:
+            dispatch_log.reset(token)
+
+
 @router.post("/mcp")
 async def mcp_post(request: Request, authorization: str = Header(default="")):
+    origin = request.headers.get("origin", "")
+    allowed = {value.strip().rstrip("/") for value in os.environ.get("MINO_MCP_ALLOWED_ORIGINS", "").split(",") if value.strip()}
+    allowed.add(str(request.base_url).rstrip("/"))
+    if origin and origin.rstrip("/") not in allowed:
+        return JSONResponse({"detail": "MCP Origin 未获允许"}, status_code=403)
+    requested_version = request.headers.get("mcp-protocol-version")
+    if requested_version and requested_version != PROTOCOL:
+        return JSONResponse({"detail": f"仅支持 MCP {PROTOCOL}"}, status_code=400)
     uid = store.resolve_mcp_token(bearer(authorization))
     if not uid:
         return JSONResponse({"detail": "MCP token 无效或已吊销"}, status_code=401)
@@ -103,7 +128,8 @@ async def mcp_post(request: Request, authorization: str = Header(default="")):
         if not isinstance(msg, dict):
             out.append(_rpc_error(None, -32600, "无效请求"))
             continue
-        res = await asyncio.to_thread(_handle, uid, msg)
+        scope = hashlib.sha256(bearer(authorization).encode()).hexdigest()
+        res = await asyncio.to_thread(_handle_owned, uid, msg, scope)
         if res is not None:
             out.append(res)
     if not out:

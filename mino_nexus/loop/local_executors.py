@@ -1411,10 +1411,12 @@ def _wait_screen_ready(
             elapsed_ms=elapsed(),
         )
 
+    out = None
     if ctx is not None and router is not None:
         out = recover_if_needed(ctx, router, target_package=target_package, shot=shot)
-        if out and out.recovered and hasattr(router, "observe"):
+        if out and (out.applied or out.recovered) and hasattr(router, "observe"):
             fresh = router.observe("screenshot", force_fresh=True)
+            facts = analyze_shot(fresh)
             if shot_usable(fresh):
                 summary = out.summary() if callable(getattr(out, "summary", None)) else out.rule_id
                 return _result(
@@ -1429,6 +1431,7 @@ def _wait_screen_ready(
         if ms > 0:
             time.sleep(ms / 1000.0)
             fresh = router.observe("screenshot", force_fresh=True)
+            facts = analyze_shot(fresh)
             if shot_usable(fresh):
                 return _result(
                     event,
@@ -1440,12 +1443,32 @@ def _wait_screen_ready(
     detail = (
         f"capture_ok={facts.get('capture_ok')} capture_black={facts.get('capture_black')}"
     )
+    if ctx is None or router is None:
+        reason = "缺少设备恢复上下文，无法下发恢复动作"
+    elif out is None:
+        reason = "没有匹配到屏幕恢复规则，未下发恢复动作"
+    elif out.mode == "advise":
+        reason = "当前恢复规则仅提供处理建议，未下发恢复动作"
+        if out.advice:
+            reason += f"：{out.advice[:200]}"
+    elif out.applied:
+        reason = "已下发恢复动作，但最新截图仍不可读"
+    else:
+        reason = "已匹配恢复规则，但没有下发可执行的恢复动作"
+    diagnostics = {"screen": facts, "recovery": {
+        "matched": out is not None, "rule_id": out.rule_id if out else "",
+        "mode": out.mode if out else "", "applied": bool(out and out.applied),
+        "recovered": bool(out and out.recovered), "attempts": out.attempts if out else 0,
+        "actions": [{"capability": a.get("capability"), "status": a.get("status"),
+                     "skipped": a.get("skipped", "")} for a in (out.actions if out else [])],
+    }}
     return _result(
         event,
         status=EventStatus.FAIL,
-        summary=f"截图不可用或全黑，recovery 未能恢复（{detail}）",
+        summary=f"屏幕仍不可读：{reason}（{detail}）",
         error="screen not readable",
         elapsed_ms=elapsed(),
+        raw_response=diagnostics,
     )
 
 

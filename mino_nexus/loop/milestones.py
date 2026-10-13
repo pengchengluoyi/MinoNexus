@@ -1072,6 +1072,10 @@ def _normalize_milestone_row(raw: Any, *, warnings: list[str]) -> Optional[dict[
         row["skip_reason"] = str(raw.get("skip_reason") or "")[:200]
     if raw.get("hook_cap"):
         row["hook_cap"] = str(raw.get("hook_cap") or "")
+    if isinstance(raw.get("hook_params"), dict):
+        row["hook_params"] = dict(raw["hook_params"])
+    if raw.get("recovery_rule_id"):
+        row["recovery_rule_id"] = str(raw["recovery_rule_id"])[:120]
     return row
 
 

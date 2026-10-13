@@ -12,3 +12,4 @@ slots[].quote 必须落在父 quote 里面。params 的键只能是该条目的 
 必填槽都要有 quote。
 如果这句话其实属于另一栏，key_ref 用 other_layer_key_refs 里的那条，不要改用本层事件硬套。
 刷新页面时，等待写在 operation.reload_page 的 params.wait_ms（毫秒），不要再拆一条等待。
+单独“点击登录页面一键登录按钮”只表示点击按钮，应选择目录中的点击事件；没有输入账号或完成登录流程的要求时，不得选择 operation.login_flow，也不得要求 credential 槽。

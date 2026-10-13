@@ -1,5 +1,5 @@
 id: agent-vision-plan
-version: 12
+version: 14
 label: 看图规划
 summary: 本回合里程碑与逻辑块编排；不输出 tap/input
 engine: json_chat

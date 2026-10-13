@@ -7,13 +7,22 @@ from typing import Any, Optional
 
 from mino_nexus.catalog import registry as catalog
 from mino_nexus.core.log import SLog
-from mino_nexus.loop.local_executors import dispatch_local, is_local_cap
 from mino_nexus.core.protocol import EventStatus
 from mino_nexus.core.schemas import PlanEvent
 
 TAG = "Recovery"
 
 _FOREGROUND_RE = re.compile(r"(?:topResumedActivity|mResumedActivity)=\S+\s+\S+\s+([\w.]+)/")
+
+
+def _trace_recovery(ctx: Any, event_type: str, payload: dict[str, Any]) -> None:
+    """只落匹配事实/动作结果，不写 params、设备凭证或原始 dumpsys。"""
+    from mino_nexus.loop.observe.session_log import active_writer
+
+    writer = active_writer()
+    run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
+    if writer is not None and writer.session_id == run_id:
+        writer.append(event_type, payload)
 
 
 @dataclass
@@ -122,6 +131,9 @@ def _enrich_evidence_from_run_context(
 ) -> None:
     """probe_device_state 在部分机型上 dumpsys/grep 为空时，用 hierarchy / 本 turn 前台结论补全。"""
     pkg = str(target_package or getattr(ctx, "target_package", "") or "").strip()
+    # 当前取证优先；上回合 ctx/hierarchy 仅补未知，不能覆盖刚读到的前台。
+    if ev.app_foreground in ("yes", "no"):
+        return
     menu_fg = str(getattr(ctx, "app_foreground", "") or "").strip().lower()
     if menu_fg == "yes" and pkg:
         ev.app_foreground = "yes"
@@ -173,6 +185,7 @@ def _fill_foreground_from_get_app(
     ctx: Any,
     *,
     target_package: str,
+    diagnostic_purpose: str = "recovery_evidence",
 ) -> None:
     if ev.foreground_pkg and ev.app_foreground in ("yes", "no"):
         return
@@ -186,15 +199,15 @@ def _fill_foreground_from_get_app(
         label="读前台包名",
     )
     try:
-        result = _dispatch(router, ctx, event, agent_turn=0, action_idx=0)
+        result = _dispatch(router, ctx, event, agent_turn=0, action_idx=0, diagnostic_purpose=diagnostic_purpose)
     except Exception:
         return
     raw = _payload_dict(result)
+    if getattr(result.status, "value", result.status) != "pass":
+        ev.error = result.error or result.summary
+        return
     if str(getattr(ctx, "platform", "")) == "desktop":
         ev.raw = raw
-        if getattr(result.status, "value", result.status) != "pass":
-            ev.error = result.error or result.summary
-            return
         matched = raw.get("target_active")
         foreground = str(raw.get("foreground_package") or "").strip()
         if matched is True and pkg:
@@ -247,15 +260,7 @@ def collect_evidence(ctx, router, *, target_package: str = "") -> Evidence:
         label="设备取证",
     )
     try:
-        from mino_nexus.loop.web.web_env import frame_step
-
-        scout_run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
-        case_seq = int(getattr(ctx, "case_seq", 0) or 0)
-        result = router.dispatch(
-            event,
-            run_id=scout_run_id,
-            step_idx=frame_step(case_seq, 2),
-        )
+        result = _dispatch(router, ctx, event, diagnostic_purpose="recovery_evidence")
     except Exception as exc:
         ev = Evidence(error=f"取证 dispatch 异常: {exc}")
         _enrich_evidence_from_run_context(ev, ctx, target_package=pkg)
@@ -309,9 +314,13 @@ def collect_evidence(ctx, router, *, target_package: str = "") -> Evidence:
     elif ev.awake == "yes" and ev.locked == "no":
         ev.screen_blocked = "no"
 
-    _enrich_evidence_from_run_context(ev, ctx, target_package=pkg)
     if router is not None:
         _fill_foreground_from_get_app(ev, router, ctx, target_package=pkg)
+    _enrich_evidence_from_run_context(ev, ctx, target_package=pkg)
+    _trace_recovery(ctx, "recovery/evidence", {
+        **ev.as_match_dict(), "foreground_package": ev.foreground_pkg,
+        "probe_failed": bool(ev.error),
+    })
     SLog.i(TAG, f"evidence: {ev.brief()}")
     return ev
 
@@ -346,7 +355,7 @@ def resolve_app_foreground_guard(
         setattr(ctx, "app_foreground", str(fg.get("app_foreground") or ""))
         return fg
     ev = Evidence()
-    _fill_foreground_from_get_app(ev, router, ctx, target_package=pkg)
+    _fill_foreground_from_get_app(ev, router, ctx, target_package=pkg, diagnostic_purpose="foreground_guard")
     probed = str(ev.app_foreground or "").strip().lower()
     if probed in ("yes", "no"):
         fg = {**fg, "app_foreground": probed}
@@ -439,18 +448,13 @@ def _dispatch(
     *,
     agent_turn: int = 0,
     action_idx: int = 0,
+    diagnostic_purpose: str = "recovery_action",
 ):
-    if is_local_cap(event.capability_id):
-        return dispatch_local(event, ctx=ctx, router=router)
-    from mino_nexus.loop.web.web_env import frame_step, recovery_action_step_idx
+    from mino_nexus.loop.web.web_env import recovery_operation_step_idx
 
     scout_run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
-    case_seq = int(getattr(ctx, "case_seq", 0) or 0)
-    if action_idx > 0:
-        step_idx = recovery_action_step_idx(case_seq, agent_turn, action_idx)
-    else:
-        step_idx = frame_step(case_seq, 3)
-    return router.dispatch(event, run_id=scout_run_id, step_idx=step_idx)
+    step_idx = recovery_operation_step_idx()
+    return router.dispatch(event, run_id=scout_run_id, step_idx=step_idx, ctx=ctx, diagnostic_purpose=diagnostic_purpose)
 
 
 def apply_rule(
@@ -507,6 +511,8 @@ def apply_rule(
             return out
     for attempt in range(1, max_attempts + 1):
         out.attempts = attempt
+        out.error = ""
+        _trace_recovery(ctx, "recovery/attempt", {"rule_id": rule.id, "attempt": attempt})
         from mino_nexus.loop.system_dialog_recovery import (
             is_system_permission_rule,
             try_unified_system_permission_recovery,
@@ -573,8 +579,14 @@ def apply_rule(
 
                 merge_shot_evidence(ev, router.observe("screenshot", force_fresh=True))
         ok, _ = _match_conditions(verify, ev, [])
+        out.evidence = ev.brief()
+        _trace_recovery(ctx, "recovery/verify", {
+            "rule_id": rule.id, "attempt": attempt, "recovered": ok,
+            **ev.as_match_dict(),
+        })
         if ok:
             out.recovered = True
+            out.error = ""
             SLog.i(TAG, f"[{rule.id}] 恢复成功（第 {attempt} 次）：{ev.brief()}")
             return out
         SLog.w(TAG, f"[{rule.id}] 第 {attempt}/{max_attempts} 次后仍未通过 verify：{ev.brief()}")
@@ -619,10 +631,16 @@ def recover_if_needed(
     hits = filter_foreground_recovery_hits(ctx, hits)
     if exclude_rule_ids:
         hits = [h for h in hits if h.rule_id not in exclude_rule_ids]
+    _trace_recovery(ctx, "recovery/match", {
+        **ev.as_match_dict(), "matched_rules": [h.rule_id for h in hits],
+        "selected_rule": hits[0].rule_id if hits else "",
+        "mode": str(hits[0].rule.mode) if hits else "", "execute_only": execute_only,
+    })
     if not hits:
         return None
     out = apply_rule(hits[0], ctx, router, target_package=target_package)
-    out.evidence = ev.brief()
+    if not out.evidence:
+        out.evidence = ev.brief()
     return out
 
 

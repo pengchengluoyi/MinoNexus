@@ -370,6 +370,8 @@ def append_llm_response(dispatch_row: dict[str, Any]) -> int:
             "error": str(dispatch_row.get("error") or "")[:400],
             "tool_name": str(dispatch_row.get("tool_name") or ""),
             "prompt_version": int(dispatch_row.get("prompt_version") or 0) or None,
+            **{k: dispatch_row.get(k) for k in ("provider_id", "sdk_provider", "http_status", "provider_error_code", "provider_error_param", "provider_request_id",
+                                               "fail_kind", "finish_reason", "prompt_sha", "call_parameters", "stream_structure", "response_trace", "raw_response_source", "usage_status", "estimated_cost_usd", "cost_status", "cost_source", "pricing_version", "usage_attempt_ids", "cost_tracking_error")},
         },
     )
 
@@ -415,11 +417,11 @@ def append_llm_request(*, job_id: str, messages: list | None) -> int:
     }
     if _screenshot_hash.get():
         payload["screenshot_hash"] = _screenshot_hash.get()
-    if job_id == "agent-decide":
+    if job_id:
         try:
             from mino_nexus.ai.prompt_repo import get_job
 
-            row = get_job("agent-decide") or {}
+            row = get_job(job_id) or {}
             payload["prompt_version"] = int(row.get("prompt_version") or 0) or None
             payload["prompt_sha"] = str(row.get("prompt_sha") or "") or None
         except Exception:

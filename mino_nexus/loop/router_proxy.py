@@ -33,6 +33,59 @@ from mino_nexus.services.node_registry import NodeSession, get_registry
 from mino_nexus.core.schemas import CapturedScreen, EventResult, EventStatus, PlanEvent
 
 TAG = "RouterProxy"
+_DIAGNOSTIC_PURPOSES = {
+    "plan_action": "执行计划动作", "recovery_action": "恢复动作",
+    "recovery_evidence": "恢复取证", "foreground_guard": "前台状态守护",
+    "app_version": "记录应用版本", "preflight": "开跑截图检查",
+    "loop_observation": "观察当前界面",
+}
+
+
+def _diagnostic_purpose(value: Any, default: str = "plan_action") -> str:
+    # 不记录 label/ai_reasoning/params，避免把输入内容或账号凭证写进诊断。
+    key = str(value or default)
+    return key if key in _DIAGNOSTIC_PURPOSES else default
+
+
+def _trace_device_result(req: P.Execute, res: P.Result | None, *, total_ms: int, purpose: str) -> None:
+    status = getattr(res.status, "value", res.status) if res is not None else "timeout"
+    fields = {
+        "capability_id": req.capability_id, "step_idx": req.step_idx,
+        "purpose": purpose, "status": status, "elapsed_ms": total_ms,
+        "scout_ms": int(res.elapsed_ms or 0) if res is not None else 0,
+        "executor_used": res.executor_used if res is not None else "",
+    }
+    raw = {**dict(res.extra or {}), **dict(res.data or {})} if res is not None else {}
+    for key in ("target_active", "verification_required"):
+        if isinstance(raw.get(key), bool):
+            fields[key] = raw[key]
+    target = raw.get("target") if isinstance(raw.get("target"), dict) else {}
+    for key in ("foreground_pid", "pid", "window_id"):
+        value = raw.get(key, target.get(key))
+        if isinstance(value, int) and not isinstance(value, bool):
+            fields[key] = value
+    action = raw.get("cua_action") if isinstance(raw.get("cua_action"), dict) else {}
+    if action.get("effect") in ("confirmed", "unverifiable", "refused", "partial", "suspected_noop"):
+        fields["effect"] = action["effect"]
+    if raw.get("capture_scope") in ("window", "display", "screen"):
+        fields["capture_scope"] = raw["capture_scope"]
+    if res is not None and req.capability_id in ("screenshot", "capture_screen"):
+        fields["width"] = res.width or int(raw.get("width") or 0)
+        fields["height"] = res.height or int(raw.get("height") or 0)
+        fields["has_image"] = bool(res.image_base64 or raw.get("image_base64"))
+    launch = raw.get("launch") if isinstance(raw.get("launch"), dict) else {}
+    if launch.get("stage") in ("launch_requested", "pid_verified", "window_ready", "window_binding"):
+        fields["stage"] = launch["stage"]
+    details = " ".join(f"{k}={v}" for k, v in fields.items() if k not in ("capability_id", "purpose", "step_idx"))
+    message = f"[{req.run_id}] result cap={req.capability_id} step={req.step_idx} purpose={_DIAGNOSTIC_PURPOSES[purpose]} {details}"
+    (SLog.i if status == "pass" else SLog.w)(TAG, message)
+    if req.capability_id == "get_foreground_app" or purpose in ("recovery_evidence", "recovery_action"):
+        from mino_nexus.loop.observe.session_log import active_writer
+
+        writer = active_writer()
+        if writer is not None and writer.session_id == req.run_id:
+            writer.append("device/action" if purpose == "recovery_action" else "device/probe", fields)
+
 
 # case_runner 在后台线程跑同步 agent_loop，Scout WS 却在 FastAPI 主 loop。
 # 若用 asyncio.run() 临时 loop 去 await node.send，RESULT 回在主 loop 上，
@@ -70,6 +123,7 @@ class RouterProxy:
         timeout_pad_sec: float = 2.0,
         target_package: str = "",
         playwright_headless: bool = True,
+        run_context: Any = None,
     ):
         from mino_nexus.services.access_scope import require_owned_device
         require_owned_device(sn)
@@ -78,6 +132,7 @@ class RouterProxy:
         self.task_id = str(task_id or "").strip()
         self.target_package = str(target_package or "")
         self.playwright_headless = bool(playwright_headless)
+        self.run_context = run_context
         # 协议 §6：等 RESULT 用 payload.timeout_sec + 宽限
         self.timeout_pad_sec = timeout_pad_sec
 
@@ -120,6 +175,7 @@ class RouterProxy:
         force_fresh: bool = True,
         timeout_sec: float = _OBSERVE_TIMEOUT_SEC,
         compress_ratio: float | None = None,
+        diagnostic_purpose: str = "loop_observation",
     ) -> CapturedScreen:
         """替代上游的 `capture_screen(ctx, ...)`，返回值保持 CapturedScreen 形状。"""
         plat = ""
@@ -138,6 +194,7 @@ class RouterProxy:
             self.observe_async(
                 kind, prefer=prefer, force_fresh=force_fresh,
                 timeout_sec=timeout_sec, compress_ratio=compress_ratio,
+                diagnostic_purpose=diagnostic_purpose,
             )
         )
         if kind == "screenshot":
@@ -205,6 +262,15 @@ class RouterProxy:
             if str(getattr(event, "event_kind", "") or "") == raw_cap:
                 event.event_kind = mapped
 
+        from mino_nexus.catalog.tool_schema import CONFIRM_ACTION_RESULT
+
+        if event.capability_id == CONFIRM_ACTION_RESULT:
+            return _fail(
+                event, started, t0,
+                "结果确认必须先由回看状态机消费，不能作为设备操作下发",
+                executor_used="router_proxy", local_reason="review_confirmation_not_consumed",
+            )
+
         if str(event.capability_id or "").startswith("plugin."):
             return await self._dispatch_host_plugin(
                 event, started=started, t0=t0, run_id=run_id, step_idx=step_idx,
@@ -223,12 +289,13 @@ class RouterProxy:
         if is_local_cap(event.capability_id):
             from mino_nexus.loop.local_executors import dispatch_local
 
-            ctx = kwargs.get("ctx")
+            ctx = kwargs.get("ctx") or self.run_context
             # 本地能力里还会再 dispatch（例如 relogin → read_web_auth）。
             # 放在线程里，事件循环才能接着把这次 EXECUTE 发给 Scout。
             return await asyncio.to_thread(
                 dispatch_local,
                 event,
+                shot=kwargs.get("shot"),
                 ctx=ctx,
                 router=self,
                 target_package=self.target_package,
@@ -281,13 +348,19 @@ class RouterProxy:
             target_package=self.target_package,
             low_level=(impl or {}).get("low_level"),
         )
-        from mino_nexus.action_space.assemble import stamp_scheme_params
+        from mino_nexus.action_space.assemble import stamp_scheme_params, visual_point_missing
         from mino_nexus.action_space.scheme import action_scheme
 
-        ctx = kwargs.get("ctx")
+        ctx = kwargs.get("ctx") or self.run_context
         scheme = action_scheme(ctx) if ctx is not None else str(getattr(self, "action_scheme", "") or "visual")
         focus_ref = str(params.get("focus_ref") or "")
         params = stamp_scheme_params(event.capability_id, params, scheme)
+        if scheme != "dom" and visual_point_missing(event.capability_id, params):
+            return _fail(
+                event, started, t0,
+                "当前视觉操作缺少完整坐标，未派发到节点；普通步骤、逻辑块和恢复步骤均需提供有效操作参数",
+                executor_used="router_proxy", local_reason="visual_coordinates_missing",
+            )
         if event.capability_id == "input_text" and params.get("target_mode") == "current_focus" and scheme != "dom":
             dispatch_run_id = run_id or self.run_id
             prefix = f"focus:{dispatch_run_id}:"
@@ -318,7 +391,10 @@ class RouterProxy:
             platform=_device_platform(self.sn, node),
         )
 
+        purpose = _diagnostic_purpose(kwargs.get("diagnostic_purpose"))
+        SLog.i(TAG, f"[{req.run_id}] dispatch cap={req.capability_id} step={req.step_idx} purpose={_DIAGNOSTIC_PURPOSES[purpose]} order={order} impl={(impl or {}).get('id')}")
         res = await self._send_with_retry(node, P.MsgType.EXECUTE, req, req.timeout_sec)
+        _trace_device_result(req, res, total_ms=int((time.time() - t0) * 1000), purpose=purpose)
         if res is None:
             return _fail(
                 event, started, t0,
@@ -379,7 +455,10 @@ class RouterProxy:
         force_fresh: bool = True,
         timeout_sec: float = _OBSERVE_TIMEOUT_SEC,
         compress_ratio: float | None = None,
+        diagnostic_purpose: str = "loop_observation",
     ) -> CapturedScreen:
+        t0 = time.monotonic()
+        purpose = _diagnostic_purpose(diagnostic_purpose, "loop_observation")
         if self._task_aborted():
             return CapturedScreen(ok=False, source="router_proxy", error="任务已取消")
         node, why = get_registry().resolve(self.sn)
@@ -411,7 +490,7 @@ class RouterProxy:
             )
         SLog.i(
             TAG,
-            f"[{(self.run_id or '')[:8]}] observe {kind} sn={self.sn} plat={plat} order={list(prefer)}",
+            f"[{self.run_id}] observe {kind} purpose={_DIAGNOSTIC_PURPOSES[purpose]} sn={self.sn} plat={plat} order={list(prefer)}",
         )
 
         cap = P.OBSERVE_CAPS.get(kind, kind)
@@ -434,6 +513,7 @@ class RouterProxy:
         res = await self._send_once(
             node, P.MsgType.EXECUTE, req, timeout_sec, pad_sec=_OBSERVE_PAD_SEC,
         )
+        _trace_device_result(req, res, total_ms=int((time.monotonic() - t0) * 1000), purpose=purpose)
         if res is None:
             return CapturedScreen(
                 ok=False, source="router_proxy",
@@ -457,9 +537,6 @@ class RouterProxy:
                 float((shot.remote_detail or {}).get("compress_ratio") or compress_ratio or 1.0),
                 authoritative=plat == "desktop",
             )
-        scout_ms = int(res.elapsed_ms or 0)
-        if scout_ms and scout_ms < 5000:
-            SLog.d(TAG, f"[{(self.run_id or '')[:8]}] observe ok scout={scout_ms}ms cap={cap}")
         return shot
 
     # ---------------- 选路 ----------------
@@ -526,11 +603,6 @@ class RouterProxy:
 
         impl = by_executor[out[0]]
         impl_dict = impl.model_dump() if hasattr(impl, "model_dump") else dict(impl)
-        SLog.i(
-            TAG,
-            f"[{self.run_id[:8]}] cap={event.capability_id} order={out} impl={impl_dict.get('id')}"
-            + (f" dropped={dropped}" if dropped else ""),
-        )
         return out, impl_dict
 
     def _device_hint(self, node: NodeSession) -> dict[str, Any]:

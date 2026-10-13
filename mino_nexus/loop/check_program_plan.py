@@ -53,6 +53,7 @@ def milestones_from_check_program(plan: dict[str, Any]) -> list[dict[str, Any]]:
                 "optional": bool(cp.get("optional")),
                 "source": str(cp.get("source") or "check_program"),
                 "key_ref": str(cp.get("key_ref") or ""),
+                "source_clause": str(cp.get("source_clause") or cp.get("source_line") or "")[:240],
                 "checkpoint_kind": str(assert_payload.get("mode") or "vlm"),
                 "assert": assert_payload,
                 "observe": str(cp.get("observe") or "exec"),

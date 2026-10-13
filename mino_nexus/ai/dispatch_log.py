@@ -360,6 +360,10 @@ def record_llm(*, messages: list | None = None, parsed=None, raw_text: str = "",
     source = env.get("source") or guessed.get("source") or source_from_trigger(trigger)
     routed_by = env.get("routed_by") or ("conductor" if trigger == "qa_tick" else "")
     row_id = f"ds-{uuid.uuid4().hex[:12]}"
+    if str(job).startswith("assistant"):
+        system = f"[redacted {len(str(system))} chars]"
+        user = f"[redacted {len(str(user))} chars]"
+        output = f"[redacted {len(str(output))} chars]"
     system_text, imgs_s = _clip_media(system, stem=f"{row_id}-s")
     input_text, imgs_u = _clip_media(user, stem=f"{row_id}-u")
     output_text, imgs_o = _clip_media(output, stem=f"{row_id}-o")
@@ -417,8 +421,14 @@ def record_llm(*, messages: list | None = None, parsed=None, raw_text: str = "",
             ),
             "finish_reason": str(meta.get("finish_reason") or ""),
             "fail_kind": str(meta.get("fail_kind") or ""),
-            "prompt_version": int(meta.get("prompt_version") or 0) or None,
-            "prompt_sha": str(meta.get("prompt_sha") or "") or None,
+            "prompt_version": int(meta.get("prompt_version") or env.get("prompt_version") or 0) or None,
+            "prompt_sha": str(meta.get("prompt_sha") or env.get("prompt_sha") or "") or None,
+            "call_parameters": meta.get("call_parameters") or env.get("call_parameters") or {},
+            "stream_structure": meta.get("stream_structure") or {},
+            "response_trace": meta.get("response_trace") or {},
+            "raw_response_source": "nexus_decoded_message" if raw_available else "unavailable",
+            **{key: meta.get(key) for key in ("sdk_provider", "http_status", "provider_error_code", "provider_error_param", "provider_request_id",
+                                             "retryable", "usage_status", "estimated_cost_usd", "cost_status", "cost_source", "pricing_version", "usage_attempt_ids", "cost_tracking_error")},
         }
     )
 

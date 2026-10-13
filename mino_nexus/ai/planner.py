@@ -71,7 +71,10 @@ def _llm_image(image_base64: str, image_mime: str = "image/png") -> tuple[str, s
 def _chat(*, job: str, provider, messages, job_meta: dict | None = None, **kwargs):
     from mino_nexus.ai import dispatch_log as dispatch
 
-    tok = dispatch.bind(role="test-engineer", job=job, skill=job)
+    tok = dispatch.bind(role="test-engineer", job=job, skill=job,
+                        prompt_version=(job_meta or {}).get("prompt_version"),
+                        prompt_sha=(job_meta or {}).get("prompt_sha"),
+                        call_parameters=(job_meta or {}).get("call"))
     try:
         try:
             from mino_nexus.loop.observe.session_log import append_llm_request
@@ -605,6 +608,7 @@ def _parse_vision_plan(raw: dict[str, Any]) -> VisionPlanDecision:
         thought=str(raw.get("thought") or "")[:2000],
         milestones=ms_rows,
         milestones_append=append_rows,
+        screen_obstacle=dict(raw.get("screen_obstacle") or {}) if isinstance(raw.get("screen_obstacle"), dict) else {},
         flow_block_ops=[dict(x) for x in fbo if isinstance(x, dict)] if isinstance(fbo, list) else [],
         hook_calls=[dict(x) for x in hooks if isinstance(x, dict)] if isinstance(hooks, list) else [],
         checkpoints_plan=[dict(x) for x in cps if isinstance(x, dict)] if isinstance(cps, list) else [],
@@ -642,6 +646,7 @@ def vision_plan_turn(
     if provider is None:
         return VisionPlanDecision(
             thought=f"未启用 AI 视觉：{gate.get('reason')}",
+            blocked_error={"error": f"未启用 AI 视觉：{gate.get('reason')}", "fail_kind": "provider_unavailable"},
             parse_warnings=["provider unavailable"],
         )
     image_base64, image_mime = _llm_image(image_base64, image_mime)
@@ -659,7 +664,7 @@ def vision_plan_turn(
     try:
         messages, job_meta = render("agent-vision-plan", slots)
     except JobRenderError as e:
-        return VisionPlanDecision(thought=str(e), parse_warnings=["job render failed"])
+        return VisionPlanDecision(thought=str(e), blocked_error={"error": str(e), "fail_kind": "prompt_configuration"}, parse_warnings=["job render failed"])
     call = job_meta.get("call") or {}
     raw, meta = _chat(
         job="agent-vision-plan",
@@ -676,6 +681,7 @@ def vision_plan_turn(
         SLog.w(TAG, f"vision_plan_turn LLM failed err={err!r}")
         return VisionPlanDecision(
             thought=err[:200],
+            blocked_error={**meta, "error": err},
             raw_llm={"llm_output": None, "meta": meta},
             parse_warnings=["llm failed"],
         )
@@ -719,6 +725,10 @@ def vision_exec_turn(
     tool_kinds: Optional[list[str]] = None,
 ) -> AgentDecision:
     """看图执行单步：只出 capability，规划由 agent-vision-plan 负责。"""
+    from mino_nexus.catalog.tool_schema import CONFIRM_ACTION_RESULT, tools_chat_payload, tools_for_menu
+
+    criteria = json.loads(assemble_vision_exec_slots(menu=[], success_criteria=success_criteria)["success_criteria"])
+    review_confirmation = bool(criteria.get("prior_action")) and isinstance(criteria.get("review_transition"), dict)
     focused = {str(x) for x in (menu_ids or set())}
     extra = ["fsm_navigate"] if "fsm_navigate" in focused or getattr(run_context, "allow_model_recovery", False) else None
     menu = available_menu_brief(
@@ -729,23 +739,27 @@ def vision_exec_turn(
         tool_kinds=tool_kinds,
         extra_ids=extra,
     )
-    if not menu:
+    if not menu and not review_confirmation:
         return AgentDecision(
             status="give_up",
             thought="capability_menu 为空（连通性丢失）",
             parse_warnings=["empty menu"],
         )
-    if menu_ids:
+    if menu_ids is not None:
         allow = {str(x) for x in menu_ids}
         menu = [c for c in menu if str(c.get("id") or "") in allow]
-        if not menu:
+        if not menu and not review_confirmation:
             focused = "、".join(sorted(allow))
             return AgentDecision(
                 status="give_up",
                 thought=f"当前阶段能力菜单不包含所需能力：{focused}；依赖阻塞，未执行动作",
                 parse_warnings=["focused cap missing from menu"],
             )
-    from mino_nexus.catalog.tool_schema import tools_chat_payload, tools_for_menu
+    if review_confirmation:
+        menu.append({
+            "id": CONFIRM_ACTION_RESULT,
+            "summary": "确认已执行动作的可见结果，只推进回看状态，不操作设备，不需要坐标。",
+        })
 
     image_base64, image_mime = _llm_image(image_base64, image_mime)
     provider, gate = resolve_regression_provider(provider_id)
@@ -753,6 +767,7 @@ def vision_exec_turn(
         return AgentDecision(
             status="ask_human",
             thought=f"未启用 AI 视觉：{gate.get('reason')}",
+            raw_llm={"meta": {"error": f"未启用 AI 视觉：{gate.get('reason')}", "fail_kind": "provider_unavailable"}},
             parse_warnings=["provider unavailable"],
         )
     slots = assemble_vision_exec_slots(
@@ -773,11 +788,12 @@ def vision_exec_turn(
         slim_envelope=True,
         include_control_tools=False,
         require_prior_status=bool(criteria.get("prior_action")),
+        include_review_confirmation=review_confirmation,
     ))
     try:
         messages, job_meta = render("agent-vision-exec", slots)
     except JobRenderError as e:
-        return AgentDecision(status="ask_human", thought=str(e), parse_warnings=["job render failed"])
+        return AgentDecision(status="ask_human", thought=str(e), raw_llm={"meta": {"error": str(e), "fail_kind": "prompt_configuration"}}, parse_warnings=["job render failed"])
     call = job_meta.get("call") or {}
     llm_input_debug = {
         "success_criteria": slots.get("success_criteria") or success_criteria,
@@ -810,6 +826,8 @@ def vision_exec_turn(
     decision = _parse_agent_decision(raw, width, height)
     allow_ids = {str(c.get("id") or "") for c in menu}
     allow_ids.add("human_input_text")
+    if review_confirmation:
+        allow_ids.add(CONFIRM_ACTION_RESULT)
     if decision.action and str(decision.action.capability_id or "") not in allow_ids:
         cid = decision.action.capability_id
         decision.parse_warnings.append(f"capability_id={cid!r} 不在菜单，已丢弃")

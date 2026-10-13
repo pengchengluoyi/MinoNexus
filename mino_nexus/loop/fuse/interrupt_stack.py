@@ -196,7 +196,7 @@ def maybe_pop_interrupt(cursor: Any, *, writer: Any = None) -> bool:
         if st in ("pending", "in_progress"):
             open_interrupt = True
             break
-        if st not in ("passed", "skipped"):
+        if st not in ("pass", "passed", "skipped"):
             interrupt_passed = False
     if open_interrupt:
         return False
@@ -204,7 +204,9 @@ def maybe_pop_interrupt(cursor: Any, *, writer: Any = None) -> bool:
     restored = [dict(m) for m in (frame.get("saved_milestones") or []) if isinstance(m, dict)]
     for row in restored:
         if str(row.get("id") or "") == parent_id:
-            row["status"] = "in_progress"
+            row["status"] = "in_progress" if interrupt_passed else "failed"
+            if not interrupt_passed:
+                row["evidence"] = "挡屏恢复未成功，原操作尚未执行"
             row.pop("block_reason", None)
             row["fail_streak"] = 0
     frames.pop()
@@ -224,6 +226,7 @@ def maybe_pop_interrupt(cursor: Any, *, writer: Any = None) -> bool:
                 "case_step": case_step,
                 "phase": phase,
                 "focus_restored": parent_id,
+                "recovered": interrupt_passed,
             },
         )
         if interrupt_passed:

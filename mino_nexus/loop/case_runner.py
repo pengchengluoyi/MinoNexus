@@ -180,12 +180,12 @@ def run_cases(
         cases = [_instruction_case(instruction)]
         if not str(run_type or "").strip() or str(run_type).lower() == "manual":
             run_type = "copilot"
-    elif case_ids:
+    elif case_ids is not None:
         by_id = {str(c.get("case_id")): c for c in all_cases if c.get("case_id")}
         cases = [by_id[str(cid)] for cid in case_ids if str(cid) in by_id]
         missing = [cid for cid in case_ids if str(cid) not in by_id]
         if missing:
-            SLog.w(TAG, f"missing case_ids: {missing[:5]} (total {len(missing)})")
+            raise ValueError("所选用例已删除或不属于当前项目，请重新选择；本次未创建任务。")
     else:
         cases = list(all_cases)
     if start_index > 0:

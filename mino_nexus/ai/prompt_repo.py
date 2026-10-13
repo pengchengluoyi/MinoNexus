@@ -12,7 +12,7 @@ import yaml
 
 _LOCK = threading.RLock()
 _STATE: "Repo | None" = None
-_MTIME = 0.0
+_MTIME = ""
 
 
 class PromptRepoError(RuntimeError):
@@ -70,12 +70,9 @@ def _entry_files(directory: Path) -> list[Path]:
     return [p for p in directory.rglob("*") if p.is_file() and p.name != ".gitkeep"]
 
 
-def _max_mtime(root: Path) -> float:
-    latest = 0.0
-    for path in root.rglob("*"):
-        if path.is_file():
-            latest = max(latest, path.stat().st_mtime)
-    return latest
+def _max_mtime(root: Path) -> str:
+    # 文件路径与内容一起参与，能检测删除、旧时间戳恢复及非最大 mtime 文件修改。
+    return content_sha256(_entry_files(root), root=root)
 
 
 def expand_blocks(base: Path, blocks: list[Any] | None) -> list[dict[str, Any]]:

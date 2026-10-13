@@ -30,16 +30,35 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _resolve_session_id(run_id: str, *, case_id: str = "") -> str:
+def _resolve_session_id(run_id: str, *, case_id: str = "", sn: str = "") -> str:
+    """只返回已存在且归属明确的 Session；不猜测另一设备或用例。"""
     rid = str(run_id or "").strip()
     if not rid:
         return ""
+    batch, _, tail = rid.partition("::")
+    cid = str(case_id or "").strip() or tail.split("::", 1)[0]
+    device = str(sn or "").strip()
     try:
-        from mino_nexus.services.session_store import resolve_session_id
+        from mino_nexus.services import session_store
 
-        return str(resolve_session_id(rid, case_id=case_id) or "").strip()
-    except Exception:
-        return rid
+        if device and cid:
+            # 资源审计通常传 batch ID；Session 主键还包含实际设备。
+            sid = f"{batch}::{cid}::{device}"
+            meta = session_store.get_meta(sid)
+            return sid if meta and meta.get("run_id") == batch and meta.get("case_id") == cid else ""
+        meta = session_store.get_meta(rid)
+        if meta and (not cid or meta.get("case_id") == cid):
+            return rid
+        if not cid:
+            # 批次级租约或 Session 尚未创建：只保留资源审计，不选某个用例镜像。
+            return ""
+        items, total = session_store.list_sessions(run_id=batch, case_id=cid, limit=2)
+        if total == 1 and len(items) == 1:
+            return str(items[0].get("session_id") or "")
+        return ""
+    except Exception as exc:
+        SLog.w(TAG, f"session resolve failed run={batch} case={cid} sn={device} error={type(exc).__name__}")
+        return ""
 
 
 def _mirror_allocation_session_log(
@@ -75,7 +94,7 @@ def _mirror_allocation_session_log(
             phase="resource",
         )
     except Exception as exc:
-        SLog.w(TAG, f"session mirror skipped session={sid[:24]}: {exc!r}")
+        SLog.w(TAG, f"session mirror failed session={sid} action={action} error={type(exc).__name__}")
 
 
 def append_allocation_log(
@@ -97,7 +116,7 @@ def append_allocation_log(
     if not pid or not act:
         return
     detail_out = dict(detail or {})
-    sid = _resolve_session_id(run_id, case_id=case_id)
+    sid = _resolve_session_id(run_id, case_id=case_id, sn=sn)
     if sid:
         detail_out["session_id"] = sid
     row = ResourceAllocationLog(
@@ -192,12 +211,11 @@ def list_allocation_logs(
                 "action": r.action or "",
                 "message": r.message or "",
                 "detail": r.detail_json if isinstance(r.detail_json, dict) else {},
-                "session_id": (
-                    (r.detail_json or {}).get("session_id")
-                    if isinstance(r.detail_json, dict)
-                    else ""
-                )
-                or _resolve_session_id(str(r.run_id or ""), case_id=str(r.case_id or "")),
+                "session_id": _resolve_session_id(
+                    str((r.detail_json or {}).get("session_id") or r.run_id or "")
+                    if isinstance(r.detail_json, dict) else str(r.run_id or ""),
+                    case_id=str(r.case_id or ""), sn=str(r.sn or ""),
+                ),
             }
             for r in rows
         ]

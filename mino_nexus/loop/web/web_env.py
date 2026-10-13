@@ -34,14 +34,15 @@ def agent_step_idx(case_seq: int, turn: int) -> int:
     return frame_step(case_seq, slot)
 
 
-def recovery_action_step_idx(case_seq: int, agent_turn: int, action_idx: int) -> int:
-    """Recovery 规则内子动作的 step_idx，与 agent 回合 / fsm 内嵌 tap 的幂等键错开。
+def recovery_operation_step_idx() -> int:
+    """每次新的恢复/取证操作独占幂等键；同次传输重发由 RouterProxy 保留此键。
 
-    Scout 以 (run_id, step_idx) 缓存 RESULT；若 recovery 复用 agent_step_idx(case, 1..3)，
-    会误命中同回合 fsm_navigate 的 tap_element 缓存（表现为 close_app/launch_app「无坐标」）。
+    不按 case/turn/action 推导：轮询、规则重试和守护线程会重复这些值。
+    高位隔离框架/agent 编号，随机位避免重启后碰到旧缓存；保持 JS 安全整数。
     """
-    base = FRAME_STEP + max(0, int(case_seq)) * 10 + 40
-    return base + max(0, int(agent_turn)) * 5 + max(1, int(action_idx))
+    from uuid import uuid4
+
+    return (1 << 52) | (uuid4().int & ((1 << 52) - 1))
 
 
 def is_web_context(ctx: Any) -> bool:

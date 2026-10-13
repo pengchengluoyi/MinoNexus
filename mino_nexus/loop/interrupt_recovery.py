@@ -28,7 +28,7 @@ def _action_to_milestone(action: Any, idx: int, rule_id: str) -> dict[str, Any] 
         "title": sel or cap,
         "kind": "hook",
         "hook_cap": cap,
-        "optional": True,
+        "optional": False,
         "source": "interrupt_recovery",
         "recovery_rule_id": rule_id,
     }
@@ -47,6 +47,7 @@ def resolve_interrupt_steps(
     target_package: str = "",
     screen_texts: list[str] | None = None,
     reason: str = "",
+    allow_fallback: bool = True,
 ) -> list[dict[str, Any]]:
     """匹配 recovery 规则 actions；无则 dismiss + 返回/等待。"""
     steps: list[dict[str, Any]] = []
@@ -71,18 +72,8 @@ def resolve_interrupt_steps(
     except Exception:  # noqa: BLE001
         steps = []
 
-    if not steps:
-        steps.append(dict(_DISMISS_STEP))
-        steps.append(
-            {
-                "id": "interrupt_back",
-                "title": "系统返回",
-                "kind": "hook",
-                "hook_cap": "press_key",
-                "hook_params": {"key": "BACK"},
-                "optional": True,
-            }
-        )
+    if not steps and allow_fallback:
+        # 未命中配置规则时只等待；猜测关闭按钮或系统返回可能改变业务状态。
         steps.append(
             {
                 "id": "interrupt_wait",

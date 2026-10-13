@@ -13,6 +13,7 @@
 | 项目号池配置（扩展字段 / 启用模板 / 本地模板） | `project_pool_config` | Studio 号池与模板；`projects.env` 中对应键仅迁移来源 |
 | 用例资源声明（Claim 词汇 / 示例） | 用例 `meta.resource_key` + `case_scene`（真源词汇见 `case_resource_key_catalog.py`） | Console「用例密钥」；见 [CASE_RESOURCE_KEY.md](CASE_RESOURCE_KEY.md) |
 | 用例、前置、预期 | `project_cases`（按 `project_id` + `requirement_id`；需求/脑图仍在 `apps.env.automation.qa_process`） | UI / QA 推进 |
+| 用例导入预览 | `case_import_previews`（账号与项目隔离，24 小时有效；解析结果逐行持久化，提交后移除） | 导入预览 / 确认导入 API；工作租约避免多进程重复解析，进程退出后恢复未完成行 |
 | `AppRegressionRun`（批次结果） | `app_regression_runs` | Nexus 的循环 |
 | 逐步 trace / baseline | `m_case_run_trace` / `m_case_baseline` | Nexus 的循环 |
 | 设备身份 | `m_device` | **连通性来自 Scout 上报**，其余来自 UI |

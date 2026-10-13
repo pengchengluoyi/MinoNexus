@@ -99,8 +99,19 @@ async def lifespan(app: FastAPI):
                 SLog.w(TAG, f"doc sync tick: {exc}")
 
     doc_sync_task = asyncio.create_task(_doc_sync_loop())
+    async def _assistant_delivery_loop() -> None:
+        from mino_nexus.services.assistant_notify import retry_pending_notifications
+        while True:
+            try:
+                await asyncio.to_thread(retry_pending_notifications)
+            except Exception as exc:
+                SLog.w(TAG, f"assistant delivery tick: {type(exc).__name__}")
+            await asyncio.sleep(30)
+
+    delivery_task = asyncio.create_task(_assistant_delivery_loop())
     yield
     doc_sync_task.cancel()
+    delivery_task.cancel()
     await unregister_beacon(handle)
 
 

@@ -232,3 +232,187 @@ def set_im_hold(body: ImHoldBody, sess: dict = Depends(current_session)):
     im_hold.push_hold(node.node_id, channel, True)
     yielded = im_hold.arbitrate()
     return ok({"channel": channel, "node_id": node.node_id, "yielded": [n for _, n in yielded]})
+
+
+class RequestReplyBody(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    revision: int
+    values: dict[str, Any]
+
+
+class RequestRevisionBody(BaseModel):
+    revision: int
+
+
+class PreferenceBody(BaseModel):
+    value: str | None = None
+
+
+class GroupPolicyBody(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    channel: str
+    instance_id: str
+    tenant: str = ''
+    chat_id: str
+    enabled: bool = False
+    allow_execute: bool = False
+    disclose_results: bool = False
+    project_ids: list[str] = []
+
+
+@router.get('/requests')
+def assistant_requests(sess: dict = Depends(current_session)):
+    from mino_nexus.services.assistant_conversation import list_requests
+    return ok(list_requests(_uid(sess)))
+
+
+@router.post('/requests/{request_id}/respond')
+def respond_to_request(request_id: str, body: RequestReplyBody, sess: dict = Depends(current_session)):
+    from mino_nexus.core.execution_user import execution_user
+    from mino_nexus.services.assistant_runtime import continue_request
+    with execution_user(_uid(sess)):
+        try:
+            result = continue_request(request_id, body.revision, body.values)
+        except (ValueError, PermissionError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ok(result)
+
+
+@router.post('/requests/{request_id}/cancel')
+def cancel_pending_request(request_id: str, body: RequestRevisionBody, sess: dict = Depends(current_session)):
+    from mino_nexus.core.execution_user import execution_user
+    from mino_nexus.services.assistant_conversation import cancel
+    with execution_user(_uid(sess)):
+        if not cancel(request_id, body.revision):
+            raise HTTPException(status_code=409, detail='请求已变化；已提交的任务请在任务页停止')
+    return ok({'cancelled': True})
+
+
+@router.get('/preferences')
+def assistant_preferences(sess: dict = Depends(current_session)):
+    from mino_nexus.services.assistant_conversation import preferences
+    return ok(preferences(_uid(sess)))
+
+
+@router.put('/preferences/{key}')
+def update_preference(key: str, body: PreferenceBody, sess: dict = Depends(current_session)):
+    from mino_nexus.services.assistant_conversation import set_preference
+    try:
+        result = set_preference(_uid(sess), key, body.value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ok(result)
+
+
+@router.get('/group-policies')
+def group_policies(sess: dict = Depends(current_session)):
+    from mino_nexus.services.assistant_conversation import groups
+    return ok({'items': groups(_uid(sess))})
+
+
+@router.put('/group-policies')
+def update_group_policy(body: GroupPolicyBody, sess: dict = Depends(current_session)):
+    from mino_nexus.core.execution_user import execution_user
+    from mino_nexus.services.assistant_conversation import save_group
+    with execution_user(_uid(sess)):
+        try:
+            result = save_group(_uid(sess), body.model_dump())
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ok(result)
+
+
+@router.get('/capabilities')
+def assistant_capabilities(sess: dict = Depends(current_session)):
+    from mino_nexus.services.assistant_envelope import capabilities
+    nodes = _im_nodes(sess)
+    return ok({'items': [{**channel, 'node_id': node['node_id'], 'node_name': node['name'],
+                'capabilities': capabilities(channel.get('capabilities'))} for node in nodes for channel in node['channels']]})
+
+
+class MediaSettingsBody(BaseModel):
+    asr_provider_id: str = ''
+    asr_model: str = ''
+
+
+class ReportSettingsBody(BaseModel):
+    workbench_url: str = ''
+
+
+@router.get('/report-settings')
+def report_settings(sess: dict = Depends(current_session)):
+    from mino_nexus.services.assistant_reports import configuration
+    return ok(configuration(_uid(sess)))
+
+
+@router.put('/report-settings')
+def save_report_settings(body: ReportSettingsBody, sess: dict = Depends(current_session)):
+    from mino_nexus.services.assistant_reports import configure
+    try:
+        return ok(configure(_uid(sess), body.workbench_url))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get('/media-settings')
+def media_settings(sess: dict = Depends(current_session)):
+    from mino_nexus.services.assistant_media import configuration
+    from mino_nexus.services.settings_store import list_ai_providers
+    return ok({**configuration(_uid(sess)), 'providers': [
+        {'id': row['id'], 'name': row.get('name') or row['id'], 'configured': row.get('configured')}
+        for row in list_ai_providers(_uid(sess)).get('providers') or []]})
+
+
+@router.put('/media-settings')
+def update_media_settings(body: MediaSettingsBody, sess: dict = Depends(current_session)):
+    from mino_nexus.core.execution_user import execution_user
+    from mino_nexus.services.assistant_media import configure
+    with execution_user(_uid(sess)):
+        try:
+            result = configure(_uid(sess), body.model_dump())
+        except (ValueError, PermissionError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ok(result)
+
+
+
+class RequestScopeBody(BaseModel):
+    revision: int
+    modules: list[str]
+
+
+@router.get('/requests/{request_id}/modules')
+def request_modules(request_id: str, sess: dict = Depends(current_session)):
+    from mino_nexus.core.execution_user import execution_user
+    from mino_nexus.services.assistant_conversation import available_modules
+    with execution_user(_uid(sess)):
+        try:
+            result = available_modules(request_id)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=404, detail='请求或项目范围不存在') from exc
+    return ok(result)
+
+
+@router.post('/requests/{request_id}/scope')
+def update_request_scope(request_id: str, body: RequestScopeBody, sess: dict = Depends(current_session)):
+    from mino_nexus.core.execution_user import execution_user
+    from mino_nexus.services.assistant_conversation import revise_scope
+    from mino_nexus.services.assistant_runtime import execute_request
+    with execution_user(_uid(sess)):
+        try:
+            result = execute_request(revise_scope(request_id, body.revision, body.modules))
+        except (ValueError, PermissionError, KeyError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ok(result)
+
+
+@router.post('/requests/{request_id}/focus')
+def focus_assistant_request(request_id: str, sess: dict = Depends(current_session)):
+    from mino_nexus.core.execution_user import execution_user
+    from mino_nexus.services.assistant_conversation import focus_request
+    with execution_user(_uid(sess)):
+        try:
+            result = focus_request(request_id)
+        except (ValueError, PermissionError) as exc:
+            raise HTTPException(status_code=404, detail='任务不存在或无权访问') from exc
+    return ok(result)

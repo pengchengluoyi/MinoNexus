@@ -212,19 +212,8 @@ def try_dispatch_block_hook(
         ai_reasoning=f"逻辑块 {block_id} · milestone {mid}",
         label=f"块·{mid or cap}",
     )
-    if is_local_cap(cap):
-        from mino_nexus.loop.local_executors import dispatch_local
-
-        res = dispatch_local(
-            event,
-            ctx=ctx,
-            router=proxy,
-            target_package=str(getattr(ctx, "target_package", "") or ""),
-        )
-        executor_used = "internal"
-    else:
-        res = proxy.dispatch(event, run_id=run_id, step_idx=int(turn_seq))
-        executor_used = str(getattr(res, "executor_used", "") or "scout")
+    res = proxy.dispatch(event, run_id=run_id, step_idx=int(turn_seq), ctx=ctx)
+    executor_used = str(getattr(res, "executor_used", "") or "router_proxy")
     st = res.status.value if hasattr(res.status, "value") else str(res.status)
     ok = str(st) in ("pass", EventStatus.PASS.value)
     if cap == "get_otp" and mid == "otp_fill":

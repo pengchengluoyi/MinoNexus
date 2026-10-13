@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 _GLUE = set(" \t\r\n，,。；;、")
@@ -126,6 +127,8 @@ def _hit_from_span(
 ) -> tuple[dict[str, Any] | None, list[str]]:
     errors: list[str] = []
     quote = str(span.get("quote") or "")
+    if spec.get("key_ref") == "operation.login_flow" and re.match(r"\s*(?:点击|点按|单击|点一下)", quote) and not re.search(r"输入|填写|密码|验证码", quote):
+        return None, ["单独点击登录按钮应选择目录中的点击事件，不是完整登录流程；请重新分类"]
     raw_params = span.get("params") if isinstance(span.get("params"), dict) else {}
     allowed = {str(s.get("id") or "") for s in (spec.get("param_slots") or [])}
     rules: dict[str, Any] = {}

@@ -6,7 +6,6 @@ import time
 from typing import Any, Callable, Optional
 
 from mino_nexus.core.log import SLog
-from mino_nexus.core.protocol import EventStatus
 
 TAG = "DisplayGuard"
 _GUARD_AGENT_TURN = 8800
@@ -23,7 +22,8 @@ def platform_needs_display_guard(ctx: Any) -> bool:
             return False
     except Exception:
         pass
-    return plat not in ("web", "playwright", "")
+    # Desktop 的准入、捕获与输入由 Cua 校验，不套用手机 wake/unlock 轮询。
+    return plat not in ("web", "playwright", "desktop", "")
 
 
 def _infer_blocked_from_capture(ev: Any) -> None:
@@ -80,8 +80,7 @@ def _collect_evidence(ctx: Any, router: Any, *, target_package: str) -> Any:
 
 
 def _apply_wake_unlock(ctx: Any, router: Any, ev: Any, *, target_package: str) -> bool:
-    from mino_nexus.core.schemas import PlanEvent
-    from mino_nexus.loop.recovery import _dispatch, apply_rule, match_rules
+    from mino_nexus.loop.recovery import apply_rule, match_rules
 
     plat = str(getattr(ctx, "platform", "") or "")
     hits = match_rules(ev, platform=plat)
@@ -107,34 +106,9 @@ def _apply_wake_unlock(ctx: Any, router: Any, ev: Any, *, target_package: str) -
         except Exception as exc:
             SLog.w(TAG, f"apply_rule screen_asleep failed: {exc!r}")
 
-    ok_any = False
-    for idx, cap in enumerate(("wake_screen", "dismiss_keyguard"), start=1):
-        event = PlanEvent(
-            seq=idx,
-            capability_id=cap,
-            event_kind=cap,
-            params={},
-            ai_reasoning="DisplayGuard：子线程唤醒/解锁",
-            label=f"DisplayGuard {cap}",
-        )
-        try:
-            res = _dispatch(
-                router,
-                ctx,
-                event,
-                agent_turn=_GUARD_AGENT_TURN,
-                action_idx=idx,
-            )
-            st = getattr(res.status, "value", res.status)
-            ok = str(st) in ("pass", EventStatus.PASS.value)
-            ok_any = ok_any or ok
-            SLog.i(
-                TAG,
-                f"direct {cap} status={st} summary={str(getattr(res, 'summary', '') or '')[:120]}",
-            )
-        except Exception as exc:
-            SLog.w(TAG, f"direct {cap} failed: {exc!r}")
-    return ok_any
+    # 没有启用且匹配的目录规则时，不能用硬编码动作绕过配置。
+    SLog.w(TAG, "没有匹配的屏幕唤醒/解锁规则，未下发恢复动作")
+    return False
 
 
 class DeviceDisplayGuard:
@@ -154,19 +128,29 @@ class DeviceDisplayGuard:
         self._poll = max(0.5, float(poll_sec))
         self._stop = threading.Event()
         self._ready = threading.Event()
+        self._failed = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
     def start(self, *, initial_timeout: float = 90.0) -> None:
-        setattr(self._ctx, "display_guard_active", True)
         self._ready.clear()
-        self._thread = threading.Thread(
+        from mino_nexus.core.execution_user import user_thread
+
+        self._failed.clear()
+        self._thread = user_thread(
             target=self._run,
             name="device-display-guard",
             daemon=True,
         )
-        self._thread.start()
+        setattr(self._ctx, "display_guard_active", True)
+        try:
+            self._thread.start()
+        except Exception:
+            setattr(self._ctx, "display_guard_active", False)
+            raise
         if not self.wait_ready(timeout=initial_timeout):
             SLog.w(TAG, f"initial wait_ready timeout after {initial_timeout}s")
+            self.stop()
+            raise RuntimeError("设备屏幕守护未能就绪，交回主流程恢复")
 
     def stop(self) -> None:
         self._stop.set()
@@ -179,13 +163,15 @@ class DeviceDisplayGuard:
     def wait_ready(self, *, timeout: float = 60.0) -> bool:
         deadline = time.time() + max(0.0, float(timeout))
         while not self._stop.is_set():
+            if self._failed.is_set():
+                return False
             if self._cancel and self._cancel():
                 return True
             if self._ready.wait(timeout=min(2.0, max(0.1, deadline - time.time()))):
                 return True
             if time.time() >= deadline:
                 return False
-        return True
+        return False
 
     def _run(self) -> None:
         try:
@@ -203,6 +189,12 @@ class DeviceDisplayGuard:
                 if self._stop.wait(self._poll):
                     break
         except Exception as exc:
+            self._failed.set()
+            from mino_nexus.loop.recovery import _trace_recovery
+
+            _trace_recovery(self._ctx, "recovery/guard", {
+                "status": "failed", "error_type": type(exc).__name__,
+            })
             SLog.e(TAG, f"guard thread crashed: {exc!r}")
         finally:
-            self._ready.set()
+            self._ready.clear()

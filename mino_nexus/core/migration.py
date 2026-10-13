@@ -109,6 +109,7 @@ def run_auto_migration() -> None:
         _ensure_column("doc_sources", "feishu_bot_id", "feishu_bot_id TEXT DEFAULT ''")
         _ensure_column("doc_sources", "auto_sync", "auto_sync INTEGER DEFAULT 0")
         _ensure_column("doc_sources", "sync_interval_sec", "sync_interval_sec INTEGER DEFAULT 3600")
+        _ensure_column("assistant_requests", "result", "result JSON DEFAULT '{}'")
         _ensure_column("assistant_mcp_tokens", "kind", "kind TEXT DEFAULT 'mcp'")
         _ensure_column("install_tokens", "install_id", "install_id TEXT DEFAULT ''")
         _ensure_column("install_tokens", "requested_node_id", "requested_node_id TEXT DEFAULT ''")

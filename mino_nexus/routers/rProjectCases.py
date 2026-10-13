@@ -188,7 +188,7 @@ def import_preview(project_id: str, body: CaseImportPreviewBody, _sess: dict = D
 @router.get("/{project_id}/cases/import/preview/{token}")
 def import_preview_status(project_id: str, token: str, _sess: dict = Depends(current_session)):
     _project(project_id)
-    data = cim.preview_status(token)
+    data = cim.preview_status(token, project_id)
     if not data:
         raise HTTPException(status_code=404, detail="预览已过期")
     return ok(data)
@@ -197,7 +197,7 @@ def import_preview_status(project_id: str, token: str, _sess: dict = Depends(cur
 @router.post("/{project_id}/cases/import/preview/{token}/cancel")
 def import_preview_cancel(project_id: str, token: str, _sess: dict = Depends(current_session)):
     _project(project_id)
-    if not cim.cancel_preview(token):
+    if not cim.cancel_preview(token, project_id):
         raise HTTPException(status_code=404, detail="预览已过期")
     return ok({"cancelled": True})
 
@@ -214,9 +214,9 @@ def import_preview_retry(
     _sess: dict = Depends(current_session),
 ):
     _project(project_id)
-    if not cim.retry_preview_row(token, body.row_index):
+    if not cim.retry_preview_row(token, body.row_index, project_id):
         raise HTTPException(status_code=400, detail="这一行不能重试")
-    return ok(cim.preview_status(token) or {})
+    return ok(cim.preview_status(token, project_id) or {})
 
 
 @router.put("/{project_id}/cases/{case_id}")

@@ -1,10 +1,12 @@
 # PC 端 UI 自动化测试插件方案
 
-> 范围：现有 Mino 自动化扩展到 PC；Workbench 是唯一用户入口，节点、插件、应用、任务、报告及管理配置均在其中完成。本文基于当前项目代码与 Cua 官方文档，未安装或运行 Cua；能力覆盖和效果需实测。
+> **2026-10-12 规范关系**：本目录的现行约束及文档覆盖关系见 [V4 索引](README.md)。方案描述目标，开发记录描述已实现及验收边界；早期段落不得覆盖后续明确修订。代码修改通过隔离验收不等于真实模型、IM 或桌面实机验收。
+
+> 范围：现有 Mino 自动化扩展到 PC；Workbench 是唯一用户入口。早期选型来自 Cua 文档，当前代码已有固定版本 SDK 集成及窗口观察整改；参数核对、原生库加载或打包成功不代表实机能力验收。各 OS / 架构的支持状态按 §11 单独登记。
 
 ## 1. 推荐结论
 
-**Scout 接入 Cua Driver，优先使用 Python SDK；Nexus 保留现有 `agent_loop` 的业务决策与准出。** PC 窗口观察、激活、前台读取与动作投递统一交给 Cua；驱动缺口明确阻塞，不回退自研 UI Automation / AX 原生封装。当前实现以 §9.5 为准。
+**Scout 接入 Cua Driver，优先使用 Python SDK；Nexus 保留现有 `agent_loop` 的业务决策与准出。** PC 窗口观察、前台读取与动作投递统一交给 Cua；启动阶段只确认进程和窗口，动作所需激活由 Cua 投递时处理。驱动缺口明确阻塞，不回退自研 UI Automation / AX 原生封装。启动与输入以 §9.6、§10 为准，§9.2–§9.5 保留为整改历史。
 
 视觉执行分两条可比较的路径：① Cua 截图、Nexus 看图定位；② Cua 截图并做本地文字 / 图标解析，Nexus 根据图像及区域信息选目标。第二条是增强感知，不是把整段用例交给 Cua 自己跑。
 
@@ -19,7 +21,7 @@
 | 对比项 | 传统脚本 / 单平台驱动 | 当前 Mino + Playwright / Android | 引入 Cua 的实际增量 |
 | --- | --- | --- | --- |
 | 流程由谁决定 | 测试脚本写死流程与断言 | Nexus 已按用例和画面决策，已经有 Agent 循环 | 主要补 PC 设备层，不是首次引入“AI 自动化”。 |
-| 平台覆盖 | UIA 管 Windows，AX 管 macOS，Playwright 管浏览器 | 已有 Android / Web 等通道，缺通用 PC 桌面通道 | 复用跨平台应用、窗口、控件、截图与输入接口，少维护多套原生封装。各平台覆盖仍不等价。 |
+| 平台覆盖 | UIA 管 Windows，AX 管 macOS，Playwright 管浏览器 | Android / Web 已有通道；当前工作树已有 Desktop 集成，实机覆盖待逐项验收 | 复用跨平台应用、窗口、控件、截图与输入接口，少维护多套原生封装。各平台覆盖仍不等价。 |
 | 控件不可访问时 | 需另接图像识别或坐标脚本 | Nexus 视觉模式已可看图决策 | 可选 perception 提供文字和图标区域，给自绘页面提供候选落点；提升幅度需要对照实验。 |
 | 动作可靠性 | 等待、句柄失效、输入效果等由测试框架封装 | 已有焦点、输入契约、回看和熔断，PC 还需适配 | 可复用窗口 / 捕获引用校验、实际执行路径、动作效果分级和局部后置条件验证。不是所有问题自动解决。 |
 | 不抢焦点的操作 | 需各系统分别实现 | 当前主要按现有通道执行 | 部分应用可后台操作，但不能由此推导所有操作可并发，也不能代替真实前台交互测试。 |
@@ -152,11 +154,13 @@ Workbench 一个步骤应能看到：**执行前图 + 候选 / 落点叠加 → 
 | P2 感知对照 | 在同一数据、模型、重试预算下比较 A、B、C；B 额外安装已确认交付方式的 perception | 比较定位命中、一次运行成功、误通过、P50 / P95 延迟、模型 token、本机资源及证据完整度。B 若未改善目标自绘 / 中文用例，不默认开启。 |
 | P3 扩展 | 推动 Cua 补齐目标控件缺口；按需求增加 Linux、Electron DOM 专用通道及隔离测试环境 | 每个平台独立验收，不把一组系统 / 应用的效果推广到所有 PC 软件。 |
 
-建议固定 10 条代表性用例各跑 10 次，覆盖原生控件、自绘、重名按钮、滚动、窗口移动、中文输入和失败状态；目标一次运行成功率 ≥95%，已知失败不得误报通过。指标是待验收目标，不是已测结果；遗漏平台 / 不支持动作必须计入覆盖缺口。
+建议固定 10 条代表性用例各跑 10 次，覆盖原生控件、自绘、重名按钮、滚动、窗口移动、中文输入和失败状态；一次运行成功率 ≥95% 是候选目标，先测基线再确认，不作为现有承诺。已知失败不得误报通过。按平台、应用及 A/B/C 路径分别报告分母、首次与重试结果、blocked 和证据完整度，遗漏平台 / 不支持动作计入覆盖缺口。
 
 **代码落点**：Scout 新增 `desktop/cua_adapter.py`、`executors/desktop_cua_executor.py` 与可选独立 worker；复用插件安装、探测、设备注册和回执。Nexus 修改 Desktop 路由、`UiChannel`、`action_space`、`agent_loop` 的模式载入 / 观察槽、提示词组装与回执判定；Workbench 增加插件状态、模式设置和报告明细。业务配置与能力目录仍在 Nexus 的 SQLite，通过 Workbench 管理。
 
 **运行约束**：一个交互桌面首版只跑一个 PC 任务，与同桌面的 headed Web 共享锁；Driver 支持部分后台操作不等于可以撤销独占。锁屏、休眠、RDP 断开、权限撤销明确阻塞；停止任务应停止新动作并处理在途结果。恢复时重采快照，不重放未知结果。支持用户从 Workbench 暂停 / 接管 / 继续 / 停止，本机提供急停。
+
+以上暂停 / 接管 / 急停是目标能力，不是全部已验收。租约、停止确认与失联回收的具体契约统一见 [多机节点方案 §8](多机部署Scout节点开发方案.md#8-2026-10-12-租约迁移与验收边界补充)；未经能力上报与联调的按钮不可呈现为可用。
 
 **安装与协议**：固定发布源、锁定包与原生库版本，SDK 与 Driver 同步升级；不要按已停止维护的 `cua-agent / cua-computer` 旧教程集成。双仓同步协议字段与 golden fixtures，并核验能力上报。按仓库要求以真实 UI 联调及 `session_events / session_meta` 验收，不新增或运行 pytest。
 
@@ -209,7 +213,7 @@ Dots / Muse / Cue 可参考任务可视化与接管体验，OpenClaw 可参考�
 
 本轮按用户要求将既有 PC 设备操作统一交给 Cua Driver 0.34.1；保留 Nexus 用例决策、账号/数据资源、任务调度、独占租约、取消/预算、业务断言和 Scout 协议适配。没有迁移为另一套 Agent，也没有新接入 perception 或 accessibility 业务路线。
 
-1. 首张 PC 截图前由 Nexus 显式派发 launch_app，Cua 启动/激活被测应用、等待普通窗口、bring_to_front(pid, window_id)，以 SDK activated=true 回执完成窗口验证，不再要求全局前台持续归属目标进程。窗口准备使用独立框架步骤号，避免与冷启动/版本读取的幂等缓存冲突；PC 不执行 Android 冷启动链。成功同步 app_launch_confirmed，失败保持 blocked 等实际状态，不再先截整屏让模型猜前台应用。
+1. 首张 PC 截图前由 Nexus 显式派发 launch_app，Cua 启动被测应用、确认目标 pid 并等待普通窗口，Scout 绑定 {kind:window,pid,window_id}。macOS 和 Windows 均不在启动阶段调用 bring_to_front，不要求 activated=true 或全局前台归属。窗口准备使用独立框架步骤号，避免与冷启动/版本读取的幂等缓存冲突；PC 不执行 Android 冷启动链。成功同步 app_launch_confirmed，失败保持 blocked 等实际状态，不再先截整屏让模型猜前台应用；启动成功不代表截图或输入已成功。
 2. 每个 run 绑定 {kind:window,pid,window_id}。明确 window_id 时精确选窗；未指定时从应用窗口中选唯一可见或完整 z_index 中唯一最前窗口；不能唯一选择就 blocked。已绑定窗口丢失或所有者变化由 Cua 拒绝，不静默改选其他窗口或桌面。
 3. SDK 通用 get_window_state 指定 pid/window_id、include_accessibility_tree=false、include_screenshot=true、display_only=false，返回注册窗口捕获。typed WindowStateOutput 未暴露 capture_id，使用通用结构化响应保留该引用；snapshot_id 不能替代它。PC 压缩由 Cua max_image_dimension 完成，压缩比大于 1 时先校准原尺寸再注册最终缩图；Scout 不再另行裁切、缩图或重编码。两次捕获有额外开销，只有最终图和引用进入模型动作链。
 4. 点击只使用 ActionTarget.WINDOW(pid, window_id) + CAPTURED_COORDINATES(x,y,capture_id) + FOREGROUND。项目只把千分比落点转换成最终图像像素，屏幕映射、Retina/缩图转换、捕获消费与窗口几何校验全部由 Cua 负责。
@@ -226,6 +230,46 @@ Dots / Muse / Cue 可参考任务可视化与接管体验，OpenClaw 可参考�
 - cr-827d55828be4，20:27:42 开始，三个 case 都未记录首图前的 launch_app，截图返回“被测应用尚无指定窗口，请先执行 launch_app”，无 observe/screen。该轨迹没有走到新窗口准备步骤。
 - cr-911dde39f9ae，20:28:53 开始，case-3973849e 的框架步骤 10004 已执行窗口准备。Scout 0.1.82 返回 launched=true、activated=true，SDK 代码 bring_to_front_exact_window_verified，目标 pid=87848/window_id=379214；但项目随后读取 list_apps.active 得到飞书 com.electron.lark，自己将状态改为 blocked。它在首张截图前退出，没有窗口截图接口失败的证据，也不能归因为录屏权限。
 
-修正为直接消费 Cua 的窗口激活确认，不再以另一次全局前台读取推翻回执。activated 缺失或 false 仍阻断，不能仅凭请求受理放行。Nexus 的 ensure_target_app_foreground 对 Desktop 不执行全局前台恢复，避免窗口截图成功后仍因用户切换应用而反复启动。get_foreground_app 保留真实查询；截图继续要求指定 pid/window_id 和有效 capture_id，输入继续由 SDK foreground 模式做准入。launch 诊断增加 activation_code、window_verified，成功阶段为 window_verified；foreground_verified 仅表示 SDK 激活时的验证结果。
+Scout 0.1.83 当时修正为直接消费 Cua 的窗口激活确认，不再以另一次全局前台读取推翻回执；该版本仍将 activated 缺失或 false 视为阻断。Nexus 的 ensure_target_app_foreground 对 Desktop 不执行全局前台恢复，避免窗口截图成功后仍因用户切换应用而反复启动。get_foreground_app 保留真实查询；截图继续要求指定 pid/window_id 和有效 capture_id，输入继续由 SDK foreground 模式做准入。该版本 launch 诊断增加 activation_code、window_verified，成功阶段为 window_verified，foreground_verified 仅表示 SDK 激活时的验证结果。持续激活门槛的进一步取消见 §9.7。
 
 此次定位依据现有 Session 事件，源码修正不代表新版本已经部署或新 Session 已通过。需更新 Scout 与 Nexus 后验证首图出现及后续点击；没有将历史失败回填为成功。
+
+### 9.7 macOS / Windows 启动仅确认进程与窗口绑定（2026-10-12）
+
+`cr-7026b30502ff::case-ed53e597::desktop:e22615fbbb917111:console` 于 20:47:50–20:47:54 执行，共 10 条事件。唯一的 tool/call 是首图前 launch_app；Scout 0.1.83 已得到目标应用 com.hi3d.desktop.beta 的 pid=87848 和 window_id=379209，随后 Cua bring_to_front 返回 route=skylight_process_exact、effect=partial、error.code=bring_to_front_exact_window_unverified，项目因没有激活确认而 blocked。没有 observe/screen 或点击事件，不能归因为窗口截图失败，也不能仅凭此记录断言 Cua 验证实现有缺陷。
+
+该门槛混淆了启动准备与持续前台激活。Cua 窗口截图通过 pid/window_id 寻址；foreground 输入由 Cua 在具体动作中处理所需激活和恢复。后台输入并非所有应用都可用，尤其 Windows 的遮挡窗口、Chromium 或自绘控件可能需要 foreground 投递。因此本次仅取消启动阶段的持续前台要求，不把全部输入切成 background。
+
+本轮行为：
+
+1. macOS 仍按 bundle ID、Windows 仍按完整 EXE 路径或 AUMID 调用 Cua launch_app；必须取得有效正整数 pid，或通过 Cua list_apps 确认已绑定目标进程仍在运行。仅请求受理而没有进程身份不能放行。
+2. 有界等待并唯一选择该进程的普通窗口，绑定 {kind:window,pid,window_id}。没有窗口、指定窗口不匹配或多窗口无法唯一选择仍 blocked；不因取消前台门槛放宽身份约束。
+3. 启动准入不调用 bring_to_front，不读取全局前台作为准入条件。launch 成功诊断为 stage=window_ready、launched=true、window_verified=true、foreground_source=not_required、activated=false、foreground_verified=false。后两项表示没有请求或验证持续激活，不表示启动失败，也不承诺应用实际上处于后台。
+4. 首图仍由 Cua get_window_state 精确指定 pid/window_id，必须返回有效 capture_id、图像与窗口元数据。启动成功不能替代截图成功；窗口不可捕获、最小化或几何失效等问题按 SDK 实际结果处理，不回退整屏。
+5. 点击、文本、组合键继续绑定相同窗口和本轮捕获，保留 delivery_mode=foreground，让 Cua 在动作时完成激活、投递、恢复及校验。动作失败、拒绝和业务断言仍各自判定；不将 launch 成功升级为输入或业务成功。
+
+涉及 Scout desktop.py、EXECUTORS.md、PROTOCOL.md，以及 Nexus 首图准备动作说明。原有消息结构不变，Nexus 的安全诊断白名单已保留这些 launch 字段；无需更改全局前台恢复逻辑。真实 macOS / Windows 验收需更新并重启 Scout 后跑新 Session：核对 launch stage=window_ready、首张窗口图出现，并继续核对点击和 replace/append 输入。此次源码修改不代表已经发布或通过实机验收，旧会话不回填。
+
+## 10. 2026-10-12 输入与模型故障边界修订
+
+current_focus 只在已有焦点引用、相同目标窗口/尺寸和会话准入有效时发送键盘动作，不能重新点击上一次的 x/y。Scout 去掉 input_text 内的旧坐标点击；focus_ref 一次使用、15 秒过期，过期/窗口变化须重新截图定位。replace 与 append 保留不同选中/定位语义。引用保护不能证明同窗口内没有外部人手改变焦点，桌面独占和真实宿主干扰验收仍必要；不把 TTL 当成原生焦点证明。
+
+模型 HTTP 错误与配置/模板不可用走 blocked，不是产品失败，也不计入“连续只有规划没有动作”熔断。Session 保留模型、provider、HTTP/code/param/request_id、Prompt version/sha 与费用调用 ID；历史 Session 不改写。
+
+cr-d234bbe6f88d / case-ed53e597 的 Session 在 2026-10-12 20:57:43–20:58:10（Asia/Shanghai）运行，共 83 事件。turn 4、5 的 agent-vision-plan 使用 volcengine / doubao-seed-2-0-lite-260428，均 HTTP 400，之后被空规划熔断记为 fail。历史没有 provider 错误正文/代码/参数/请求 ID，不能确认 ID 无效、权限不足或图像/参数/endpoint 不匹配中的哪一种。修正后必须用新的 Session 验证归因，不修改这条历史结论。SDK 火山目录未登记该 ID，而同名在另一渠道出现，仅作配置核查线索，不能当作火山官方退役或无权限的证明。
+
+本次不改变 protocol.py 消息字段。既有 golden fixture 需保持双仓 round-trip。真实 macOS/Windows 的当前焦点、中文 replace/append、窗口移动、Cua 回执和模型能力验收不能由合成接口替代。
+
+## 11. 发布包支持矩阵与选型准出（2026-10-13）
+
+当前版本锁定 `cua-driver==0.34.1`；版本依据实际 SDK / 打包配置，不混用未来版本文档。下表是必须填写的验收清单，空白不代表支持；实际结果补到开发记录，包含 Scout / Nexus 构建、包版本、系统版本、架构、权限宿主和 Session ID。
+
+| 目标 | 首版范围 | 发布及运行门禁 | 目前可作出的结论 |
+| --- | --- | --- | --- |
+| macOS Apple Silicon | A 纯视觉 | 对应包下载 / 安装、宿主权限、目标窗口截图、中文 replace / append、落点、取消及陈旧引用拒绝 | 有 SDK 集成与整改记录，完整实机准出仍需新 Session |
+| Windows x64 | A 纯视觉 | 对应包安装、交互登录会话、窗口与输入、缩放、取消、RDP 断开 | 单独验收，不能复用 Mac 结果 |
+| macOS Intel / Windows ARM64 | 未默认开放 | 包与原生库明确存在，并通过同等实机门禁 | 未确认支持，界面标未支持 / 未验证 |
+| Linux | 后置 | 固定发行版及图形会话，验证包、截图、输入与取消 | 不因宿主可登记就开放桌面执行 |
+| B perception / C accessibility | 独立增量 | 锁定依赖与交付方式，同图引用、中文识别 / 控件返回和实际动作可验证 | 不计入首版 A 已实现范围 |
+
+SDK 参数核对、包生成和实机闭环分开登记；仅发布成功不开放未经验证的能力。必需能力缺失明确 blocked。安装 / 驱动升级后重新探测运行能力，回滚同样重探测；不存在的 wheel、架构或权限宿主不能靠自动切 MCP 绕过。

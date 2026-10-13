@@ -251,6 +251,13 @@ def _evaluate_fuse_repeat_tap(
         and bool(getattr(cursor, "otp_field_refocus_after_rewind", False))
     ):
         return None
+    if (
+        str(ctx.get("cap_id") or "") == "tap_element"
+        and focus_mid in ("account_field", "otp_field", "prep_tap_input_box")
+        and not str(getattr(run_ctx, "focus_action_ref", "") or "")
+    ):
+        # 输入框聚焦里程碑还没有本会话的聚焦点击引用：这次点击是补聚焦，不是重复点击。
+        return None
     store = getattr(cursor, "flow_block_tap_streak", None)
     if not isinstance(store, dict):
         store = {}

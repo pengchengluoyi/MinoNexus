@@ -241,6 +241,9 @@ def _login_span(text: str, entries: list[dict[str, Any]]) -> dict[str, Any] | No
             missing.append(str(slot.get("id") or "slot"))
     if not found:
         return None
+    # 单独点击登录按钮属于点击操作，不占用整段为完整登录流程。
+    if "credential" in missing and re.match(r"\s*(?:点击|点按|单击|点一下)", text) and not re.search(r"输入|填写|密码|验证码", text):
+        return None
     start = min(int(s["start"]) for s in found)
     end = max(int(s["end"]) for s in found)
     return {
@@ -436,7 +439,7 @@ def user_message(
     bar = _LAYER_ZH.get(layer, "步骤")
     other = "预期" if layer == "operation" else "操作"
     text = str(clause or "").strip()
-    head = f"步骤 {int(case_step)} {bar}「{text}」"
+    head = f"{bar}步骤 {int(case_step)}「{text}」"
     if reason == "layer_mismatch":
         return f"{head}无法执行：这是{other}（{event_name or '事件'}），写在了{bar}栏。"
     if reason == "ambiguous_clause":
@@ -453,7 +456,11 @@ def user_message(
     if reason == "params_incomplete":
         return f"{head}无法验证：{event_name or '该检查'}缺少{detail or '必要参数'}。"
     if reason == "missing_slot":
-        return f"{head}无法执行：缺少{detail or '必填槽'}。"
+        if "credential" in detail:
+            return f"{head}尚未执行：当前登录流程没有可用测试账号，请检查项目当前环境的账号配置。"
+        names = {"submit": "提交按钮", "entry": "页面入口", "credential": "测试账号"}
+        readable = "、".join(names.get(value, "必要操作信息") for value in detail.split("、") if value)
+        return f"{head}尚未执行：缺少{readable or '必要操作信息'}，请在用例编辑页补充。"
     if reason == "uncovered":
         return f"{head}未执行：{detail}"
     if reason == "unmapped":

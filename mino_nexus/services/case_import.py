@@ -4,13 +4,16 @@ from mino_nexus.core.execution_user import user_thread, owned_job, require_user_
 
 
 import copy
-import threading
+import os
 import uuid
-from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from mino_nexus.services import cover_import as ci
 from mino_nexus.services import project_store as ps
+from mino_nexus.services import case_import_preview_store as preview_store
 from mino_nexus.services.case_store import (
     apply_import_row,
     count_cases,
@@ -21,28 +24,8 @@ from mino_nexus.services.case_store import (
 
 ConflictAction = Literal["overwrite", "skip"]
 
-_PREVIEW_TTL = timedelta(hours=2)
-_previews: dict[str, dict[str, Any]] = {}
-
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _purge_previews() -> None:
-    cutoff = datetime.now(timezone.utc) - _PREVIEW_TTL
-    dead = []
-    for tok, doc in _previews.items():
-        created = doc.get("created_at")
-        try:
-            ts = datetime.fromisoformat(str(created))
-        except Exception:
-            dead.append(tok)
-            continue
-        if ts < cutoff:
-            dead.append(tok)
-    for tok in dead:
-        _previews.pop(tok, None)
 
 
 def _require_project(project_id: str) -> dict[str, Any]:
@@ -210,7 +193,6 @@ def preview_import(
     column_map: dict[str, int] | None = None,
     default_platform: str = "",
 ) -> dict[str, Any]:
-    _purge_previews()
     pid = str(project_id or "").strip()
     rid = str(requirement_id or "").strip()
     if not pid:
@@ -252,7 +234,6 @@ def preview_import(
             from mino_nexus.services.case_resource_claim import compile_resource_key_from_precondition
             from mino_nexus.services.resource_claim_summary import resource_claim_summary
 
-            env_doc = ps.project_env(pid)
             preview_plat = str(row.get("platform") or default_plat or "").strip()
             claim = compile_resource_key_from_precondition(
                 str(pre),
@@ -264,6 +245,7 @@ def preview_import(
                 scene=claim.get("case_scene") if isinstance(claim.get("case_scene"), dict) else None,
                 precondition=str(pre),
             )
+            row["resource_key"] = claim
         except Exception:
             claim_summary = ""
         steps = row.get("steps") or []
@@ -293,10 +275,10 @@ def preview_import(
             "name": name,
             "module": row.get("module") or "",
             "platform": row.get("platform") or "",
-            "precondition_preview": str(pre)[:200],
+            "precondition_preview": str(pre),
             "resource_claim_summary": claim_summary,
-            "steps_preview": "\n".join(steps)[:240],
-            "expected_preview": "\n".join(expected)[:240],
+            "steps_preview": "\n".join(steps),
+            "expected_preview": "\n".join(expected),
             "steps_parsed": [],
             "expected_parsed": [],
             "remark": "标题、操作、预期缺一列，不解析" if incomplete else "",
@@ -311,18 +293,21 @@ def preview_import(
     from mino_nexus.services.settings_store import get_case_import_settings
 
     token = uuid.uuid4().hex
-    _previews[token] = {
+    app_id = next((str(app.get("id") or "") for app in ps.list_apps(pid) if app.get("id")), "")
+    preview_store.create(token, {
         "owner_user_id": require_user_id(),
         "created_at": _now(),
         "project_id": pid,
+        "app_id": app_id,
+        "env_doc": env_doc,
         "requirement_id": rid,
         "default_platform": default_plat,
         "rows": copy.deepcopy(preview_rows),
         "meta": meta,
         "cancel": False,
         "batch_size": int(get_case_import_settings().get("preview_batch_size") or 5),
-    }
-    user_thread(target=_compile_preview_batches, args=(token,), daemon=True).start()
+    })
+    _start_preview_worker(token)
     return {
         "preview_token": token,
         "project_id": pid,
@@ -338,10 +323,12 @@ def preview_import(
     }
 
 
-def preview_status(preview_token: str) -> dict[str, Any] | None:
-    doc = _previews.get(str(preview_token or ""))
-    if not doc or doc.get("owner_user_id") != require_user_id():
+def preview_status(preview_token: str, project_id: str = "") -> dict[str, Any] | None:
+    doc = preview_store.get(str(preview_token or ""), project_id)
+    if not doc:
         return None
+    if not doc.get("cancel") and any(row.get("parse_status") == "pending" for row in doc.get("rows") or []):
+        _start_preview_worker(str(preview_token))
     rows = list(doc.get("rows") or [])
     parsed = sum(1 for row in rows if row.get("parse_status") != "pending")
     return {
@@ -354,26 +341,26 @@ def preview_status(preview_token: str) -> dict[str, Any] | None:
     }
 
 
-def cancel_preview(preview_token: str) -> bool:
-    doc = _previews.get(str(preview_token or ""))
-    if not doc or doc.get("owner_user_id") != require_user_id():
+def cancel_preview(preview_token: str, project_id: str = "") -> bool:
+    doc = preview_store.get(str(preview_token or ""), project_id)
+    if not doc:
         return False
     doc["cancel"] = True
     for row in doc.get("rows") or []:
         if row.get("parse_status") == "pending":
             row["parse_status"] = "cancelled"
-    return True
+    return preview_store.update(str(preview_token), doc)
 
 
-def retry_preview_row(preview_token: str, row_index: int) -> bool:
-    doc = _previews.get(str(preview_token or ""))
-    if not doc or doc.get("owner_user_id") != require_user_id():
+def retry_preview_row(preview_token: str, row_index: int, project_id: str = "") -> bool:
+    doc = preview_store.get(str(preview_token or ""), project_id)
+    if not doc:
         return False
     found = False
     for row in doc.get("rows") or []:
-        if int(row.get("row_index") or -1) != int(row_index):
+        if int(row.get("row_index", -1)) != int(row_index):
             continue
-        if row.get("parse_status") == "incomplete":
+        if row.get("parse_status") not in ("error", "cancelled"):
             return False
         row["parse_status"] = "pending"
         row["steps_parsed"] = []
@@ -382,48 +369,68 @@ def retry_preview_row(preview_token: str, row_index: int) -> bool:
         break
     if not found:
         return False
-    doc["cancel"] = False
-    user_thread(target=_compile_preview_batches, args=(str(preview_token),), daemon=True).start()
+    preview_store.update_row(str(preview_token), row, restart=True)
+    _start_preview_worker(str(preview_token))
     return True
 
 
-def _compile_preview_batches(token: str) -> None:
-    doc = _previews.get(token)
-    if not doc or doc.get("owner_user_id") != require_user_id():
-        return
+def _start_preview_worker(token: str) -> None:
+    worker_id = f"{os.getpid()}:{uuid.uuid4().hex}"
+    if preview_store.claim(token, worker_id):
+        try:
+            user_thread(target=_compile_preview_batches, args=(token, worker_id), daemon=True).start()
+        except Exception:
+            preview_store.release(token, worker_id)
+            raise
+
+
+def _compile_preview_batches(token: str, worker_id: str) -> None:
     from mino_nexus.services.case_key_registry import import_row_key_summary
 
-    while True:
-        doc = _previews.get(token)
-        if not doc or doc.get("cancel"):
-            return
-        pending = [row for row in (doc.get("rows") or []) if row.get("parse_status") == "pending"]
-        if not pending:
-            return
-        batch = pending[: int(doc.get("batch_size") or 5)]
-        for row in batch:
-            if doc.get("cancel"):
+    try:
+        while True:
+            doc = preview_store.get(token)
+            if not doc or doc.get("cancel"):
                 return
-            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
-            try:
-                summary = import_row_key_summary(payload, app_id=str(doc.get("project_id") or ""))
-            except Exception as exc:
-                row["parse_status"] = "error"
-                row["remark"] = str(exc)[:200]
-                continue
-            row["steps_parsed"] = list(summary.get("steps_parsed") or [])
-            row["expected_parsed"] = list(summary.get("expected_parsed") or [])
-            row["remark"] = str(summary.get("remark") or "")
-            row["step_key_validation"] = summary
-            row["ui_automation"] = summary.get("ui_automation") or {"coverable": True, "blocked_by": []}
-            flags = list(row.get("flags") or [])
-            if summary.get("issues") and "step_key_issues" not in flags:
-                flags.append("step_key_issues")
-            ua = row["ui_automation"]
-            if isinstance(ua, dict) and ua.get("coverable") is False and "ui_not_coverable" not in flags:
-                flags.append("ui_not_coverable")
-            row["flags"] = flags
-            row["parse_status"] = "done"
+            pending = [row for row in doc.get("rows") or [] if row.get("parse_status") == "pending"]
+            if not pending:
+                return
+            batch = pending[: max(1, min(4, int(doc.get("batch_size") or 5)))]
+            with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+                futures = {
+                    executor.submit(copy_context().run, import_row_key_summary, row.get("payload") or {}, app_id=str(doc.get("app_id") or ""), env_doc=doc.get("env_doc")): row["row_index"]
+                    for row in batch
+                }
+                for future in as_completed(futures):
+                    doc = preview_store.get(token)
+                    if not doc or doc.get("cancel"):
+                        return
+                    row = next(item for item in doc["rows"] if item["row_index"] == futures[future])
+                    try:
+                        summary = future.result()
+                    except Exception as exc:
+                        row["parse_status"] = "error"
+                        row["remark"] = str(exc)[:200]
+                        row["selected_by_default"] = False
+                    else:
+                        row["steps_parsed"] = list(summary.get("steps_parsed") or [])
+                        row["expected_parsed"] = list(summary.get("expected_parsed") or [])
+                        row["remark"] = str(summary.get("remark") or "")
+                        row["payload"]["meta"] = summary.pop("compiled_meta", {})
+                        row["step_key_validation"] = summary
+                        row["automation_details"] = summary.get("automation_details") or {}
+                        row["ui_automation"] = summary.get("ui_automation") or {"coverable": True, "blocked_by": []}
+                        flags = [flag for flag in row.get("flags") or [] if flag not in ("step_key_issues", "ui_not_coverable")]
+                        if summary.get("issues"):
+                            flags.append("step_key_issues")
+                        if row["ui_automation"].get("coverable") is False:
+                            flags.append("ui_not_coverable")
+                        row["flags"] = flags
+                        row["parse_status"] = "done"
+                    if not preview_store.update_row(token, row, worker_id=worker_id):
+                        return
+    finally:
+        preview_store.release(token, worker_id)
 
 
 def normalize_table(table: Any) -> list[list[str]]:
@@ -448,8 +455,8 @@ def commit_import(
     work_rows: list[dict[str, Any]] = []
     fill_plat = str(default_platform or "").strip()
     if preview_token:
-        doc = _previews.get(str(preview_token))
-        if not doc or doc.get("owner_user_id") != require_user_id():
+        doc = preview_store.get(str(preview_token), pid)
+        if not doc:
             raise ValueError("预览已过期，请重新解析")
         if str(doc.get("project_id") or "") != pid:
             raise ValueError("预览与项目不匹配")
@@ -457,6 +464,8 @@ def commit_import(
             raise ValueError("预览与需求不匹配")
         if any(row.get("parse_status") == "pending" for row in (doc.get("rows") or [])):
             raise ValueError("解析还没完成")
+        if doc.get("cancel"):
+            raise ValueError("预览已取消，请重新解析")
         if not fill_plat:
             fill_plat = str(doc.get("default_platform") or "").strip()
         work_rows = copy.deepcopy(list(doc.get("rows") or []))
@@ -473,6 +482,8 @@ def commit_import(
                 item["on_conflict"] = ov["on_conflict"]
             if "selected" in ov:
                 item["selected"] = ov["selected"]
+        if any(item.get("selected") is not False and item.get("parse_status") != "done" for item in work_rows):
+            raise ValueError("所选用例尚未成功解析，请重试或取消勾选")
     elif rows:
         work_rows = rows
     else:
@@ -509,7 +520,7 @@ def commit_import(
         if block_on_step_key_issues:
             from mino_nexus.services.case_key_registry import import_row_key_summary
 
-            summary = import_row_key_summary(row, app_id=app_id)
+            summary = item.get("step_key_validation") if preview_token else import_row_key_summary(row, app_id=app_id, env_doc=env_doc)
             if summary.get("issues"):
                 blocked += 1
                 results.append({
@@ -530,7 +541,7 @@ def commit_import(
             continue
         action_raw = str(item.get("on_conflict") or default_on_conflict or "skip").strip().lower()
         on_conflict: ConflictAction = "overwrite" if action_raw == "overwrite" else "skip"
-        status, saved = apply_import_row(pid, rid, row, on_conflict=on_conflict)
+        status, saved = apply_import_row(pid, rid, row, on_conflict=on_conflict, compiled=bool(preview_token))
         if status == "created":
             created += 1
         elif status == "updated":
@@ -543,7 +554,7 @@ def commit_import(
             "status": status,
         })
     if preview_token:
-        _previews.pop(str(preview_token), None)
+        preview_store.remove(str(preview_token))
     total = count_cases(pid, rid)
     return {
         "project_id": pid,

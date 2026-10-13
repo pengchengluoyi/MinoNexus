@@ -10,6 +10,7 @@ from mino_nexus.models.assistant import (
 from mino_nexus.models.atlas import AtlasAlias
 from mino_nexus.models.auth import AuthSession, AuthState, User
 from mino_nexus.models.case import ProjectCase
+from mino_nexus.models.case_import_preview import CaseImportPreview
 from mino_nexus.models.catalog import CatalogEntry, CatalogMeta
 from mino_nexus.models.device_reservation import DeviceReservation
 from mino_nexus.models.device import Device
@@ -21,6 +22,10 @@ from mino_nexus.models.resource_ops import (
     ResourceTransitionRule,
 )
 from mino_nexus.models.dispatch import DispatchCall
+from mino_nexus.models.model_usage import ModelUsage
+from mino_nexus.models.prompt_evidence import PromptEvidence
+from mino_nexus.models.assistant_conversation import AssistantRequest, AssistantFocus, AssistantPreference, AssistantGroupPolicy, AssistantMessageReference
+from mino_nexus.models.assistant_delivery import AssistantReceipt, AssistantNotification
 from mino_nexus.models.doc_library import DocChunk, DocSource
 from mino_nexus.models.knowledge import KnowledgeEntry
 from mino_nexus.models.nav import StudioNav
@@ -49,6 +54,7 @@ __all__ = [
     "AppIntelProposal",
     "App",
     "ProjectCase",
+    "CaseImportPreview",
     "AppRegressionRun",
     "AtlasAlias",
     "AuthSession",

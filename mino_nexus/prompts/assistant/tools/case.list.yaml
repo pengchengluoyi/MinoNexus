@@ -1,5 +1,5 @@
 id: case.list
-version: 1
+version: 3
 title: 项目用例列表
 description: 列出某个应用所在项目下的用例。用户问有哪些用例、搜某条用例时用。
 route: GET /project/{project_id}/cases
@@ -11,9 +11,52 @@ params_schema:
     project_id:
       type: string
       description: 项目 id 或项目名
-    keyword:
+    search:
       type: string
       description: 按用例名过滤，可省略
+    module:
+      type: string
+      description: 精确模块名
+    limit:
+      type: integer
+      default: 50
+      minimum: 1
+      maximum: 200
+    offset:
+      type: integer
+      minimum: 0
+    intent:
+      type: string
+      enum:
+      - query
+      - execute_test
+      description: 原用户明确要求执行测试时为 execute_test；纯查询或闲聊为 query。仅在追问续接中使用，不改变当前只读工具。
+    app_id:
+      type: string
+      description: 应用 id 或应用名
+    modules:
+      type: array
+      items:
+        type: string
+      description: 用户明确要求多个模块时的并集，去重执行项目共享用例
+    ordinal:
+      type: integer
+      minimum: 1
+      description: 当前范围内第几条用例，第一条传 1
+    all_cases:
+      type: boolean
+      description: 仅用户明确要求整个项目全部用例时传 true
+    case_ids:
+      type: array
+      items:
+        type: string
+      description: 明确选择的用例 id，空列表不会执行全部
+    env_surface:
+      type: string
+      description: 用户明确指定的应用渠道 id 或别名，例如 Agent/macagent；先确定渠道再筛选设备
+    env_profile:
+      type: string
+      description: 本次运行环境，例如 test/pre/prod
   required:
   - project_id
 param_resolvers:

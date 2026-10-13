@@ -20,7 +20,7 @@ AI_PROVIDER_PRESETS: list[dict[str, Any]] = [
         "name": "Anthropic",
         "api_type": "anthropic",
         "base_url": "https://api.anthropic.com",
-        "default_model": "claude-3-5-sonnet-latest",
+        "default_model": "claude-sonnet-4-20250514",
         "model_options": ["claude-3-5-sonnet-latest", "claude-sonnet-4-20250514"],
     },
     {
@@ -52,8 +52,8 @@ AI_PROVIDER_PRESETS: list[dict[str, Any]] = [
         "name": "火山引擎",
         "api_type": "openai",
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "default_model": "doubao-seed-2-0-lite-260428",
-        "model_options": ["doubao-seed-2-0-lite-260428"],
+        "default_model": "doubao-seed-2-0-lite-260215",
+        "model_options": [],
     },
 ]
 
@@ -233,7 +233,10 @@ def _provider_public(provider_id: str, raw: Optional[dict[str, Any]] = None) -> 
     preset = next((p for p in AI_PROVIDER_PRESETS if p["id"] == provider_id), None)
     raw = raw if isinstance(raw, dict) else {}
     api_key = str(raw.get("api_key") or "").strip()
-    model_options = list((preset or {}).get("model_options") or [])
+    from mino_nexus.ai.model_sdk import sdk_provider, catalog, model_info
+    native = sdk_provider({"id": provider_id, **raw})
+    models = catalog(native)
+    model_options = [m["id"] for m in models["models"] if m["mode"] == "chat"]
     model = str(raw.get("model") or "").strip() or str((preset or {}).get("default_model") or "")
     configured = bool(api_key)
     enabled = raw.get("enabled", True) is not False
@@ -243,6 +246,9 @@ def _provider_public(provider_id: str, raw: Optional[dict[str, Any]] = None) -> 
         case_execution_use = False
     elif not enabled:
         case_execution_use = False
+    validation = raw.get("_validation") or {"status": "unverified"}
+    selected_info = model_info(native, model)
+    selected_info["account_access"] = "verified_text_connection" if validation.get("status") == "verified" else "unverified"
     return {
         "id": provider_id,
         "name": raw.get("name") or (preset or {}).get("name") or provider_id,
@@ -250,6 +256,13 @@ def _provider_public(provider_id: str, raw: Optional[dict[str, Any]] = None) -> 
         "base_url": str(raw.get("base_url") or (preset or {}).get("base_url") or "").strip(),
         "model": model,
         "model_options": model_options,
+        "sdk": models["sdk"], "sdk_version": models["sdk_version"], "sdk_provider": native,
+        "model_info": selected_info,
+        "embedding_model": str(raw.get("embedding_model") or ""),
+        "model_parameters": raw.get("model_parameters") or {},
+        "pricing": raw.get("pricing") or {},
+        "embedding_pricing": raw.get("embedding_pricing") or {},
+        "validation": raw.get("_validation") or {"status": "unverified"},
         "api_key_masked": _mask_secret(api_key),
         "configured": configured,
         "enabled": enabled,
@@ -273,6 +286,8 @@ def get_ai_usage(user_id: str | None = None) -> dict[str, Any]:
 
 
 def list_ai_providers(user_id: str | None = None) -> dict[str, Any]:
+    from mino_nexus.ai.model_sdk import KEY_PROVIDERS
+
     ai = _ai_root(user_id)
     providers = [_provider_public(p["id"], ai.get(p["id"])) for p in AI_PROVIDER_PRESETS]
     custom_ids = [
@@ -285,7 +300,8 @@ def list_ai_providers(user_id: str | None = None) -> dict[str, Any]:
             providers.append(_provider_public(provider_id, row))
     return {
         "providers": providers,
-        "presets": AI_PROVIDER_PRESETS,
+        "sdk_providers": list(KEY_PROVIDERS),
+        "presets": [{**p, "model_options": next(row["model_options"] for row in providers if row["id"] == p["id"])} for p in AI_PROVIDER_PRESETS],
         "default_provider": str(ai.get("_default_provider") or "openai"),
         "usage": get_ai_usage(user_id),
     }
@@ -302,9 +318,38 @@ def save_ai_provider(provider_id: str, payload: dict[str, Any], user_id: str | N
         row["api_key"] = ""
     elif str(payload.get("api_key") or "").strip():
         row["api_key"] = str(payload.get("api_key")).strip()
-    for key in ("name", "api_type", "base_url", "model"):
+    for key in ("name", "api_type", "base_url", "model", "sdk_provider", "embedding_model"):
         if key in payload and payload.get(key) is not None:
             row[key] = str(payload.get(key) or "")
+    from mino_nexus.ai.model_sdk import sdk_provider
+    row["sdk_provider"] = sdk_provider({"id": pid, **row})
+    if "model_parameters" in payload:
+        params = payload.get("model_parameters") or {}
+        allowed = {"temperature", "max_tokens", "top_p", "thinking"}
+        if not isinstance(params, dict) or set(params) - allowed:
+            raise ValueError("模型参数仅支持 temperature/max_tokens/top_p/thinking")
+        import math
+        for name, value in params.items():
+            if name == "thinking":
+                if value not in ({"type": "enabled"}, {"type": "disabled"}, {"type": "auto"}):
+                    raise ValueError("thinking.type 须为 enabled/disabled/auto")
+            elif not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+                raise ValueError("模型参数须为有限数字")
+            elif name == "temperature" and not 0 <= value <= 2 or name == "top_p" and not 0 <= value <= 1 or name == "max_tokens" and (value < 1 or int(value) != value):
+                raise ValueError("模型参数超出范围")
+        row["model_parameters"] = params
+    for field in ("pricing", "embedding_pricing"):
+        if field in payload:
+            price = payload.get(field) or {}
+            import math
+            if not isinstance(price, dict) or set(price) - {"input_per_million_usd", "output_per_million_usd"}:
+                raise ValueError("单价须为 USD / 百万 token")
+            if any(not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) or v < 0 for v in price.values() if v is not None):
+                raise ValueError("单价须为非负有限数字")
+            row[field] = {k: v for k, v in price.items() if v is not None}
+    if any(k in payload for k in ("api_key", "clear_key", "model", "base_url", "sdk_provider", "model_parameters", "embedding_model")):
+        # 编辑配置使上次验证失效。不能把旧模型的成功状态挂到新模型上。
+        row.pop("_validation", None)
     if "enabled" in payload:
         row["enabled"] = bool(payload.get("enabled"))
     if "case_execution_use" in payload:
@@ -325,6 +370,20 @@ def save_ai_provider(provider_id: str, payload: dict[str, Any], user_id: str | N
         ai["_default_provider"] = pid
     _save_ai(ai, user_id)
     return _provider_public(pid, row)
+
+
+@_ai_write
+def record_ai_validation(provider_id: str, fingerprint: str, result: dict, user_id: str | None = None) -> bool:
+    from mino_nexus.ai.model_sdk import config_fingerprint
+    ai = _ai_root(user_id)
+    current = get_ai_provider_credentials(provider_id, user_id)
+    if config_fingerprint(current) != fingerprint:
+        return False  # 验证期间配置已变化，拒绝写回旧结果
+    row = ai.get(provider_id) if isinstance(ai.get(provider_id), dict) else {}
+    row["_validation"] = result
+    ai[provider_id] = row
+    _save_ai(ai, user_id)
+    return True
 
 
 @_ai_write
@@ -361,6 +420,8 @@ def get_ai_provider_credentials(provider_id: str | None = None, user_id: str | N
     raw = ai.get(pid) if isinstance(ai.get(pid), dict) else {}
     preset = next((p for p in AI_PROVIDER_PRESETS if p["id"] == pid), None)
     api_key = str(raw.get("api_key") or "").strip()
+    from mino_nexus.ai.model_sdk import sdk_provider
+    effective_base = str(raw.get("base_url") or (preset or {}).get("base_url") or "").rstrip("/")
     return {
         "owner_user_id": uid,
         "id": pid,
@@ -368,6 +429,11 @@ def get_ai_provider_credentials(provider_id: str | None = None, user_id: str | N
         "configured": bool(api_key),
         "enabled": raw.get("enabled", True) is not False if api_key else False,
         "api_key": api_key,
+        "sdk_provider": sdk_provider({"id": pid, **raw}),
+        "model_parameters": raw.get("model_parameters") or {},
+        "pricing": raw.get("pricing") or {},
+        "embedding_pricing": raw.get("embedding_pricing") or {},
+        "custom_pricing_required": not preset or effective_base != str(preset.get("base_url") or "").rstrip("/"),
         "base_url": str(raw.get("base_url") or (preset or {}).get("base_url") or "").rstrip("/"),
         "model": str(raw.get("model") or (preset or {}).get("default_model") or "").strip(),
         "api_type": str(raw.get("api_type") or (preset or {}).get("api_type") or "openai").strip(),

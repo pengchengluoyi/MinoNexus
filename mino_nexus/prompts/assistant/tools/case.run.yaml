@@ -1,5 +1,5 @@
 id: case.run
-version: 2
+version: 4
 title: 跑用例
 description: 在指定设备上执行用例，返回任务 id。用户说跑一下、执行、回归时用。
 route: POST /case-runner/run
@@ -23,11 +23,32 @@ params_schema:
     sn:
       type: string
       description: 设备序列号或别名
+    modules:
+      type: array
+      items:
+        type: string
+      description: 用户明确要求多个模块时的并集，去重执行项目共享用例
+    module:
+      type: string
+      description: 用户指定的用例模块，按项目共享用例范围精确筛选
+    search:
+      type: string
+      description: 用户指定的用例名称关键字
+    ordinal:
+      type: integer
+      minimum: 1
+      description: 当前范围内第几条用例，第一条传 1
+    all_cases:
+      type: boolean
+      description: 仅用户明确要求整个项目全部用例时传 true
+    playwright_headless:
+      type: boolean
+      description: 无头浏览器模式，影响资源容量与准入
     case_ids:
       type: array
       items:
         type: string
-      description: 用例 id，可省略
+      description: 明确选择的用例 id，空列表不会执行全部
     action_scheme:
       type: string
       enum:

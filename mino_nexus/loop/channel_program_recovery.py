@@ -21,6 +21,8 @@ def channel_supports_capability(ctx: Any, capability_id: str) -> bool:
     if not cap:
         return True
     ch = ui_channel_from_ctx(ctx)
+    if ch == UiChannel.DESKTOP and cap == "get_app_version":
+        return cap in (getattr(ctx, "desktop_capabilities", None) or [])
     if ch == UiChannel.DESKTOP and cap in {"reset_native_app_before_case", "clear_app_cache", "force_stop_app"}:
         return False
     if ch == UiChannel.WEB and cap in _NATIVE_ONLY_CAPS:

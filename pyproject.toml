@@ -16,6 +16,7 @@ dependencies = [
   "sqlalchemy>=2.0",
   "pydantic>=2.12",
   "httpx>=0.28",          # 打 LLM endpoint
+  "litellm==1.105.0",     # 统一 SDK（不安装 proxy extras）；能力/成本使用随版本固定的注册表
   "requests>=2.32",       # llm_client / Figma 同步
   "websockets>=15.0",     # UI observers + Scout 节点接入
   "APScheduler>=3.11",

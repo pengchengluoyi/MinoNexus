@@ -12,7 +12,7 @@ _BLOCK_RE = re.compile(r"【块[:：]\s*([^】]+)】")
 _NAV_RE = re.compile(r"【导航[:：]\s*([^】]+)】")
 _CAP_RE = re.compile(r"【cap[:：]\s*([^】]+)】", re.I)
 _KEY_REF_RE = re.compile(r"\b((?:operation|expected)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)\b", re.I)
-_COMPILE_CONTRACT_REVISION = 2
+_COMPILE_CONTRACT_REVISION = 3
 _SLUG_BAD = re.compile(r"[^\w]+", re.UNICODE)
 _SPATIAL_HINTS: tuple[tuple[str, str], ...] = (
     ("右上", "top_right"),
@@ -364,6 +364,8 @@ def _step_from_hit(hit: dict[str, Any], *, case_step: int, sub_idx: int) -> dict
         }
         if hit.get("bind"):
             assert_payload["bind"] = hit["bind"]
+        if not element and not rules and clause:
+            assert_payload["expectation"] = clause[:240]
         row = {
             "id": f"ck_s{case_step}_{sub_idx}"[:64],
             "key_ref": str(hit.get("key_ref") or ""),

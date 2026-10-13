@@ -52,6 +52,8 @@ def _render_side(blocks: list[dict[str, Any]], slots: dict[str, str]) -> str:
             continue
         if not _block_enabled(block):
             continue
+        if str(block.get("kind") or "").strip().lower() == "image":
+            continue
         chunk = _slot_text(block, slots)
         if chunk:
             parts.append(chunk)
@@ -110,6 +112,12 @@ def render(job_id: str, slots: dict[str, str]) -> tuple[list[dict], dict]:
     from mino_nexus.ai.prompt_repo import get_job
 
     row = get_job(job_id)
+    if row:
+        from mino_nexus.services.prompt_evidence import archive_template
+        try:
+            archive_template(row)
+        except Exception as exc:
+            raise JobRenderError(f"Prompt 证据暂不可写，已阻塞调用（{type(exc).__name__}）") from exc
     if not row:
         raise JobRenderError(f"prompts 里没有 {job_id}")
     return render_job(row, slots)

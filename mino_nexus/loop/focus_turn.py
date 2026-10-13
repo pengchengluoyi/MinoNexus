@@ -47,6 +47,12 @@ def try_satisfy_focus_instead_of_repeat(
         return False
     if _focus_cap(focus) != cap:
         return False
+    if (
+        cap == "tap_element"
+        and str(getattr(cursor, "visual_failed_milestone", "") or "") == str(focus.get("id") or "")
+    ):
+        # 该里程碑刚被画面回看判「未完成」：重复点击不等于已满足，交给守卫让模型换点，不能记 pass。
+        return False
     hit_id = ""
     hit_reason = ""
     for gid in SATISFY_GUARD_IDS:

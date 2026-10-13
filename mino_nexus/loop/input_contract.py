@@ -121,7 +121,10 @@ def focus_input_block_reason(ctx: Any) -> str:
         return f"节点不可用，不能派发当前焦点输入：{why or sn}"
     executor, platform = _executor_for(ctx)
     caps = getattr(node, "runtime_capabilities", None)
-    if supports_focus_input(caps, executor=executor, platform=platform, write_mode="replace"):
+    if supports_focus_input(
+        caps, executor=executor, platform=platform,
+        write_mode="append" if executor == "adb" else "replace",
+    ):
         return ""
     ver = str(getattr(node, "scout_version", "") or "未知")
     return (

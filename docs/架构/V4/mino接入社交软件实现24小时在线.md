@@ -1,9 +1,11 @@
-# Mino 接入社交软件实现 24 小时在线
+# Mino 社交助手接入与常驻运行方案
 
-> **状态**：规划，未开工。第二版，已按评审意见（§11）修订。
+> **2026-10-12 规范关系**：本目录的现行约束及文档覆盖关系见 [V4 索引](README.md)。方案描述目标，开发记录描述已实现及验收边界；早期段落不得覆盖后续明确修订。代码修改通过隔离验收不等于真实模型、IM 或桌面实机验收。
+
+> **状态**：方案与修订依据。部分功能已有代码；2026-10-12 补充调用幂等、持久通知与隐私约束，真实 IM 与全天运行验收仍待完成。
 > **要回答的事**：用户怎样在飞书、企微、微信里用一句话驱动 Nexus（查项目、跑用例、看结果、收通知），以及其它 Agent 怎样把 Nexus 当成工具来用。具体包括：Nexus 的接口怎么开放（给 IM，也作为 MCP 给外部 Agent）；一句话怎么由大模型落到具体接口；每次调用之后给用户看什么样的反馈；哪些开源项目可以直接接入；对现有各模块的影响。
 > **关联**：[Scout 插件下放到节点](../V3/Scout插件下放到节点.md)、[PROMPTS](../../基础框架/PROMPTS.md)、[PROTOCOL](../../基础框架/PROTOCOL.md)、[NODE_REGISTRY](../../基础框架/NODE_REGISTRY.md)、[CAPABILITY_CATALOG](../../基础框架/CAPABILITY_CATALOG.md)。
-> **前端范围**：只做 **MinoWorkbench**。Studio、Console 后续不再维护，本方案不在它们上面加任何东西。
+> **前端范围**：**MinoWorkbench** 是唯一用户及管理入口。文件名保留以兼容已有引用；“24 小时在线”是部署目标，不是已验收的可用性承诺。
 
 V4 要做的事可以用一句话概括：**把 Nexus 变成一个可以被「说话」调用的服务**。这里的「说话的人」有两类：
 
@@ -18,22 +20,22 @@ V4 要做的事可以用一句话概括：**把 Nexus 变成一个可以被「�
 
 | 题 | 决定 | 理由 |
 |---|---|---|
-| 两个服务各干什么 | **Nexus** 负责调度：理解一句话、选接口、调接口、组织反馈，以及对外提供 MCP。**Scout** 负责执行：跑设备任务，并与 IM 软件收发消息。**两者都必须在线** | 所有 LLM 调用只在 Nexus（Scout 有 `verify_no_llm.py`）；第三方密钥只在 Scout（V3）。一个 Scout 节点既可以执行任务，也可以连接 IM，不需要单独的「网关节点」 |
-| 「24 小时在线」怎么保证 | Nexus 常驻；挂 IM 机器人的那台 Scout 常驻、防休眠。同一个机器人只允许一台 Scout 持有连接 | 在线率取决于这两个进程，不引入第三个服务 |
+| 两个服务各干什么 | **Nexus** 负责调度：理解一句话、选接口、调接口、组织反馈，以及对外提供 MCP。**Scout** 负责执行：跑设备任务，并与 IM 软件收发消息。**两者都必须在线** | 所有 LLM 调用只在 Nexus（Scout 有 `verify_no_llm.py`）；IM 等执行插件的密钥留在 Scout；大模型 Key 按当前执行账号存于 Nexus，由 LiteLLM SDK 显式使用。一个 Scout 节点既可以执行任务，也可以连接 IM，不需要单独的「网关节点」 |
+| 常驻运行与恢复 | Nexus 和持有 IM 机器人的 Scout 常驻；同一实例只允许一台本人节点持有连接。进程守护、防休眠、持久队列和恢复按 §7.4 验收 | 外部渠道、网络和主机故障均影响在线率；不承诺仅靠两个进程实现不丢不重 |
 | IM 渠道层用什么 | **LangBot 集成进 Scout**：Scout 负责安装和托管 LangBot 进程，LangBot 只做收发消息，不配置大模型。消息经本机回环接口交给 Scout，再上报 Nexus | LangBot（Apache-2.0）已覆盖飞书、企微、个人微信、钉钉、QQ 等平台，避免逐个平台自研。已在用的微信 iLink 原生插件保留 |
 | 接口怎么开放 | **不直接暴露 301 个路由。** 建一张**助手工具表**（白名单），每条工具绑定一个现有路由 | 选错率、token 成本、越权面都可控 |
 | 对外开放给其它 Agent | Nexus 提供 **MCP 端点 `/mcp`**，暴露同一张工具表。**这是 V4 的一等公民，不是附属功能** | 一次实现，所有 MCP 客户端都能用。IM 助手内部也走同一套工具执行器 |
 | 一句话怎么变成调用 | job `assistant-route`（function calling），真源是仓库文件 `mino_nexus/prompts/assistant/`，用 git 管理（见 [prompt 改造方案](prompt改造方案.md)） | 与 `agent-decide` 用 function tools 是同一个模式 |
-| 写操作 | **只有两档。查询和新增 / 执行类（跑用例、重跑、探索、生成草稿）直接执行，不弹确认。删除类不进工具表**，IM 和 MCP 都调不到，只能在 Workbench 上手动操作 | 确认卡在 IM 里成本高、打断节奏；删除才是真正不可逆的，干脆不暴露 |
+| 写操作 | **只有两档。查询和新增 / 执行类（跑用例、重跑、探索、生成草稿）直接执行，不弹确认。删除类不进工具表**，IM 和 MCP 都调不到，只能在 Workbench 上手动操作 | 确认卡在 IM 里成本高、打断节奏；是否删除不足以判断风险；执行仅限工具白名单、账号权限、本条明确目标与写操作幂等保护，缺参或结果未知时停止 |
 | 反馈 UI | 渠道无关的卡片结构 **MinoCard**，在 Nexus 渲染成 LangBot 消息链 / 微信文本，在 Workbench 渲染成组件 | 业务只产出一份结构，渠道差异由渲染器处理 |
-| 消息正文存哪 | **存 Scout 本地数据库**，不进 Nexus `mino.db`。Nexus 只存调用轨迹（调了什么、结果状态、耗时、token），不存原话 | 与 V3「第三方数据留在节点」一致。注意 Scout 目前**没有数据库**，需要新建（§7.3） |
-| 助手隔离粒度 | **每个用户一个助手**：人设、记忆、默认项目和设备按 Nexus 用户隔离。出现跨项目记忆污染时，再升级为「每个用户的每个项目一个助手」 | 先简单，数据结构预留 `project_id` 维度，升级时不用迁表 |
+| 消息正文存哪 | **存 Scout 本地数据库**，不进 Nexus `mino.db`。Nexus 只存脱敏调用轨迹，不存原话 | 正文与摘要存 `scout.db`；业务任务本来在 Nexus，不能与聊天正文混为一类 |
+| 助手隔离粒度 | **每个用户一个助手**：人设、记忆、每条消息明确的项目与设备（缺参追问）按 Nexus 用户隔离。出现跨项目记忆污染时，再升级为「每个用户的每个项目一个助手」 | 先简单，数据结构预留 `project_id` 维度，升级时不用迁表 |
 
 ---
 
-## 1. 现状：已经有的部分
+## 1. 早期接入基线与当前状态
 
-微信这条链路已经端到端跑通，只是一个「无工具、无身份的聊天机器人」：
+下图和清单是助手改造前的微信基线，不能作为当前缺口清单。当前工作树已有助手身份、工具、receipt 和通知实现，实施及隔离验收见开发记录；真实渠道联调仍待完成。
 
 ```
 微信用户 ──iLink 长轮询──▶ Scout plugins/wechat.py
@@ -91,9 +93,9 @@ V4 要做的事可以用一句话概括：**把 Nexus 变成一个可以被「�
 
 1. LangBot 收到消息 → `mino-bridge` 插件拦截（阻止 LangBot 默认处理），转发给本机 Scout `im_bridge`。微信 iLink 消息直接进 `im_bridge`。
 2. Scout `im_bridge`：写入本地 `im_store`；把消息统一成 `ImInbound{channel, tenant, chat_id, chat_type, sender_id, msg_id, text, mentions, attachments, reply_ctx, recent_turns}` 上报 Nexus。`recent_turns` 是本会话最近 K 轮正文，由 Scout 从本地取出带上，因为 Nexus 不存正文。
-3. Nexus `assistant_gateway`：按 `msg_id` 去重；用 `(channel, tenant, sender_id)` 查 `im_identity` 得到 Nexus 用户。未绑定时只回绑定引导。群聊里没有 @ 机器人的消息直接忽略。
+3. Nexus `assistant_gateway`：按 §12 的稳定入站键去重；由已验证的机器人实例、租户、发送者及有效绑定得到用户，并复核节点 owner。未绑定只回引导；本期群聊只回复帮助，不在群里绑定、执行、查询或发送业务结果。
 4. 渠道支持时先回一条「收到，处理中」，目的是三秒内给反馈。
-5. `assistant_agent`：拼上下文（人设、用户画像、默认项目和设备、`recent_turns`），调 `assistant-route` → 得到 `tool_calls` / `ask` / `answer`。
+5. `assistant_agent`：拼上下文（人设、用户画像、每条消息明确的项目与设备（缺参追问）、`recent_turns`），调 `assistant-route` → 得到 `tool_calls` / `ask` / `answer`。
 6. `assistant_tools`：参数解析 → ASGI 调路由 → 结果裁剪后回填给模型，最多 4 轮。没有确认环节（§4.3）。
 7. `assistant_cards`：组成 MinoCard → 按渠道渲染 → `call_plugin` 交给 Scout → LangBot / iLink 发出。Scout 同时把回复正文写入 `im_store`。
 8. 长任务（跑用例、探索）只拿到 `task_id`，于是先回「已开跑」，并在 `assistant_notify` 里登记。任务结束后主动推送结果。
@@ -200,7 +202,7 @@ MCP 也是工具表的自测台：先在 MCP 客户端里验证描述写得清�
 
 | job | 引擎 | 输入槽 | 输出 |
 |---|---|---|---|
-| `assistant-route` | function calling（tools = 召回出的工具） | `persona_block`、`user_profile`（名字、角色、默认项目和设备）、`recent_turns`（来自 Scout）、`now` | `tool_calls[]` / `ask{question, options}` / `answer{text}` |
+| `assistant-route` | function calling（tools = 召回出的工具） | `persona_block`、`user_profile`（名字、角色）、本条明确目标、当前会话已确认上下文、`recent_turns`（来自 Scout）、`now` | `tool_calls[]` / `ask{question, options}` / `answer{text}` |
 | `assistant-reply` | text_chat，可选（模板能覆盖时跳过） | 用户原话、调用轨迹、裁剪后的结果 | 写进卡片 `summary` 块的一段话 |
 
 遵守 PROMPTS.md：不在 `.py` 写中文 prompt 字面量；`dispatch.bind(job=...)` 带 job id；结构化输出过 `ai/schemas.py`。闲聊也由 `assistant-route` 的 `answer` 分支处理，人设来自 `prompts/assistant/persona/`。`im-dialogue` 在 P1 替换微信回复的同一提交里删除（见 [prompt 改造方案](prompt改造方案.md) §7）。
@@ -210,7 +212,7 @@ MCP 也是工具表的自测台：先在 MCP 客户端里验证描述写得清�
 ```
 用户原话
   │
-  ├─ 0. 快捷指令（不走模型）：/帮助 /绑定 123456 /默认项目 支付 /默认设备 小米13 /状态
+  ├─ 0. 快捷指令（不走模型）：/帮助 /绑定 123456 /状态；绑定与账号状态仅限私聊
   │
   ├─ 1. 召回：工具 ≤30 条时全给；超过 30 条时按 description 的 embedding（复用 services/doc_embed）+ 关键词取 top 8
   │
@@ -232,7 +234,7 @@ MCP 也是工具表的自测台：先在 MCP 客户端里验证描述写得清�
 - **删除类不入表、门禁兜底**：最坏情况是多跑了一次用例，而不是数据丢了。
 - **参数不信模型**：id 类参数一律由 resolver 在库里查实；模型给的 id 如果不在当前用户可见范围，就当作没给。
 - **歧义就追问，不猜**：resolver 命中多个候选时返回 `ask`，不取第一个。
-- **默认值写明**：没说设备时按「上次用的 → 用户默认 → 唯一在线」取值，并在结果卡的 `intent` 块里写明「用的是 小米13（默认设备）」。
+- **缺参追问**：参数只取本条明确输入及当前会话已确认上下文；缺失或同名歧义就追问，即使只有一台在线设备也不自动选择。结果卡展示实际解析的项目、用例和设备，执行前重新校验归属、兼容性及就绪状态。
 - **结果卡带撤回入口**：跑用例的结果卡附「取消任务」按钮（渠道不支持按钮时，提示回复「取消」）。
 
 ### 4.4 其它细节
@@ -248,7 +250,7 @@ MCP 也是工具表的自测台：先在 MCP 客户端里验证描述写得清�
 
 ### 5.1 每张卡回答四个问题
 
-1. **我理解成了什么**：例如「在 小米13（默认设备）上执行『支付-登录』共 3 条用例」。
+1. **我理解成了什么**：例如「在你本次指定的小米13上执行『支付-登录』共 3 条用例」。
 2. **我做了什么**：调用轨迹，例如 `✅ 搜索用例 · 0.3s`、`⏳ 跑用例 · 已排队`。
 3. **结果是什么**：键值、表格、进度、截图。
 4. **接下来可以做什么**：取消任务、重跑失败项、在 Workbench 打开。
@@ -260,7 +262,7 @@ MCP 也是工具表的自测台：先在 MCP 客户端里验证描述写得清�
   "card_id": "c_...", "turn_id": "t_...", "status": "running|done|failed|need_input",
   "header": {"title": "跑用例", "tone": "info|success|warn|danger"},
   "blocks": [
-    {"type": "intent", "text": "在 小米13（默认设备）上执行「支付-登录」3 条用例"},
+    {"type": "intent", "text": "在本次指定的小米13上执行「支付-登录」3 条用例"},
     {"type": "trace", "steps": [{"tool": "case.search", "label": "搜索用例", "status": "ok", "ms": 310, "args_brief": "关键词=登录"}]},
     {"type": "kv", "items": [["任务", "task-1029"], ["设备", "小米13"], ["预计", "6 分钟"]]},
     {"type": "table", "columns": ["用例", "结果", "耗时"], "rows": [["登录-密码", "✅", "42s"]]},
@@ -338,23 +340,23 @@ LangBot 子进程（由 Scout 托管）
 ### 7.1 身份绑定
 
 1. 用户在 Workbench「助手」页点「绑定 IM」→ 生成 6 位绑定码，10 分钟有效。
-2. 在 IM 里对机器人发 `/绑定 123456` → Nexus 写入 `im_identity(channel, tenant_id, sender_id, user_id, bound_at)`，签发 `assistant_token`。
+2. 在本人机器人私聊发送 `/绑定 123456` → Nexus 原子消费绑定码；校验节点 owner、机器人实例和租户，再写入绑定及代次。精确身份键包含 `channel / instance_id / tenant_id / sender_id`；码、实例与登录用户不一致时拒绝，不允许覆盖他人身份。
 3. 一个 Nexus 用户可以绑定多个渠道，**共用同一个助手**（同一份人设、偏好、记忆）。解绑和吊销在 Workbench 上操作。
 
 未绑定的人只能看到绑定引导，看不到任何业务数据。
 
 ### 7.2 群聊策略
 
-- 只响应 @ 机器人的消息；工具以**发言人本人**的身份执行。
-- 写操作在群里同样直接执行（已无删除类工具）。结果卡里不展示账号、密码、验证码类字段（沿用 `node_plugin_call._HIDDEN` 的脱敏思路）。
-- 订阅推送可以推到群，前提是订阅者本人有该任务的查看权限。
+- 本期群聊仅回复帮助，账号绑定、查询、执行及完成通知使用私聊；@ 机器人不授予业务权限。
+- 后续若开放群目标，单独实现按用户、机器人和群的允许列表及可披露字段策略；个人能查任务不代表整群能看。
+- 发送前复核订阅、目标及当前绑定代次；解绑、权限撤销或群授权移除立即停止补推。无论何种目标，都不发送密码、验证码或密钥。
 
 ### 7.3 数据存放
 
 | 数据 | 存在哪 | 说明 |
 |---|---|---|
-| IM 消息正文（用户原话、机器人回复）、会话摘要 | **Scout 本地 sqlite** | Scout 目前只有 `config_dir` 下的 JSON 和系统钥匙串，**没有数据库**，需要新建。建议文件名 `scout.db`，放在 Scout 数据目录，避免与 Nexus 的 `mino.db` 同名混淆 |
-| 身份绑定、助手偏好（默认项目和设备、人设）、工具表、卡片模板、订阅 | Nexus `mino.db` | 业务状态，遵守 CLAUDE.md「业务状态进 sqlite」 |
+| IM 消息正文（用户原话、机器人回复）、会话摘要 | **Scout 本地 sqlite `scout.db`** | 放在 Scout 数据目录；历史正文的保留与权限按用户和绑定范围处理，当前验收见开发记录 |
+| 身份绑定、助手人设与非执行偏好、订阅、receipt 与 delivery | Nexus `mino.db` | 业务状态进 SQLite；本次执行参数来自请求 / 已确认会话，工具表和卡片模板是 `prompts/assistant/` 文件真源 |
 | 调用轨迹：`tool_calls`、状态、耗时、`card_id`、`prompt_version`、token、原话哈希 | Nexus `mino.db`（`assistant_turn`） | **不含正文**。LLM 调用同时进 `dispatch_log` |
 | 平台密钥 | Scout 系统钥匙串 | V3 规则不变 |
 
@@ -364,12 +366,12 @@ LangBot 子进程（由 Scout 托管）
 - `assistant-route` 的请求本身会把最近几轮正文发给模型 provider，这是使用大模型无法避免的；`dispatch_log` 中保存的 messages 需要对 assistant 类 job 做正文脱敏，否则正文会以日志形式进入 Nexus。
 - 限流：每人每分钟 N 条、每天 token 上限，超出时回提示。
 
-### 7.4 24 小时在线
+### 7.4 常驻运行与断线恢复
 
 | 风险 | 对策 |
 |---|---|
 | 挂机器人的 Scout 休眠 | 该节点开启防休眠（`power.py`）；Workbench 节点页标出「IM 主节点」，并提示它需要常驻 |
-| 该 Scout 掉线 | Workbench 明确提示「助手离线」；LangBot 随 Scout 一起恢复，飞书和企微的重投加 `msg_id` 去重保证不丢不重 |
+| 该 Scout 掉线 | Workbench 显示节点离线；重连后按持久队列与 receipt 恢复。渠道是否重投须逐平台验证，`msg_id` 去重不保证端到端不丢不重 |
 | LangBot 子进程崩溃 | `langbot_host` 守护重启，连续失败时上报节点事件，Workbench 节点页显示 |
 | Nexus 重启 | 订阅在库里，重启后恢复；任务完成事件从 `run_store` 补推；Scout 端在 Nexus 不可达期间收到的消息暂存于 `scout.db`，重连后按顺序补报 |
 | 大模型不可用 | 回固定文案；快捷指令（/状态 /最近任务）不依赖模型照常可用 |
@@ -387,11 +389,11 @@ LangBot 子进程（由 Scout 托管）
 | MCP 端点 | **新增** | `/mcp`，复用 `assistant_tools`；可放 `services/assistant_mcp.py`，在 `app.py` 挂载 |
 | `ai/` | 中 | `planner.py` 加 `assistant_route` / `assistant_reply` 入口；`schemas.py` 加 route 输出 schema；`tool_schema.py` 抽出通用的「schema → function tool」函数，设备菜单和助手工具共用；`roles_catalog` 中 `im-qa-assistant` 改走新入口 |
 | `ai/dispatch_log.py` | 小 | assistant 类 job 落痕时对正文脱敏（§7.3） |
-| `models/` | **新增 4 张表** | `im_identity`、`assistant_profile`（每用户一个助手：人设选择、默认项目和设备；预留 `project_id` 列）、`assistant_turn`（轨迹，无正文）、`assistant_subscription`。工具表和卡片模板不建表，放 `prompts/assistant/`。每表一个文件，`core/migration.py` additive 建表。**不建消息正文表** |
+| `models/` | **新增 4 张表** | `im_identity`、`assistant_profile`（每用户一个助手：人设选择、每条消息明确的项目与设备（缺参追问）；预留 `project_id` 列）、`assistant_turn`（轨迹，无正文）、`assistant_subscription`。工具表和卡片模板不建表，放 `prompts/assistant/`。每表一个文件，`core/migration.py` additive 建表。**不建消息正文表** |
 | `mino_nexus/prompts/assistant/` | 新增 | `jobs/assistant-route`、`jobs/assistant-reply`（后续加 `assistant-summarize`）、`persona/`、`tools/`、`cards/`、`eval/`。格式见 [prompt 改造方案](prompt改造方案.md) |
 | `routers/rAssistant.py`（新） | 新增 | `/assistant/bind`、`/assistant/profile`、`/assistant/tools`（只读）、`/assistant/card-templates/{id}/preview`、`/assistant/turns`（轨迹查询，正文现取）、`/assistant/subscriptions`、`/assistant/mcp-tokens` |
 | `app.py` | 小 | 挂 `rAssistant` 和 `/mcp`；请求模型保持模块级（§7.1） |
-| `core/client_gate.py` | 小 | 新增 `assistant`、`mcp` 两类客户端：工具表外的写一律拒绝，删除类一律拒绝。顺带把 `workbench` 纳入门禁表（当前门禁只认 console / studio） |
+| `core/client_gate.py` | 小 | assistant / MCP token 依据服务端解析的身份与权限限制到工具白名单，删除类拒绝；不能把可伪造的客户端头作为授权。Workbench 管理入口也检查实际用户权限 |
 | `services/auth_store.py` | 小 | 签发和吊销 `assistant_token` / MCP token |
 | `services/node_registry.py` | 中 | `plugin_wechat_message` 泛化为 `plugin_im_message`（带 channel 字段和 `recent_turns`），`_reply_wechat_message` 换成 `assistant_gateway.handle_inbound`；记录哪台节点是某个机器人的持有者，并做仲裁 |
 | `services/node_plugin_call.py` | 小 | `_ALLOWED` 增加 `plugin.im.send`、`plugin.im.history`、`plugin.im.upload_image` |
@@ -421,7 +423,7 @@ LangBot 子进程（由 Scout 托管）
 
 | 位置 | 改动 |
 |---|---|
-| 新路由 `/assistant`（新 domain `src/domains/assistant`） | **我的助手**：绑定 IM（生成绑定码、查看和解绑已绑定渠道）；默认项目和设备、人设；会话列表与每轮轨迹（模型决策、工具请求和响应、卡片预览、token、耗时；正文从节点现取，节点离线时提示）；订阅管理；**MCP token 生成和接入说明**（OpenClaw / Claude 配置片段一键复制） |
+| 新路由 `/assistant`（新 domain `src/domains/assistant`） | **我的助手**：绑定 IM（生成绑定码、查看和解绑已绑定渠道）；每条消息明确的项目与设备（缺参追问）、人设；会话列表与每轮轨迹（模型决策、工具请求和响应、卡片预览、token、耗时；正文从节点现取，节点离线时提示）；订阅管理；**MCP token 生成和接入说明**（OpenClaw / Claude 配置片段一键复制） |
 | `/settings/runtime` 节点页 | 插件区新增「对话」分类，详见 §8.3.1 |
 | `/jobs`（已有） | assistant 的 job 单独分组展示；按 prompt 改造方案改为只读 |
 | admin 下新页 `/assistant-tools` | 只读：浏览工具描述、参数 schema、档位和入口；卡片模板的多渠道预览。编辑在仓库中完成 |
@@ -473,16 +475,15 @@ V3 之后，Scout 插件在 Workbench 节点页（`src/domains/settings/nodes/No
 
 | 页面 | 谁用 | 管什么 |
 |---|---|---|
-| 节点页 → 对话 | 节点的拥有者 / 管理员 | 机器人连不连得上：安装、密钥、平台开关、持有节点、保留期 |
-| `/assistant` 我的助手 | 每个用户 | 我和助手的关系：绑定我的 IM 账号、我的默认值、我的会话和轨迹、我的订阅、我的 MCP token |
+| 节点页 → 对话 | 当前节点拥有者；管理员也仅管理本人节点 | 机器人连不连得上：安装、密钥、平台开关、持有节点、保留期 |
+| `/assistant` 我的助手 | 每个用户 | 我和助手的关系：绑定我的 IM 账号、我的非执行偏好、我的会话和轨迹、我的订阅、我的 MCP token |
 
-一句话：**节点页管机器人，助手页管人。** 普通用户不需要知道机器人挂在哪台节点上；助手页只在机器人离线时提示「助手离线，请联系节点管理员」，并给出持有节点的名字。
+**节点页管本人机器人，助手页管本人绑定。** 两页只展示当前账号数据；离线时显示本人持有节点及处理入口，不借用他人在线机器人，也不默认允许管理员读取其他用户配置。
 
 ### 8.4 其它仓库
 
 | 仓库 | 影响 |
 |---|---|
-| MinoStudio / MinoConsole | **不改**，后续不维护 |
 | ClawNode | P5 可选：作为一个渠道，或作为 MCP 客户端 |
 | MiniOrangeServer | 不动（只读） |
 
@@ -495,11 +496,11 @@ V3 之后，Scout 插件在 Workbench 节点页（`src/domains/settings/nodes/No
 | **P0 工具表 + MCP** | 表结构、工具表、ASGI 执行器、resolver、`assistant` / `mcp` 门禁、首批只读工具、`/mcp`、Workbench MCP token 与工具浏览页 | 在 Claude Desktop / OpenClaw 里挂 `/mcp`，问「支付项目最近失败的任务」能拿到正确数据；调删除类接口被 403 | 1.5 周 |
 | **P1 微信打通 + 写操作** | 身份绑定；`assistant-route`；`wechat_text` 渲染器；`_reply_wechat_message` 换成 `assistant_gateway`；跑用例 / 重跑 / 取消 / 探索；`assistant_notify` 完成推送；Scout `scout.db` + `im_store`；Workbench「助手」页 | 微信里说「在小米上跑一下支付的登录用例」→ 直接开跑 → 完成后收到结果 | 1.5–2 周 |
 | **P2 LangBot 进 Scout** | 先做 `mino-bridge` 回声 demo 验证三项能力；`langbot_host`；`im_bridge`；`langbot` 渲染器；飞书、企微接入；协议同步（两仓一次做完） | 飞书、企微里与 P1 同样的对话可以跑通；LangBot 崩溃后自动拉起 | 2 周 |
-| **P3 记忆与评测** | 会话摘要；默认值记忆；评测语料与回放 | 意图命中率 ≥ 90%（以语料集计） | 1 周 |
-| **P4 主动与富卡片** | 订阅、日报 / 周报、异常主动告警（节点掉线、连续失败）；飞书卡片原地更新（可选） | 每天 9 点群里收到昨日跑批日报 | 1–1.5 周 |
+| **P3 记忆与评测** | 会话摘要；用户人设和非执行偏好记忆；评测语料与回放 | 意图命中率 ≥ 90%（以语料集计） | 1 周 |
+| **P4 主动与富卡片** | 私聊订阅、日报 / 周报、异常主动告警；飞书卡片原地更新（可选） | 私聊收到本人报告；重启可恢复，解绑停止补推 | 1–1.5 周 |
 | **P5 扩面** | 工具扩到 30 条以上并启用召回；MCP resources；按项目隔离助手（若出现记忆污染） | 第三方 Agent 通过 MCP 覆盖主要查询和执行场景 | 按需 |
 
-关键路径：P0 工具表和门禁 → P1 路由 job → P2 协议同步。**MCP 放在 P0**：它不依赖 IM，最先上线，也最先验证工具描述的质量。
+以上是社交子项目拆分，整体交付优先级以 [V4 索引](README.md) 为准。只读 MCP 可并行验证；启用写工具前先通过账号隔离、幂等和执行可靠性门禁，涉及 Scout 的协议变更随相应阶段同步，不拖到最后。
 
 ---
 
@@ -518,9 +519,9 @@ V3 之后，Scout 插件在 Workbench 节点页（`src/domains/settings/nodes/No
 
 | 意见 | 处理 |
 |---|---|
-| 不考虑 Studio、Console，前端只做 Workbench | 全文移除 Studio / Console 的改动，§8.3 改为 Workbench，对应到现有路由 `/settings/runtime`、`/jobs` 和新页 |
+| 用户及管理入口统一为 Workbench | §8.3 对应 `/settings/runtime`、`/jobs` 和助手页面，权限由服务端用户身份判定 |
 | 网关节点不讨论部署形态，只讲 Nexus 和 Scout；Scout 既能执行也能连 IM | 删除「网关节点 / gateway mode / 免设备安装包」。§0 明确：Nexus 调度，Scout 执行 + IM，两者都在线 |
-| 消息正文存 Scout 的数据库 | 采纳。正文只在 Scout，Nexus 只存不含正文的轨迹。Scout 当前没有数据库，需新建；命名建议见 §10.1 |
+| 消息正文存 Scout 的数据库 | 采纳。正文留在 Scout 的 `scout.db`，Nexus 只存脱敏调用轨迹；当前实现与验收按开发记录确认 |
 | 删除不在 IM 暴露，新增直接执行 | 采纳。档位只剩 read / write，都直接执行，删除类不入表，门禁兜底；去掉确认卡和 `pending_confirm` |
 | LangBot 直接接入 Scout | 采纳，作为 IM 渠道层，由 Scout 托管（§6.1）。微信 iLink 原生插件保留 |
 | 每个用户一个助手 | 采纳。`assistant_profile` 按用户一行，预留 `project_id` 维度 |
@@ -533,3 +534,22 @@ V3 之后，Scout 插件在 Workbench 节点页（`src/domains/settings/nodes/No
 | 第二版三个待确认点都同意 | §10 标为已确认 |
 | 之前 Scout 维护的是 CLI 和 MCP，社交软件接入后 Workbench 要怎么维护 | 新增 §8.3.1：节点页增加「对话」分类（与「通知」分开），LangBot、平台适配器、微信 iLink、持有节点、保留期都在这里维护；表单字段改为由 Scout 上报；明确「节点页管机器人，助手页管人」 |
 | prompt 改为 git 管理 | 见 [prompt 改造方案](prompt改造方案.md)。本文随之调整：assistant 的 job、人设、工具表、卡片模板、评测语料都放在 `mino_nexus/prompts/assistant/`，不再建 `assistant_tool`、`assistant_card_template` 表（新增表从 6 张减为 4 张）；Workbench 上相关页面改为只读预览；`im-dialogue` 不再保留为兜底，在 P1 同一提交中删除 |
+
+## 12. 2026-10-12 可靠性与隐私修订（覆盖早期冲突描述）
+
+1. 所有模型调用使用 Nexus 的 LiteLLM SDK 边界；模型 Key 只来自执行账号。机器人持有账号、消息绑定账号和任务 owner 必须一致，禁止共享机器人模型 Key 回退。助手不保存或补入默认项目/设备。
+2. 入站稳定键包含 owner、渠道、机器人实例、租户、会话、发送者和 msg_id，不含承载 node_id。新的持久 receipt 区分 processing / retryable / done / uncertain。无写操作的异常可在冷却后重试；已尝试写操作的未知结果不能重放。旧永久 claim 只读保留，避免升级重放；没有消息 ID 的回调不执行。
+3. 白名单写工具必须有稳定 mutation scope（IM 入站键或 MCP token 范围+请求 id）。实际解析后的工具参数参与哈希；同一请求成功返回原任务 ID；并发、崩溃或超时结果未知时返回待核查，不能重新创建任务。不同消息/请求是新的意图。本阶段不是所有业务路由的数据库事务级 exactly-once，写完成与 receipt 提交之间崩溃仍需查询任务后人工核对。
+4. 完成通知使用持久 subscription delivery，记录已确认发送的分段数、重试时间、次数和租约；启动后及每 30 秒恢复，正文从已有任务记录生成，不另存聊天正文。失败后从未确认段继续，不重推所有段。发送成功与进度落库之间的崩溃仍可能重复最后一段，语义为至少一次；不声称跨平台 exactly-once。绑定撤销停止补推。
+5. 新 assistant_turn 的卡片只保存模板/状态/正文脱敏标记；工具参数只存摘要哈希。助手 dispatch 不保存用户输入、模型回复或 raw tools。旧记录不破坏或回写清理，读取投影遮蔽旧卡片正文。聊天正文仍可能存在 Scout 本地库和第三方 IM；业务任务和业务用例数据本来就在 Nexus，这不是禁止存储业务记录。
+6. 群聊 @ 不是授权披露账号数据。本阶段群聊只回复帮助，绑定、账号查询、执行和通知使用私聊；未来要开放群范围，须单独实现允许群及可披露字段策略，不能从个人查询权限推导群公开权限。
+7. MCP 明确只实现 2025-03-26 的无会话 POST 子集；GET 返回 405、已接收的通知返回 202。校验 JSON-RPC 格式、协议版本和 Origin；额外浏览器 Origin 使用显式 MINO_MCP_ALLOWED_ORIGINS。稳定 id 参与写操作幂等。尚未实现恢复流/断点重连/完整 MCP 客户端兼容矩阵。
+8. 机器人持有仍有内存仲裁部分。本轮未增加跨 Scout 的 generation/fencing 协议，节点失联、跨进程持有权切换与高可用仍不得标为已验收。常驻运行是部署目标；至少应记录节点在线/渠道连接/可执行/绑定/通知积压五个独立指标，以及恢复耗时和观测区间。
+
+### 12.1 幂等、补发与常驻验收（2026-10-13）
+
+- 入站由 Scout 持久化后上报；ACK、receipt 和重试时机以真实渠道能力核对，不先回成功再落盘。队列记录稳定键、状态、次数、下次时间及保留期限；到期 / 重试耗尽可见并可人工处置，不无限补发过期意图。
+- 写工具成功重试必须返回原任务；写后断线 / 崩溃且 receipt 未完成时保留 `uncertain`，查询业务记录核对，不重新发起。没有事务级幂等的路由不得宣传 exactly-once；若允许自动恢复，需把 mutation ID 与业务创建在同一事务关联。
+- 机器人、绑定和任务必须属于同一账号。正文历史与工具上下文按机器人实例、私聊会话、发送者及绑定代次过滤；解绑 / 换绑后旧上下文和待发通知不得复活。
+- 补验收：同一回调并发、创建任务后响应丢失、进程重启、机器人转到本人另一节点、解绑时通知排队及群聊请求。核对任务数量、原任务 ID、发送段号和代次，记录未知窗口，不仅检查去重函数返回值。
+- 每个平台独立做至少 24 小时受控观察，注明构建、网络及样本；统计接收 / 回应成功率、消息延迟、连接可确认时间、积压及故障恢复耗时。观察期间主动断网、重启并测试未授权消息，结果不能推广为生产 SLA。

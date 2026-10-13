@@ -1,5 +1,5 @@
 id: device.list
-version: 2
+version: 4
 title: 兼容设备列表
 description: 实时查询设备。为任务选设备必须传项目、应用和 env_surface，仅返回该渠道的可执行候选；不要复用历史设备列表。status 为 online/offline，ready
   仅表示 desktop_state 桌面就绪。
@@ -27,9 +27,38 @@ params_schema:
       - visual
       - dom
       description: 执行方案；原生 PC 应用仅支持 visual
+    playwright_headless:
+      type: boolean
+      description: 无头浏览器模式；候选容量与最终准入使用同一模式
     only_online:
       type: boolean
       description: 普通设备查询是否只显示在线设备，默认为 true；指定应用渠道时单独列出不可用原因
+    intent:
+      type: string
+      enum:
+      - query
+      - execute_test
+      description: 原用户明确要求执行测试时为 execute_test；纯查询或闲聊为 query。仅在追问续接中使用，不改变当前只读工具。
+    module:
+      type: string
+      description: 用户指定的用例模块，按项目共享用例范围精确筛选
+    modules:
+      type: array
+      items:
+        type: string
+      description: 用户明确要求多个模块时的并集，去重执行项目共享用例
+    ordinal:
+      type: integer
+      minimum: 1
+      description: 当前范围内第几条用例，第一条传 1
+    all_cases:
+      type: boolean
+      description: 仅用户明确要求整个项目全部用例时传 true
+    case_ids:
+      type: array
+      items:
+        type: string
+      description: 明确选择的用例 id，空列表不会执行全部
 param_resolvers:
   project_id: project.by_name
   app_id: app.by_name

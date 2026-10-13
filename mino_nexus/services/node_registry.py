@@ -234,6 +234,7 @@ class NodeSession:
     host: dict[str, Any] = field(default_factory=dict)
     # None：这台 Scout 还没报插件状态。列表只含 class/id/installed/configured。
     plugins: Optional[list[dict[str, Any]]] = None
+    plugins_reported: threading.Event = field(default_factory=threading.Event, repr=False, compare=False)
     runtime_capabilities: Optional[list[dict[str, Any]]] = None
     plugin_job: dict[str, Any] = field(default_factory=dict)
     # 发一条消息并等应答；由 websocket/node.py 注入
@@ -381,6 +382,8 @@ class NodeRegistry:
                 runtime_capabilities=getattr(reg, "runtime_capabilities", None),
             )
             self._nodes[reg.node_id] = session
+            if session.plugins:
+                session.plugins_reported.set()
             session.persist_snapshot()
 
             for d in accepted_devices:
@@ -507,10 +510,12 @@ class NodeRegistry:
             for executor in getattr(hb, "executors", None) or []:
                 node.executors[executor.id] = executor
             host = getattr(hb, "host", None)
-            node.host = dict(host) if isinstance(host, dict) else {}
+            if isinstance(host, dict) and host:
+                node.host = dict(host)
             reported = getattr(hb, "plugins", None)
             if reported is not None:
                 node.plugins = sanitize_plugins(reported)
+                node.plugins_reported.set()
             caps = getattr(hb, "runtime_capabilities", None)
             if caps is not None:
                 node.runtime_capabilities = list(caps)
@@ -559,6 +564,7 @@ class NodeRegistry:
             if node is None:
                 return
             node.plugins = sanitize_plugins(plugins)
+            node.plugins_reported.set()
             node.last_seen = time.time()
 
     def node_event(self, req: P.Execute, *, node_id: str = "") -> list[str]:

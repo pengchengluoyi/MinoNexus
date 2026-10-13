@@ -1,0 +1,17 @@
+id: assistant-media
+version: 1
+label: 助手图片理解
+summary: 描述用户图片的界面、现象与需要补充的信息
+engine: text_chat
+role: ""
+output_schema: ""
+enabled: true
+slots: []
+call:
+  temperature: 0.1
+  max_tokens: 500
+  timeout_sec: 60
+system:
+- id: rules
+  file: system/10-rules.md
+user: []
