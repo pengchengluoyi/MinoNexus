@@ -3,7 +3,44 @@ from __future__ import annotations
 
 import re
 import uuid
-from typing import Any
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Iterator
+
+_RUNTIME_MODE: ContextVar[str] = ContextVar("control_registry_runtime_mode", default="")
+
+
+class ControlRegistryReadOnlyError(RuntimeError):
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(f"控件配置只读：{reason}")
+
+
+@contextmanager
+def registry_runtime(execution_mode: str = "legacy") -> Iterator[None]:
+    mode = str(execution_mode or "legacy").strip().lower()
+    if mode not in {"legacy", "v5"}:
+        raise ValueError(f"未知控件运行模式：{mode}")
+    if runtime_readonly():
+        mode = "v5"
+    token = _RUNTIME_MODE.set(mode)
+    try:
+        yield
+    finally:
+        _RUNTIME_MODE.reset(token)
+
+
+def runtime_readonly() -> bool:
+    return _RUNTIME_MODE.get() == "v5"
+
+
+def _assert_runtime_writable() -> None:
+    if runtime_readonly():
+        raise ControlRegistryReadOnlyError("v5_runtime")
+
+
+def _published_typed(row: Any) -> bool:
+    return row.publish_state == "published" and bool(row.locator_spec)
 
 _ELEMENT_TYPES = {"button", "input", "checkbox", "dialog", "text", "image", "switch", "page"}
 _SCOPES = {"page", "iframe", "dialog", "new_window", "webview", "shadow"}
@@ -43,12 +80,22 @@ def _public(row: Any) -> dict[str, Any]:
         "vlm_text": str(source.get("vlm_text") or ""),
     }
     return {
+        "project_id": row.project_id,
+        "target_desc": str(merged.get("vlm_text") or row.desc_key or ""),
         "control_id": row.control_id,
         "legacy_control_id": str(merged.get("legacy_control_id") or ""),
         "element_type": row.element_type or "button",
         "scope": row.scope or "page",
         "locator_value": merged,
         "pending_merge": bool(row.pending_merge),
+        "revision": int(row.revision or 1),
+        "locator_spec": dict(row.locator_spec or {}),
+        "sensitive": bool(row.sensitive),
+        "publish_state": row.publish_state or "draft",
+        "published_by": row.published_by or "",
+        "published_at": row.published_at or "",
+        "updated_by": row.updated_by or "",
+        "updated_at": row.updated_at or "",
     }
 
 
@@ -64,6 +111,7 @@ def ensure_control(
     platform: str = "",
 ) -> str:
     """有明确页面/容器身份时按其作用域复用；历史无身份的控件保留旧键。"""
+    _assert_runtime_writable()
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.ui_control import UiControl
 
@@ -115,16 +163,40 @@ def ensure_control(
             )
             db.add(row)
             db.flush()
-        elif vlm_text and not str((row.locator_value or {}).get("vlm_text") or "").strip():
+        elif not _published_typed(row) and vlm_text and not str((row.locator_value or {}).get("vlm_text") or "").strip():
             locator = _empty_locator()
             locator.update(row.locator_value or {})
             locator["vlm_text"] = str(vlm_text)[:200]
             source = dict(locator.get("source") or {})
             source["vlm_text"] = "case"
             locator["source"] = source
-            row.locator_value = locator
-            db.flush()
+            changed = (
+                db.query(UiControl)
+                .filter(
+                    UiControl.pk == row.pk,
+                    UiControl.revision == row.revision,
+                    UiControl.publish_state != "published",
+                )
+                .update(
+                    {UiControl.locator_value: locator, UiControl.revision: UiControl.revision + 1},
+                    synchronize_session=False,
+                )
+            )
+            if not changed:
+                raise ControlRegistryReadOnlyError("configuration_changed")
         return str(row.control_id)
+
+
+def _find_control_row(db: Any, pid: str, cid: str) -> Any:
+    """Legacy compatibility only; V5 never borrows another project's identity."""
+    from mino_nexus.models.ui_control import UiControl
+
+    rows = db.query(UiControl).filter(UiControl.project_id == pid, UiControl.control_id == cid).all()
+    if not rows and pid != "_project" and not runtime_readonly():
+        rows = db.query(UiControl).filter(UiControl.project_id == "_project", UiControl.control_id == cid).all()
+    if len(rows) > 1:
+        raise ValueError("control_identity_conflict")
+    return rows[0] if rows else None
 
 
 def get_control(project_id: str, control_id: str) -> dict[str, Any] | None:
@@ -136,11 +208,7 @@ def get_control(project_id: str, control_id: str) -> dict[str, Any] | None:
     if not cid:
         return None
     with session_scope() as db:
-        row = (
-            db.query(UiControl)
-            .filter(UiControl.project_id == pid, UiControl.control_id == cid)
-            .first()
-        )
+        row = _find_control_row(db, pid, cid)
         return _public(row) if row else None
 
 
@@ -171,6 +239,7 @@ def fill_locator(
     source: str,
 ) -> str:
     """只补当前渠道那一格。看图不接受坐标。"""
+    _assert_runtime_writable()
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.ui_control import UiControl
 
@@ -182,13 +251,11 @@ def fill_locator(
         return cell
     pid = str(project_id or "").strip() or "_project"
     with session_scope() as db:
-        row = (
-            db.query(UiControl)
-            .filter(UiControl.project_id == pid, UiControl.control_id == str(control_id or ""))
-            .first()
-        )
+        row = _find_control_row(db, pid, str(control_id or ""))
         if row is None:
             return cell
+        if _published_typed(row):
+            raise ControlRegistryReadOnlyError("published_typed_control")
         locator = _empty_locator()
         locator.update(row.locator_value or {})
         if str(locator.get(cell) or "").strip():
@@ -197,8 +264,20 @@ def fill_locator(
         src = dict(locator.get("source") or {})
         src[cell] = str(source or "case")[:32]
         locator["source"] = src
-        row.locator_value = locator
-        db.flush()
+        changed = (
+            db.query(UiControl)
+            .filter(
+                UiControl.pk == row.pk,
+                UiControl.revision == row.revision,
+                UiControl.publish_state != "published",
+            )
+            .update(
+                {UiControl.locator_value: locator, UiControl.revision: UiControl.revision + 1},
+                synchronize_session=False,
+            )
+        )
+        if not changed:
+            raise ControlRegistryReadOnlyError("configuration_changed")
     return cell
 
 
@@ -257,6 +336,8 @@ def assert_of(step: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 def stamp_compiled_plans(case: dict[str, Any], do_plan: dict[str, Any], check_plan: dict[str, Any]) -> list[dict[str, Any]]:
     """给操作和预期补上 control_id 与步骤字段。未实现的动作返回阻塞说明。"""
     project_id = str(case.get("project_id") or case.get("app_id") or "")
+    if not project_id or project_id == "_project":
+        raise ValueError("control_project_missing: 编译控件必须携带真实 project_id")
     blocked: list[dict[str, Any]] = []
     first_step = ""
     for index, step in enumerate(do_plan.get("steps") or []):
@@ -350,20 +431,27 @@ def locator_stop_reason(
     if not str(control_id or "").strip():
         return ""
     cell = locator_cell(scheme, platform)
-    current = read_locator(get_control(project_id, control_id), scheme=scheme, platform=platform)
+    found = get_control(project_id, control_id)
+    if found is None:
+        return f"未执行：控件 {control_id} 在项目 {project_id or '_project'} 下不存在（含 _project），需重新导入/编译用例。"
+    current = read_locator(found, scheme=scheme, platform=platform)
     if current:
         return ""
     incoming = str(target_desc or "").strip() if cell == "vlm_text" else str(dom_locator or "").strip()
     if incoming and not _looks_like_coord(incoming):
-        fill_locator(
-            project_id,
-            control_id,
-            scheme=scheme,
-            platform=platform,
-            value=incoming,
-            source="case" if cell == "vlm_text" else "dom_hit",
-        )
-        return ""
+        try:
+            fill_locator(
+                project_id,
+                control_id,
+                scheme=scheme,
+                platform=platform,
+                value=incoming,
+                source="case" if cell == "vlm_text" else "dom_hit",
+            )
+        except ControlRegistryReadOnlyError:
+            return "未执行：控件配置只读，当前渠道的定位尚未发布。"
+        if read_locator(get_control(project_id, control_id), scheme=scheme, platform=platform):
+            return ""
     return "未执行：当前渠道的定位还没有写上。"
 
 
@@ -383,18 +471,22 @@ def note_execution_locator(
     cell = locator_cell(scheme, platform)
     current = read_locator(get_control(project_id, control_id), scheme=scheme, platform=platform)
     filled = False
+    write_blocked = ""
     if not current:
         incoming = str(target_desc or "").strip() if cell == "vlm_text" else str(dom_locator or "").strip()
         if incoming and not (cell == "vlm_text" and _looks_like_coord(incoming)):
-            fill_locator(
-                project_id,
-                control_id,
-                scheme=scheme,
-                platform=platform,
-                value=incoming,
-                source="case" if cell == "vlm_text" else "dom_hit",
-            )
-            filled = True
+            try:
+                fill_locator(
+                    project_id,
+                    control_id,
+                    scheme=scheme,
+                    platform=platform,
+                    value=incoming,
+                    source="case" if cell == "vlm_text" else "dom_hit",
+                )
+                filled = bool(read_locator(get_control(project_id, control_id), scheme=scheme, platform=platform))
+            except ControlRegistryReadOnlyError as exc:
+                write_blocked = exc.reason
     writer.append(
         "control/locator",
         {
@@ -403,6 +495,7 @@ def note_execution_locator(
             "filled": filled,
             "scheme": "visual" if str(scheme or "").strip().lower() != "dom" else "dom",
             "platform": str(platform or ""),
+            **({"write_blocked": write_blocked} if write_blocked else {}),
         },
     )
 

@@ -51,6 +51,8 @@ def _visible_expected(
         return "输入框已聚焦，可以填写"
     if mid == "send_code":
         return "本次发码已被接受：出现倒计时、发送成功提示，或发送按钮变为已发送。验证码框本来就能填，不能算发码成功。"
+    if mid == "legal_consent":
+        return "协议复选框已处于勾选状态（打钩/高亮），登录按钮变为可点"
     if mid == "submit_login":
         return "登录提交后的画面已经出现"
     if capability_id == "input_text":
@@ -232,10 +234,13 @@ def recover_input_focus(
     if pair is None:
         return "none"
     focus, following = pair
-    if following.get("status") != "in_progress":
+    if following.get("status") != "in_progress" and not (
+        following.get("status") == "pending" and focus.get("status") == "in_progress"
+    ):
         return "none"
     attempts = int(following.get("input_recovery_attempts") or 0)
-    exhausted = attempts >= 1
+    # A write that may have started cannot be automatically replayed.
+    exhausted = attempts >= 1 or execution_started
     if writer:
         writer.append(
             "input/recovery_exhausted" if exhausted else "input/recovery",

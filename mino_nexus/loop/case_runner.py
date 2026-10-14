@@ -55,42 +55,6 @@ def _instruction_case(instruction: str) -> dict[str, Any]:
     }
 
 
-def _case_ui_automation(case: dict[str, Any]) -> dict[str, Any]:
-    meta = case.get("meta") if isinstance(case.get("meta"), dict) else {}
-    ua = meta.get("ui_automation") if isinstance(meta.get("ui_automation"), dict) else None
-    if isinstance(ua, dict) and "coverable" in ua:
-        return ua
-    return {
-        "coverable": False,
-        "blocked_by": [
-            {
-                "reason": "unmapped",
-                "user_message": "这次用例还没有编译成程序图",
-            }
-        ],
-    }
-
-
-def _reject_uncoverable_cases(cases: list[dict[str, Any]]) -> None:
-    blocked: list[dict[str, Any]] = []
-    for case in cases:
-        if not isinstance(case, dict):
-            continue
-        ua = _case_ui_automation(case)
-        if ua.get("coverable") is not False:
-            continue
-        items = [x for x in (ua.get("blocked_by") or []) if isinstance(x, dict)]
-        blocked.append(
-            {
-                "case_id": str(case.get("case_id") or ""),
-                "name": str(case.get("name") or "")[:80],
-                "blocked_by": items,
-            }
-        )
-    if blocked:
-        raise UiNotCoverable(blocked)
-
-
 def _pick_online_sns() -> list[str]:
     return [str(d.get("sn") or "") for d in ui_devices.ui_devices() if d.get("status") == "online" and d.get("sn")]
 
@@ -155,6 +119,7 @@ def run_cases(
     env_surface: str = "",
     action_scheme: str = "visual",
     plugin_user_id: str = "",
+    execution_mode: str = "legacy",
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     phases: list[tuple[str, int]] = []
@@ -163,6 +128,9 @@ def run_cases(
         phases.append((name, int((time.perf_counter() - t0) * 1000)))
 
     require_user_id(plugin_user_id or None)
+    execution_mode = "legacy" if execution_mode in {"", "agent"} else execution_mode
+    if execution_mode not in {"legacy", "v5"}:
+        raise ValueError("未知执行模式")
     from mino_nexus.services.access_scope import require_owned_device
     device_sns = _normalize_sns(sn, sns)
     for owned_sn in device_sns:
@@ -192,13 +160,28 @@ def run_cases(
         cases = cases[start_index:]
     if not cases:
         raise ValueError("没有可执行的用例草稿。请先在流程里生成用例，或指定 case_ids。")
-    if not instruction:
-        _reject_uncoverable_cases(cases)
+    requested_total = len(cases)
+    skipped_cases: list[dict[str, Any]] = []
+    if not instruction and execution_mode != "v5":
+        from mino_nexus.services.case_preflight import partition_cases
+
+        cases, preflight = partition_cases(cases)
+        skipped_cases = preflight["blocked"]
+        if not cases:
+            raise UiNotCoverable(skipped_cases)
+    if execution_mode == "v5":
+        if instruction or not device_sns or not playwright_headless:
+            raise ValueError("V5 需要已发布文字用例、固定 Web 节点和 headless")
+        if any(not c.get("v5_publication") or c.get("v5_plan_state") != "published" for c in cases):
+            raise ValueError("V5 用例尚未发布或需要重新核验")
     mark("cases")
 
     from mino_nexus.services.device_targets import select
     device_sns, device_targets = select(app, device_sns, surface=env_surface, profile=env_profile,
-                                        headless=playwright_headless, action_scheme=action_scheme)
+                                        headless=playwright_headless, action_scheme=action_scheme, allow_queue=execution_mode == "v5")
+    if execution_mode == "v5" and any(device_targets[s].get("platform") != "web" or
+        s != "web" + str(device_targets[s].get("node_id") or "") for s in device_sns):
+        raise ValueError("V5 必须固定到声明 Web 槽的节点")
     platforms_by_sn = {dsn: str(device_targets[dsn]["platform"]) for dsn in device_sns}
     mark("devices")
     task_platform = platform
@@ -256,12 +239,13 @@ def run_cases(
     from mino_nexus.services.access_scope import require_owned_device
     for owned_sn in device_sns:
         require_owned_device(owned_sn)
-    provider, gate = resolve_regression_provider(str(provider_id or "").strip() or None)
+    provider, gate = ({}, {}) if execution_mode == "v5" else resolve_regression_provider(str(provider_id or "").strip() or None)
     mark("assembled")
     doc: dict[str, Any] = {
         "run_id": run_id,
         "task_id": run_id,
         "engine": "agent",
+        "execution_mode": execution_mode,
         "run_type": run_type or "manual",
         "app_id": str(app.get("id") or ""),
         "app_name": str(app.get("name") or ""),
@@ -289,6 +273,8 @@ def run_cases(
         "started_at": _now(),
         "finished_at": None,
         "cases": seeded,
+        "requested_total": requested_total,
+        "skipped_cases": skipped_cases,
         "error": "",
         "total": len(seeded),
         "completed": 0,
@@ -311,7 +297,7 @@ def run_cases(
     fail_reason = ""
     if not device_sns:
         fail_reason = "没有在线设备。请在 Studio 安装并连接 Scout，再选一台设备下发。"
-    elif not provider:
+    elif not provider and execution_mode != "v5":
         fail_reason = gate.get("reason") or "未配置用例执行大模型（Studio → 密钥 → 大模型 Key → 可用 + 用例）"
 
     if fail_reason:
@@ -501,6 +487,7 @@ def retry_failed(task_id: str, *, sn: str = "") -> dict[str, Any]:
         env_surface=str(doc.get("env_surface") or ""),
         action_scheme=str(doc.get("action_scheme") or "visual"),
         plugin_user_id=str(doc.get("plugin_user_id") or ""),
+        execution_mode=str(doc.get("execution_mode") or "legacy"),
     )
     return {"ok": True, "code": 200, "case_ids": failed_ids, "data": snapshot}
 
@@ -516,23 +503,10 @@ def _ensure_web_parallel_capacity(sn: str) -> None:
 
 class UiNotCoverable(Exception):
     def __init__(self, blocked: list[dict[str, Any]]):
+        from mino_nexus.services.case_preflight import blocked_message
+
         self.blocked = list(blocked or [])
-        bits: list[str] = []
-        for row in self.blocked:
-            cid = str(row.get("case_id") or "")
-            for item in row.get("blocked_by") or []:
-                if not isinstance(item, dict):
-                    continue
-                step = item.get("case_step")
-                clause = str(item.get("source_clause") or "").strip()
-                message = str(item.get("user_message") or "").strip()
-                if message:
-                    bits.append(message)
-                    continue
-                reason = str(item.get("reason") or "")
-                bits.append(f"{cid} 第{step}步「{clause}」({reason})")
-        msg = "无法 UI 自动化测试：" + ("；".join(bits[:8]) if bits else "存在写不到具体事件的步骤")
-        super().__init__(msg)
+        super().__init__("所选用例均无法 UI 自动化，本次未创建任务。\n" + blocked_message(self.blocked))
 
 
 class DeviceBusy(Exception):

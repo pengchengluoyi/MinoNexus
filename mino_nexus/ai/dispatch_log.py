@@ -303,7 +303,8 @@ def _write(row: dict) -> dict:
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.dispatch import DispatchCall
 
-    row = dict(row)
+    from mino_nexus.core.secret_redaction import sanitize
+    row = sanitize(dict(row))
     row.setdefault("id", f"ds-{uuid.uuid4().hex[:12]}")
     row.setdefault("at", _now())
     with _LOCK:

@@ -766,7 +766,12 @@ def _attach_edge_control(fsm: dict[str, Any], edge: dict[str, Any], params: dict
     desc = str(params.get("selector_text") or params.get("text") or "").strip()
     if not desc:
         return
-    from mino_nexus.services.control_registry import ensure_control, fill_locator
+    from mino_nexus.services.control_registry import (
+        ControlRegistryReadOnlyError, ensure_control, fill_locator, runtime_readonly,
+    )
+
+    if runtime_readonly():
+        return
 
     app_id = str(fsm.get("app_id") or "")
     control_id = ensure_control(app_id, target_desc=desc, element_type="button", vlm_text=desc)
@@ -776,14 +781,17 @@ def _attach_edge_control(fsm: dict[str, Any], edge: dict[str, Any], params: dict
     if not rid:
         return
     platform = str(fsm.get("platform") or "android")
-    fill_locator(
-        app_id,
-        control_id,
-        scheme="dom",
-        platform=platform,
-        value=rid,
-        source="capture",
-    )
+    try:
+        fill_locator(
+            app_id,
+            control_id,
+            scheme="dom",
+            platform=platform,
+            value=rid,
+            source="capture",
+        )
+    except ControlRegistryReadOnlyError:
+        return
 
 
 def tab_root_entry_hint(fsm: dict[str, Any], to_state_ref: str) -> str:

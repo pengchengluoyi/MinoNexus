@@ -31,7 +31,8 @@ class LogFormatter(logging.Formatter):
         elif level == 'E': color = RED
         else: color = RESET
 
-        return f"{color}{date_str}  {process_id}  {thread_id} {level} {tag}: {record.getMessage()}{RESET}"
+        from mino_nexus.core.secret_redaction import sanitize
+        return sanitize(f"{color}{date_str}  {process_id}  {thread_id} {level} {tag}: {record.getMessage()}{RESET}")
 
 # 配置基础 Logger (只负责控制台输出)
 logger = logging.getLogger("MinoNexus")

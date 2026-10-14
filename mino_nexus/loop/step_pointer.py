@@ -253,6 +253,9 @@ def _numbered_column_map(case: dict[str, Any], key: str, raw_key: str) -> dict[i
 
 
 CASE_WALL_SEC_PER_UNIT = 30
+# 实测一个操作步 = 点击决策 + 回看确认（各一次模型调用）≈ 40–90s，校验步 ≈ 45s。
+CASE_DO_STEP_WEIGHT = 2
+CASE_CHECK_STEP_WEIGHT = 1.5
 
 
 def count_precondition_units(precondition: str) -> int:
@@ -268,12 +271,12 @@ def count_precondition_units(precondition: str) -> int:
 
 
 def compute_case_wall_budget_sec(case: dict[str, Any]) -> int:
-    """墙钟预算：前置条数×30 + 操作最大步号×30 + 校验步数×30（与操作步数同号）。"""
+    """墙钟预算：前置条数×30 + 操作步号×60 + 校验步数×45（与操作步数同号）。"""
     prep = count_precondition_units(str(case.get("precondition") or ""))
     nodes = build_seq_nodes(case)
     do_units = max((node.n for node in nodes), default=0)
     check_units = do_units
-    units = prep + do_units + check_units
+    units = prep + do_units * CASE_DO_STEP_WEIGHT + check_units * CASE_CHECK_STEP_WEIGHT
     if units <= 0:
         units = 1
     try:
@@ -282,7 +285,7 @@ def compute_case_wall_budget_sec(case: dict[str, Any]) -> int:
         override = 0
     if override > 0:
         return max(CASE_WALL_SEC_PER_UNIT, override)
-    return units * CASE_WALL_SEC_PER_UNIT
+    return int(round(units * CASE_WALL_SEC_PER_UNIT))
 
 
 def build_seq_nodes(case: dict[str, Any]) -> list[SeqNode]:
@@ -558,6 +561,10 @@ class StepCursor:
             )
         if cap == "input_text":
             text = str((params or {}).get("text") or "")
+            from mino_nexus.core.secret_redaction import sanitize, register_inputs
+            register_inputs(params or {})
+            if sanitize(text) != text:
+                text = ""
             cur = self.current()
             step_n = int(getattr(cur, "n", 0) or 0) if cur is not None else 0
             bag = getattr(self, "typed_by_step", None)

@@ -279,6 +279,9 @@ class NodeSession:
                     "run_id": w.run_id,
                     "step_idx": w.step_idx,
                     "capability_id": w.capability_id,
+                    "lanes_total": w.lanes_total,
+                    "lanes_free": w.lanes_free,
+                    "lanes_quarantined": w.lanes_quarantined,
                 }
                 for w in (self.device_workload or [])
             ],

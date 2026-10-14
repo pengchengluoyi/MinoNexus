@@ -28,6 +28,21 @@ def execution_result_metadata(result: Any) -> dict[str, Any]:
         out["scout"] = {key: scout[key][:256] for key in ("node_id", "sn", "platform", "os", "scout_version", "run_id") if isinstance(scout.get(key), str)}
         if isinstance(scout.get("step_idx"), int):
             out["scout"]["step_idx"] = scout["step_idx"]
+    fd = raw.get("focus_diag")
+    if fd is True:
+        # Scout 焦点引用失配诊断：只含 bounds/hint/包名，无输入正文。
+        edits = raw.get("edit_texts")
+        out["focus_diag"] = {
+            "ref_sent": str(raw.get("ref_sent") or "")[:128],
+            "ref_recorded": str(raw.get("ref_recorded") or "")[:128],
+            "recorded": raw.get("recorded") if isinstance(raw.get("recorded"), dict) else None,
+            "focused_count": raw.get("focused_count") if isinstance(raw.get("focused_count"), int) else None,
+            "edit_texts": [
+                {k: row.get(k) for k in ("focused", "enabled", "bounds", "hint", "resource_id", "package")}
+                for row in (edits[:8] if isinstance(edits, list) else []) if isinstance(row, dict)
+            ],
+            "dump_error": str(raw.get("dump_error") or raw.get("diag_error") or "")[:120],
+        }
     desktop = {key: raw[key][:128] for key in ("capture_id", "session_generation", "snapshot_id", "capture_scope")
                if isinstance(raw.get(key), str)}
     target = raw.get("target")

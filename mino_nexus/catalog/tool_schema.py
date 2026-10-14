@@ -653,7 +653,7 @@ def tools_for_menu(
     if include_review_confirmation and require_prior_status:
         tools.append(openai_tool(
             CONFIRM_ACTION_RESULT,
-            "确认已执行动作的可见结果，不操作设备；画面已证明 prior_action.expected 达成时调用。",
+            "确认已执行动作的可见结果，不操作设备；画面已证明 prior_action.expected 达成时调用。若下一步操作已明确，不要单独调用本工具，直接调用下一步操作并在其参数里填 prior_status=pass（省一轮模型调用）。",
             {"type": "object", "properties": {
                 "prior_status": {"type": "string", "enum": ["pass"]},
             }, "required": ["thought", "prior_status"], "additionalProperties": False},

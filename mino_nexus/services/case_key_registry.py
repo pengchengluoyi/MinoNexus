@@ -248,6 +248,10 @@ def validate_case_step_keys(
 ) -> dict[str, Any]:
     """保存/导入前校验：未知块、Nav 屏、fallback 行、建议补 key。"""
     synced = compiled_case if compiled_case is not None else sync_case_step_program_keys(dict(case))
+    from mino_nexus.services.v5_publication import guard_case_row
+    synced = guard_case_row(synced)
+    if synced.get("v5_publication"):
+        synced = sync_case_step_program_keys(synced)
     warnings = list((synced.get("meta") or {}).get("key_compile_warnings") or [])
     block_map = known_blocks if known_blocks is not None else flow_block_key_refs()
     screen_map = known_screens if known_screens is not None else nav_screen_key_refs(app_id)
@@ -439,6 +443,10 @@ def compile_preview_view(case: dict[str, Any] | None, *, compiled_case: dict[str
     from mino_nexus.services.case_step_key_compiler import sync_case_step_program_keys
 
     synced = compiled_case if compiled_case is not None else sync_case_step_program_keys(dict(case))
+    from mino_nexus.services.v5_publication import guard_case_row
+    synced = guard_case_row(synced)
+    if synced.get("v5_publication"):
+        synced = sync_case_step_program_keys(synced)
     meta = synced.get("meta") if isinstance(synced.get("meta"), dict) else {}
     ua = ui_automation_summary(synced)
     spk = meta.get("step_program_keys") if isinstance(meta.get("step_program_keys"), dict) else {}

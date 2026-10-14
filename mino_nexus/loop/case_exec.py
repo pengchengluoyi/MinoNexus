@@ -92,6 +92,10 @@ def _run_case_list(
     cases: list[dict[str, Any]],
     doc: dict[str, Any],
 ) -> None:
+    if doc.get("execution_mode") == "v5":
+        from mino_nexus.loop.v5_case_exec import run_case_list
+        run_case_list(run_id, cases, doc)
+        return
     from mino_nexus.loop.agent_loop import run_case
     from mino_nexus.loop.device_run_continuity import (
         continuity_blockers,

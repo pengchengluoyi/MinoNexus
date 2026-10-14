@@ -1,5 +1,7 @@
 # CLAUDE.md — MinoNexus
 
+
+> **前端架构硬约束（2026-10-14）**：Mino 项目只有 **MinoWorkbench** 一个前端。MinoConsole 与 MinoStudio 已取消，不再开发、构建、交付或作为配置/验收入口。管理、用例、环境、控件配置和证据查看全部在 Workbench；Nexus 与 Scout 保持后端和执行节点职责。历史文档中的 Console/Studio 入口均以 Workbench 为准。“三端”仅指 Web、移动、PC 被测平台。
 本文件是给 Claude Code / 任何在本仓库工作的人的**硬约束清单**。写代码前先读这里。
 
 ---
@@ -30,7 +32,7 @@ MinoNexus 是服务端大脑。它决定"下一步做什么"，让 [MinoScout](.
 
 ### 2.1 能力目录是唯一真源，且只在本仓
 
-`catalog_entries` 声明"能做什么、用什么实现"，**不写"什么时候做、按什么顺序做"** —— 后者是 LLM 的事。`kind` 为 `prep` / `do` / `check` / `generic` / `recovery`，与执行阶段和 `/packs?kind=` 同一套。空库不灌目录，能力只经 Console 写入。
+`catalog_entries` 声明"能做什么、用什么实现"，**不写"什么时候做、按什么顺序做"** —— 后者是 LLM 的事。`kind` 为 `prep` / `do` / `check` / `generic` / `recovery`，与执行阶段和 `/packs?kind=` 同一套。空库不灌目录，能力只经 Workbench 写入。
 
 Scout 不读 YAML。所以**凡是 Scout 执行时需要知道的东西，必须由 Nexus 算完塞进 `EXECUTE` 载荷**：`executor_order`、`low_level`、`selected_impl`、`device_hint`。
 
@@ -112,7 +114,7 @@ mino_nexus/
 | 改与 Scout 的通信 | [docs/PROTOCOL.md](docs/基础框架/PROTOCOL.md) + §5。**协议改动必须两仓同步** |
 | 派单 / 设备归属 / 多节点 | [docs/NODE_REGISTRY.md](docs/基础框架/NODE_REGISTRY.md) |
 | 动数据模型 | [docs/DATA_MODEL.md](docs/基础框架/DATA_MODEL.md) |
-| 打通 Console / Studio | [docs/HTTP.md](docs/基础框架/HTTP.md) |
+| 打通 Workbench | [docs/HTTP.md](docs/基础框架/HTTP.md) |
 | 动导航图 / 守卫 / hierarchy | [docs/NAVIGATION_ATLAS.md](docs/基础框架/NAVIGATION_ATLAS.md)。配置在 `nav_fsm*` 表，**代码里不得硬编码被测 App 的文案或包名** |
 | 动三渠道统一检索 / context-pack | [docs/9月12日_AppIntel信息基座.md](docs/9月12日_AppIntel信息基座.md)（规划真源） |
 | 从上游搬代码 | [docs/MIGRATION.md](docs/基础框架/MIGRATION.md) |
@@ -146,7 +148,7 @@ mino_nexus/
 - 不要把 CLIP / OCR / 组件检测搬回来 —— 拆分时已确认批次路径零调用
 - 不要改 `../MiniOrangeServer` 的任何文件
 - 不要假设至少有一个 Scout 在线 —— 无节点时必须能启动并在 UI 上说清楚
-- 不要让 Console / Studio 去发现 Nexus —— origin 编译进前端，登录失败只提示「无法连接服务器」
+- 不要让 Workbench 去发现 Nexus —— origin 编译进前端，登录失败只提示「无法连接服务器」
 - 不要在 `EXECUTE` 里省 `executor_order` —— Scout 不会自己算，会直接无路可走
 - **不要**为排查或自证修复去新增 `tests/test_*.py` 或跑 pytest（§1 约束 5）；查 `cr-…::case-…::sn` 的 `session_events`
 

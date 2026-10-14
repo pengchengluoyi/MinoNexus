@@ -75,6 +75,20 @@ def admit_in_transaction(db, doc: dict) -> None:
         if group in acquired:
             continue
         acquired.add(group)
+        if group.startswith("web:"):
+            from mino_nexus.services.node_registry import get_registry
+            node, _ = get_registry().resolve(sn)
+            capacity = next((w for w in (node.device_workload if node else []) if w.sn == sn and w.lanes_total is not None), None)
+            same_group = [run for run in live if sn in ((run.payload or {}).get("sns") or [(run.payload or {}).get("sn")])]
+            if any((run.payload or {}).get("execution_mode", "legacy") != doc.get("execution_mode", "legacy") for run in same_group):
+                raise ResourceBusy(sn, same_group[0].run_id)
+            if doc.get("execution_mode") == "v5":
+                if capacity is None or capacity.lanes_total <= (capacity.lanes_quarantined or 0):
+                    raise ResourceBusy(sn, "")
+                # This is a queued task reservation, not a guessed browser lane.
+                # Scout grants an exclusive lane within the request's setup deadline.
+                db.add(DeviceReservation(resource_key=f"{group}:v5-queue:{rid}", run_id=rid))
+                continue
         legacy_count = 0
         legacy_id = ""
         for run in live:
@@ -85,11 +99,12 @@ def admit_in_transaction(db, doc: dict) -> None:
                     legacy_count += 1
                     legacy_id = run.run_id
                     break
-        if legacy_count >= (4 if group.startswith("web:") else 1):
+        limit = max(0, (capacity.lanes_total - (capacity.lanes_quarantined or 0))) if group.startswith("web:") and capacity else (4 if group.startswith("web:") else 1)
+        if legacy_count >= limit:
             raise ResourceBusy(sn, legacy_id)
         if group.startswith("web:"):
             occupied = {r.resource_key for r in db.query(DeviceReservation).filter(DeviceReservation.resource_key.like(group + ":lane:%"))}
-            free = next((f"{group}:lane:{i}" for i in range(4) if f"{group}:lane:{i}" not in occupied), "")
+            free = next((f"{group}:lane:{i}" for i in range(limit) if f"{group}:lane:{i}" not in occupied), "")
             if not free:
                 raise ResourceBusy(sn, "")
             group = free

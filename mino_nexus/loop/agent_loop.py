@@ -279,6 +279,10 @@ def _log_program_tool(
     )
 
 
+# 模型空工具调用重试可抵扣的墙钟上限：防止 provider 持续异常时无限续命。
+_BUDGET_CREDIT_CAP_SEC = 90.0
+
+
 def _llm_trace(decision: AgentDecision) -> dict[str, Any]:
     raw = decision.raw_llm if isinstance(decision.raw_llm, dict) else {}
     meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
@@ -397,6 +401,7 @@ def run_case(
     from mino_nexus.ai import dispatch_log as dispatch
 
     from mino_nexus.loop.step_contract import bind_run_case
+    from mino_nexus.services.control_registry import registry_runtime
 
     bind_run_case(case if isinstance(case, dict) else None)
     cid = str(case.get("case_id") or "")
@@ -532,6 +537,7 @@ def run_case(
             "device_os": ctx.desktop_os,
             "env_surface": ctx.env_surface,
             "case_platform": str(case.get("platform") or ""),
+            "execution_mode": ctx.execution_mode,
             **({"parent_session_id": parent_session_id} if parent_session_id else {}),
             **({"fork_from_turn": fork_state.get("fork_from_turn")} if fork_state else {}),
         },
@@ -541,7 +547,7 @@ def run_case(
     outcome: dict[str, Any] = {"status": "fail", "summary": "未开始", "steps": steps}
     plat_skip = platform_skip_reason(case, ctx.platform, device_os=ctx.desktop_os)
     try:
-        with bind_writer(writer):
+        with bind_writer(writer), registry_runtime(ctx.execution_mode):
             if isinstance(case.get("execution_target"), dict):
                 writer.append("platform/bind", dict(case["execution_target"]))
             if plat_skip:
@@ -1047,7 +1053,7 @@ def _run_loop(
     if not is_explore and wall_budget_sec > 0:
         history.append(
             f"0. program → info: 本用例墙钟预算 {wall_budget_sec} 秒"
-            f"（前置+操作+校验按步数各 ×{30} 秒）；耗尽即失败，不再按「N 步」截断。"
+            f"（前置每条 30 秒、操作每步 60 秒、校验每步 45 秒）；耗尽即失败，不再按「N 步」截断。"
         )
     cursor.progress_gate.reset_milestone(
         cursor.phase,
@@ -1416,8 +1422,13 @@ def _run_loop(
     for seq in range(1, max_steps + 1):
         if cancel_check and cancel_check():
             return _leave(status="cancelled", summary="任务已取消")
-        if not is_explore and wall_budget_sec > 0 and (time.time() - t0) >= wall_budget_sec:
-            summary = f"超过 {wall_budget_sec} 秒仍未完成"
+        credit_sec = min(float(getattr(ctx, "case_budget_credit_sec", 0) or 0), _BUDGET_CREDIT_CAP_SEC)
+        if wall_budget_sec > 0:
+            setattr(ctx, "case_deadline_ts", t0 + float(wall_budget_sec) + credit_sec)
+        if not is_explore and wall_budget_sec > 0 and (time.time() - t0 - credit_sec) >= wall_budget_sec:
+            summary = f"超过 {wall_budget_sec} 秒仍未完成" + (
+                f"（已抵扣模型空工具调用重试 {credit_sec:.0f} 秒）" if credit_sec else ""
+            )
             return _leave(status="fail", summary=summary)
         turn_mark["t0"] = time.time()
         turn_decision_cap = ""
@@ -3361,6 +3372,17 @@ def _run_loop(
                     cursor.mark_checked()
         thought = decision.thought or ""
         trace = _llm_trace(decision)
+        _meta_llm = ((decision.raw_llm or {}).get("meta") if isinstance(decision.raw_llm, dict) else None) or {}
+        _wasted = int(_meta_llm.get("wasted_ms") or 0) if isinstance(_meta_llm, dict) else 0
+        if _wasted > 0:
+            setattr(ctx, "case_budget_credit_sec",
+                    float(getattr(ctx, "case_budget_credit_sec", 0) or 0) + _wasted / 1000.0)
+            if writer:
+                writer.append("budget/credit", {
+                    "reason": "llm_empty_tool_calls_retry", "wasted_ms": _wasted,
+                    "credit_sec": round(float(getattr(ctx, "case_budget_credit_sec", 0) or 0), 1),
+                    "cap_sec": _BUDGET_CREDIT_CAP_SEC,
+                })
         emit(
             "think",
             thought=thought, step=seq, goal=cursor.decide_goal(),
@@ -5038,6 +5060,9 @@ def _run_loop(
             and cap_clears_repeat_tap(cap_id)
         ):
             cursor.clear_repeat_tap()
+        from mino_nexus.loop.recovery import invalidate_evidence_cache
+
+        invalidate_evidence_cache(ctx)  # 动作后设备状态已变，旧取证不可复用
         if status_val == "pass" and cap_id == "tap_element":
             from mino_nexus.loop.milestone_orchestrator import in_progress_milestone_id
             from mino_nexus.loop.visual_review import input_focus_milestone_id
@@ -5052,11 +5077,21 @@ def _run_loop(
                 or tap_field in ("email", "login_email", "sms_code", "otp", "phone", "password")
                 or str(tap_target.get("role") or "").strip().lower() in ("input", "textbox", "searchbox")
             )
-            # ADB Scout 以 EXECUTE.step_idx（agent_step_idx）作为 tap 的 focus 编号并精确比对，
-            # 不是回合号 seq；用 seq 会让 input_text 报「焦点点击引用失效」。
+            # Scout 以 EXECUTE.step_idx 作为 tap 的 focus 编号并精确比对。step_idx 现在是
+            # RouterProxy 按 run 分配的线上序号（_next_wire_step_idx），只有回执里的才是真值；
+            # 缺少真实回执时不猜编号，由输入菜单要求重新聚焦。
+            wire_idx = None
+            raw_res = getattr(result, "raw_response", None)
+            if isinstance(raw_res, dict):
+                ref_obj = raw_res.get("action_ref") if isinstance(raw_res.get("action_ref"), dict) else {}
+                sc = raw_res.get("scout") if isinstance(raw_res.get("scout"), dict) else {}
+                for cand in (ref_obj.get("step_idx"), sc.get("step_idx")):
+                    if isinstance(cand, int) and not isinstance(cand, bool) and cand > 0:
+                        wire_idx = cand
+                        break
             setattr(
                 ctx, "focus_action_ref",
-                f"focus:{scout_run_id}:{agent_step_idx(case_seq, seq)}" if input_click else "",
+                f"focus:{scout_run_id}:{wire_idx}" if input_click and wire_idx is not None else "",
             )
             setattr(ctx, "focus_action_field", tap_field if input_click else "")
         if status_val == "pass" and cap_id in (

@@ -363,6 +363,23 @@ def maybe_skip_ui_absent_milestones(
             continue
         if find_consent_control(nodes) is not None:
             continue
+        if not nodes:
+            # 纯视觉没有层级：「找不到控件」不等于「界面没有协议框」（cr-a278a45ce22c 登录按钮因未勾选而不可用）。
+            # accept_legal_consent 靠层级，在这里不可用，改成让看图模型点勾选框本身。
+            if row.get("kind") != "visual_tap":
+                row["kind"] = "visual_tap"
+                row["device_cap"] = "tap_element"
+                row.pop("hook_cap", None)
+                row["title"] = "勾选同意协议（仅当复选框未勾选时点击；已勾选则无需操作）"
+                row["converted_from_hook"] = "accept_legal_consent"
+                if writer:
+                    writer.append(
+                        "milestone/consent_visual",
+                        {"milestone_id": rid, "reason": "no_hierarchy_visual_scheme"},
+                    )
+                changed = True
+                break
+            continue
         row["status"] = "skipped"
         row["skip_reason"] = "absent_ui"
         row["skipped_by"] = "hierarchy"

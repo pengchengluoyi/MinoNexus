@@ -113,6 +113,7 @@ def handle_utterance(
     origin = conversation.origin_for(channel, chat_id, node_id, reply_ctx or {})
     control = route_control(text, origin, inbound or {})
     if control is not None:
+        control['routing_path'] = 'control'
         return control
     pending = conversation.pending_for(origin, reply_to=str((inbound or {}).get("reply_to") or ""))
     if pending:
@@ -128,7 +129,9 @@ def handle_utterance(
                 chosen = matches[0]["value"]
         if chosen is not None:
             try:
-                return continue_request(pending["id"], pending["revision"], {question["field"]: chosen}, origin=origin)
+                result = continue_request(pending["id"], pending["revision"], {question["field"]: chosen}, origin=origin)
+                result['routing_path'] = 'pending_choice'
+                return result
             except ValueError:
                 return result_for(answer="这条追问已被处理或内容已变化，请查看最新请求。", origin=origin)
     profile = store.get_profile(user_id)
@@ -159,9 +162,13 @@ def handle_utterance(
     def submit(spec_id: str, args: dict[str, Any]) -> dict[str, Any]:
         from mino_nexus.services.assistant_runtime import execute_request
         check_binding()
-        request = conversation.create(spec_id, {**target, **args}, target, {}, origin, state="resolving")
+        request_args = {**target, **args}
+        if spec_id == 'case.run':
+            request_args = conversation.reuse_execution_args(origin, request_args)
+        request = conversation.create(spec_id, request_args, target, {}, origin, state="resolving")
         result = execute_request(request)
         result["usage"] = usage
+        result['routing_path'] = 'llm'
         result["steps"] = steps + result.get("steps", [])
         return result
 
@@ -217,6 +224,8 @@ def handle_utterance(
             check_binding()
             if spec.get("risk") == "write":
                 return submit(spec["id"], args)
+            if args.get("intent") == "execute_test" and spec.get("id") in ("case.list", "device.list", "app.list"):
+                return submit("case.run", args)
             outcome = run_tool(spec, args, user_id=user_id, target=target)
             last_outcome = outcome
             steps.append({
@@ -253,5 +262,7 @@ def handle_utterance(
             break
     if not answer and last_outcome is not None:
         answer = last_outcome.summary
-    return result_for(answer=answer, outcome=last_outcome, origin=origin, steps=steps,
-                      target=target, usage=usage, model_error=model_error, runtime_stop=runtime_stop)
+    result = result_for(answer=answer, outcome=last_outcome, origin=origin, steps=steps,
+                        target=target, usage=usage, model_error=model_error, runtime_stop=runtime_stop)
+    result['routing_path'] = 'llm'
+    return result

@@ -6,6 +6,12 @@ from typing import Any
 def explain(summary: str, data: Any = None) -> tuple[str, list[str]]:
     text = str(summary or '').strip()
     if isinstance(data, dict):
+        preflight = data.get('preflight') or {}
+        detail = data.get('detail') if isinstance(data.get('detail'), dict) else {}
+        blocked = preflight.get('blocked') or data.get('blocked') or detail.get('blocked')
+        if blocked and not preflight.get('runnable'):
+            return ('所选用例均未通过执行预检，本次没有创建任务。',
+                    ['打开下方 Workbench 用例链接，检查原步骤和编译预览；修正后重新执行。'])
         message = data.get('user_message')
         if message:
             text = str(message)

@@ -229,7 +229,39 @@ def _fill_foreground_from_get_app(
         ev.app_foreground = _yes_no(fg_pkg == pkg)
 
 
+_EVIDENCE_TTL_SEC = 1.5
+
+
+def invalidate_evidence_cache(ctx) -> None:
+    """设备状态可能被动作改变：丢弃本 run 缓存的取证。"""
+    try:
+        setattr(ctx, "_evidence_cache", None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def collect_evidence(ctx, router, *, target_package: str = "") -> Evidence:
+    """短 TTL 去重：同一回合内多处（显示守卫/恢复/中断检测）重复取证只打一次设备。
+
+    动作执行后由 agent_loop 调 invalidate_evidence_cache；取证失败的结果不缓存。
+    """
+    import copy
+    import time as _t
+
+    hit = getattr(ctx, "_evidence_cache", None)
+    key = target_package or str(getattr(ctx, "target_package", "") or "")
+    if isinstance(hit, tuple) and len(hit) == 3 and hit[1] == key and (_t.time() - hit[0]) < _EVIDENCE_TTL_SEC:
+        return copy.deepcopy(hit[2])
+    ev = _collect_evidence_uncached(ctx, router, target_package=target_package)
+    if not getattr(ev, "error", ""):
+        try:
+            setattr(ctx, "_evidence_cache", (_t.time(), key, copy.deepcopy(ev)))
+        except Exception:  # noqa: BLE001
+            pass
+    return ev
+
+
+def _collect_evidence_uncached(ctx, router, *, target_package: str = "") -> Evidence:
     pkg = target_package or str(getattr(ctx, "target_package", "") or "")
     try:
         from mino_nexus.runtime.run_context import is_web_slot

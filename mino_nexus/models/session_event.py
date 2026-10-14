@@ -21,6 +21,9 @@ class SessionMeta(Base):
     finished_at = Column(String, nullable=True)
     format_version = Column(Integer, default=1)
     summary = Column(String, default="")
+    runtime_context = Column(JSON, nullable=False, default=dict)
+    verdict = Column(JSON, nullable=False, default=dict)
+    finalization_id = Column(String, nullable=False, default="")
 
 
 class SessionEvent(Base):

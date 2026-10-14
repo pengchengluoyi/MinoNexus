@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from mino_nexus.models.session_event import SessionEvent, SessionMeta
+from mino_nexus.services.session_atomic import append_batch
 
 
 def _now() -> str:
@@ -53,38 +54,9 @@ def append_event(
     turn: int = 0,
     phase: str = "",
 ) -> int:
-    from mino_nexus.core.database import SessionLocal, ensure_db
-
-    ensure_db()
-    db = SessionLocal()
-    try:
-        meta = (
-            db.query(SessionMeta)
-            .filter(SessionMeta.session_id == session_id)
-            .first()
-        )
-        if meta is None:
-            raise ValueError(f"session not open: {session_id}")
-        seq = int(meta.event_count or 0) + 1
-        db.add(
-            SessionEvent(
-                session_id=session_id,
-                seq=seq,
-                ts=_now(),
-                type=str(type or "").strip(),
-                turn=int(turn or 0),
-                phase=str(phase or ""),
-                payload=dict(payload or {}),
-            )
-        )
-        meta.event_count = seq
-        db.commit()
-        return seq
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    from mino_nexus.services.session_atomic import append_batch
+    return append_batch(session_id, [{"type": type, "payload": payload,
+                                     "turn": turn, "phase": phase}])[0]["seq"]
 
 
 def is_open(session_id: str) -> bool:
@@ -163,6 +135,9 @@ def _meta_dict(row: SessionMeta) -> dict[str, Any]:
         "finished_at": row.finished_at or "",
         "format_version": int(row.format_version or 1),
         "summary": row.summary or "",
+        "runtime_context": dict(row.runtime_context or {}),
+        "verdict": dict(row.verdict or {}),
+        "finalization_id": row.finalization_id or "",
     }
 
 

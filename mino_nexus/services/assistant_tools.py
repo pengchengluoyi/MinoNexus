@@ -414,14 +414,44 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
             pid = require_app(args["app_id"]).get("project_id")
         if not pid or pid not in group.get("project_ids", []):
             return ToolOutcome(ok=False, summary="当前群没有这个项目的访问授权，请转到私聊处理。", tool_id=str(spec.get("id") or ""))
+    preflight_data: dict[str, Any] = {}
     if spec.get("id") == "case.run" and args.get("app_id") and args.get("_clarification_field") not in ("project_id", "app_id"):
         from mino_nexus.services.assistant_scope import resolve
         args, scope_problem, scope_candidates = resolve(args)
         if scope_problem:
             return ToolOutcome(ok=False, summary=scope_problem, ask=scope_problem if scope_candidates else "",
                 tool_id="case.run", args=args, field="module" if scope_candidates else "", candidates=scope_candidates)
+        from mino_nexus.services.case_preflight import preflight
+        from mino_nexus.services.project_store import require_app
+
+        preflight_data = preflight(require_app(str(args["app_id"])), args["case_ids"])
+        if not preflight_data["runnable"]:
+            return ToolOutcome(ok=False, status=400, summary="所选用例均无法 UI 自动化，本次未创建任务。",
+                tool_id="case.run", args=args, data={"preflight": preflight_data})
     question_field = str(args.pop("_clarification_field", ""))
     if ask:
+        if question_field == "env_surface" and spec.get("id") == "case.run":
+            from mino_nexus.services.assistant_targets import channel_candidates, compatible_devices, device_brief
+
+            choices = []
+            devices = _visible_devices(user_id)
+            for channel in channel_candidates(args, user_id)["items"]:
+                scoped = {**args, "env_surface": channel["id"]}
+                selected_sn = ""
+                if args.get("sn") and str(args["sn"]).lower() not in _GENERIC_DEVICE:
+                    selected_sn, _, _, _ = _resolve_one("device.by_alias", str(args["sn"]), user_id=user_id, scope=scoped)
+                    if not selected_sn:
+                        continue
+                for device in compatible_devices(scoped, devices):
+                    if not device.get("executable") or (selected_sn and str(device.get("sn")) != selected_sn):
+                        continue
+                    value = {"env_surface": channel["id"], "env_profile": str(args.get("env_profile") or ""), "sn": str(device["sn"])}
+                    choices.append({"label": channel["label"] + " · " + device_brief(device)["display_label"],
+                                    "value": json.dumps(value, ensure_ascii=False, sort_keys=True)})
+            message = "请选择本次应用渠道和设备，回复一个序号即可。" if choices else "当前没有与本次要求匹配的应用渠道和可执行设备。"
+            return ToolOutcome(ok=False, ask=message if choices else "", summary=message, tool_id="case.run", args=args,
+                field="execution_target" if choices else "", candidates=choices,
+                data={"preflight": preflight_data} if preflight_data else None)
         candidates = []
         resolver = (spec.get("param_resolvers") or {}).get(question_field)
         for label in options:
@@ -432,7 +462,8 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
             if value:
                 candidates.append({"label": label, "value": value})
         return ToolOutcome(ok=False, ask=ask if question_field else "", options=options,
-            tool_id=str(spec.get("id") or ""), summary=ask, args=args, field=question_field, candidates=candidates)
+            tool_id=str(spec.get("id") or ""), summary=ask, args=args, field=question_field, candidates=candidates,
+            data={"preflight": preflight_data} if preflight_data else None)
     for key in ("project_id", "app_id", "env_surface", "env_profile"):
         if key in props and target and target.get(key) and args.get(key) != target[key]:
             msg = "工具选择的项目、应用或渠道与本次用户明确指定的目标不一致，请按本次目标重新选择。"
@@ -465,7 +496,7 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
                 msg = f"本次用哪台设备？当前应用渠道兼容且可执行的设备：{'、'.join(names)}。"
                 return ToolOutcome(ok=False, ask=msg, options=names, tool_id=str(spec.get("id") or ""), summary=msg,
                     args=args, field="sn", candidates=[{"value": str(device["sn"]), "label": device_brief(device)["display_label"]}
-                    for device in available])
+                    for device in available], data={"preflight": preflight_data} if preflight_data else None)
     names = _PARAM.findall(path)
     required = list((spec.get("params_schema") or {}).get("required") or [])
     missing = [name for name in dict.fromkeys(names + required) if args.get(name) in (None, "", [])]
@@ -525,6 +556,12 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         payload = {"detail": response.text[:500]}
     picked = _pick(payload, [str(x) for x in (spec.get("result_pick") or [])])
     ok = 200 <= response.status_code < 300 and not (isinstance(payload, dict) and (payload.get("ok") is False or payload.get("code", 200) != 200))
+    if ok and spec.get("id") == "case.run" and isinstance(payload.get("data"), dict):
+        run = payload["data"]
+        picked = {key: run[key] for key in ("task_id", "run_id", "requested_total", "total", "skipped_cases") if key in run}
+        preflight_data = {"runnable": [str(case.get("case_id") or "") for case in run.get("cases") or []],
+                          "blocked": run.get("skipped_cases") or [], "requested_total": run.get("requested_total", run.get("total", 0))}
+        picked["preflight"] = preflight_data
     if ok and spec.get("id") == "device.list" and isinstance(picked, dict):
         from mino_nexus.services.assistant_targets import device_result
 
@@ -551,7 +588,7 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         else:
             summary = str(detail or "服务没有返回可确认的结果")
     text = json.dumps(picked, ensure_ascii=False, default=str)
-    if surface != "mcp" and len(text) > 4000:
+    if surface != "mcp" and len(text) > 4000 and spec.get("id") != "case.run":
         picked = {"preview": text[:4000]}
     if receipt_key:
         receipt_data = picked if isinstance(picked, dict) else {}

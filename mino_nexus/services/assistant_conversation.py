@@ -2,6 +2,7 @@
 from __future__ import annotations
 import time
 import hashlib
+import json
 import uuid
 from typing import Any
 from sqlalchemy import or_
@@ -156,6 +157,13 @@ def claim(request_id: str, revision: int, *, lane: str = '', patch: dict | None 
         candidates = (row.question or {}).get('candidates') or []
         if candidates and patch[field] not in [item['value'] for item in candidates]:
             raise ValueError('该选择不在原候选列表中，请查看最新请求')
+        if field == 'execution_target':
+            if not candidates:
+                raise ValueError('执行目标缺少有效候选，请重新选择')
+            selection = json.loads(patch[field])
+            if not isinstance(selection, dict) or set(selection) != {'env_surface', 'env_profile', 'sn'}:
+                raise ValueError('执行目标格式已变化，请重新选择')
+            patch = selection
         updated = db.query(Pending).filter(Pending.id == request_id, Pending.user_id == uid,
                     Pending.revision == revision, Pending.state == 'need_input', Pending.expires_at > now).update(
             {Pending.state: 'resolving', Pending.updated_at: now,
@@ -164,6 +172,30 @@ def claim(request_id: str, revision: int, *, lane: str = '', patch: dict | None 
             raise ValueError('请求已被另一条回复处理')
         db.refresh(row)
         return {**_view(row), '_origin': dict(row.origin or {})}
+
+
+def reuse_execution_args(origin: dict, args: dict) -> dict:
+    from mino_nexus.services.assistant_tools import _resolve_one
+
+    out = dict(args)
+    app_id, _, _, _ = _resolve_one('app.by_name', str(out.get('app_id') or ''), user_id=require_user_id(), scope=out)
+    if not app_id:
+        return out
+    out['app_id'] = app_id
+    focus = get_focus(origin)
+    with session_scope() as db:
+        previous = db.get(Pending, focus.get('request_id') or '')
+        if previous is None or previous.user_id != require_user_id() or previous.lane != lane_for(require_user_id(), origin):
+            return out
+        if previous.tool_id != 'case.run' or previous.expires_at <= _now() or previous.state not in {'failed', 'need_input'}:
+            return out
+        saved = previous.args or {}
+        if saved.get('app_id') != app_id or any(out.get(key) and out[key] != saved.get(key) for key in ('env_surface', 'env_profile')):
+            return out
+        for key in ('env_surface', 'env_profile', 'sn'):
+            if saved.get(key):
+                out.setdefault(key, saved[key])
+    return out
 
 
 def finish(request_id: str, revision: int, outcome, *, task_id: str = '') -> dict:
@@ -178,12 +210,13 @@ def finish(request_id: str, revision: int, outcome, *, task_id: str = '') -> dic
         if outcome.args:
             row.args = {key: value for key, value in outcome.args.items() if key in ARG_KEYS}
         row.question = {'field': outcome.field, 'candidates': outcome.candidates} if outcome.ask else {}
+        preflight = outcome.data.get('preflight') if isinstance(outcome.data, dict) else None
         if not outcome.ok and not outcome.ask:
             from mino_nexus.services.assistant_errors import explain
             issue, advice = explain(outcome.summary, outcome.data)
-            row.result = {'problem': issue[:1800], 'next_steps': advice}
+            row.result = {'problem': issue[:1800], 'next_steps': advice, **({'preflight': preflight} if preflight else {})}
         else:
-            row.result = {}
+            row.result = {'preflight': preflight} if preflight else {}
         if task_id:
             _set_focus(db, uid, row.lane, row.id, task_id)
         return _view(row)

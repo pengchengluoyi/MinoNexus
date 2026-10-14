@@ -85,3 +85,10 @@ def report_url(doc: dict, task_id: str, *, base_url: str, case_id: str = '') -> 
     if case_id:
         query['tcase'] = case_id
     return f'{base}/testing/{quote(app_id, safe="")}?{urlencode(query)}'
+
+
+def case_edit_url(app_id: str, case_id: str, *, base_url: str) -> str:
+    base = normalize_base(base_url)
+    if not base or not app_id or not case_id:
+        return ''
+    return f'{base}/testing/{quote(app_id, safe="")}?{urlencode({"tab": "cases", "case": case_id})}'

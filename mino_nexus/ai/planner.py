@@ -318,7 +318,12 @@ def assert_visual(
             parse_warnings=[str(meta.get("error") or meta.get("content_preview") or "")[:160]],
             raw_llm={"meta": meta},
         )
-    return _parse_assert_result(raw)
+    result = _parse_assert_result(raw)
+    from mino_nexus.core.secret_redaction import sanitize
+    result.raw_llm["meta"] = sanitize(meta)
+    result.raw_llm["prompt_version"] = job_meta.get("prompt_version")
+    result.raw_llm["prompt_sha"] = job_meta.get("prompt_sha")
+    return result
 def verify_step_expected(
     *,
     expectation: str,
@@ -703,6 +708,28 @@ def _strip_exec_planning_fields(decision: AgentDecision) -> AgentDecision:
     return decision
 
 
+_VISION_EXEC_TOOL_DENY = frozenset({"install_apk", "get_app_version", "get_foreground_app", "read_device_data", "set_clipboard"})
+
+
+def _clamp_to_case_deadline(run_context: Any, timeout_sec: int) -> float:
+    """整个调用及其重试共享剩余预算，不能以超时下限重新延长用例。"""
+    try:
+        deadline = float(getattr(run_context, "case_deadline_ts", 0) or 0)
+    except (TypeError, ValueError):
+        deadline = 0.0
+    if deadline <= 0:
+        return timeout_sec
+    import time as _t
+
+    return max(.001, min(float(timeout_sec), deadline - _t.time()))
+
+
+def _case_model_deadline(run_context: Any) -> float | None:
+    import time as _t
+    deadline = float(getattr(run_context, "case_deadline_ts", 0) or 0)
+    return _t.monotonic() + max(0, deadline - _t.time()) if deadline > 0 else None
+
+
 def vision_exec_turn(
     *,
     run_context: Any,
@@ -745,6 +772,8 @@ def vision_exec_turn(
             thought="capability_menu 为空（连通性丢失）",
             parse_warnings=["empty menu"],
         )
+    # 看图执行不需要的只读/运维能力不进 tools：少一份 schema，模型更快、也更少选错。
+    menu = [c for c in menu if str(c.get("id") or "") not in _VISION_EXEC_TOOL_DENY]
     if menu_ids is not None:
         allow = {str(x) for x in menu_ids}
         menu = [c for c in menu if str(c.get("id") or "") in allow]
@@ -808,7 +837,8 @@ def vision_exec_turn(
         job_meta=job_meta,
         temperature=float(call.get("temperature", 0.1)),
         max_tokens=int(call.get("max_tokens", 2048)),
-        timeout_sec=int(call.get("timeout_sec", timeout_sec)),
+        timeout_sec=_clamp_to_case_deadline(run_context, int(call.get("timeout_sec", timeout_sec))),
+        deadline_monotonic=_case_model_deadline(run_context),
         json_mode=bool(call.get("json_mode", False)),
         extra_payload=tool_payload or None,
         allow_tools_downgrade=False,
@@ -950,7 +980,8 @@ def decide_next_action(
         job_meta=job_meta,
         temperature=float(call.get("temperature", 0.1)),
         max_tokens=int(call.get("max_tokens", 2048)),
-        timeout_sec=int(call.get("timeout_sec", timeout_sec)),
+        timeout_sec=_clamp_to_case_deadline(run_context, int(call.get("timeout_sec", timeout_sec))),
+        deadline_monotonic=_case_model_deadline(run_context),
         json_mode=bool(call.get("json_mode", False)),
         extra_payload=tool_payload or None,
         allow_tools_downgrade=False,

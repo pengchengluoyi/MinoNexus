@@ -21,6 +21,7 @@ from typing import Any, Optional
 from fastapi import WebSocket, WebSocketDisconnect
 
 from mino_nexus.core import protocol as P
+from mino_nexus.core.wire_identity import assign_execute_identity
 from mino_nexus.core.log import SLog
 from mino_nexus.services.node_registry import get_registry
 
@@ -91,10 +92,12 @@ class NodeConnection:
         """发一条 N→S 请求并等它的 RESULT。超时返回 None。
 
         协议 §6：调用方（RouterProxy）负责按同一 `(run_id, step_idx)` 重发一次；
-        Scout 侧有幂等缓存，重发不会重复操作设备。
+        legacy 可重取；V5 正编号写请求禁止网络重发，丢结果按 effect_unknown 终结。
         """
         if self._closed:
             return None
+        if mtype == P.MsgType.EXECUTE and isinstance(payload, P.Execute):
+            assign_execute_identity(payload)
         env = P.Envelope(type=mtype, msg_id=_msg_id(), ts=_now_iso(), payload=payload)
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()

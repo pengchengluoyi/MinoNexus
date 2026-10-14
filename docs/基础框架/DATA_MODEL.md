@@ -1,6 +1,6 @@
 # DATA_MODEL — 数据模型与归属
 
-**Nexus 是业务状态的数据归属方。** Scout 不访问 Nexus 数据库；IM 正文仅保存在 Scout 本地 `scout.db`，不形成第二份业务真源。
+**Nexus 是业务状态的数据归属方。** Scout 不访问 Nexus 数据库；渠道消息真源仍在 Scout 本地 `scout.db`。Nexus 的 `assistant_turns` 保留限长、按敏感字段脱敏的 IM 轮次证据，用于请求复盘，不作为渠道消息同步库。
 
 ## 1. 归属总表
 
@@ -26,6 +26,7 @@
 | 执行知识条目 | `knowledge_entries` | UI / 跑批沉淀 / DOC_LEARN（二期） |
 | 调度流水 | `dispatch_calls` | LLM / pipeline |
 | Session 轨迹 | `session_events` / `session_meta` | Agent 循环双写 |
+| IM 轮次证据 | `assistant_turns` | `detail_json.user_text/assistant_text/outbound_text/sent_text/request_id` 与 `card_json`；正文最多保留 8000 字符及截断标记，敏感值隐藏；记录发送状态和片数，仅当前账号可查 |
 | 能力目录 | `catalog_entries`（`kind` 区分五类） | 空库不灌；只经 Console `/packs` 写入 |
 | NavFSM（导航图配置） | `nav_fsm` / `nav_fsm_states` / `nav_fsm_edges` | Studio / `PUT /nav-fsm/{app_id}`；见 [NAVIGATION_ATLAS.md](NAVIGATION_ATLAS.md)。键：`app_id` + `project_id`（来自 `apps`） |
 | NavFSM 校准证据（文件） | `{data_dir}/nav/calibration/{app_id}/{calibration_id}/` | 与 `mino.db` 同根；不进 git、不进 ORM 正文 |
@@ -102,7 +103,7 @@ Studio 读取顺序：**先内存 `_RUNS`，兜底 session log 投影**。
 - 任务分页索引 `app_regression_runs(owner_user_id,app_id,started_at,run_id)`；最终实测 `EXPLAIN QUERY PLAN` 命中 `ix_run_owner_app_started` 覆盖索引。
 - `im_route_identities` 精确唯一键 `(channel,instance_id,tenant,sender_id)`，记录本人 `user_id`、`node_id`、`bound_at` 与随机 `binding_key`。解绑再绑定生成新代次，旧请求不能恢复权限。旧 `im_identities` 保留但不参与在线路由。
 - `im_inbound_claims(key,owner_user_id,created_at)` 对同来源消息原子去重；绑定码在事务中条件删除并校验 TTL/owner，其他账号尝试不消费码。
-- `assistant_subscriptions` 保存真实 sender 与确认后的 reply context，通知前检查任务 owner、节点 owner、实例与绑定代次。旧会话路由元数据存入 `assistant_turns.detail_json._im_route`，不存正文、不向公共详情暴露原始 sender 或路由凭据。
+- `assistant_subscriptions` 保存真实 sender 与确认后的 reply context，通知前检查任务 owner、节点 owner、实例与绑定代次。会话路由元数据存入 `assistant_turns.detail_json._im_route`，不向公共详情暴露原始 sender 或路由凭据；正文证据按上述规则保留，历史被丢弃的正文无法回填。
 
 首次启动在建表/迁移前使用 SQLite backup API 生成独占创建、0600 权限的一致性备份，不覆盖旧备份。迁移标记 `migration:account-isolation-v1` 写回 SQLite。仅可信且仍对应有效用户的旧任务 `plugin_user_id` 回填 owner，关联 session 继承可信任务归属；无可信归属数据不推测 owner。已部署中间版本缺 binding_key 时，添加列前也执行备份。历史全局 Key、旧社交映射和无归属本地插件配置均需维护流程明确确认，当前未实现认领/转移 UI。
 

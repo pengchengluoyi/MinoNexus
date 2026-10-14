@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 import time
 import uuid
@@ -236,7 +237,24 @@ def save_profile(user_id: str, patch: dict[str, Any]) -> dict[str, Any]:
     return get_profile(user_id)
 
 
-# ---------------- 轨迹（不含正文） ----------------
+# ---------------- 轮次轨迹 ----------------
+
+
+def _trace_value(value: Any) -> Any:
+    from mino_nexus.core.secret_redaction import sanitize
+
+    value = sanitize(value)
+    if isinstance(value, str):
+        value = re.sub(r'(?i)(password|passwd|secret|api[_-]?key|access[_-]?token|token|otp|验证码|密码|密钥)\s*[:=：]\s*[^\s,，;；]+', r'\1：[已隐藏]', value)
+        value = re.sub(r'(?i)\bBearer\s+\S+', 'Bearer [已隐藏]', value)
+        value = re.sub(r'(/绑定\s*)\d{6}', r'\1[已隐藏]', value)
+        value = re.sub(r'(?<!\d)1[3-9]\d{9}(?!\d)', '[手机号已隐藏]', value)
+        return value[:8000] + ('…[已截断]' if len(value) > 8000 else '')
+    if isinstance(value, dict):
+        return {key: _trace_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_trace_value(item) for item in value]
+    return value
 
 
 def new_turn_id() -> str:
@@ -257,15 +275,19 @@ def save_turn(turn: dict[str, Any]) -> None:
     from mino_nexus.models.assistant import AssistantTurn
 
     import hashlib
-    # IM/MCP 会话轨迹仅保留结构与摘要哈希，卡片回复与工具参数不落 Nexus。
     steps = []
     for step in turn.get("steps") or []:
         safe = {k: step.get(k) for k in ("tool", "label", "status", "ms")}
         safe["args_sha256"] = hashlib.sha256(str(step.get("args_brief") or "").encode()).hexdigest()
         steps.append(safe)
     card = turn.get("card") or {}
-    safe_card = {k: card.get(k) for k in ("template", "status", "card_type")}
-    safe_card["body_redacted"] = True
+    safe_card = _trace_value(card)
+    safe_card["body_redacted"] = not ("user_text" in turn or "assistant_text" in turn)
+    detail = dict(turn.get("detail") or {})
+    for key in ("user_text", "assistant_text"):
+        if key in turn:
+            detail[key] = _trace_value(str(turn.get(key) or ""))
+    detail["text_truncated"] = any(len(str(turn.get(key) or "")) > 8000 for key in ("user_text", "assistant_text"))
     with session_scope() as db:
         db.merge(AssistantTurn(
             turn_id=turn["turn_id"],
@@ -279,7 +301,7 @@ def save_turn(turn: dict[str, Any]) -> None:
             intent=turn.get("intent", ""),
             steps_json=steps,
             card_json=safe_card,
-            detail_json=dict(turn.get("detail") or {}),
+            detail_json=detail,
             prompt_tokens=int(turn.get("prompt_tokens") or 0),
             completion_tokens=int(turn.get("completion_tokens") or 0),
             elapsed_ms=int(turn.get("elapsed_ms") or 0),
@@ -296,13 +318,53 @@ def _turn_public(r) -> dict[str, Any]:
         "status": r.status or "ok",
         "intent": r.intent or "",
         "steps": [{k: v for k, v in step.items() if k in ("tool", "label", "status", "ms", "args_sha256")} for step in (r.steps_json or []) if isinstance(step, dict)],
-        "card": {"template": (r.card_json or {}).get("template"), "status": (r.card_json or {}).get("status"), "card_type": (r.card_json or {}).get("card_type", "notification"), "body_redacted": True} if r.card_json else None,
+        "card": _trace_value(r.card_json) if r.card_json else None,
+        "user_text": (r.detail_json or {}).get("user_text", ""),
+        "assistant_text": (r.detail_json or {}).get("assistant_text", ""),
+        "request_id": (r.detail_json or {}).get("request_id", ""),
         "prompt_tokens": int(r.prompt_tokens or 0),
         "completion_tokens": int(r.completion_tokens or 0),
         "elapsed_ms": int(r.elapsed_ms or 0),
         "created_at": int(r.created_at or 0),
         "detail": {k: v for k, v in dict(r.detail_json or {}).items() if not k.startswith("_")},
     }
+
+
+def record_turn_delivery(turn_id: str, text: str, status: str, *, sent_segments: int = 0, sent_text: str | None = None) -> None:
+    from mino_nexus.core.execution_user import require_user_id
+    from mino_nexus.models.assistant import AssistantTurn
+
+    with session_scope() as db:
+        row = db.get(AssistantTurn, turn_id)
+        if row is not None and row.user_id == require_user_id():
+            confirmed = sent_text if sent_text is not None else text if status == "sent" else ""
+            row.detail_json = {**(row.detail_json or {}), "outbound_text": _trace_value(text), "sent_text": _trace_value(confirmed),
+                               "delivery_status": status, "sent_segments": sent_segments}
+
+
+def recent_im_history(user_id: str, inbound: dict[str, Any], binding: dict[str, Any]) -> list[dict[str, Any]]:
+    from mino_nexus.models.assistant import AssistantTurn
+
+    with session_scope() as db:
+        query = db.query(AssistantTurn).filter_by(user_id=user_id, surface="im",
+            channel=str(inbound.get("channel") or ""), chat_id=str(inbound.get("chat_id") or ""),
+            node_id=str(inbound.get("node_id") or ""))
+        for key in ("instance_id", "tenant", "sender_id", "thread_id"):
+            query = query.filter(AssistantTurn.detail_json["_im_route"][key].as_string() == str(inbound.get(key) or ""))
+        query = query.filter(AssistantTurn.detail_json["_im_route"]["binding_key"].as_string() == str(binding.get("binding_key") or ""),
+                             AssistantTurn.created_at > int(binding.get("bound_at") or 0),
+                             AssistantTurn.status.notin_(("processing", "interrupted")))
+        rows = query.order_by(AssistantTurn.created_at.desc(), AssistantTurn.turn_id.desc()).limit(4).all()
+        history = []
+        for row in reversed(rows):
+            for role, key in (("user", "user_text"), ("assistant", "assistant_text")):
+                detail = row.detail_json or {}
+                if role == "assistant" and detail.get("delivery_status") != "sent":
+                    continue
+                text = str(detail.get("sent_text" if role == "assistant" else key) or "")
+                if text:
+                    history.append({"role": role, "text": text[:500], "ts": row.created_at})
+        return history
 
 
 def list_turns(user_id: str, *, limit: int = 30, offset: int = 0, surface: str = "") -> dict[str, Any]:

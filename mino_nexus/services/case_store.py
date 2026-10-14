@@ -206,6 +206,8 @@ def _row_fields(
 ) -> dict[str, Any]:
     from mino_nexus.services.case_resource_claim import sync_case_resource_metadata
 
+    from mino_nexus.services.v5_publication import guard_case_row
+    raw = guard_case_row({**raw, "project_id": project_id})
     raw = sync_case_resource_metadata(
         dict(raw),
         project_id=project_id,
@@ -236,6 +238,21 @@ def _row_fields(
         sort_index=int(raw.get("index") if raw.get("index") is not None else sort_index),
         updated_at=_now(),
     )
+
+
+def _retain_publication(obj, fields):
+    """Re-read server-owned state in the writing transaction."""
+    from copy import deepcopy
+    old = dict(obj.extra or {})
+    new = dict(fields["extra"])
+    if old.get("v5_publication"):
+        new["v5_publication"] = deepcopy(old["v5_publication"])
+        changed_resource = new.get("resource_key") != old["v5_publication"].get("resource_key")
+        new["v5_plan_state"] = "needs_revalidate" if changed_resource else old.get("v5_plan_state", "published")
+        meta = dict(new.get("meta") or {})
+        meta["step_program_keys"] = deepcopy(old["v5_publication"]["compiled_keys"])
+        new["meta"] = meta
+    fields["extra"] = new
 
 
 def save_case(project_id: str, row: dict[str, Any], *, requirement_id: str = "") -> dict[str, Any]:
@@ -271,6 +288,7 @@ def save_case(project_id: str, row: dict[str, Any], *, requirement_id: str = "")
             obj = ProjectCase(**fields)
             db.add(obj)
         else:
+            _retain_publication(obj, fields)
             for key, val in fields.items():
                 setattr(obj, key, val)
         db.flush()
@@ -302,7 +320,8 @@ def upsert_cases(
                 ProjectCase.project_id == pid,
                 ProjectCase.requirement_id == rid,
             ).all():
-                db.delete(old)
+                if not (old.extra or {}).get("v5_publication"):
+                    db.delete(old)
         for i, raw in enumerate(incoming):
             cid = str(raw.get("case_id") or "").strip()
             fields = _row_fields(raw, project_id=pid, requirement_id=rid, sort_index=i)
@@ -315,6 +334,7 @@ def upsert_cases(
                 obj = ProjectCase(**fields)
                 db.add(obj)
             else:
+                _retain_publication(obj, fields)
                 for key, val in fields.items():
                     setattr(obj, key, val)
         db.flush()
@@ -368,6 +388,7 @@ def apply_import_row(
             )
             if obj is None:
                 return "skipped", existing
+            _retain_publication(obj, fields)
             for key, val in fields.items():
                 setattr(obj, key, val)
             db.flush()

@@ -189,6 +189,7 @@ def run_cases(body: RunRequest, sess: dict = Depends(current_session)):
             env_surface=str(body.env_surface or "").strip(),
             action_scheme=str(body.action_scheme or "visual").strip().lower(),
             plugin_user_id=_plugin_user(sess),
+            execution_mode=str(body.execution_mode or "legacy"),
         )
         return ok(snapshot, msg="AI-led 回归任务已启动")
     except (cr.DeviceBusy, ResourceBusy) as exc:

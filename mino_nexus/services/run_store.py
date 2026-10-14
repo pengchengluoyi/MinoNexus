@@ -319,6 +319,11 @@ def seed_case(run_id: str, raw: dict[str, Any], index: int, *, sn: str = "", cov
         "expected_parsed": [str(x) for x in (raw.get("expected_parsed") or []) if str(x).strip()],
         "meta": _run_case_meta(raw),
         "error": "",
+        "project_id": raw.get("project_id", ""),
+        "resource_key": copy.deepcopy(raw.get("resource_key")),
+        "v5_publication": copy.deepcopy(raw.get("v5_publication")),
+        "v5_plan_state": raw.get("v5_plan_state", "draft"),
+        "wall_budget_sec": raw.get("wall_budget_sec", 0),
     }
 
 
@@ -378,6 +383,8 @@ def to_task_json(doc: dict[str, Any] | None, *, include_cases: bool = True) -> d
         "slot_id": doc.get("slot_id") or "",
         "status": doc.get("status") or "running",
         "total": doc.get("total") or 0,
+        "requested_total": doc.get("requested_total", doc.get("total") or 0),
+        "skipped_cases": copy.deepcopy(doc.get("skipped_cases") or []),
         "completed": doc.get("completed") or 0,
         "passed": doc.get("passed") or 0,
         "failed": doc.get("failed") or 0,
@@ -395,6 +402,7 @@ def to_task_json(doc: dict[str, Any] | None, *, include_cases: bool = True) -> d
         "current_case_id": doc.get("current_case_id") or "",
         "title": doc.get("title") or "",
         "engine": doc.get("engine") or "agent",
+        "execution_mode": doc.get("execution_mode") or "legacy",
         "boot_ms": int(doc.get("boot_ms") or 0),
         "boot_phases": list(doc.get("boot_phases") or []),
     }

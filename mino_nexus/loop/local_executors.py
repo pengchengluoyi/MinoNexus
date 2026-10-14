@@ -565,6 +565,7 @@ def _accept_legal_consent(
     t0: float,
 ) -> EventResult:
     from mino_nexus.loop.hierarchy_slots import node_flag
+    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
     from mino_nexus.loop.ui_consent import (
         any_focused_input,
         find_consent_control,
@@ -599,7 +600,7 @@ def _accept_legal_consent(
             executor="internal",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
-    if any_focused_input(nodes):
+    if ui_channel_from_ctx(ctx) != UiChannel.WEB and any_focused_input(nodes):
         back = _dispatch_device(
             router,
             ctx=ctx,
@@ -832,8 +833,17 @@ def _dismiss_ime(
     router: Any,
     t0: float,
 ) -> EventResult:
+    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
     from mino_nexus.loop.ui_consent import any_focused_input
 
+    if ui_channel_from_ctx(ctx) == UiChannel.WEB:
+        return _result(
+            event,
+            status=EventStatus.PASS,
+            summary="Web 无需用 BACK 收起输入法，未派发按键",
+            executor="internal",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
     nodes = _hierarchy_nodes(ctx)
     if not any_focused_input(nodes):
         return _result(

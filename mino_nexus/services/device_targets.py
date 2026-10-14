@@ -57,7 +57,7 @@ def target_channel(app: dict, row: dict, *, surface="", profile="") -> dict:
     return {**channel, "env_profile": resolved}
 
 
-def evaluate(row: dict, *, app: dict | None = None, surface="", profile="", headless=True, action_scheme="visual") -> dict:
+def evaluate(row: dict, *, app: dict | None = None, surface="", profile="", headless=True, action_scheme="visual", allow_queue=False) -> dict:
     from mino_nexus.services.device_admission import busy_for
     out = dict(row)
     code, reason = "", ""
@@ -92,7 +92,7 @@ def evaluate(row: dict, *, app: dict | None = None, surface="", profile="", head
             out["target_platform"] = channel.get("platform") or ""
         except (ValueError, KeyError) as exc:
             code, reason = "app_incompatible", str(exc)
-    if not code:
+    if not code and not (allow_queue and platform == "web" and headless):
         busy = busy_for(row, headless=headless)
         if busy:
             code, reason = "busy", "设备或共享桌面繁忙，请等待当前任务结束"

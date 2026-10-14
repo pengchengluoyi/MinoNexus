@@ -18,7 +18,14 @@ def prepare_device_execute_params(
     if cid == "tap_element":
         return enrich_web_tap_params(out, ctx)
     if cid == "input_text":
-        return enrich_web_input_text_params(out, ctx)
+        out = enrich_web_input_text_params(out, ctx)
+        nodes = _tap_node_pool(ctx)
+        if any(n.get("sensitive") or "password" in str(n.get("class", "")).lower() for n in nodes
+               if n.get("focused") or n.get("focus") or n.get("resource_id") == out.get("resource_id")):
+            out["sensitive"] = True
+        from mino_nexus.core.secret_redaction import register_inputs
+        register_inputs(out)
+        return out
     if cid in ("long_press_element", "multi_tap"):
         out["web_coordinate_only"] = True
     return out

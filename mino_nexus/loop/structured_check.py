@@ -33,6 +33,9 @@ def checkpoints_need_structured(checkpoints: list[dict[str, Any]] | None) -> boo
 def hydrate_bound_text(cursor: Any, checkpoints: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """把同一步已输入的文本写进 rules，供看图或 DOM 比较。不改用例定义。"""
     typed = _typed_text(cursor)
+    from mino_nexus.core.secret_redaction import sanitize
+    if sanitize(typed) != typed:
+        return checkpoints
     if not typed:
         return checkpoints
     out: list[dict[str, Any]] = []

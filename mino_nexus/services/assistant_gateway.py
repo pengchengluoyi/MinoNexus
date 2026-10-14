@@ -109,7 +109,7 @@ def send_to_chat(*, channel: str, node_id: str, chat_id: str, sender_id: str, re
     )
 
 
-def _send(inbound: dict[str, Any], text: str, card: dict | None = None, stream=None) -> None:
+def _send(inbound: dict[str, Any], text: str, card: dict | None = None, stream=None, *, turn_id: str = "") -> None:
     from mino_nexus.services.assistant_cards import split_text
     from mino_nexus.services.assistant_envelope import capabilities
     from mino_nexus.services import assistant_conversation as conversation
@@ -127,7 +127,10 @@ def _send(inbound: dict[str, Any], text: str, card: dict | None = None, stream=N
         if card.get("card_type") == "notification" and not policy.get("disclose_results"):
             text = "本次请求状态：" + str((card.get("header") or {}).get("title") or "已处理") + "。详细结果请在私聊或 Workbench 查看。"
             card = None
-    for index, segment in enumerate(split_text(text, capability["max_characters"], capability["length_unit"])):
+    segments = split_text(text, capability["max_characters"], capability["length_unit"])
+    if turn_id:
+        store.record_turn_delivery(turn_id, text, "prepared")
+    for index, segment in enumerate(segments):
         scope = str(ctx().get("assistant_inbound_key") or inbound.get("msg_id") or "")
         delivery_id = hashlib.sha256(json.dumps([origin, scope, index, segment], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         try:
@@ -137,21 +140,34 @@ def _send(inbound: dict[str, Any], text: str, card: dict | None = None, stream=N
                 sender_id=origin["sender_id"], reply_ctx=inbound.get("reply_ctx") or {}, text=segment,
                 delivery_id=delivery_id, card=card if index == 0 else None)
         except Exception:
+            if turn_id:
+                store.record_turn_delivery(turn_id, text, "partially_sent" if index else "failed", sent_segments=index,
+                                           sent_text="\n\n".join(segments[:index]))
             raise
+        if turn_id:
+            store.record_turn_delivery(turn_id, text, "sent" if index + 1 == len(segments) else "partially_sent", sent_segments=index + 1,
+                                       sent_text="\n\n".join(segments[:index + 1]))
         if request:
             conversation.reference(origin, request.get("id", ""), int(request.get("revision") or 0),
                                    message_id=delivery_id, provider_id=str(result.get("provider_message_id") or delivery_id))
 
 
-def _ack(inbound: dict[str, Any]) -> None:
+def _ack(inbound: dict[str, Any]) -> bool:
     if not inbound.get("delivery_key"):
-        return
+        return True
     from mino_nexus.services.node_plugin_call import call_plugin
     channel = str(inbound.get("channel") or "")
-    call_plugin(kind="bot" if channel == "wechat" else "im", plugin_id="wechat" if channel == "wechat" else "langbot",
-                node_id=str(inbound.get("node_id") or ""), capability_id="plugin.im.ack", params={
-                    "channel": channel, "chat_id": inbound.get("chat_id"), "sender_id": inbound.get("sender_id"),
-                    "reply_ctx": inbound.get("reply_ctx") or {}, "delivery_key": inbound["delivery_key"]}, timeout=10)
+    try:
+        call_plugin(kind="bot" if channel == "wechat" else "im", plugin_id="wechat" if channel == "wechat" else "langbot",
+                    node_id=str(inbound.get("node_id") or ""), capability_id="plugin.im.ack", params={
+                        "channel": channel, "chat_id": inbound.get("chat_id"), "sender_id": inbound.get("sender_id"),
+                        "reply_ctx": inbound.get("reply_ctx") or {}, "delivery_key": inbound["delivery_key"]}, timeout=10)
+    except Exception as exc:
+        # ACK 失败不代表消息业务处理失败。保留 done/uncertain，重投只重试 ACK。
+        reason = str(exc) if str(exc) in {"request_key_conflict", "request_inflight"} else type(exc).__name__
+        SLog.w(TAG, f"入站确认失败，等待渠道重投后重试 ACK：{reason}")
+        return False
+    return True
 
 
 def _shortcut(inbound: dict[str, Any], user_id: str, text: str) -> str:
@@ -317,26 +333,38 @@ def _process_claimed_inbound(inbound: dict[str, Any], owner: str, key: str) -> N
     context_token = dispatch_log.bind(assistant_origin=origin, assistant_generation=generation, assistant_group_policy=group,
                                       assistant_stream_callback=stream.accept if stream.enabled else None)
     started = time.time()
+    turn_id = store.new_turn_id()
+    turn_base = {"turn_id": turn_id, "user_id": user_id, "surface": "im", "channel": channel,
+                 "chat_id": chat_id, "node_id": str(inbound.get("node_id") or ""), "msg_key": key,
+                 "user_text": str(inbound.get("text") or ""),
+                 "created_at": int(started)}
+    route_detail = {"_im_route": {name: inbound["reply_ctx"].get(name, "") for name in
+                    ("instance_id", "tenant", "sender_id", "binding_key", "bot_uuid", "thread_id")}}
     try:
         store.require_im_binding(user_id, channel, str(inbound.get("node_id") or ""), inbound["reply_ctx"])
+        history = confirmed_history(inbound, binding) or store.recent_im_history(user_id, inbound, binding)
+        store.save_turn({**turn_base, "status": "processing", "detail": route_detail})
         evidence = []
         if inbound.get("attachments"):
             from mino_nexus.services.assistant_media import ingest
             try:
                 text, evidence = ingest(inbound, origin)
             except ValueError as exc:
-                _send(inbound, str(exc))
+                store.save_turn({**turn_base, "status": "blocked", "assistant_text": str(exc), "detail": route_detail})
+                _send(inbound, str(exc), turn_id=turn_id)
                 return
             conversation.require_generation(origin, generation)
             if not text:
                 from mino_nexus.services.assistant_runtime import result_for
                 result = result_for(answer="\n\n".join(row["text"] for row in evidence) + "\n\n请说明要咨询的问题，或要测试的应用和模块。", origin=origin)
-                _send(inbound, result["text"], result["card"])
+                store.save_turn({**turn_base, "status": result["card"]["status"], "assistant_text": result["text"],
+                                 "card": result["card"], "detail": route_detail})
+                _send(inbound, result["text"], result["card"], turn_id=turn_id)
                 return
         result = handle_utterance(
             user_id=user_id,
             text=text,
-            recent_turns=confirmed_history(inbound, binding) + evidence,
+            recent_turns=history + evidence,
             channel=channel,
             chat_id=chat_id,
             node_id=str(inbound.get("node_id") or ""),
@@ -345,11 +373,16 @@ def _process_claimed_inbound(inbound: dict[str, Any], owner: str, key: str) -> N
         )
     except Exception as exc:
         SLog.w(TAG, f"agent failed: {type(exc).__name__}")
+        failure_text = "当前没有可确认的执行结果，请先在任务页查询状态，避免重复提交。"
+        store.save_turn({**turn_base, "status": "interrupted", "assistant_text": failure_text,
+                         "elapsed_ms": int((time.time() - started) * 1000),
+                         "detail": {**route_detail, "request_id": conversation.get_focus(origin).get("request_id") or "",
+                                    "error_type": type(exc).__name__, "delivery_status": "prepared"}})
         try:
             store.require_im_binding(user_id, channel, str(inbound.get("node_id") or ""), inbound["reply_ctx"])
             conversation.require_generation(origin, generation)
             stream.finish("回复已中断。当前没有可确认的执行结果，请在任务页查看状态。", {"card_type": "notification", "header": {"title": "处理结果待确认"}})
-            _send(inbound, "当前没有可确认的执行结果，请先在任务页查询状态，避免重复提交。")
+            _send(inbound, failure_text, turn_id=turn_id)
         except PermissionError:
             pass
         raise
@@ -357,15 +390,15 @@ def _process_claimed_inbound(inbound: dict[str, Any], owner: str, key: str) -> N
         dispatch_log.reset(context_token)
     usage = result.get("usage") or {}
     store.save_turn({
-        "turn_id": store.new_turn_id(),
+        **turn_base,
         "user_id": user_id,
         "surface": "im",
         "channel": channel,
         "chat_id": chat_id,
         "node_id": str(inbound.get("node_id") or ""),
         "msg_key": key,
-        "detail": {"request_id": result.get("request_id") or "", "task_id": result.get("task_id") or "", "app_id": result.get("app_id") or "", "card_type": (result.get("card") or {}).get("card_type"), "usage_status": "reported" if result.get("usage", {}).get("available", True) else "missing", "_im_route": {k: inbound["reply_ctx"].get(k, "") for k in
-            ("instance_id", "tenant", "sender_id", "binding_key", "bot_uuid")}},
+        "detail": {**route_detail, "request_id": result.get("request_id") or "", "task_id": result.get("task_id") or "", "app_id": result.get("app_id") or "", "card_type": (result.get("card") or {}).get("card_type"), "usage_status": "reported" if result.get("usage", {}).get("available", True) else "missing", "routing_path": result.get("routing_path") or "", "delivery_status": "prepared"},
+        "assistant_text": str(result.get("text") or ""),
         "status": (result.get("card") or {}).get("status") or "ok",
         "intent": result.get("intent") or "",
         "elapsed_ms": int((time.time() - started) * 1000),
@@ -379,6 +412,6 @@ def _process_claimed_inbound(inbound: dict[str, Any], owner: str, key: str) -> N
     except PermissionError:
         return
     conversation.require_generation(origin, generation)
-    _send(inbound, str(result.get("text") or ""), result.get("card"), stream=stream)
+    _send(inbound, str(result.get("text") or ""), result.get("card"), stream=stream, turn_id=turn_id)
     if result.get("model_error"):
         raise RuntimeError("模型不可用，入站消息可在安全范围恢复")

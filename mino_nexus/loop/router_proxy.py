@@ -21,10 +21,12 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from typing import Any, Optional
 
 from mino_nexus.core import protocol as P
+from mino_nexus.core.wire_identity import next_auxiliary_step_idx
 from mino_nexus.catalog import registry as catalog
 from mino_nexus.catalog.exec_classes import LOCAL_EXECUTOR_IDS as LOCAL_CAPS
 from mino_nexus.services.device_secrets import get_lock_password
@@ -47,7 +49,9 @@ def _diagnostic_purpose(value: Any, default: str = "plan_action") -> str:
     return key if key in _DIAGNOSTIC_PURPOSES else default
 
 
-def _trace_device_result(req: P.Execute, res: P.Result | None, *, total_ms: int, purpose: str) -> None:
+def _trace_device_result(
+    req: P.Execute, res: P.Result | None, *, total_ms: int, purpose: str, logical_seq: int | None = None,
+) -> None:
     status = getattr(res.status, "value", res.status) if res is not None else "timeout"
     fields = {
         "capability_id": req.capability_id, "step_idx": req.step_idx,
@@ -55,6 +59,9 @@ def _trace_device_result(req: P.Execute, res: P.Result | None, *, total_ms: int,
         "scout_ms": int(res.elapsed_ms or 0) if res is not None else 0,
         "executor_used": res.executor_used if res is not None else "",
     }
+    if req.step_idx > 0:
+        fields["action_ref"] = _action_ref(req)
+        fields["logical_seq"] = logical_seq
     raw = {**dict(res.extra or {}), **dict(res.data or {})} if res is not None else {}
     for key in ("target_active", "verification_required"):
         if isinstance(raw.get(key), bool):
@@ -79,12 +86,12 @@ def _trace_device_result(req: P.Execute, res: P.Result | None, *, total_ms: int,
     details = " ".join(f"{k}={v}" for k, v in fields.items() if k not in ("capability_id", "purpose", "step_idx"))
     message = f"[{req.run_id}] result cap={req.capability_id} step={req.step_idx} purpose={_DIAGNOSTIC_PURPOSES[purpose]} {details}"
     (SLog.i if status == "pass" else SLog.w)(TAG, message)
-    if req.capability_id == "get_foreground_app" or purpose in ("recovery_evidence", "recovery_action"):
+    if req.step_idx > 0 or req.capability_id == "get_foreground_app" or purpose in ("recovery_evidence", "recovery_action"):
         from mino_nexus.loop.observe.session_log import active_writer
 
         writer = active_writer()
         if writer is not None and writer.session_id == req.run_id:
-            writer.append("device/action" if purpose == "recovery_action" else "device/probe", fields)
+            writer.append("device/action" if req.step_idx > 0 or purpose == "recovery_action" else "device/probe", fields)
 
 
 # case_runner 在后台线程跑同步 agent_loop，Scout WS 却在 FastAPI 主 loop。
@@ -95,6 +102,19 @@ _OBSERVE_TIMEOUT_SEC = 8.0
 _OBSERVE_PAD_SEC = 2.0
 _MUTATE_TIMEOUT_SEC = 10.0
 _DEFAULT_ACTION_TIMEOUT_SEC = 15.0
+_WIRE_STEP_LOCK = threading.Lock()
+_WIRE_STEPS: dict[str, int] = {}
+
+
+def _next_read_idx(run_id: str) -> int:
+    return next_auxiliary_step_idx(run_id)
+
+
+def _next_wire_step_idx(run_id: str) -> int:
+    with _WIRE_STEP_LOCK:
+        next_step = _WIRE_STEPS.get(run_id, 0) + 1
+        _WIRE_STEPS[run_id] = next_step
+        return next_step
 
 
 def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -124,6 +144,8 @@ class RouterProxy:
         target_package: str = "",
         playwright_headless: bool = True,
         run_context: Any = None,
+        execution_mode: str = "legacy",
+        execution_control: Any = None,
     ):
         from mino_nexus.services.access_scope import require_owned_device
         require_owned_device(sn)
@@ -133,6 +155,8 @@ class RouterProxy:
         self.target_package = str(target_package or "")
         self.playwright_headless = bool(playwright_headless)
         self.run_context = run_context
+        self.execution_mode = execution_mode
+        self.execution_control = execution_control
         # 协议 §6：等 RESULT 用 payload.timeout_sec + 宽限
         self.timeout_pad_sec = timeout_pad_sec
 
@@ -216,7 +240,7 @@ class RouterProxy:
         rid = run_id or self.run_id
         req = P.Execute(
             run_id=rid,
-            step_idx=-1,
+            step_idx=_next_read_idx(rid),
             sn=self.sn,
             capability_id="cancel_run",
             params={},
@@ -242,6 +266,9 @@ class RouterProxy:
     ) -> EventResult:
         started = _now_iso()
         t0 = time.time()
+
+        if self.execution_mode == "v5":
+            return await self._dispatch_v5(event, run_id or self.run_id, started, t0, kwargs)
 
         if self._task_aborted():
             return _fail(
@@ -287,13 +314,11 @@ class RouterProxy:
             )
 
         if is_local_cap(event.capability_id):
-            from mino_nexus.loop.local_executors import dispatch_local
-
             ctx = kwargs.get("ctx") or self.run_context
             # 本地能力里还会再 dispatch（例如 relogin → read_web_auth）。
             # 放在线程里，事件循环才能接着把这次 EXECUTE 发给 Scout。
             return await asyncio.to_thread(
-                dispatch_local,
+                _dispatch_local_in_runtime,
                 event,
                 shot=kwargs.get("shot"),
                 ctx=ctx,
@@ -378,7 +403,7 @@ class RouterProxy:
 
         req = P.Execute(
             run_id=run_id or self.run_id,
-            step_idx=step_idx if step_idx >= 0 else event.seq,
+            step_idx=_next_wire_step_idx(run_id or self.run_id),
             sn=self.sn,
             capability_id=event.capability_id,
             params=params,
@@ -392,17 +417,97 @@ class RouterProxy:
         )
 
         purpose = _diagnostic_purpose(kwargs.get("diagnostic_purpose"))
+        from mino_nexus.core.secret_redaction import register_inputs
+        register_inputs(req.params)
+        register_inputs(req.device_hint)
         SLog.i(TAG, f"[{req.run_id}] dispatch cap={req.capability_id} step={req.step_idx} purpose={_DIAGNOSTIC_PURPOSES[purpose]} order={order} impl={(impl or {}).get('id')}")
         res = await self._send_with_retry(node, P.MsgType.EXECUTE, req, req.timeout_sec)
-        _trace_device_result(req, res, total_ms=int((time.time() - t0) * 1000), purpose=purpose)
+        _trace_device_result(req, res, total_ms=int((time.time() - t0) * 1000), purpose=purpose, logical_seq=event.seq)
         if res is None:
             return _fail(
                 event, started, t0,
                 f"scout timeout（node={node.node_id}，重发一次仍无 RESULT）",
                 executor_used="router_proxy",
-                raw_response={"scout": _request_metadata(node, req)},
+                raw_response={"scout": _request_metadata(node, req), "action_ref": _action_ref(req)},
             )
         return _event_result_from(event, res, started, node=node, request=req)
+
+    async def _dispatch_v5(self, event, run_id, started, t0, options):
+        from mino_nexus.core.secret_redaction import register_inputs
+        from mino_nexus.services.web_v5_contract import PROFILE
+        reads = {"probe", "read_web_target_facts", "screenshot"}
+        cleanup = {"cancel_run", "close_web_v5"}
+        writes = {"open_web_v5", "tap_target", "input_target"}
+        cap = event.capability_id
+        from mino_nexus.services.v5_capabilities import CAPABILITIES, snapshot as capability_snapshot
+        impl = {"id": "web.strict.v1", "executor": "playwright"}
+        if cap in CAPABILITIES:
+            try:
+                selected = getattr(self, "v5_capabilities", None) or capability_snapshot()
+                impl = selected[cap]["selected_impl"]
+            except (ValueError, KeyError):
+                return _fail(event, started, t0, "capability_unavailable", executor_used="router_proxy",
+                             raw_response={"execution": {"execution_started": "no", "phase": "admission", "reason_code": "capability_unavailable"}})
+        monotonic_start = time.monotonic()
+        control = self.execution_control
+        reason = ""
+        if cap not in reads | cleanup | writes:
+            reason = "unsupported_v5_capability"
+        elif cap in writes and (control.state != "running" or self._task_aborted()):
+            reason = control.reason_code or "task_cancelled"
+        node, why = get_registry().resolve(self.sn)
+        if not node or self.sn != f"web{node.node_id}":
+            reason = reason or "node_pin_mismatch"
+        requested = float(options.get("timeout_sec", 6))
+        remaining = control.remaining()
+        reserve = float(options.get("reserve_sec", 0))
+        if remaining < requested + reserve and cap in writes:
+            reason = reason or "timeout_before_dispatch"
+        available = min(requested, 1) if cap in cleanup else min(requested, max(0, remaining - .05))
+        if available <= 0:
+            reason = reason or "timeout_before_dispatch"
+        if reason:
+            stopped = control.stop(reason) if cap in writes else {}
+            return _fail(event, started, t0, reason, executor_used="router_proxy",
+                raw_response={"execution": {"execution_started": "no", "phase": "admission", "reason_code": reason},
+                              "execution_control": stopped})
+        register_inputs(event.params)
+        req = P.Execute(run_id=run_id, step_idx=_next_wire_step_idx(run_id) if cap in writes else _next_read_idx(run_id),
+            sn=self.sn, capability_id=cap, params={**event.params, "timeout_profile": PROFILE},
+            executor_order=["playwright"], selected_impl=impl,
+            device_hint={"execution_mode": "v5", "headless": self.playwright_headless, "node_id": node.node_id},
+            timeout_sec=max(.001, available - min(1, available / 4)), device_id=self.sn, platform="web")
+        try:
+            res = await node.send(P.MsgType.EXECUTE, req, timeout=available)
+        except Exception:
+            res = None
+        # A read can be retried once, only inside its original deadline/window.
+        if res is None and cap in reads:
+            left = min(control.remaining(), available - (time.monotonic() - monotonic_start))
+            if left > .05:
+                req = P.Execute(**{**req.__dict__, "step_idx": _next_read_idx(run_id), "timeout_sec": max(.001, left - .05)})
+                try:
+                    res = await node.send(P.MsgType.EXECUTE, req, timeout=left)
+                except Exception:
+                    res = None
+        if res is None:
+            reason = "effect_unknown" if cap in writes else "observation_missing"
+            raw = {"execution": {"execution_started": "unknown", "phase": "transport", "reason_code": reason},
+                   "action_ref": _action_ref(req)}
+            if cap in writes:
+                raw["execution_control"] = control.stop(reason, _action_ref(req))
+            return _fail(event, started, t0, reason, executor_used="router_proxy", raw_response=raw)
+        result = _event_result_from(event, res, started, node=node, request=req)
+        if cap in writes and (control.state != "running" or self._task_aborted()):
+            result.raw_response["execution_control"] = control.stop(control.reason_code or "task_cancelled", _action_ref(req))
+            result.status = EventStatus.FAIL
+        execution = result.raw_response.get("execution") or {"execution_started": "unknown", "reason_code": "execution_metadata_missing"}
+        if cap in writes and (execution.get("execution_started") != "yes" or result.status != EventStatus.PASS
+                              or result.raw_response.get("execution_control", {}).get("stop_run")):
+            reason = execution.get("reason_code") or "effect_unknown"
+            result.raw_response["execution_control"] = control.stop(reason, _action_ref(req))
+            result.status = EventStatus.FAIL
+        return result
 
     async def _dispatch_host_plugin(
         self,
@@ -425,7 +530,7 @@ class RouterProxy:
         timeout = min(600.0, max(20.0, wait_ms / 1000.0 + 15.0))
         req = P.Execute(
             run_id=run_id or self.run_id,
-            step_idx=-1,
+            step_idx=_next_read_idx(run_id or self.run_id),
             sn=self.sn,
             capability_id=event.capability_id,
             params=params,
@@ -496,7 +601,7 @@ class RouterProxy:
         cap = P.OBSERVE_CAPS.get(kind, kind)
         req = P.Execute(
             run_id=self.run_id,
-            step_idx=-1,
+            step_idx=_next_read_idx(self.run_id),
             sn=self.sn,
             capability_id=cap,
             params={
@@ -664,6 +769,8 @@ class RouterProxy:
         res = await self._send_once(node, mtype, payload, timeout_sec)
         if res is not None:
             return res
+        if isinstance(payload, P.Execute) and payload.step_idx > 0:
+            return None
         SLog.w(TAG, f"[{node.node_id}] {mtype.value} 超时，按同键重发一次（Scout 侧幂等）")
         return await self._send_once(node, mtype, payload, timeout_sec)
 
@@ -786,20 +893,31 @@ def _request_metadata(node, request) -> dict[str, Any]:
             "run_id": request.run_id, "step_idx": request.step_idx}
 
 
+def _action_ref(request: P.Execute) -> dict[str, Any]:
+    return {"run_id": request.run_id, "step_idx": request.step_idx}
+
+
 def _event_result_from(event: PlanEvent, res: P.Result, started: str, *, node=None, request=None) -> EventResult:
+    from mino_nexus.core.secret_redaction import sanitize, remember
     raw = dict(res.extra or {})
     if res.data:
         raw = {**raw, **dict(res.data), "data": dict(res.data)}
+    if raw.get("sensitive"):
+        remember(event.params.get("text"))
+        event.params["sensitive"] = True
     if node is not None and request is not None:
         raw["scout"] = _request_metadata(node, request)
+        if request.step_idx > 0:
+            raw["action_ref"] = _action_ref(request)
+            raw["logical_seq"] = event.seq
     return EventResult(
         seq=event.seq, capability_id=event.capability_id,
         event_kind=event.event_kind or event.capability_id,
         status=res.status, executor_used=res.executor_used,
-        elapsed_ms=res.elapsed_ms, summary=res.summary, error=res.error,
+        elapsed_ms=res.elapsed_ms, summary=sanitize(res.summary), error=sanitize(res.error),
         ai_reasoning=event.ai_reasoning or "",
-        plan_event=event.model_dump(exclude_none=True),
-        raw_response=raw,
+        plan_event=sanitize(event.model_dump(exclude_none=True)),
+        raw_response=sanitize(raw),
         attempts=[
             {"executor": a.executor, "status": a.status.value if hasattr(a.status, "value") else a.status,
              "elapsed_ms": a.elapsed_ms, "error": a.error}
@@ -807,6 +925,14 @@ def _event_result_from(event: PlanEvent, res: P.Result, started: str, *, node=No
         ],
         started_at=started, finished_at=_now_iso(),
     )
+
+
+def _dispatch_local_in_runtime(event: PlanEvent, *, ctx: Any, **kwargs: Any) -> EventResult:
+    from mino_nexus.loop.local_executors import dispatch_local
+    from mino_nexus.services.control_registry import registry_runtime
+
+    with registry_runtime(getattr(ctx, "execution_mode", "legacy")):
+        return dispatch_local(event, ctx=ctx, **kwargs)
 
 
 def _run_sync(coro):

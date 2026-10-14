@@ -147,10 +147,24 @@ def turn_detail(turn_id: str, sess: dict = Depends(current_session)):
 
 @router.get("/turns/{turn_id}/messages")
 def turn_messages(turn_id: str, sess: dict = Depends(current_session)):
-    """正文只在 Scout 本地库。这里经 plugin.im.history 现取，Nexus 不缓存。"""
+    """优先读取本轮限长证据；历史无正文的轮次仍从 Scout 获取。"""
     row = store.get_turn(_uid(sess), turn_id)
     if row is None:
         raise HTTPException(status_code=404, detail="轨迹不存在")
+    detail = row.get("detail") or {}
+    if row.get("user_text") or row.get("assistant_text"):
+        messages = []
+        if row.get("user_text"):
+            messages.append({"role": "user", "text": row["user_text"], "ts": row["created_at"]})
+        status = str(detail.get("delivery_status") or "unconfirmed")
+        assistant_text = str(detail.get("sent_text") or row.get("assistant_text") or "")
+        if assistant_text:
+            if status != "sent":
+                assistant_text = ("【仅部分回复已确认发送】" if detail.get("sent_text") else "【生成回复，未确认发送】") + "\n" + assistant_text
+            messages.append({"role": "assistant", "text": assistant_text, "ts": row["created_at"]})
+        return ok({"available": True, "reason": "", "source": "nexus_turn", "messages": messages,
+                   "request_id": row.get("request_id") or "", "delivery_status": status,
+                   "text_truncated": bool(detail.get("text_truncated"))})
     channel, chat_id, node_id = row["_channel"], row["_chat_id"], row["_node_id"]
     if row["surface"] != "im" or not channel or not chat_id:
         return ok({"available": False, "reason": "这条记录没有对话正文", "messages": []})

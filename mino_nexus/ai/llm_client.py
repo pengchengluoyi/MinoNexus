@@ -593,6 +593,7 @@ def _post_chat_completions(
     extra_payload: Optional[dict[str, Any]] = None, json_mode: bool = False,
     response_schema: Optional[dict[str, Any]] = None, allow_tools_downgrade: bool = True,
     max_attempts: int = _MAX_ATTEMPTS, stream: bool = True, on_text=None,
+    deadline_monotonic: Optional[float] = None,
 ) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
     """所有文本/视觉/function calling 通过 LiteLLM；400 不删参、不重试。"""
     from mino_nexus.ai.model_sdk import sdk, connection, model_info, error_meta, ChatStream, ChatResponseTrace
@@ -621,7 +622,8 @@ def _post_chat_completions(
         if info.get("mode") == "embedding":
             raise ValueError("向量模型不能用于对话或 UI 执行")
         supported = sdk().get_supported_openai_params(model=model, custom_llm_provider=native) or []
-        params = {"messages": messages, "stream": bool(extra.pop("stream", stream))}
+        from mino_nexus.core.secret_redaction import sanitize
+        params = {"messages": sanitize(messages), "stream": bool(extra.pop("stream", stream))}
         if "temperature" in supported:
             params["temperature"] = temperature
         if max_tokens is not None and int(max_tokens) > 0:
@@ -655,9 +657,15 @@ def _post_chat_completions(
         meta.update(error_meta(exc, provider))
         return None, meta
     started = time.time()
+    call_deadline = min(deadline_monotonic or float("inf"), time.monotonic() + max(.001, float(timeout_sec)))
     if on_text is not None:
         max_attempts = 1
     for attempt in range(1, max(1, max_attempts) + 1):
+        remaining = call_deadline - time.monotonic()
+        if remaining <= 0:
+            meta.update(error="模型调用已达墙钟预算，停止重试", fail_kind="wall_timeout", retryable=False,
+                        elapsed_ms=int((time.time() - started) * 1000))
+            return None, meta
         meta["attempts"] = attempt
         response = None
         meta["error"] = ""
@@ -677,11 +685,11 @@ def _post_chat_completions(
             import httpx
             result = sdk().completion(**config, **params,
                 logger_fn=trace.logger,
-                timeout=httpx.Timeout(float(timeout_sec), connect=min(_CONNECT_TIMEOUT_SEC, float(timeout_sec)),
-                                      read=min(_STREAM_IDLE_TIMEOUT_SEC, float(timeout_sec)) if params["stream"] else float(timeout_sec)))
+                timeout=httpx.Timeout(remaining, connect=min(_CONNECT_TIMEOUT_SEC, remaining),
+                                      read=min(_STREAM_IDLE_TIMEOUT_SEC, remaining) if params["stream"] else remaining))
             meta["http_status"] = 200
             if params["stream"]:
-                response, meta = _consume_sse_chat(ChatStream(result, trace), meta, started=attempt_start, timeout_sec=timeout_sec, on_text=on_text)
+                response, meta = _consume_sse_chat(ChatStream(result, trace), meta, started=attempt_start, timeout_sec=remaining, on_text=on_text)
             else:
                 response = result.model_dump(exclude_none=True)
         except Exception as exc:
@@ -698,7 +706,11 @@ def _post_chat_completions(
             meta["elapsed_ms"] = int((time.time() - started) * 1000)
             return response, meta
         meta["retry_reasons"].append(str(meta.get("http_status") or meta.get("fail_kind")))
-        time.sleep(_backoff_delay(attempt))
+        delay = _backoff_delay(attempt)
+        if call_deadline - time.monotonic() <= delay:
+            meta.update(error="模型重试预算不足，停止重试", fail_kind="wall_timeout", retryable=False)
+            return None, meta
+        time.sleep(delay)
     return None, meta
 
 def _backoff_delay(attempt: int) -> float:
@@ -732,6 +744,8 @@ def call_chat_plain(
         _safe_record_llm(messages=messages, meta=meta)
         return "", meta
     content, parse_meta = extract_chat_content(resp_json)
+    from mino_nexus.core.secret_redaction import sanitize
+    content = sanitize(content)
     meta.update(parse_meta)
     from mino_nexus.ai.model_sdk import record_decoded_response_trace
     record_decoded_response_trace(meta, parse_meta)
@@ -881,6 +895,7 @@ def call_chat_text(
     parse_retries: int = _PARSE_RETRIES,
     allow_tools_downgrade: bool = True,
     require_tool_calls: bool = False,
+    deadline_monotonic: Optional[float] = None,
 ) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
     """OpenAI-compatible /chat/completions 调用，返回解析好的 JSON dict。
 
@@ -903,8 +918,16 @@ def call_chat_text(
     meta: dict[str, Any] = {}
     parsed: Optional[dict[str, Any]] = None
     rounds = 1 + max(0, int(parse_retries))
+    wasted_ms = 0
+    last_round_ms = 0
+    call_deadline = min(deadline_monotonic or float("inf"), time.monotonic() + max(.001, float(timeout_sec)))
 
     for round_i in range(rounds):
+        remaining = call_deadline - time.monotonic()
+        if remaining <= 0:
+            meta.update(error="模型解析重试已达墙钟预算", fail_kind="wall_timeout", retryable=False)
+            _safe_record_llm(messages=messages, meta=meta)
+            return None, meta
         retry_nonstream = round_i > 0 and require_tool_calls and str(meta.get("fail_kind") or "") == "no_tool_calls"
         round_payload = dict(extra_payload or {})
         if retry_nonstream:
@@ -919,20 +942,27 @@ def call_chat_text(
                 temperature = max(float(temperature), 0.4)
                 if max_tokens is not None:
                     max_tokens = max(int(max_tokens), 1536)
-                meta["empty_tool_calls_retry"] = True
+                # 失败那一轮的耗时（供墙钟预算抵扣：这是 provider 缺陷，不是用例慢）。
+                # _merge_round_meta 会以新一轮 meta 为底，所以先存局部变量、合并后再写回。
+                wasted_ms += last_round_ms
         resp_json, round_meta = _post_chat_completions(
             provider=provider,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            timeout_sec=timeout_sec,
+            timeout_sec=remaining,
             extra_payload=round_payload,
             json_mode=json_mode,
             response_schema=response_schema,
             max_attempts=max_attempts,
             allow_tools_downgrade=allow_tools_downgrade,
+            deadline_monotonic=call_deadline,
         )
+        last_round_ms = int(round_meta.get("elapsed_ms") or 0)
         meta = _merge_round_meta(meta, round_meta)
+        if wasted_ms:
+            meta["empty_tool_calls_retry"] = True
+            meta["wasted_ms"] = wasted_ms
         if resp_json is None:
             meta["fail_kind"] = str(round_meta.get("fail_kind") or "http")
             _safe_record_llm(messages=messages, meta=meta)
@@ -946,6 +976,8 @@ def call_chat_text(
         parsed, content = _parse_chat_json(
             resp_json, meta, require_tool_calls=req_tools,
         )
+        from mino_nexus.core.secret_redaction import sanitize
+        parsed, content = sanitize(parsed), sanitize(content)
         if parsed is not None:
             _safe_record_llm(messages=messages, parsed=parsed, raw_text=content, meta=meta)
             return parsed, meta

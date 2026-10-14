@@ -243,6 +243,8 @@ def try_claim_account_lease(
     rid = str(payload.get("run_id") or "").strip()
     sn = str(payload.get("sn") or "").strip()
     with session_scope() as db:
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
         row = (
             db.query(PoolAccount)
             .filter(PoolAccount.project_id == pid, PoolAccount.id == aid)

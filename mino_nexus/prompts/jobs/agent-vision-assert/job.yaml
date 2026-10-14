@@ -1,5 +1,5 @@
 id: agent-vision-assert
-version: 3
+version: 4
 label: 看图校验
 summary: check 阶段逐项校验必选与选填项，区分页面失败和校验无法完成
 engine: vision_assert
@@ -16,6 +16,9 @@ slots:
   kind: text
   required: false
 - name: context_block
+  kind: text
+  required: false
+- name: checkpoint_response_schema
   kind: text
   required: false
 - name: image_base64
@@ -49,5 +52,9 @@ user:
 - id: ctx
   slot: context_block
   skip_if_empty: true
+- id: checkpoint-contract
+  slot: checkpoint_response_schema
+  skip_if_empty: true
+  heading: 批量校验输出 JSON Schema（与程序解析契约相同；不支持服务端 schema 时仍须遵守）：
 - id: nag
   file: user/10-nag.md

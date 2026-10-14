@@ -1,6 +1,6 @@
 """V4 社交助手：身份绑定、助手档案、调用轨迹、订阅、MCP token。
 
-调用轨迹不存消息正文（正文只在 Scout 本地库）。
+调用轨迹保留限长并按字段脱敏的轮次正文，用于请求复盘；Scout 保留渠道消息真源。
 """
 from __future__ import annotations
 

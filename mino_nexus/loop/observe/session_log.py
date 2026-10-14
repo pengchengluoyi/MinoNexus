@@ -74,6 +74,8 @@ def _clip_value(val: Any, cap: int = _PAYLOAD_CAP) -> Any:
 
 
 def _sanitize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    from mino_nexus.core.secret_redaction import sanitize
+    payload = sanitize(payload)
     out: dict[str, Any] = {}
     for key, val in (payload or {}).items():
         cap = _THUMB_CAP if str(key) == "thumb" else _PAYLOAD_CAP

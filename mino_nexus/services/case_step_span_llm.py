@@ -477,6 +477,8 @@ def _ask(payload: dict[str, Any]) -> tuple[Any, str]:
         )
     finally:
         reset(tok)
+    from mino_nexus.services.compile_provenance import record
+    record(meta, job_meta)
     if not isinstance(parsed, dict):
         return None, str((meta or {}).get("error") or "非法 JSON")
     return parsed.get("spans"), ""

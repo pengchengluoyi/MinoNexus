@@ -52,7 +52,8 @@ def resolve(args: dict[str, Any]) -> tuple[dict, str, list[dict]]:
             return out, '本次测试哪个模块？也可以明确说执行整个项目的全部用例。', [{'label': name, 'value': name} for name in modules]
         if not selected:
             return out, '这个范围没有用例，本次任务尚未提交。请在用例页检查模块和筛选条件。', []
-        digest = hashlib.sha256(json.dumps([(row.case_id, row.sort_index, str(row.updated_at), row.steps, row.expected)
+        digest = hashlib.sha256(json.dumps([(row.case_id, row.sort_index, str(row.updated_at), row.precondition,
+                                            row.steps, row.expected, (row.extra or {}).get('meta', {}).get('ui_automation'))
                                            for row in selected], ensure_ascii=False, default=str).encode()).hexdigest()
         if args.get('scope_revision') and args['scope_revision'] != digest:
             return out, '用例内容或范围在等待期间发生变化，请重新选择，避免执行错误范围。', []

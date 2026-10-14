@@ -94,6 +94,7 @@ class RunContext:
 
     # ---- 拆分新增：这条 run 派给了哪个节点 ----
     node_id: str = ""
+    execution_mode: str = "legacy"
 
     def remember_app_version(self, version: str) -> None:
         v = str(version or "").strip()

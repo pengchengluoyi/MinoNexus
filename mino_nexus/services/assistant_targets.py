@@ -37,7 +37,11 @@ def named_target(text: str) -> dict[str, Any]:
                 (str(row.get("label") or "") and str(row["label"]) + "环境" in text)]
     environment = {"env_profile": str(profiles[0]["key"])} if len(profiles) == 1 else {}
     if len(hits) != 1:
-        return {"project_id": project["id"], "project_name": project.get("name") or "", **environment}
+        out = {"project_id": project["id"], "project_name": project.get("name") or "", **environment}
+        explicit = [app for app in project.get("apps") or [] if any(_mentioned(text, str(app.get(key) or "")) for key in ("id", "name"))]
+        if len(explicit) == 1:
+            out.update(app_id=explicit[0]["id"], app_name=explicit[0].get("name") or "")
+        return out
     channel = hits[0]
     apps = project.get("apps") or []
     explicit = [a for a in apps if any(_mentioned(text, str(a.get(k) or "")) for k in ("id", "name"))]

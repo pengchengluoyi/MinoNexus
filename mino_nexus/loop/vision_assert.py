@@ -21,6 +21,56 @@ def _render_assert_job(slots: dict[str, str]) -> tuple[Any, Any]:
     raise JobRenderError("agent-vision-assert / assert-vision 均未配置")
 
 
+def _checkpoint_response_schema(checkpoints: list[dict[str, Any]]) -> dict[str, Any]:
+    """批量结果的同一契约供支持 schema 的服务与 prompt 文本降级使用。"""
+    ids = [row.get("point_id") if isinstance(row, dict) else None for row in checkpoints]
+    if any(not isinstance(point_id, str) or not point_id.strip() for point_id in ids):
+        raise ValueError("请求中的校验点 ID 为空或不是字符串")
+    if len(set(ids)) != len(ids):
+        raise ValueError("请求中的校验点 ID 重复")
+    variants: list[dict[str, Any]] = []
+    for input_value in (False, True):
+        point_ids = [row["point_id"] for row in checkpoints
+                     if (str(row.get("checkpoint_kind") or "") == "input_value") == input_value]
+        if not point_ids:
+            continue
+        properties: dict[str, Any] = {
+            "point_id": {"type": "string", "enum": point_ids},
+            "passed": {"type": "boolean"},
+            "evidence": {"type": "string"},
+        }
+        if input_value:
+            properties.update({
+                "evidence_scope": {"type": "string", "enum": ["visible_full", "visible_partial", "unknown"]},
+                "target_ref": {"type": "string", "enum": point_ids},
+                "match_kind": {"type": ["string", "null"], "enum": ["exact", "prefix", "suffix", None]},
+                "truncation": {"type": ["string", "null"], "enum": [
+                    "tail_ellipsis", "tail_clipped", "head_clipped", "head_scrolled", None,
+                ]},
+                "visible_text": {"type": ["string", "null"]},
+                "hidden_content_verified": {"type": "boolean", "enum": [False]},
+                "ellipsis_source": {"type": ["string", "null"], "enum": ["rendered", None]},
+            })
+        variants.append({
+            "type": "object", "properties": properties,
+            "required": list(properties), "additionalProperties": False,
+        })
+    properties = {
+        "passed": {"type": "boolean"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "ai_reasoning": {"type": "string"},
+        "evidence": {"type": "string"},
+        "checkpoint_results": {
+            "type": "array", "minItems": len(ids), "maxItems": len(ids),
+            "items": variants[0] if len(variants) == 1 else {"anyOf": variants},
+        },
+    }
+    return {
+        "title": "checkpoint_assert_result", "type": "object", "properties": properties,
+        "required": list(properties), "additionalProperties": False,
+    }
+
+
 def _check_visible_scope(row: dict[str, Any], checkpoint: dict[str, Any]) -> bool:
     input_value = str(checkpoint.get("checkpoint_kind") or "") == "input_value"
     scope = str(row.get("evidence_scope") or ("" if input_value else "visible_full"))
@@ -76,6 +126,15 @@ def vision_assert_checkpoints(
     from mino_nexus.ai.planner import _llm_image, _parse_assert_result, _chat
     from mino_nexus.ai.llm_client import resolve_regression_provider
 
+    response_schema = None
+    if checkpoints:
+        try:
+            response_schema = _checkpoint_response_schema(checkpoints)
+        except ValueError as exc:
+            return AssertResult(
+                passed=False, confidence=0.0, ai_reasoning=str(exc),
+                parse_warnings=[str(exc)], error_kind="assert_output_invalid",
+            )
     provider, gate = resolve_regression_provider(provider_id)
     if provider is None:
         return AssertResult(
@@ -97,6 +156,8 @@ def vision_assert_checkpoints(
         image_mime=image_mime,
         context_block=merged_ctx,
     )
+    if response_schema:
+        slots["checkpoint_response_schema"] = json.dumps(response_schema, ensure_ascii=False)
     try:
         messages, job_meta = _render_assert_job(slots)
     except Exception as exc:  # noqa: BLE001
@@ -119,6 +180,7 @@ def vision_assert_checkpoints(
         max_tokens=int(call.get("max_tokens", 800)),
         timeout_sec=int(call.get("timeout_sec", 60)),
         json_mode=bool(call.get("json_mode", True)),
+        response_schema=response_schema,
     )
     if raw is None:
         return AssertResult(
@@ -155,12 +217,14 @@ def vision_assert_checkpoints(
             if not isinstance(row, dict):
                 errors.append("逐项结果格式错误")
                 continue
-            point_id = str(row.get("point_id") or "")
-            if point_id not in requested or point_id in seen:
+            point_id = row.get("point_id")
+            if not isinstance(point_id, str) or point_id not in requested or point_id in seen:
                 errors.append(f"未知或重复的校验点: {point_id}")
                 continue
             seen.add(point_id)
-            if type(row.get("passed")) is not bool or not str(row.get("evidence") or "").strip():
+            if (type(row.get("passed")) is not bool
+                    or not isinstance(row.get("evidence"), str)
+                    or not row["evidence"].strip()):
                 errors.append(f"校验点结果或证据无效: {point_id}")
                 continue
             if row["passed"] and not _check_visible_scope(row, requested[point_id]):

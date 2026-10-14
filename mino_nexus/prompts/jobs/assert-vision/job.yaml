@@ -1,5 +1,5 @@
 id: assert-vision
-version: 4
+version: 5
 label: assert-vision
 summary: ''
 engine: vision_assert
@@ -18,6 +18,9 @@ slots:
 - name: context_block
   kind: text
   required: false
+- name: checkpoint_response_schema
+  kind: text
+  required: false
 - name: image_base64
   kind: image
   required: true
@@ -26,7 +29,7 @@ slots:
   required: false
 call:
   temperature: 0.0
-  max_tokens: 320
+  max_tokens: 1000
   timeout_sec: 60
   json_mode: true
 image:
@@ -49,5 +52,9 @@ user:
 - id: ctx
   slot: context_block
   skip_if_empty: true
+- id: checkpoint-contract
+  slot: checkpoint_response_schema
+  skip_if_empty: true
+  heading: 批量校验输出 JSON Schema（与程序解析契约相同；不支持服务端 schema 时仍须遵守）：
 - id: nag
   file: user/10-nag.md

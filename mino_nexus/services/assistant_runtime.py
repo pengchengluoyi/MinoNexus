@@ -100,6 +100,27 @@ def result_for(*, answer: str, origin: dict, outcome: ToolOutcome | None = None,
         card['blocks'].append({'type': 'kv', 'items': [['已查询到的结果', outcome.summary]]})
     if task_id:
         card['blocks'].append({'type': 'kv', 'items': [['任务', task_id]]})
+    data = outcome.data if outcome and isinstance(outcome.data, dict) else {}
+    preflight = data.get('preflight') or {}
+    detail = data.get('detail') if isinstance(data.get('detail'), dict) else {}
+    blocked = preflight.get('blocked') or data.get('blocked') or detail.get('blocked') or []
+    if blocked:
+        from mino_nexus.services.case_preflight import blocked_message
+        from mino_nexus.services.assistant_reports import configuration, case_edit_url
+
+        heading = '以下用例没有执行' if task_id else '以下用例未通过预检'
+        card['blocks'].append({'type': 'problem', 'text': heading + '：\n' + blocked_message(blocked)})
+        base = configuration(require_user_id())['effective_url']
+        if base:
+            for case in blocked:
+                url = case_edit_url(str(target_args.get('app_id') or ''), str(case.get('case_id') or ''), base_url=base)
+                if url:
+                    card['actions'].append({'id': 'edit_' + str(case['case_id']),
+                                            'label': '编辑用例 ' + str(case['case_id']), 'url': url})
+        else:
+            card['blocks'].append({'type': 'next_steps', 'items': ['请在 Workbench 对话设置中配置可访问的地址；也可按上述用例编号进入用例页编辑。']})
+        if task_id:
+            card['blocks'][0]['text'] = f"已受理 {len(preflight.get('runnable') or [])} 条可执行用例；另有 {len(blocked)} 条没有执行。任务完成后会通知你。"
     if request:
         card['request'] = {key: request[key] for key in ('id', 'revision', 'state', 'expires_at', 'question')}
         if question:
@@ -222,7 +243,8 @@ def route_control(text: str, origin: dict, inbound: dict) -> dict | None:
     if raw in ('继续', '继续本次请求', '/继续'):
         if pending:
             outcome = ToolOutcome(ok=False, ask='请选择本次需要补充的信息。', summary='',
-                                  field=pending['question'].get('field', ''), candidates=pending['question'].get('candidates', []))
+                                  field=pending['question'].get('field', ''), candidates=pending['question'].get('candidates', []),
+                                  data=pending.get('result') or {}, args=pending.get('args') or {}, tool_id=pending.get('tool_id') or '')
             return result_for(answer=outcome.ask, outcome=outcome, origin=origin, request=pending)
         return result_for(answer='当前没有待补充的请求。可以查询任务进度，或说明要测试的应用和模块。', origin=origin)
     match = re.fullmatch(r'(?:切换到|关注任务|/关注)\s*(\S+)', raw)

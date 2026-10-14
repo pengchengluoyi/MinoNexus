@@ -12,12 +12,12 @@
   "confidence": 0.0..1.0,
   "ai_reasoning": "<预期 vs 实际的对比，含验证类型与层级判断>",
   "evidence": "<所见关键元素及视觉状态>",
-  "verify_points": [
-    {"id":"p1","dimension":"...","expected":"...","actual":"...","passed":true|false}
+  "checkpoint_results": [
+    {"point_id":"<输入 point_id 原值>","passed":true|false,"evidence":"<该项在当前截图中的具体观察>"}
   ]
 }
 
-verify_points：从用户输入拆出的验证点逐条判定，至少 1 条。
+有「校验点 JSON」时，checkpoint_results 对每个输入 point_id 恰好返回一项，不重命名、不增删；必选项决定总体 passed，选填项失败不影响总体通过。没有「校验点 JSON」时仅按预期文本判断，checkpoint_results 返回空数组。不要输出 verify_points；它不是逐项结果契约。
 
 ---
 
@@ -121,9 +121,9 @@ system > login_block > guide > half_sheet > full_modal > toast > main > backgrou
 
 ## 七、判定流程
 
-1. 解析用户输入 → verify_points[]（dimension + expected + 严格度）
+1. 有校验点 JSON 时，按输入 point_id 与 element / rules / expectation 确定验证范围；没有时从预期文本解析验证维度与严格度
 2. 识别截图：层级、态、内容形态
-3. 逐点判定，写入 verify_points
+3. 有校验点 JSON 时逐点判定，写入 checkpoint_results，保留原 point_id 与该点证据；没有时 checkpoint_results 为空数组
 4. passed = 所有 **required** 点均 true（用户未区分时全部为 required）
 5. confidence：清晰 0.85+；遮挡/模糊/OR 边界 0.3~0.5
 6. ai_reasoning：每点「预期 vs 实际」；样式冲突必须 false
@@ -142,9 +142,10 @@ system > login_block > guide > half_sheet > full_modal > toast > main > backgrou
 <!-- prompt_version >= 3 (drop forced visual JSON) -->
 
 ### 看图校验（agent-vision-assert）
-一次调用评估上下文中的**全部校验点 JSON**；输出 passed / confidence / evidence / ai_reasoning / checkpoint_results。verify_points 仅是解释，不能替代 checkpoint_results。
+一次调用评估上下文中的**全部校验点 JSON**；输出 passed / confidence / evidence / ai_reasoning / checkpoint_results。不要输出 verify_points，也不能用总体 passed 或总体 evidence 替代逐项结果。
 同时输出 checkpoint_results 数组，对每个输入的 point_id 恰好返回一项：{"point_id":"原 ID","passed":true 或 false,"evidence":"该项在当前截图中的具体观察"}。缺项、重复项和没有观察证据都不能判通过；总体 passed 仅当全部必需项目通过时为 true。
 输入值检查点须另外给出 evidence_scope（visible_full / visible_partial / unknown）及 target_ref（该 point_id）。完整值要求 exact_value，不可用部分可见放行。仅当 verification_policy=visible_content、目标输入框内确有界面截断证据，且有区别于旧值的可见片段时，才可用 visible_partial；此时给出 match_kind（prefix/suffix）、truncation（tail_ellipsis/tail_clipped/head_clipped/head_scrolled）、visible_text（去掉确认属于界面渲染的省略标记后的可见字符）和 hidden_content_verified=false。tail_ellipsis 还须给出 ellipsis_source=rendered；无法确认省略号来源就不能通过。看不清目标、截断来源或片段无法区分时返回 passed=false、evidence_scope=unknown；不得把省略号一律删掉，也不能用输入框外的文案作为证据。不要输出账号或验证码明文到 evidence 中。
+输入值结果中的 hidden_content_verified 固定为 false，截图不证明隐藏内容；完整可见或无法确认时，match_kind / truncation / visible_text / ellipsis_source 中不适用的字段返回 null，不编造截断证据。
 required=false 的选填项仍必须返回结果和证据，但其不通过不影响总体通过；只有必选项参与通过聚合，不能将选填项伪报为通过。程序区分页面预期不成立（fail）和校验无法完成（blocked），不将缺图、输出格式异常或不支持的检查当作被测页面故障。
 前后变化或过程态必须有可核对的历史证据；历史上下文仅辅助验证输入校验点，不能增加校验范围或替代当前截图。
 结构化校验点以 element 与 rules 确定目标，不根据原步骤文案另找目标；保留的历史上下文只提供前后对比证据。

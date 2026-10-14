@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import copy
 import unicodedata
 from typing import Any
 
@@ -978,8 +979,16 @@ def _stored_plan_fresh(plan: Any, source: str, *, platform: str = "", instructio
     return True
 
 
+from mino_nexus.services.compile_provenance import capture as capture_provenance
+
+
+@capture_provenance
 def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
     """整案编译 → step_program_keys + 各步 plan 缓存 + warnings + ui_automation。"""
+    project_id = str(case.get("project_id") or case.get("app_id") or "").strip()
+    if not project_id or project_id == "_project":
+        raise ValueError("control_project_missing: 请从项目内导入或编译用例")
+    case = {**case, "project_id": project_id}
     step_keys: dict[str, Any] = {}
     all_warnings: list[dict[str, Any]] = []
     platform = str(case.get("platform") or "")
@@ -996,8 +1005,8 @@ def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
         if _stored_plan_fresh(do_old, instr, platform=platform, app_id=app_id) and _stored_plan_fresh(
             ck_old, expected, platform=platform, instruction=instr, app_id=app_id
         ):
-            do_plan = dict(do_old or {})
-            ck_plan = dict(ck_old or {})
+            do_plan = copy.deepcopy(do_old or {})
+            ck_plan = copy.deepcopy(ck_old or {})
         else:
             do_plan = build_do_program_plan_for_step(n, instr, platform=platform)
             ck_plan = build_check_program_plan_for_step(
@@ -1095,7 +1104,14 @@ def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
 
 
 def sync_case_step_program_keys(row: dict[str, Any]) -> dict[str, Any]:
-    out = dict(row)
+    from mino_nexus.services.v5_publication import guard_case_row
+    out = guard_case_row(row)
+    publication = out.get("v5_publication")
+    if publication:
+        meta = dict(out.get("meta") or {})
+        meta["step_program_keys"] = publication["compiled_keys"]
+        out["meta"] = meta
+        return out
     compiled = compile_case_step_program_keys(out)
     meta = out.get("meta") if isinstance(out.get("meta"), dict) else {}
     if not meta and isinstance(out.get("resource_key"), dict):
@@ -1104,6 +1120,7 @@ def sync_case_step_program_keys(row: dict[str, Any]) -> dict[str, Any]:
     meta["step_program_keys"] = compiled["step_program_keys"]
     meta["key_compile_warnings"] = compiled["key_compile_warnings"]
     meta["ui_automation"] = compiled["ui_automation"]
+    meta["compile_provenance"] = compiled.get("compile_provenance", [])
     out["meta"] = meta
     return out
 

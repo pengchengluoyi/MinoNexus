@@ -864,8 +864,10 @@ def lease_expired(lease: dict[str, Any], *, now: Optional[datetime] = None) -> b
         dt = datetime.fromisoformat(exp)
     except ValueError:
         return False
-    ref = now or datetime.now()
-    return ref >= dt
+    # Legacy leases have local timestamps without an offset; V5 leases use
+    # timezone-aware UTC timestamps. Normalize both before comparing.
+    ref = (now or datetime.now().astimezone()).astimezone()
+    return ref >= dt.astimezone()
 
 
 def new_lease_record(

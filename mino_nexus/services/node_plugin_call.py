@@ -5,6 +5,7 @@ import inspect
 from typing import Any
 
 from mino_nexus.core import protocol as P
+from mino_nexus.core.wire_identity import assign_execute_identity
 from mino_nexus.loop.router_proxy import _run_sync
 from mino_nexus.services.node_registry import get_registry
 
@@ -82,6 +83,8 @@ def call_plugin(
         params=dict(params or {}),
         timeout_sec=float(timeout),
     )
+
+    assign_execute_identity(payload)
 
     async def _once():
         result = node.send(P.MsgType.EXECUTE, payload, timeout=float(timeout) + 5)

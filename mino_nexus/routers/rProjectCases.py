@@ -76,11 +76,119 @@ class CaseUpdateBody(BaseModel):
     case_scene: dict[str, Any] | None = None
 
 
+class V5PublishBody(BaseModel):
+    expected_revision: int = Field(ge=1)
+    reviewed_expected_strength: bool = False
+    retry_policy: dict[str, Any] | None = None
+    reversible: bool = False
+
+
+class V5ControlBody(BaseModel):
+    expected_revision: int = Field(ge=1)
+    locator_spec: dict[str, Any]
+    sensitive: bool = False
+    publish: bool = False
+
+
+class V5ControlProbeBody(BaseModel):
+    expected_revision: int = Field(ge=1)
+    sn: str = Field(min_length=1)
+    url: str = Field(min_length=1)
+
+
+class V5BaselineBody(BaseModel):
+    expected_revision: int = Field(ge=1)
+    control_id: str = Field(min_length=1)
+
+
 def _project(project_id: str) -> dict[str, Any]:
     row = ps.find_project(project_id)
     if not row:
         raise HTTPException(status_code=404, detail="Project not found")
     return row
+
+
+@router.get("/{project_id}/controls")
+def v5_controls(project_id: str, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.v5_controls import list_controls, audit
+    return ok({"items": list_controls(project_id), "identity_conflicts": audit(project_id)})
+
+
+@router.put("/{project_id}/controls/{control_id}")
+def v5_configure_control(project_id: str, control_id: str, body: V5ControlBody, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.v5_controls import configure
+    try:
+        return ok(configure(project_id, control_id, **body.model_dump()))
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "conflict" in str(exc) else 400, detail={"reason_code": str(exc)}) from exc
+
+
+@router.post("/{project_id}/controls/{control_id}/probe")
+def v5_probe_control(project_id: str, control_id: str, body: V5ControlProbeBody, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.v5_controls import probe
+    try:
+        return ok(probe(project_id, control_id, **body.model_dump()))
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "conflict" in str(exc) else 400, detail={"reason_code": str(exc)}) from exc
+
+
+@router.get("/{project_id}/cases/{case_id}/v5/preview")
+def v5_case_preview(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.case_store import get_case
+    from mino_nexus.services.v5_publication import preview
+    case = get_case(project_id, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="用例不存在")
+    return ok(preview(case))
+
+
+@router.put("/{project_id}/cases/{case_id}/v5/baseline")
+def v5_configure_baseline(project_id: str, case_id: str, body: V5BaselineBody, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.v5_publication import configure_baseline
+    try:
+        return ok(configure_baseline(project_id, case_id, body.expected_revision, body.control_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "conflict" in str(exc) else 400, detail={"reason_code": str(exc)}) from exc
+
+
+@router.post("/{project_id}/cases/{case_id}/v5/compile")
+def v5_compile_draft(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.case_store import get_case, save_case
+    from mino_nexus.services.case_step_key_compiler import compile_case_step_program_keys
+    from mino_nexus.services.v5_publication import preview
+    case = get_case(project_id, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="用例不存在")
+    compiled = compile_case_step_program_keys(case)
+    meta = dict(case.get("meta") or {})
+    meta.update(v5_draft_step_program_keys=compiled["step_program_keys"], key_compile_warnings=compiled["key_compile_warnings"], compile_provenance=compiled.get("compile_provenance", []))
+    saved = save_case(project_id, {**case, "meta": meta})
+    return ok({"case": saved, "preview": preview(saved)})
+
+
+@router.post("/{project_id}/cases/{case_id}/v5/publish")
+def v5_publish_case(project_id: str, case_id: str, body: V5PublishBody, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    if not body.reviewed_expected_strength:
+        raise HTTPException(status_code=400, detail={"reason_code": "expected_strength_review_required"})
+    from mino_nexus.services.v5_publication import publish
+    try:
+        return ok(publish(project_id, case_id, body.expected_revision, retry_policy=body.retry_policy, reversible=body.reversible))
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "conflict" in str(exc) else 400, detail={"reason_code": str(exc)}) from exc
+
+
+@router.get("/{project_id}/v5/metrics")
+def v5_weekly_metrics(project_id: str, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.v5_metrics import weekly
+    return ok(weekly(project_id))
 
 
 @router.post("/{project_id}/resource-key/preview")

@@ -462,7 +462,11 @@ def user_message(
         readable = "、".join(names.get(value, "必要操作信息") for value in detail.split("、") if value)
         return f"{head}尚未执行：缺少{readable or '必要操作信息'}，请在用例编辑页补充。"
     if reason == "uncovered":
-        return f"{head}未执行：{detail}"
+        if layer == "expected" and re.search(r"[（(].*[）)]|即可", text):
+            return f"{head}尚未完整编译：请把括号内的页面说明改成明确检查点，保留需要验证的内容；句末语气词可删除。"
+        if layer == "operation" and "登录" in text:
+            return f"{head}尚未完整编译：请在编译预览中检查登录事件及其必填信息；当前摘要不足以确认是否缺少账号。"
+        return f"{head}尚未完整编译：请将这一步写成明确的操作或检查点，并在编译预览中查看未匹配的事件。"
     if reason == "unmapped":
         return f"{head}无法执行：当前目录没有对应事件。"
     if reason in ("unavailable_cap", "capability_disabled"):
