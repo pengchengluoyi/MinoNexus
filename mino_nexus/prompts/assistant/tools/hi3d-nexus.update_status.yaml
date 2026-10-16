@@ -1,0 +1,18 @@
+id: nexus.update_status
+version: 1
+title: 查询 Nexus 更新操作
+description: 查询原 operation_id 的持久更新状态。断线不代表失败，needs_operator 需要本地维护；查询不会重启或重装。
+route: GET /sys/updates/status
+risk: read
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    operation_id: {type: string}
+  required: [operation_id]
+param_resolvers: {}
+result_pick: [data]
+card: answer
+surfaces: [mcp]
+enabled: true
+async: false

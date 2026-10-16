@@ -34,7 +34,6 @@ from mino_nexus.routers import (
     rFlowBlocks,
     rMcp,
     rMe,
-    rMcp,
     rNavFsm,
     rObserve,
     rPacks,
@@ -129,6 +128,7 @@ async def lifespan(app: FastAPI):
     compile_task.cancel()
     doc_sync_task.cancel()
     delivery_task.cancel()
+    await asyncio.gather(compile_task, doc_sync_task, delivery_task, return_exceptions=True)
     await unregister_beacon(handle)
 
 
@@ -174,6 +174,11 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    from mino_nexus.core.maintenance_gate import MaintenanceMiddleware
+    app.add_middleware(MaintenanceMiddleware)
+    from mino_nexus.routers import rNexusUpdate, rWorkbenchUpdate
+    app.include_router(rNexusUpdate.router)
+    app.include_router(rWorkbenchUpdate.router)
     app.include_router(rSys.router)
     app.include_router(rAuth.router)
     app.include_router(rMe.router)
@@ -193,7 +198,6 @@ def create_app() -> FastAPI:
     app.include_router(rAppIntel.router)
     app.include_router(rTask.router)
     app.include_router(rAssistant.router)
-    app.include_router(rMcp.router)
     app.include_router(rMcp.router)
     from mino_nexus.services.assistant_tools import bind_app
 

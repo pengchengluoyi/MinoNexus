@@ -601,6 +601,10 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         if not any(k in receipt_data for k in ("task_id", "run_id", "id")) and isinstance(payload, dict) and isinstance(payload.get("data"), dict):
             receipt_data = payload["data"]
         identifiers = {k: receipt_data[k] for k in ("task_id", "run_id", "id", "status") if isinstance(receipt_data.get(k), (str, int))}
+        if spec.get("id", "").startswith(("workbench.update", "nexus.update")):
+            identifiers.update({k: receipt_data[k] for k in (
+                "installation_id", "operation_id", "build_id", "state", "observation", "helper_started", "recovery"
+            ) if isinstance(receipt_data.get(k), (str, bool))})
         if spec.get("id") == "scout.update":
             identifiers.update({k: receipt_data[k] for k in (
                 "node_id", "command", "previous_version", "running_version_verified", "next_tool"

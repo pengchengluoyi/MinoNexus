@@ -68,7 +68,8 @@ def _kick_im_hold() -> None:
         except Exception as exc:
             SLog.w(TAG, f"im_hold 仲裁失败 {type(exc).__name__}")
 
-    threading.Thread(target=_run, name="im-hold", daemon=True).start()
+    from mino_nexus.core.maintenance_gate import background
+    threading.Thread(target=background(_run), name="im-hold", daemon=True).start()
 
 
 class NodeConnection:

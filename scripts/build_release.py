@@ -32,6 +32,8 @@ def build(args):
     work.mkdir(parents=True, exist_ok=False)
     identity = {"component": component, "version":version, "build_id":build_id,
                 "source_commit":commit, "dirty":dirty, "os":osn, "arch":arch}
+    if component == "nexus":
+        identity["maintenance_contract_version"] = 1
     env = dict(os.environ, MINO_NEXUS_DATA_DIR=str(work / "isolated-data"), MINO_NEXUS_MDNS="0",
                PYINSTALLER_CONFIG_DIR=str(work / "pyinstaller-cache"), PYTHONDONTWRITEBYTECODE="1")
     source = work / "source"
@@ -57,7 +59,11 @@ def build(args):
             "--distpath", str(work / "dist"), "--workpath", str(work / "freeze"),
             "--specpath", str(work)]
     command([*base, "--name", "mino-" + component, *extra, str(entry)], cwd=source, env=env)
-    command([*base, "--name", "mino-maintain", str(ROOT / "packaging/maintain.py")], cwd=source, env=env)
+    helper_options = (["--paths", str(source), "--collect-submodules", "mino_nexus.core"]
+                      if component == "nexus" else [])
+    command([*base, "--name", "mino-maintain", *helper_options, str(ROOT / "packaging/maintain.py")], cwd=source, env=env)
+    if component == "nexus":
+        command([str(work / "dist/mino-maintain/mino-maintain"), "d2", "--help"], env=env)
     executable = work / "dist" / ("mino-" + component) / ("mino-" + component + (".exe" if osn == "win32" else ""))
     command([str(executable), "--help"], env=env)
     if component == "nexus":

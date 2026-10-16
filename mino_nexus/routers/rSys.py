@@ -14,7 +14,7 @@ router = APIRouter(tags=["Sys"])
 
 @router.get("/sys/server_info")
 def sys_server_info():
-    from mino_nexus.core.build_info import identity
+    from mino_nexus.core.deployment import identity
     urls = public_urls()
     return ok({
         **identity(),

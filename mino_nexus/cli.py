@@ -322,6 +322,9 @@ def _migrate_cli(argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "maintenance":
+        from mino_nexus.core.deployment_cli import main as maintenance_main
+        return maintenance_main(argv[1:])
     if argv and argv[0] == "probe":
         from mino_nexus.core.maintenance_probe import main as probe_main
         return probe_main(argv[1:])

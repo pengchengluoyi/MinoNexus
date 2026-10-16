@@ -1,0 +1,40 @@
+{
+  "id": "workbench.update_recover",
+  "version": 1,
+  "title": "恢复原 Workbench 更新",
+  "description": "从安装端原持久 operation_id 续接独立助手；终态只返回原记录。拒绝通过 MCP 恢复 local-verification 操作；needs_operator 需本地处理。",
+  "route": "POST /sys/workbench/updates/recover",
+  "risk": "write",
+  "params_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "installation_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 101,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "operation_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 101,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      }
+    },
+    "required": [
+      "installation_id",
+      "operation_id"
+    ]
+  },
+  "param_resolvers": {},
+  "result_pick": [
+    "data"
+  ],
+  "card": "answer",
+  "surfaces": [
+    "mcp"
+  ],
+  "enabled": true,
+  "async": false
+}

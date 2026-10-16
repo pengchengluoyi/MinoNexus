@@ -146,6 +146,9 @@ def run(args):
     return child.wait()
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "d2":
+        from mino_nexus.core.deployment_cli import main as deployment_main
+        return deployment_main(sys.argv[2:])
     ap = argparse.ArgumentParser(prog="mino-maintain")
     sub = ap.add_subparsers(dest="command", required=True)
     p = sub.add_parser("install")

@@ -1,0 +1,21 @@
+id: nexus.update
+version: 1
+title: 更新正式 Nexus 固定版本
+description: 显式更新或回退正式 Nexus。仅部署管理员可用，目标包必须已暂存且具备对应版本的兼容演练记录。使用稳定 operation_id；断线后查询原操作，不生成新 ID 重试。等待现有批次完成后独立助手停服更新。
+route: POST /sys/updates/request
+risk: write
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    operation_id: {type: string, minLength: 1, maxLength: 120}
+    build_id: {type: string, minLength: 1, maxLength: 120}
+    wait_seconds: {type: integer, minimum: 1, maximum: 1800, default: 1800}
+    rollback: {type: boolean, default: false}
+  required: [operation_id, build_id]
+param_resolvers: {}
+result_pick: [data]
+card: answer
+surfaces: [mcp]
+enabled: true
+async: false

@@ -1,0 +1,24 @@
+{
+  "id": "workbench.installation",
+  "version": 1,
+  "title": "读取已登记 Workbench 安装",
+  "description": "读取部署管理员登记的同机 Workbench 安装身份与磁盘当前版本；不代表运行健康检查。",
+  "route": "GET /sys/workbench/installation",
+  "risk": "read",
+  "params_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {},
+    "required": []
+  },
+  "param_resolvers": {},
+  "result_pick": [
+    "data"
+  ],
+  "card": "answer",
+  "surfaces": [
+    "mcp"
+  ],
+  "enabled": true,
+  "async": false
+}
