@@ -5,7 +5,23 @@ from mino_nexus.models.nav_flow_block_catalog import GLOBAL_APP_ID, NavFlowBlock
 
 LOGIN_BLOCK_ID = "fb.global.login"
 SYSTEM_DIALOG_BLOCK_ID = "fb.global.system_dialog"
-_RETIRED_LOGIN_BLOCK_IDS = ("fb.global.login.email_web",)
+# Explicit release lineage; unknown versions are never ordered by guessing.
+_LOGIN_VERSION_ORDER = (
+    "v1", "v2", "v3", "v4", "v5", "v6", "v7",
+    "v8", "v9", "v10", "v11", "v12", "v13",
+)
+_VERSION_ORDER = {
+    LOGIN_BLOCK_ID: _LOGIN_VERSION_ORDER,
+    LOGIN_BLOCK_ID + ".send_code": _LOGIN_VERSION_ORDER,
+    LOGIN_BLOCK_ID + ".legal_consent": _LOGIN_VERSION_ORDER,
+    SYSTEM_DIALOG_BLOCK_ID: ("v1",),
+}
+
+
+def _is_seed_upgrade(block_id: str, current: str, target: str) -> bool:
+    order = _VERSION_ORDER.get(block_id, ())
+    return current in order and target in order and order.index(current) < order.index(target)
+
 
 # 一条登录链。账号和验证码由 lease_account / get_otp 按用例给出，不按邮箱/手机、Web/App 拆块。
 _UNIFIED_LOGIN_STEPS = [
@@ -157,30 +173,16 @@ def seed_global_flow_blocks() -> int:
                     )
                 )
                 n += 1
-            else:
-                if not existing.steps_json:
-                    existing.steps_json = row["steps_json"]
-                    existing.display_name = str(row["display_name"])
-                    n += 1
-                ver = str(row.get("version") or "")
-                if ver in ("v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13") and str(existing.version or "") != ver:
-                    existing.steps_json = row["steps_json"]
-                    existing.version = ver
-                    existing.display_name = str(row["display_name"])
-                    existing.description = str(row.get("description") or existing.description or "")
-                    n += 1
-        for retired in _RETIRED_LOGIN_BLOCK_IDS:
-            gone = (
-                db.query(NavFlowBlockCatalog)
-                .filter(
-                    NavFlowBlockCatalog.app_id == GLOBAL_APP_ID,
-                    NavFlowBlockCatalog.block_id == retired,
-                )
-                .first()
-            )
-            if gone is not None:
-                db.delete(gone)
+            elif (existing.block_origin == "global_catalog"
+                  and _is_seed_upgrade(bid, str(existing.version or ""),
+                                       str(row.get("version") or "v1"))):
+                existing.steps_json = row["steps_json"]
+                existing.version = str(row.get("version") or "v1")
+                existing.display_name = str(row["display_name"])
+                existing.description = str(row.get("description") or "")
                 n += 1
+        # Legacy IDs are no longer seeded, but startup must not delete them:
+        # a newer release or an existing plan may still reference those rows.
         db.commit()
     finally:
         db.close()

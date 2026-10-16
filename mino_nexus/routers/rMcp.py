@@ -115,7 +115,8 @@ async def mcp_post(request: Request, authorization: str = Header(default="")):
     requested_version = request.headers.get("mcp-protocol-version")
     if requested_version and requested_version != PROTOCOL:
         return JSONResponse({"detail": f"仅支持 MCP {PROTOCOL}"}, status_code=400)
-    uid = store.resolve_mcp_token(bearer(authorization))
+    probe = store.resolve_probe_token(bearer(authorization))
+    uid = "system:probe" if probe else store.resolve_mcp_token(bearer(authorization))
     if not uid:
         return JSONResponse({"detail": "MCP token 无效或已吊销"}, status_code=401)
     try:
@@ -127,6 +128,12 @@ async def mcp_post(request: Request, authorization: str = Header(default="")):
     for msg in items:
         if not isinstance(msg, dict):
             out.append(_rpc_error(None, -32600, "无效请求"))
+            continue
+        if probe:
+            if msg.get("method") not in {"initialize", "ping", "tools/list"}:
+                out.append(_rpc_error(msg.get("id"), -32601, "probe token 仅允许 initialize/ping/tools/list"))
+            else:
+                out.append(await asyncio.to_thread(_handle, uid, msg))
             continue
         scope = hashlib.sha256(bearer(authorization).encode()).hexdigest()
         res = await asyncio.to_thread(_handle_owned, uid, msg, scope)

@@ -557,7 +557,7 @@ def resolve_api_token(token: str) -> Optional[str]:
         return None
     with session_scope() as db:
         row = db.query(AssistantMcpToken).filter(AssistantMcpToken.token_hash == _hash_token(token)).first()
-        if row is None or row.revoked:
+        if row is None or row.revoked or row.kind not in ("mcp", "assistant"):
             return None
         row.last_used_at = _now()
         return row.user_id
@@ -609,3 +609,28 @@ def revoke_assistant_token(user_id: str) -> None:
             extra = dict(prof.extra or {})
             extra.pop("assistant_token", None)
             prof.extra = extra
+
+
+def create_probe_token(name: str = "maintenance") -> dict[str, Any]:
+    """Local maintenance credential; no user profile or business API access."""
+    from mino_nexus.models.assistant import AssistantMcpToken
+    token = "mino_probe_" + secrets.token_urlsafe(32)
+    with session_scope() as db:
+        row = AssistantMcpToken(user_id="system:probe", name=name[:60], kind="probe",
+            prefix=token[:15], token_hash=_hash_token(token), created_at=_now())
+        db.add(row)
+        db.flush()
+        return {"id": row.id, "token": token}
+
+
+def resolve_probe_token(token: str) -> bool:
+    """Read-only authentication: no last_used_at update or assistant token."""
+    if not str(token or "").startswith("mino_probe_"):
+        return False
+    from mino_nexus.core.database import SessionLocal
+    from mino_nexus.models.assistant import AssistantMcpToken
+    with SessionLocal() as db:
+        row = db.query(AssistantMcpToken).filter(
+            AssistantMcpToken.token_hash == _hash_token(token),
+            AssistantMcpToken.kind == "probe", AssistantMcpToken.revoked.is_(False)).first()
+        return row is not None

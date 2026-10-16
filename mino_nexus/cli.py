@@ -297,8 +297,36 @@ def _nav_cli(argv: list[str]) -> int:
     return 1
 
 
+def _migrate_cli(argv: list[str]) -> int:
+    """Offline initialization; caller must stop writers and back up first."""
+    import os
+
+    ap = argparse.ArgumentParser(prog="mino-nexus migrate")
+    ap.add_argument("--data-dir", required=True, help="Explicit offline data directory")
+    args = ap.parse_args(argv)
+    target = Path(args.data_dir).expanduser().resolve()
+    if not args.data_dir.strip():
+        ap.error("--data-dir must not be empty")
+    os.environ["MINO_NEXUS_DATA_DIR"] = str(target)
+    os.environ["MINO_NEXUS_MDNS"] = "0"
+    # No paths/database/app import before configuration above.
+    from mino_nexus.core.database import ensure_db
+    try:
+        ensure_db()
+    except Exception as exc:
+        SLog.e(TAG, f"offline initialization failed: {type(exc).__name__}")
+        return 1
+    SLog.i(TAG, "offline initialization complete (migration and bootstrap)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "probe":
+        from mino_nexus.core.maintenance_probe import main as probe_main
+        return probe_main(argv[1:])
+    if argv and argv[0] == "migrate":
+        return _migrate_cli(argv[1:])
     if argv and argv[0] == "catalog":
         return _catalog_cli(argv[1:])
     if argv and argv[0] == "session":
@@ -309,7 +337,26 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="mino-nexus", description="MinoNexus 服务端")
     ap.add_argument("--host", default="0.0.0.0", help="监听地址；局域网要 0.0.0.0 才能解析 mino.local")
     ap.add_argument("--port", type=int, default=10104, help="UI 仍打这个端口，与上游一致")
+    ap.add_argument("--data-dir", help="Set data root before loading the application")
+    ap.add_argument("--dev", action="store_true", help="Require an isolated explicit data root")
+    ap.add_argument("--no-mdns", action="store_true", help="Disable mDNS advertisement")
     args = ap.parse_args(argv)
+
+    import os
+    raw_dir = args.data_dir or os.environ.get("MINO_NEXUS_DATA_DIR", "")
+    if args.dev and not raw_dir.strip():
+        ap.error("--dev requires --data-dir or MINO_NEXUS_DATA_DIR")
+    if args.data_dir is not None and not args.data_dir.strip():
+        ap.error("--data-dir must not be empty")
+    if raw_dir:
+        target = Path(raw_dir).expanduser().resolve()
+        default = (Path(os.environ.get("APPDATA", Path.home())) / "MinoNexus"
+                   if os.name == "nt" else Path.home() / ".mino-nexus").resolve()
+        if args.dev and (target == default or default in target.parents or target in default.parents):
+            ap.error("development data root must not overlap the default production root")
+        os.environ["MINO_NEXUS_DATA_DIR"] = str(target)
+    if args.dev or args.no_mdns:
+        os.environ["MINO_NEXUS_MDNS"] = "0"
 
     import uvicorn
 

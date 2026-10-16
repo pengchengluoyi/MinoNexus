@@ -1,4 +1,4 @@
-"""启动时 additive 迁移。新库靠 create_all；旧库缺列再 ALTER。"""
+"""启动迁移，包括结构和历史数据变更；失败必须中断初始化。"""
 from __future__ import annotations
 
 import json
@@ -144,5 +144,6 @@ def run_auto_migration() -> None:
         ensure_fts()
         # 历史密钥与账号文件保留；执行链路不再读取它们，不能在启动时清除用户数据。
     except Exception as exc:
-        SLog.w(TAG, f"migration skipped: {exc}")
+        SLog.e(TAG, f"migration failed: {type(exc).__name__}")
+        raise
     SLog.i(TAG, "schema ready")
