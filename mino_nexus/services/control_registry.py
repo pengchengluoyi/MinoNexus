@@ -214,7 +214,7 @@ def get_control(project_id: str, control_id: str) -> dict[str, Any] | None:
 
 def locator_cell(scheme: str, platform: str) -> str:
     """看图只用描述。DOM 按设备取 Playwright 或 UI Automation。"""
-    visual = str(scheme or "").strip().lower() != "dom"
+    visual = str(scheme or "").strip().lower() not in ("dom", "dom_preferred")
     if visual:
         return "vlm_text"
     plat = str(platform or "").strip().lower()
@@ -335,7 +335,7 @@ def assert_of(step: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
 def stamp_compiled_plans(case: dict[str, Any], do_plan: dict[str, Any], check_plan: dict[str, Any]) -> list[dict[str, Any]]:
     """给操作和预期补上 control_id 与步骤字段。未实现的动作返回阻塞说明。"""
-    project_id = str(case.get("project_id") or case.get("app_id") or "")
+    project_id = str(case.get("project_id") or "")
     if not project_id or project_id == "_project":
         raise ValueError("control_project_missing: 编译控件必须携带真实 project_id")
     blocked: list[dict[str, Any]] = []
@@ -493,7 +493,7 @@ def note_execution_locator(
             "control_id": str(control_id),
             "cell": cell,
             "filled": filled,
-            "scheme": "visual" if str(scheme or "").strip().lower() != "dom" else "dom",
+            "scheme": "visual" if str(scheme or "").strip().lower() not in ("dom", "dom_preferred") else "dom",
             "platform": str(platform or ""),
             **({"write_blocked": write_blocked} if write_blocked else {}),
         },

@@ -29,9 +29,11 @@ def _checkpoint_response_schema(checkpoints: list[dict[str, Any]]) -> dict[str, 
     if len(set(ids)) != len(ids):
         raise ValueError("请求中的校验点 ID 重复")
     variants: list[dict[str, Any]] = []
-    for input_value in (False, True):
-        point_ids = [row["point_id"] for row in checkpoints
-                     if (str(row.get("checkpoint_kind") or "") == "input_value") == input_value]
+    from mino_nexus.services.checkpoint_text_policy import text_policy
+    for group in ("plain", "input", "text"):
+        def row_group(row):
+            return "text" if text_policy(row) else "input" if row.get("checkpoint_kind") == "input_value" else "plain"
+        point_ids = [row["point_id"] for row in checkpoints if row_group(row) == group]
         if not point_ids:
             continue
         properties: dict[str, Any] = {
@@ -39,7 +41,7 @@ def _checkpoint_response_schema(checkpoints: list[dict[str, Any]]) -> dict[str, 
             "passed": {"type": "boolean"},
             "evidence": {"type": "string"},
         }
-        if input_value:
+        if group == "input":
             properties.update({
                 "evidence_scope": {"type": "string", "enum": ["visible_full", "visible_partial", "unknown"]},
                 "target_ref": {"type": "string", "enum": point_ids},
@@ -51,6 +53,9 @@ def _checkpoint_response_schema(checkpoints: list[dict[str, Any]]) -> dict[str, 
                 "hidden_content_verified": {"type": "boolean", "enum": [False]},
                 "ellipsis_source": {"type": ["string", "null"], "enum": ["rendered", None]},
             })
+        if group == "text":
+            from mino_nexus.loop.text_assert import text_evidence_schema
+            properties.update(text_evidence_schema())
         variants.append({
             "type": "object", "properties": properties,
             "required": list(properties), "additionalProperties": False,
@@ -69,6 +74,27 @@ def _checkpoint_response_schema(checkpoints: list[dict[str, Any]]) -> dict[str, 
         "title": "checkpoint_assert_result", "type": "object", "properties": properties,
         "required": list(properties), "additionalProperties": False,
     }
+
+
+
+def _checkpoint_output_contract(schema: dict[str, Any], checkpoints: list[dict[str, Any]]) -> str:
+    """SDK 不支持 response_format 时，逐 ID 声明必填字段，避免套用普通项模板。"""
+    from mino_nexus.services.checkpoint_text_policy import text_policy
+
+    items = schema["properties"]["checkpoint_results"]["items"]
+    variants = items.get("anyOf", [items])
+    manifest = []
+    for checkpoint in checkpoints:
+        point_id = checkpoint["point_id"]
+        variant = next(row for row in variants if point_id in row["properties"]["point_id"]["enum"])
+        manifest.append({"point_id": point_id, "required_fields": variant["required"],
+                         **({"text_match": text_policy(checkpoint)} if text_policy(checkpoint) else {})})
+    return ("每项字段合同（逐 ID；文案项不能退化成普通项；evidence 与 observed_text 都必填）：\n"
+            + json.dumps(manifest, ensure_ascii=False)
+            + "\nobserved_language 使用 en/zh-CN 等语言标签，不能写 English/Chinese。"
+              "无法观察时按 unknown/observable=false 如实报告；不能补造文案。"
+              "ai_reasoning 简短汇总即可；优先完整返回逐项原文和证据，不重复长篇推理。\n"
+            + "JSON Schema：\n" + json.dumps(schema, ensure_ascii=False))
 
 
 def _check_visible_scope(row: dict[str, Any], checkpoint: dict[str, Any]) -> bool:
@@ -117,13 +143,17 @@ def vision_assert_checkpoints(
     expectation: str,
     image_base64: str,
     image_mime: str = "image/png",
+    reference_image_base64: str = "",
+    reference_image_mime: str = "image/png",
     context_block: str = "",
     provider_id: str | None = None,
     checkpoints: list[dict[str, Any]] | None = None,
+    text_observations: dict[str, Any] | None = None,
+    run_context: Any = None,
 ) -> AssertResult:
     """批量校验点；优先 job agent-vision-assert。"""
     from mino_nexus.ai.job_slots import assemble_assert_vision_slots
-    from mino_nexus.ai.planner import _llm_image, _parse_assert_result, _chat
+    from mino_nexus.ai.planner import _llm_image, _parse_assert_result, _chat, _clamp_to_case_deadline, _case_model_deadline
     from mino_nexus.ai.llm_client import resolve_regression_provider
 
     response_schema = None
@@ -140,12 +170,13 @@ def vision_assert_checkpoints(
         return AssertResult(
             passed=False,
             confidence=0.0,
-            ai_reasoning=f"未启用 AI 视觉：{gate.get('reason')}",
+            ai_reasoning=f"未启用 AI 校验：{gate.get('reason')}",
             evidence="",
             parse_warnings=["provider unavailable"],
             error_kind="provider_unavailable",
         )
-    image_base64, image_mime = _llm_image(image_base64, image_mime)
+    if text_observations is None:
+        image_base64, image_mime = _llm_image(image_base64, image_mime)
     cp_block = ""
     if checkpoints:
         cp_block = "校验点 JSON：\n" + json.dumps(checkpoints, ensure_ascii=False, indent=2)
@@ -157,9 +188,22 @@ def vision_assert_checkpoints(
         context_block=merged_ctx,
     )
     if response_schema:
-        slots["checkpoint_response_schema"] = json.dumps(response_schema, ensure_ascii=False)
+        slots["checkpoint_response_schema"] = _checkpoint_output_contract(response_schema, checkpoints)
     try:
-        messages, job_meta = _render_assert_job(slots)
+        if text_observations is not None:
+            from mino_nexus.ai.prompt_render import render
+            shared_texts = {fact["ref"]: fact for observation in text_observations.values()
+                            for fact in observation.get("texts", [])}
+            payload = {"texts": list(shared_texts.values()), "checkpoints": {
+                point_id: {"node_refs": [fact["ref"] for fact in observation.get("texts", [])],
+                           "incomplete": bool(observation.get("incomplete")),
+                           "snapshot_id": str(observation.get("snapshot_id") or "")}
+                for point_id, observation in text_observations.items()
+            }}
+            slots["text_observations"] = json.dumps(payload, ensure_ascii=False)
+            messages, job_meta = render("agent-text-assert", slots)
+        else:
+            messages, job_meta = _render_assert_job(slots)
     except Exception as exc:  # noqa: BLE001
         return AssertResult(
             passed=False,
@@ -169,16 +213,28 @@ def vision_assert_checkpoints(
             parse_warnings=["job render failed"],
             error_kind="assert_render_error",
         )
+    if reference_image_base64:
+        if text_observations is not None:
+            return AssertResult(passed=False, confidence=0.0, evidence="",
+                                ai_reasoning="DOM 文案检查不能附加参考图", error_kind="assert_output_invalid")
+        reference, reference_mime = _llm_image(reference_image_base64, reference_image_mime)
+        first_user = next((i for i, message in enumerate(messages) if message.get("role") == "user"), len(messages))
+        messages.insert(first_user, {"role": "user", "content": [
+            {"type": "text", "text": '{"image_role":"reference"}'},
+            {"type": "image_url", "image_url": {"url": f"data:{reference_mime};base64,{reference}"}},
+        ]})
     call = job_meta.get("call") or {}
     job_id = str(job_meta.get("id") or job_meta.get("job_id") or "agent-vision-assert")
     raw, meta = _chat(
-        job=job_id if job_id in ("agent-vision-assert", "assert-vision") else "agent-vision-assert",
+        job=job_id,
         provider=provider,
         messages=messages,
         job_meta=job_meta,
         temperature=float(call.get("temperature", 0.0)),
         max_tokens=int(call.get("max_tokens", 800)),
-        timeout_sec=int(call.get("timeout_sec", 60)),
+        timeout_sec=_clamp_to_case_deadline(
+            run_context, int(call.get("timeout_sec", 60))),
+        deadline_monotonic=_case_model_deadline(run_context),
         json_mode=bool(call.get("json_mode", True)),
         response_schema=response_schema,
     )
@@ -208,6 +264,7 @@ def vision_assert_checkpoints(
         seen: set[str] = set()
         valid: list[dict[str, Any]] = []
         errors: list[str] = []
+        unavailable_problems = 0
         if "" in requested or len(requested) != len(checkpoints):
             errors.append("请求中的校验点 ID 为空或重复")
         if not isinstance(rows, list):
@@ -227,10 +284,29 @@ def vision_assert_checkpoints(
                     or not row["evidence"].strip()):
                 errors.append(f"校验点结果或证据无效: {point_id}")
                 continue
+            from mino_nexus.services.checkpoint_text_policy import text_policy
+            if text_policy(requested[point_id]):
+                from mino_nexus.loop.text_assert import validate_text_evidence
+                problem = validate_text_evidence(
+                    row, requested[point_id],
+                    observation=text_observations.get(point_id) if text_observations is not None else None,
+                )
+                if problem:
+                    errors.append(f"{point_id}: {problem.reason}")
+                    unavailable_problems += int(problem.unavailable)
+                    continue
             if row["passed"] and not _check_visible_scope(row, requested[point_id]):
                 errors.append(f"校验点验证范围不足: {point_id}")
                 continue
+            if text_policy(requested[point_id]):
+                row["observation_source"] = "dom_text" if text_observations is not None else "screenshot"
+                if text_observations is not None:
+                    row["observation_ref"] = str(text_observations[point_id].get("snapshot_id") or "")
+            evidence_fields = {key: row[key] for key in (
+                "text_match", "observable", "observed_text", "observed_language", "node_refs", "semantic_checks", "observation_ref", "observation_source",
+            ) if key in row}
             valid.append({
+                **evidence_fields,
                 "point_id": point_id,
                 "passed": row["passed"],
                 "evidence": str(row["evidence"]),
@@ -247,9 +323,16 @@ def vision_assert_checkpoints(
         if errors:
             result.passed = False
             result.parse_warnings.extend(errors)
-            result.error_kind = "assert_output_invalid"
+            result.error_kind = (
+                "dom_check_unavailable" if text_observations is not None else "assert_unavailable"
+            ) if unavailable_problems == len(errors) else "assert_output_invalid"
         elif not result.error_kind:
             result.passed = all(row["passed"] for row in valid if requested[row["point_id"]].get("required") is not False)
+            if not result.passed:
+                result.ai_reasoning = "；".join(str(row["evidence"]) for row in valid
+                    if not row["passed"] and requested[row["point_id"]].get("required") is not False)[:500]
+    if text_observations is not None:
+        result.evidence = "dom"
     return result
 
 
@@ -277,17 +360,19 @@ def checkpoints_from_milestones(cursor: Any) -> list[dict[str, Any]]:
         item["verification_policy"] = str(rules.get("verification_policy") or (
             "visible_content" if item["checkpoint_kind"] == "input_value" else "exact_value"
         ))
+        from mino_nexus.services.checkpoint_text_policy import text_policy
+        if text_policy({**item, "rules": rules}) == "intent":
+            item["verification_policy"] = "text_intent"
         if element:
             item["element"] = element
         if rules:
             item["rules"] = rules
         if isinstance(assert_payload.get("bind"), dict):
             item["bind"] = assert_payload["bind"]
-        if not element and not rules:
-            # title 可能只是分类名（如「导航」），用例原句才是要判的预期
-            item["expectation"] = str(
-                assert_payload.get("expectation") or row.get("source_clause") or row.get("title") or ""
-            )
+        # 结构字段之外仍保留作者原句，不能丢失括号、否定或 AND/ANY。
+        item["expectation"] = str(
+            assert_payload.get("expectation") or row.get("source_clause") or row.get("title") or ""
+        )
         out.append(item)
     from mino_nexus.loop.structured_check import hydrate_bound_text
 
@@ -302,6 +387,7 @@ def run_vision_assert_if_enabled(
     expected: str,
     context_block: str = "",
     provider_id: str = "",
+    run_context: Any = None,
 ) -> Optional[AssertResult]:
     if not vision_assert_v1_enabled():
         return None
@@ -338,10 +424,12 @@ def run_vision_assert_if_enabled(
         context_block=ctx_for_job,
         provider_id=provider_id or None,
         checkpoints=cps,
+        run_context=run_context,
     )
     setattr(cursor, "vision_assert_done", True)
     if writer:
         import hashlib
+        from mino_nexus.loop.text_assert import checkpoint_report
 
         writer.append(
             "assert/vision",
@@ -354,15 +442,7 @@ def run_vision_assert_if_enabled(
                 "confidence": float(result.confidence or 0),
                 "checkpoints": len(cps),
                 "evidence": str(result.evidence or "")[:300],
-                "checkpoint_results": [
-                    {
-                        "point_id": str(row.get("point_id") or ""),
-                        "passed": row.get("passed") is True,
-                        "evidence_scope": str(row.get("evidence_scope") or "unknown"),
-                        "hidden_content_verified": row.get("hidden_content_verified") is True,
-                    }
-                    for row in result.checkpoint_results
-                ],
+                "checkpoint_results": [checkpoint_report(row) for row in result.checkpoint_results],
                 "parse_warnings": list(result.parse_warnings)[:5],
             },
         )

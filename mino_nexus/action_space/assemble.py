@@ -64,7 +64,7 @@ def assemble_execute_params(
     if cid not in _POINT_CAPS and cid != "input_text":
         return out
     from mino_nexus.ai.coords import prepare_xy_params_for_execute
-    from mino_nexus.action_space.scheme import action_scheme
+    from mino_nexus.action_space.scheme import execution_scheme as action_scheme
     from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
 
     prepare_xy_params_for_execute(out, int(width or 0), int(height or 0))
@@ -73,6 +73,13 @@ def assemble_execute_params(
         from mino_nexus.action_space.web import apply_web_point
 
         out = apply_web_point(out)
+    if scheme == "dom" and cid in ("tap_element", "input_text"):
+        from mino_nexus.action_space.scheme import structure_target_nodes
+
+        hits = structure_target_nodes(cid, out, ctx)
+        if len(hits) == 1 and hits[0].get("node_ref"):
+            out["node_ref"] = hits[0]["node_ref"]
+            out["snapshot_id"] = hits[0].get("snapshot_id", "")
     out = stamp_scheme_params(cid, out, scheme)
     if cid == "input_text" and scheme != "dom":
         from mino_nexus.action_space.visual import bind_focus_ref

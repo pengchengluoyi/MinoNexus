@@ -15,7 +15,7 @@ __all__ = ["run_vision_exec_turn", "vision_exec_v1_enabled"]
 def visual_execution_block_reason(shot: Any, inspect_slots: dict[str, str], *, send_image: bool) -> str:
     """视觉执行和绑定重放共用准入；程序动作另走原有路径。"""
     if not send_image:
-        return "foreground_image_withheld"
+        return "" if str(inspect_slots.get("hierarchy_text") or "").strip() else "foreground_image_withheld"
     from mino_nexus.loop.screen_capture import shot_usable
 
     if not shot_usable(shot) and not str(inspect_slots.get("hierarchy_text") or "").strip():
@@ -49,6 +49,17 @@ def run_vision_exec_turn(
     send_image: bool = True,
     exec_mode: str = "",
 ) -> AgentDecision:
+    from mino_nexus.action_space.scheme import action_scheme, execution_scheme
+    from mino_nexus.loop.login_evidence_navigation import active_evidence_navigation, restore_execution_reference
+
+    inspect_slots = dict(inspect_slots)
+    reference = restore_execution_reference(cursor, ctx)
+    from mino_nexus.loop.prep_program_plan import active_reauthentication_navigation
+    current_navigation = bool(reference) or active_reauthentication_navigation(cursor) or active_evidence_navigation(cursor)
+    if execution_scheme(ctx) == "visual" and not (current_navigation and action_scheme(ctx) == "dom_preferred"):
+        # 截图兜底以当前图为观察合同，不再把低置信 DOM 页名/控件提示喂给执行模型。
+        inspect_slots["hierarchy_text"] = ""
+        inspect_slots["nav_assist"] = ""
     reason = visual_execution_block_reason(shot, inspect_slots, send_image=send_image)
     if reason:
         return blocked_visual_decision(reason, writer)
@@ -60,6 +71,8 @@ def run_vision_exec_turn(
     case_step, phase = step_scope_key(cursor)
     has_img = shot_usable(shot)
     img_b64 = str(getattr(shot, "image_base64", "") or "") if send_image and has_img else ""
+    if not img_b64:
+        reference = {}
     decision = vision_exec_turn(
         run_context=ctx,
         cursor=cursor,
@@ -68,6 +81,8 @@ def run_vision_exec_turn(
         height=int(getattr(shot, "height", None) or 1920),
         image_base64=img_b64,
         image_mime=str(getattr(shot, "image_mime", "") or "image/png"),
+        reference_image_base64=reference.get("image_base64", ""),
+        reference_image_mime=reference.get("image_mime", "image/png"),
         hierarchy_text=str(inspect_slots.get("hierarchy_text") or ""),
         provider_id=provider_id or None,
         phase=phase,

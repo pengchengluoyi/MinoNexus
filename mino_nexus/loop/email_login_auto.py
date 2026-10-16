@@ -109,30 +109,7 @@ def _dispatch_step(
     from mino_nexus.core.protocol import EventStatus
     from mino_nexus.loop.local_executors import _dispatch_device, dispatch_local
 
-    if cap in ("get_otp", "request_sms_code"):
-        event = PlanEvent(
-            seq=int(turn_seq),
-            capability_id=cap,
-            event_kind=cap,
-            params=params,
-            ai_reasoning=label,
-            label=label,
-        )
-        res = dispatch_local(
-            event,
-            ctx=ctx,
-            router=proxy,
-            target_package=str(getattr(ctx, "target_package", "") or ""),
-        )
-    else:
-        res = _dispatch_device(
-            proxy,
-            ctx=ctx,
-            seq=int(turn_seq),
-            cap=cap,
-            params=params,
-            label=label,
-        )
+    res = _dispatch_device(proxy, ctx=ctx, seq=int(turn_seq), cap=cap, params=params, label=label)
     st = res.status.value if hasattr(res.status, "value") else str(res.status)
     ok = str(st) in ("pass", EventStatus.PASS.value)
     return {
@@ -301,15 +278,14 @@ def run_email_login_ui_chain(
     if "sms_send" in set(intents_done or set()):
         return out
 
-    send = _dispatch_step(
-        proxy,
-        ctx,
-        turn_seq=turn_seq,
-        cap="request_sms_code",
-        params={},
-        label="程序：邮箱已填，点击发送验证码",
-    )
-    out.append(send)
+    # Login business calls its own step; every device child still crosses RouterProxy.
+    import time
+    from mino_nexus.loop.login_block_steps import send_code
+    event = PlanEvent(seq=int(turn_seq), capability_id='tap_element', params={}, label='登录块·send_code')
+    result = send_code(event, ctx=ctx, router=proxy, t0=time.time())
+    status = result.status.value if hasattr(result.status, 'value') else str(result.status)
+    out.append({'ok': status == 'pass', 'status': status, 'summary': str(result.summary or result.error),
+                'capability_id': 'tap_element', 'block_id': 'fb.global.login', 'step_id': 'send_code', 'params': {}})
     return out
 
 

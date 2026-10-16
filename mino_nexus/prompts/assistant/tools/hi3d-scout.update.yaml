@@ -1,0 +1,30 @@
+id: scout.update
+version: 1
+title: 更新 Scout 节点
+description: 更新一个明确指定的在线空闲 Scout，使用该节点已配置的 manifest 发布源（默认最新发布）。不支持指定版本、降级或自定义下载地址。可能重启节点；成功仅表示节点已应答，不代表新版本已运行。超时或断线后先查询
+  scout_update_status，不自动重复更新。
+route: POST /runtime/nodes/{node_id}/update
+risk: write
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    node_id:
+      type: string
+      minLength: 1
+      pattern: ^[a-z0-9]+$
+      description: scout_list 返回的准确 node_id，不是设备 SN
+    reason:
+      type: string
+      maxLength: 500
+      description: 本次更新原因；不要包含凭据
+  required:
+  - node_id
+param_resolvers: {}
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true
+async: false

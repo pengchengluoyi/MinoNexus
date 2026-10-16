@@ -19,6 +19,7 @@ DEFAULT_SUCCESS = (
 def build_explore_case(
     *,
     instruction: str = "",
+    platform: str = "",
     max_steps: int = 80,
     max_idle_steps: int = 15,
 ) -> dict[str, Any]:
@@ -26,7 +27,15 @@ def build_explore_case(
     goal = DEFAULT_EXPLORE_GOAL
     if extra:
         goal = f"{goal}\n\n补充约束：{extra}"
+    scene = {
+        "required_session": "any", "session_prep": "skip",
+        "device_need": "web" if platform == "web" else "app",
+        "reason": "应用探索：不测登录流程",
+    }
+    if platform:
+        scene["platform"] = platform
     return {
+        "platform": platform,
         "case_id": EXPLORE_CASE_ID,
         "name": "应用探索",
         "source": "explore",
@@ -36,12 +45,7 @@ def build_explore_case(
         "steps_raw": goal,
         "expected_raw": "",
         "success_criteria": DEFAULT_SUCCESS,
-        "max_steps": max(10, min(200, int(max_steps or 80))),
+        "max_steps": max(1, min(200, int(max_steps or 80))),
         "max_idle_steps": max(3, min(60, int(max_idle_steps or 15))),
-        "case_scene": {
-            "required_session": "any",
-            "session_prep": "skip",
-            "device_need": "app",
-            "reason": "应用探索：不测登录流程",
-        },
+        "case_scene": scene,
     }

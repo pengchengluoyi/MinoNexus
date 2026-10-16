@@ -20,18 +20,22 @@ ENV_PROFILE_LABELS = {
 }
 
 CHANNEL_KINDS = ("app", "web", "server")
-CHANNEL_PLATFORMS = ("android", "ios", "web", "pc", "mac", "macos", "windows", "linux", "server")
+CHANNEL_PLATFORMS = ("mac", "win", "android", "web")
 
 DEFAULT_CHANNELS = [
     {"id": "android", "kind": "app", "platform": "android", "alias": "", "third_party": False, "label": "安卓", "field": "package", "placeholder": "com.example.app"},
-    {"id": "ios", "kind": "app", "platform": "ios", "alias": "", "third_party": False, "label": "iOS", "field": "bundle", "placeholder": "com.example.app"},
     {"id": "web", "kind": "web", "platform": "web", "alias": "", "third_party": False, "label": "Web", "field": "base_url", "placeholder": "https://test.example.com"},
-    {"id": "pc", "kind": "app", "platform": "pc", "alias": "", "third_party": False, "label": "PC", "field": "path", "placeholder": "完整 EXE 路径或 AUMID"},
+    {"id": "win", "kind": "app", "platform": "win", "alias": "", "third_party": False, "label": "Windows", "field": "path", "placeholder": "完整 EXE 路径或 AUMID"},
     {"id": "mac", "kind": "app", "platform": "mac", "alias": "", "third_party": False, "label": "Mac", "field": "bundle", "placeholder": "com.example.desktop"},
-    {"id": "server", "kind": "server", "platform": "server", "alias": "", "third_party": False, "label": "Server", "field": "base_url", "placeholder": "https://api.example.com"},
+    {"id": "server", "kind": "server", "alias": "", "third_party": False, "label": "Server", "field": "base_url", "placeholder": "https://api.example.com"},
 ]
 
 _PLATFORM_PRESET = {c["id"]: c for c in DEFAULT_CHANNELS}
+
+_PLATFORM_PRESET.update({
+    "ios": {"id": "ios", "kind": "app", "platform": "ios", "label": "iOS", "field": "bundle"},
+    "pc": {"id": "pc", "kind": "app", "platform": "pc", "label": "PC", "field": "path"},
+})
 
 _KIND_PREFIX = (
     ("android", "app", "android"),
@@ -92,23 +96,14 @@ def default_project_env() -> dict:
 
 
 def _infer_kind_platform(cid: str, kind: str = "", platform: str = "") -> Tuple[str, str]:
-    k = str(kind or "").strip().lower()
-    p = str(platform or "").strip().lower()
-    if k in CHANNEL_KINDS and p in CHANNEL_PLATFORMS:
-        return k, p
-    if p in _PLATFORM_PRESET:
-        preset = _PLATFORM_PRESET[p]
-        return str(preset["kind"]), str(preset["platform"])
-    if cid in _PLATFORM_PRESET:
-        preset = _PLATFORM_PRESET[cid]
-        return str(preset["kind"]), str(preset["platform"])
-    for prefix, pk, pp in _KIND_PREFIX:
-        if cid == prefix or cid.startswith(prefix + "-") or cid.startswith(prefix + "."):
-            return pk, pp
-    if k in CHANNEL_KINDS:
-        fallback = {"app": "android", "web": "web", "server": "server"}[k]
-        return k, p if p in CHANNEL_PLATFORMS else fallback
-    return "web", "web"
+    # Read legacy values verbatim; only absent legacy fields may use a known preset.
+    k, p = str(kind or ""), str(platform or "")
+    if k or p:
+        return k or ("web" if p == "web" else "app"), p
+    preset = _PLATFORM_PRESET.get(cid)
+    if preset:
+        return str(preset["kind"]), str(preset.get("platform") or "")
+    return "", ""
 
 
 def _channel_title(ch: Optional[dict]) -> str:
@@ -135,7 +130,7 @@ def _norm_channel(raw: Any, seen: set) -> Optional[dict]:
     alias = str(raw.get("alias") or "").strip()[:24]
     third_raw = raw.get("third_party")
     third_party = bool(third_raw) if third_raw is not None else bool(alias)
-    cid_in = _slug(raw.get("id") or raw.get("key") or "", "")
+    cid_in = str(raw.get("id") or raw.get("key") or "")
     kind, platform = _infer_kind_platform(
         cid_in,
         str(raw.get("kind") or ""),
@@ -181,7 +176,7 @@ def _norm_channel(raw: Any, seen: set) -> Optional[dict]:
     return {
         "id": cid,
         "kind": kind,
-        "platform": platform,
+        **({"platform": platform} if kind != "server" or "platform" in raw else {}),
         "alias": alias,
         "app_identifier": app_ident,
         "third_party": bool(third_party),
@@ -351,11 +346,13 @@ def _profile_value(block: Any, field: str) -> str:
 
 def _norm_profile(raw: Any, channels: List[dict]) -> dict:
     src = raw if isinstance(raw, dict) else {}
-    out = empty_profile(channels)
+    out = copy.deepcopy(src)
     for ch in channels:
         cid = ch["id"]
         field = ch["field"]
-        out[cid][field] = _profile_value(src.get(cid), field)
+        block = copy.deepcopy(src[cid]) if isinstance(src.get(cid), dict) else {}
+        block[field] = _profile_value(src.get(cid), field)
+        out[cid] = block
     return out
 
 
@@ -381,10 +378,11 @@ def normalize_project_env(raw: Any) -> dict:
                 if isinstance(snap, dict):
                     inferred.update(k for k, v in snap.items() if isinstance(v, dict))
         if not inferred:
-            inferred = {"android", "ios", "web"}
+            inferred = {"mac", "win", "android", "web", "server"}
         for preset in DEFAULT_CHANNELS:
             if preset["id"] in inferred:
                 channels.append(copy.deepcopy(preset))
+                seen_ch.add(preset["id"])
         for cid in sorted(inferred):
             if cid not in seen_ch:
                 ch = _norm_channel({"id": cid, "label": cid, "field": "value"}, seen_ch)
@@ -789,11 +787,11 @@ def resolve_surface_id(
         kind = "web"
     elif plat == "server":
         kind = "server"
-    elif plat in ("android", "ios", "pc", "mac"):
+    elif plat in ("android", "ios", "win", "pc", "mac"):
         kind = "app"
     if kind:
         matching = [c for c in channels if str(c.get("kind") or "") == kind]
-        if plat in ("android", "ios", "pc", "mac"):
+        if plat in ("android", "ios", "win", "pc", "mac"):
             matching = [
                 c for c in matching
                 if str(c.get("platform") or "") == plat or str(c.get("id") or "") == plat
@@ -985,40 +983,9 @@ def profile_snapshot(env_doc: dict, env_profile: Optional[str] = None) -> dict:
         snap = empty_profile(channels)
     else:
         snap = copy.deepcopy(snap)
-    order = pipeline_keys(env_doc)
-    for ch in channels or []:
-        cid = str(ch.get("id") or "")
-        field = str(ch.get("field") or "value")
-        if cid not in ("android", "ios"):
-            continue
-        if _profile_value((snap.get(cid) if isinstance(snap.get(cid), dict) else {}), field):
-            continue
-        filled = _inherit_mobile_value(profiles, order, name, cid, field)
-        if filled:
-            snap.setdefault(cid, {})
-            snap[cid][field] = filled
+    # Missing values remain missing. A different environment or an iOS bundle
+    # is not evidence of the selected Android application target.
     return snap
-
-
-def _inherit_mobile_value(profiles: dict, order: List[str], env_key: str, channel_id: str, field: str) -> str:
-    keys = [k for k in (order or []) if k] or list((profiles or {}).keys())
-    for key in keys:
-        snap = profiles.get(key) if isinstance(profiles, dict) else None
-        if not isinstance(snap, dict):
-            continue
-        v = _profile_value(snap.get(channel_id), field)
-        if v:
-            return v
-    other = "ios" if channel_id == "android" else "android"
-    other_field = "bundle" if other == "ios" else "package"
-    for key in [env_key, *keys]:
-        snap = profiles.get(key) if isinstance(profiles, dict) else None
-        if not isinstance(snap, dict):
-            continue
-        v = _profile_value(snap.get(other), other_field)
-        if v:
-            return v
-    return ""
 
 
 def target_id_from_snapshot(snap: dict, platform: str = "android", surface: str = "") -> str:
@@ -1047,8 +1014,7 @@ def target_id_from_snapshot(snap: dict, platform: str = "android", surface: str 
     pkg = str(android.get("package") or "").strip()
     if pkg:
         return pkg
-    ios = data.get("ios") if isinstance(data.get("ios"), dict) else {}
-    return str(ios.get("bundle") or ios.get("bundle_id") or "").strip()
+    return ""
 
 
 def env_from_project_row(project: dict | None, apps: Optional[List[dict]] = None) -> dict:
@@ -1064,3 +1030,23 @@ def env_from_project_row(project: dict | None, apps: Optional[List[dict]] = None
             doc["profiles"]["test"] = normalize_project_env(app.get("env"))["profiles"]["test"]
             break
     return doc
+
+
+def validate_environment_write(doc: dict) -> None:
+    """Reject before normalization; never guess platform or rewrite channel identities."""
+    from mino_nexus.core.platform_contract import environment_channel
+    channels = doc.get("channels")
+    if not isinstance(channels, list) or not channels:
+        raise ValueError("环境至少需要一个明确的渠道")
+    seen = set()
+    for index, ch in enumerate(channels):
+        if not isinstance(ch, dict):
+            raise ValueError(f"channels[{index}] 必须为渠道对象")
+        cid = ch.get("id")
+        if not isinstance(cid, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", cid) or cid in seen:
+            raise ValueError(f"channels[{index}] 的 ID 无效或重复；请保留唯一稳定 ID")
+        seen.add(cid)
+        try:
+            environment_channel(ch)
+        except ValueError as exc:
+            raise ValueError(f"渠道 {cid} 平台合同无效：{exc}；目标平台限 mac/win/android/web，server 不设 platform") from exc

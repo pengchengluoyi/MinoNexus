@@ -72,7 +72,7 @@ def enrich_web_tap_params(params: dict[str, Any], ctx: Any | None = None) -> dic
     out = dict(params or {})
     out["web_coordinate_only"] = True
     out["tap_prefer_coordinates"] = True
-    from mino_nexus.action_space.scheme import action_scheme
+    from mino_nexus.action_space.scheme import execution_scheme as action_scheme
 
     if action_scheme(ctx) != "dom":
         return out
@@ -346,7 +346,7 @@ def _steer_email_off_otp(out: dict[str, Any], ctx: Any | None, field: str) -> di
 def enrich_web_input_text_params(params: dict[str, Any], ctx: Any | None = None) -> dict[str, Any]:
     """Web 看图输入写入当前焦点，不补坐标。DOM 方案仍按节点定位。"""
     out = dict(params or {})
-    from mino_nexus.action_space.scheme import action_scheme
+    from mino_nexus.action_space.scheme import execution_scheme as action_scheme
 
     if action_scheme(ctx) != "dom":
         from mino_nexus.action_space.visual import apply_focus_input, bind_focus_ref

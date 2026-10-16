@@ -23,7 +23,7 @@ def platform_needs_display_guard(ctx: Any) -> bool:
     except Exception:
         pass
     # Desktop 的准入、捕获与输入由 Cua 校验，不套用手机 wake/unlock 轮询。
-    return plat not in ("web", "playwright", "desktop", "")
+    return plat not in ("web", "playwright", "desktop", "mac", "win", "")
 
 
 def _infer_blocked_from_capture(ev: Any) -> None:
@@ -148,9 +148,12 @@ class DeviceDisplayGuard:
             setattr(self._ctx, "display_guard_active", False)
             raise
         if not self.wait_ready(timeout=initial_timeout):
-            SLog.w(TAG, f"initial wait_ready timeout after {initial_timeout}s")
+            write_stopped = bool(getattr(self._ctx, "recovery_write_stopped", False))
+            reason = ("恢复写动作已停止，保留资源隔离" if write_stopped
+                      else "设备屏幕守护未能就绪，交回主流程恢复")
+            SLog.w(TAG, reason)
             self.stop()
-            raise RuntimeError("设备屏幕守护未能就绪，交回主流程恢复")
+            raise RuntimeError(reason)
 
     def stop(self) -> None:
         self._stop.set()
@@ -179,6 +182,9 @@ class DeviceDisplayGuard:
                 if self._cancel and self._cancel():
                     self._stop.set()
                     break
+                if getattr(self._ctx, "recovery_write_stopped", False):
+                    self._failed.set()
+                    break
                 ev = _collect_evidence(self._ctx, self._router, target_package=self._pkg)
                 if not _display_needs_fix(ev):
                     self._ready.set()
@@ -186,6 +192,9 @@ class DeviceDisplayGuard:
                     self._ready.clear()
                     SLog.i(TAG, f"display needs wake/unlock {ev.brief()}")
                     _apply_wake_unlock(self._ctx, self._router, ev, target_package=self._pkg)
+                    if getattr(self._ctx, "recovery_write_stopped", False):
+                        self._failed.set()
+                        break
                 if self._stop.wait(self._poll):
                     break
         except Exception as exc:

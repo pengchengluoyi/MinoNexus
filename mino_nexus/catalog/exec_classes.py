@@ -17,10 +17,10 @@ MENU_ATOMIC_KINDS: Tuple[str, ...] = CAPABILITY_KINDS + (RECOVERY_KIND,)
 
 # 不出网的本地执行器。菜单过滤和派发读同一份。
 LOCAL_EXECUTOR_IDS = frozenset({
-    "relogin", "lease_account", "get_otp", "get_phone", "release_account", "fsm_navigate",
-    "accept_legal_consent", "dismiss_ime", "request_sms_code",
+    "lease_account", "get_otp", "get_phone", "release_account",
+    "operation.check_box", "dismiss_ime", "confirm_login_state",
     "assert_visual", "persona_subtask", "wait_ms", "wait_screen_ready",
-    "check_run_env", "signal_nav_calib_step",
+    "signal_nav_calib_step",
 })
 LOCAL_ORCH_IDS = LOCAL_EXECUTOR_IDS
 
@@ -34,8 +34,7 @@ KIND_META: Dict[str, Dict[str, str]] = {
 MUTATE_CAPS = frozenset({
     "tap_element", "multi_tap", "swipe_element_to_element", "swipe_direction",
     "input_text", "press_key", "long_press_element",
-    "fsm_navigate",
-    "accept_legal_consent", "dismiss_ime", "request_sms_code",
+    "operation.check_box", "dismiss_ime",
 })
 
 # 计入本步已执行（require_do_work）：突变 + 等待/租号/取码。等待不算改界面，但算进展。

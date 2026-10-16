@@ -160,7 +160,14 @@ class NodeConnection:
         if env.type is P.MsgType.REGISTER:
             await self._on_register(env)
         elif env.type is P.MsgType.HEARTBEAT:
-            reg.heartbeat(env.payload)
+            if env.payload.node_id != self.node_id:
+                return
+            try:
+                reg.heartbeat(env.payload, send=self.request)
+            except (ValueError, TypeError, AttributeError):
+                await self.ws.close(code=1008, reason="心跳平台或嵌套能力合同无效，请升级 Scout")
+                self.close()
+                return
             _kick_im_hold()
         elif env.type is P.MsgType.EXECUTE:
             await self._on_inbound_execute(env)
@@ -209,6 +216,16 @@ class NodeConnection:
             self.close()
             return
 
+        from mino_nexus.core.platform_contract import validate_platform_announcement, PlatformContractError
+        try:
+            validate_platform_announcement(req)
+        except (PlatformContractError, TypeError, AttributeError):
+            await self._reply(env, P.Registered(accepted=False, nexus_version=NEXUS_VERSION,
+                reason="平台或嵌套能力合同无效，请升级 Scout 至平台合同 v1"))
+            await self.ws.close(code=1008, reason="平台合同不兼容")
+            self.close()
+            return
+
         from dataclasses import replace
         from mino_nexus.services.runtime_tokens import authenticate_registration
 
@@ -225,7 +242,7 @@ class NodeConnection:
             return
         owner_user_id = identity["user_id"]
         assigned = identity["node_id"]
-        reg_req = replace(req, node_id=assigned) if assigned != req.node_id else req
+        reg_req = replace(req, node_id=assigned, devices=[]) if assigned != req.node_id else req
         self.node_id = assigned
         warnings = list(identity["warnings"])
         warnings.extend(reg.register(reg_req, send=self.request, owner_user_id=owner_user_id))
@@ -236,6 +253,7 @@ class NodeConnection:
 
         await self._reply(env, P.Registered(
             accepted=True,
+            platform_contract_version=1,
             nexus_version=NEXUS_VERSION,
             session_token=f"sess-{_msg_id()}",
             heartbeat_interval_sec=HEARTBEAT_INTERVAL_SEC,
@@ -243,6 +261,7 @@ class NodeConnection:
             node_id=issued_node_id,
             node_token=identity["node_token"],
             owner_user_id=owner_user_id,
+            node_connection_generation=reg.get_node(assigned).node_connection_generation,
         ))
 
     async def _reply_result(self, req_env: P.Envelope, payload: P.Result) -> None:

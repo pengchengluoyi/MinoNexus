@@ -944,6 +944,9 @@ def release_ctx_lease(ctx: Any) -> None:
     rid = str(lease.get("run_id") or getattr(ctx, "run_id", "") or "").strip()
     if not pid or not aid:
         return
+    from mino_nexus.services.run_write_safety import protected
+    if protected(rid):
+        return
     try:
         _clear_leased(pid, aid, rid)
     except Exception as exc:

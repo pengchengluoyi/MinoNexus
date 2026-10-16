@@ -1,0 +1,54 @@
+﻿project_id,case_id,name,platform,phase,source_line_index,source_text,stored_compile_status,compiled_items,blocked_reason,verification,latest_run_id,latest_status
+9bd609c0-144a-437d-ba5b-069c83c65ebc,case-sync1,t,,do,1,t,stored_blocked_placeholder,0,uncovered,无有效业务定义；未运行,,
+ad7e96eb-d629-47ae-ac2c-5fdd9d1f60c2,case-sync1,t,,do,1,t,stored_blocked_placeholder,0,uncovered,无有效业务定义；未运行,,
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-ed53e597,验证场景选择弹窗所有UI元素展示正确,web,do,1,"1. 点击右上角登录,输入手机号或邮箱验证码, 完成登录",compiled_candidate,1,,只读静态审计，未证明运行成功,cr-d1375d774f0d,fail
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-ed53e597,验证场景选择弹窗所有UI元素展示正确,web,check,1,1. 弹窗正常居中展示,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-d1375d774f0d,fail
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-ed53e597,验证场景选择弹窗所有UI元素展示正确,web,check,2,2. 弹窗标题为「你主要用 Hi3D 来做什么？」，正文提示为「选择感兴趣的场景，为你推荐更合适的内容（可多选）」,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-d1375d774f0d,fail
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-ed53e597,验证场景选择弹窗所有UI元素展示正确,web,check,3,3. 9个场景选项（3D打印、游戏、动画/影视、VR/AR/XR、工业设计、时尚设计、室内设计、建筑、其他）全部正常展示,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-d1375d774f0d,fail
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-ed53e597,验证场景选择弹窗所有UI元素展示正确,web,check,4,4. 确认按钮默认置灰不可点击，跳过按钮为弱化样式展示,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-d1375d774f0d,fail
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-e1835aa2,验证其他选项勾选后输入框规则符合要求,web,do,1,1. 勾选「其他」场景选项,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-7a7a8e231f4f,blocked
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-e1835aa2,验证其他选项勾选后输入框规则符合要求,web,do,2,2. 在弹出的自定义输入框中输入101个字符,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-7a7a8e231f4f,blocked
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-e1835aa2,验证其他选项勾选后输入框规则符合要求,web,do,3,3. 清空输入框，依次输入特殊字符、emoji内容,compiled_candidate,2,,只读静态审计，未证明运行成功,cr-7a7a8e231f4f,blocked
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-e1835aa2,验证其他选项勾选后输入框规则符合要求,web,check,1,1. 勾选「其他」后自动展示自定义输入框,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-7a7a8e231f4f,blocked
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-e1835aa2,验证其他选项勾选后输入框规则符合要求,web,check,2,2. 输入超过100字符时自动截断(超出的自负不展示)，仅保留前100字符,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-7a7a8e231f4f,blocked
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-e1835aa2,验证其他选项勾选后输入框规则符合要求,web,check,3,3. 所有特殊字符、emoji均可正常输入无报错,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-7a7a8e231f4f,blocked
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-3973849e,验证已展示过弹窗的用户刷新页面不再重复弹出,web,do,1,1. 刷新页面,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-7a7a8e231f4f,blocked
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-3973849e,验证已展示过弹窗的用户刷新页面不再重复弹出,web,check,1,1.在上传图片的元素右侧有一个新人引导弹窗,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-7a7a8e231f4f,blocked
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-bc8b51cf,除白名单外：任意页面触发登录，成功后保留原页面与操作上下文,android,do,1,1. 点击首条帖子进入详情,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-c9f5303a434e,fail
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-bc8b51cf,除白名单外：任意页面触发登录，成功后保留原页面与操作上下文,android,do,2,2. 在详情页点击「点赞」图标,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-c9f5303a434e,fail
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-bc8b51cf,除白名单外：任意页面触发登录，成功后保留原页面与操作上下文,android,do,3,3. 在登录页输入手机号与验证码并点击登录,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-c9f5303a434e,fail
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-bc8b51cf,除白名单外：任意页面触发登录，成功后保留原页面与操作上下文,android,check,1,1. 进入该帖子详情,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-c9f5303a434e,fail
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-bc8b51cf,除白名单外：任意页面触发登录，成功后保留原页面与操作上下文,android,check,2,2. 拉起登录页,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-c9f5303a434e,fail
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-bc8b51cf,除白名单外：任意页面触发登录，成功后保留原页面与操作上下文,android,check,3,3. 返回到帖子详情页(包含点赞、关注即可)即可,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-c9f5303a434e,fail
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-0cc1d95f,点击底部「我的」Tab 时未登录 → 全屏登录页 → 成功后进拍摄流程（见形象与权限）,android,do,1,1. 点击底部「我的」Tab,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-0cc1d95f,点击底部「我的」Tab 时未登录 → 全屏登录页 → 成功后进拍摄流程（见形象与权限）,android,do,2,2. 在登录页完成验证码登录,stored_blocked,0,uncovered,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-0cc1d95f,点击底部「我的」Tab 时未登录 → 全屏登录页 → 成功后进拍摄流程（见形象与权限）,android,do,3,3. 点击右下角完成按钮,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-0cc1d95f,点击底部「我的」Tab 时未登录 → 全屏登录页 → 成功后进拍摄流程（见形象与权限）,android,do,4,4. 点击左上角返回箭头,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-0cc1d95f,点击底部「我的」Tab 时未登录 → 全屏登录页 → 成功后进拍摄流程（见形象与权限）,android,check,1,1. 进入全屏登录页,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-0cc1d95f,点击底部「我的」Tab 时未登录 → 全屏登录页 → 成功后进拍摄流程（见形象与权限）,android,check,2,2. 进入选择你的形象配置页(包含多个头像、完成按钮),stored_blocked,0,uncovered,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-0cc1d95f,点击底部「我的」Tab 时未登录 → 全屏登录页 → 成功后进拍摄流程（见形象与权限）,android,check,3,3. 进入拍摄页(页面底部有几个圆形按钮) 即可,stored_blocked,0,uncovered,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-0cc1d95f,点击底部「我的」Tab 时未登录 → 全屏登录页 → 成功后进拍摄流程（见形象与权限）,android,check,4,4. 跳转到灵感页(包含 双列帖子流)即可,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-d0536328,首页「开始造物」→ 先进拍摄页 → 拍摄/选图成功但未登录 → 登录 → 成功后进「生成中页」（不丢失当次任务）,android,do,1,1. 点击底部「开始造物」Tab,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-d0536328,首页「开始造物」→ 先进拍摄页 → 拍摄/选图成功但未登录 → 登录 → 成功后进「生成中页」（不丢失当次任务）,android,do,2,2. 点击快门按钮,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-d0536328,首页「开始造物」→ 先进拍摄页 → 拍摄/选图成功但未登录 → 登录 → 成功后进「生成中页」（不丢失当次任务）,android,do,3,3. 输入手机号与验证码并点击登录,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-d0536328,首页「开始造物」→ 先进拍摄页 → 拍摄/选图成功但未登录 → 登录 → 成功后进「生成中页」（不丢失当次任务）,android,check,1,1. 进入拍摄页(包含实拍或取景框或页面底部左下角图库、右下角翻转) 即可,stored_blocked,0,uncovered,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-d0536328,首页「开始造物」→ 先进拍摄页 → 拍摄/选图成功但未登录 → 登录 → 成功后进「生成中页」（不丢失当次任务）,android,check,2,2. 拉起登录页,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-d0536328,首页「开始造物」→ 先进拍摄页 → 拍摄/选图成功但未登录 → 登录 → 成功后进「生成中页」（不丢失当次任务）,android,check,3,3. 进入生成中页面(包含脑洞疯狂加载 或脑洞疯狂加载中 + xx%)即可,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-54c993b3,个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄,android,do,1,1. 点击底部「我的」Tab,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-54c993b3,个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄,android,do,2,"2. 页面中向上滑动点击退出登录,并点击确认",stored_blocked,0,uncovered,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-54c993b3,个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄,android,do,3,3. 页面向下滑动并点击「去登录」,stored_blocked,0,uncovered,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-54c993b3,个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄,android,do,4,4. 输入手机号与验证码并点击登录,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-54c993b3,个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄,android,do,5,5. 点击完成,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-54c993b3,个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄,android,check,1,1. 进入个人页,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-54c993b3,个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄,android,check,2,2. 个人页最下方不显示退出登录按钮,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-54c993b3,个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄,android,check,3,3. 弹出登录页面,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-54c993b3,个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄,android,check,4,4. 进入选择你的形象配置页(包含多个头像、完成按钮即可),stored_blocked,0,uncovered,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-54c993b3,个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄,android,check,5,5. 保存成功并进入拍摄页(包含实拍或取景框或页面底部左下角图库、右下角翻转) 即可,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-7effbeed,灵感帖子详情点「做成真的」→ 登录后回详情继续下单，不进拍摄页,android,do,1,1. 点击一条帖子卡片进入详情,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-7effbeed,灵感帖子详情点「做成真的」→ 登录后回详情继续下单，不进拍摄页,android,do,2,2. 点击「3D空间」按钮,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-7effbeed,灵感帖子详情点「做成真的」→ 登录后回详情继续下单，不进拍摄页,android,do,3,3.点击「做成真的」,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-7effbeed,灵感帖子详情点「做成真的」→ 登录后回详情继续下单，不进拍摄页,android,do,4,4.输入账号密码完成登录,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-7effbeed,灵感帖子详情点「做成真的」→ 登录后回详情继续下单，不进拍摄页,android,check,1,1. 进入该帖子详情页(包含点赞、关注即可),stored_blocked,0,uncovered,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-7effbeed,灵感帖子详情点「做成真的」→ 登录后回详情继续下单，不进拍摄页,android,check,2,2. 进入3D空间页(3D预览),compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-7effbeed,灵感帖子详情点「做成真的」→ 登录后回详情继续下单，不进拍摄页,android,check,3,3. 弹出登录页,compiled_candidate,1,,只读静态审计，未证明运行成功,,
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-7effbeed,灵感帖子详情点「做成真的」→ 登录后回详情继续下单，不进拍摄页,android,check,4,4. 跳转到支付页面(包含立即支付按钮或价格或收货地址或商品卡片即可),compiled_candidate,1,,只读静态审计，未证明运行成功,,

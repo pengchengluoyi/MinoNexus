@@ -80,7 +80,7 @@ def ensure_single_in_progress(cursor: Any, *, writer: Any = None) -> bool:
             continue
         if _required_failed_before(ms, row):
             continue
-        if ctx is not None and not milestone_caps_registered(
+        if row.get('requirement') != 'conditional' and ctx is not None and not milestone_caps_registered(
             row, menu_ids, allow_program=True, platform=platform, phase=phase,
         ):
             if row.get("optional"):
@@ -324,11 +324,18 @@ def seeded_single_focus_skips_plan(state: dict[str, Any], ctx: Any) -> bool:
         return False
     if _blocking_overlay(ctx) or _unlisted_agree_control(state, ctx):
         return False
+    from mino_nexus.services.step_requirements import condition_complete
+    if any(r.get('requirement') == 'conditional' and not condition_complete(r) for r in _milestones_list(state)):
+        return False
     if state.get("screen_obstacle"):
         return False
-    if _milestone_cap(row) in _VISUAL_STEP_CAPS and not getattr(ctx, "nav_hierarchy_nodes", None):
-        # 无原生 UI 树时，首次设备动作前必须让规划器看图排除挡屏。
-        return False
+    if _milestone_cap(row) in _VISUAL_STEP_CAPS:
+        from mino_nexus.action_space.scheme import execution_scheme
+
+        if execution_scheme(ctx) == "visual" or not getattr(ctx, "nav_hierarchy_nodes", None):
+            # 旧 DOM 仍有节点不能证明新截图无挡屏；首次截图设备动作前必须重规划。
+            # 已派发动作的下一轮回看由 skip_visual_prior gate 处理，不重复规划或点击。
+            return False
     mid = str(row.get("id") or "")
     source = str(row.get("source") or "")
     programish = source in ("prep_program", "do_program", "check_program", "program_seed") or bool(
@@ -403,23 +410,69 @@ def _login_finished_but_form_open(state: dict[str, Any], ctx: Any) -> bool:
     )
 
 
+
+def _current_business_review(state: dict[str, Any], ctx: Any) -> bool:
+    """完整当前观察中的业务回看可消除弱几何猜测，仅允许进入独立 check。"""
+    if state.get("phase") != "do" or ctx is None:
+        return False
+    observation = dict(getattr(ctx, "observation_contract", None) or {})
+    if (not observation.get("snapshot_id") or observation.get("truncated") is not False
+            or observation.get("missing") != []):
+        return False
+    current = str(getattr(ctx, "decision_screenshot_hash", "") or "")
+    if not current:
+        return False
+    # 正向 dialog/modal 结构不能由一般的动作回看覆盖。
+    for node in getattr(ctx, "nav_hierarchy_nodes", None) or []:
+        if not isinstance(node, dict):
+            continue
+        role = str(node.get("role") or "").lower()
+        cls = str(node.get("class") or "").lower()
+        if role in {"dialog", "alertdialog"} or "dialog" in cls or node.get("modal") is True:
+            return False
+    return any(row.get("source") == "do_program" and row.get("status") == "pass"
+               and row.get("evidence") == "visual_same_turn" and row.get("review_observation_ref") == current
+               for row in _milestones_list(state))
+
+
 def program_exit_allowed(state: dict[str, Any], ctx: Any) -> bool:
     """必填都终态，且屏上没有还没写进列表的障碍：程序准出，不打 exit_latch。"""
     phase = str(state.get("phase") or "").strip().lower()
+    from mino_nexus.services.step_requirements import condition_complete
+    if any(r.get('requirement') == 'conditional' and not condition_complete(r) for r in _milestones_list(state)):
+        return False
     if state.get("screen_obstacle"):
         return False
     # 前置的协议弹窗是 exit_latch 规划追加的。这里提前准出会直接跳过「同意」。
     if phase == "prep":
         return False
-    if _blocking_overlay(ctx) or _sparse_blocking_sheet(ctx) or _unlisted_agree_control(state, ctx):
+    if _blocking_overlay(ctx) or _unlisted_agree_control(state, ctx):
+        return False
+    if _sparse_blocking_sheet(ctx) and not _current_business_review(state, ctx):
         return False
     if _login_finished_but_form_open(state, ctx):
         return False
+    login_rows = [r for r in _milestones_list(state) if r.get("id") == "login_state"]
+    if login_rows and any(r.get("status") != "pass" for r in login_rows if not r.get("optional")):
+        return False
+    # login_entry may be skipped because the credential form is already open.
+    # This is an observed precondition satisfaction, not missing capability.
+    # Only accept that exact skip once submission and login confirmation passed.
+    verified_login = all(any(r.get("id") == mid and r.get("status") == "pass"
+                             for r in _milestones_list(state))
+                         for mid in ("submit_login", "login_state"))
     last: Optional[dict[str, Any]] = None
     for row in _milestones_list(state):
         if row.get("optional"):
             continue
-        if str(row.get("status") or "").strip().lower() not in _TERMINAL:
+        from mino_nexus.services.step_requirements import condition_complete
+        if row.get('requirement') == 'conditional' and condition_complete(row):
+            last = row
+            continue
+        observed_entry = (verified_login and row.get("id") == "login_entry"
+                          and row.get("status") == "skipped"
+                          and row.get("skip_reason") == "login_form_visible")
+        if str(row.get("status") or "").strip().lower() != "pass" and not observed_entry:
             return False
         last = row
     if last is None:
@@ -502,7 +555,7 @@ def focus_exec_menu_ids(cursor: Any, ctx: Any = None) -> Optional[set[str]]:
     if not row:
         return None
     from mino_nexus.loop.visual_review import input_focus_menu_ids, same_turn_review_targets
-    from mino_nexus.action_space.scheme import action_scheme
+    from mino_nexus.action_space.scheme import execution_scheme as action_scheme
 
     transition = same_turn_review_targets(cursor) if action_scheme(ctx) == "visual" else None
     if transition:
@@ -805,7 +858,7 @@ def run_vision_orchestrated_turn(
                 )
             plan_gate = False
     if plan_gate:
-        from mino_nexus.action_space.scheme import action_scheme
+        from mino_nexus.action_space.scheme import execution_scheme as action_scheme
         from mino_nexus.loop.visual_review import has_visual_prior
 
         if (

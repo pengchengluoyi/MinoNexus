@@ -141,6 +141,19 @@ def dispatch_local(
             error="capability_disabled",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
+    from mino_nexus.services.local_tool_dependencies import evaluate
+    dependencies = evaluate(cap, ctx=ctx, shot=shot, execution=True)
+    if dependencies:
+        from mino_nexus.loop.observe.session_log import active_writer
+        writer = active_writer()
+        if writer is not None:
+            writer.append("dependency/check", {"capability_id": cap, "facts": dependencies})
+        unavailable = next((f for f in dependencies if f["status"] != "ready"), None)
+        if unavailable:
+            return _result(event, status=EventStatus.BLOCKED,
+                summary="本地工具依赖未满足：" + unavailable["reason_code"],
+                error=unavailable["reason_code"], raw_response={"dependencies": dependencies},
+                elapsed_ms=int((time.time() - t0) * 1000))
     if cap == "signal_nav_calib_step":
         key = str((event.params or {}).get("step_key") or "").strip()
         summary = f"校准里程碑 {key}" if key else "校准里程碑（未给 step_key）"
@@ -202,6 +215,7 @@ def dispatch_local(
 
         res = verify_step_expected(
             expectation=expectation,
+            provider_id=str(getattr(ctx, "provider_id", "") or "") or None,
             image_base64=shot.image_base64,
             image_mime=getattr(shot, "image_mime", None) or "image/png",
             context_block=knowledge_ctx,
@@ -222,7 +236,7 @@ def dispatch_local(
             elapsed_ms=int((time.time() - t0) * 1000),
             vlm_meta=vlm_meta,
         )
-    if cap == "relogin":
+    if cap == "confirm_login_state":
         from mino_nexus.loop.login_state_probe import observe_login_state, remember_session
         from mino_nexus.runtime.session_gate import required_session as required_session_enum
 
@@ -231,16 +245,9 @@ def dispatch_local(
         session, reason = observe_login_state(ctx, router, shot)
         summary = reason or f"session={session}"
         if req == "guest" and session == "logged_in":
-            from mino_nexus.loop.session_ensure import try_logout_via_nav
-
-            ok, logout_msg = try_logout_via_nav(ctx, router, seq=event.seq)
-            if ok:
-                remember_session(ctx, "logged_out", "logout")
-                summary = f"已登出（原 session=logged_in）；{logout_msg}"
-            else:
-                summary = f"资源与要求不一致：仍为已登录。{logout_msg}"
+            summary = "当前已登录，与访客前置不符；需显式退出流程，观察工具不执行退出。"
         elif req == "logged_in" and session != "logged_in":
-            summary = f"当前 session={session}，与要求的已登录不一致；已写入上下文，后续步骤继续登录。{reason}"
+            summary = f"当前 session={session}，登录流程仍需执行。{reason}"
         src = str(getattr(ctx, "device_session_source", "") or "")
         if src == "tool_api":
             executor = "playwright"
@@ -248,17 +255,17 @@ def dispatch_local(
             executor = "vlm"
         else:
             executor = "internal"
+        known = session in {"logged_in", "logged_out", "guest"}
+        mismatch = req == "guest" and session == "logged_in"
+        error = "login_observation_unavailable" if not known else "session_requirement_mismatch" if mismatch else ""
         return _result(
             event,
-            status=EventStatus.PASS,
+            status=EventStatus.BLOCKED if not known else EventStatus.FAIL if mismatch else EventStatus.PASS,
             summary=summary[:500],
+            error=error,
             executor=executor,
             elapsed_ms=int((time.time() - t0) * 1000),
         )
-    if cap == "check_run_env":
-        return _check_run_env(event, ctx=ctx, t0=t0)
-    if cap in ("fsm_navigate", "recover_fsm_navigate"):
-        return _fsm_navigate(event, ctx=ctx, t0=t0, router=router)
     if cap == "lease_account":
         params = dict(event.params or {})
         from mino_nexus.loop.session_ensure import account_need_from_case
@@ -307,10 +314,9 @@ def dispatch_local(
         )
     if cap == "get_otp":
         return _get_otp(event, ctx=ctx, t0=t0, router=router)
-    if cap == "accept_legal_consent":
-        return _accept_legal_consent(event, ctx=ctx, router=router, t0=t0)
-    if cap == "request_sms_code":
-        return _request_sms_code(event, ctx=ctx, router=router, t0=t0)
+    if cap == "operation.check_box":
+        from mino_nexus.loop.check_box import execute
+        return execute(event, ctx=ctx, router=router, t0=t0)
     if cap == "dismiss_ime":
         return _dismiss_ime(event, ctx=ctx, router=router, t0=t0)
     if cap == "persona_subtask":
@@ -423,10 +429,9 @@ def _resolve_otp(ctx: Any) -> tuple[str, str]:
     if mode == "gmail":
         return "", "gmail"
     if mode == "auto":
-        from mino_nexus.services.otp_resolve import gmail_inbox_address
+        from mino_nexus.services.otp_resolve import resolve_gmail_inbox
 
-        uid = str(getattr(ctx, "plugin_user_id", "") or "").strip() if ctx is not None else ""
-        if gmail_inbox_address(env_doc, plugin_user_id=uid):
+        if resolve_gmail_inbox(env_doc, ctx):
             return "", "gmail"
     if mode == "fixed" and not fixed:
         return "", "missing"
@@ -450,18 +455,8 @@ def _fetch_gmail_otp(ctx: Any, router: Any) -> str:
     hint = "请在这台 Scout 节点的「邮箱 / Gmail」里填写收件箱和应用专用密码"
     if router is None:
         raise GmailOtpError(hint)
-    _env_doc, _secrets, otp = _otp_context(ctx)
-    since = float(getattr(ctx, "otp_sent_at", 0) or 0) or None
-    deadline = float(getattr(ctx, "case_deadline_ts", 0) or 0) or None
-    params = {
-        "to_address": _lease_email_for_otp(ctx),
-        "since_ts": since,
-        "from_allowlist": list(otp.get("from_allowlist") or []),
-        "subject_contains": str(otp.get("subject_contains") or ""),
-        "poll_interval_ms": int(otp.get("poll_interval_ms") or 3000),
-        "max_wait_ms": int(otp.get("max_wait_ms") or 90_000),
-        "deadline_ts": deadline,
-    }
+    from mino_nexus.services.otp_binding import request_params, OTP_CHILD
+    params = request_params(ctx)
     event = PlanEvent(
         seq=0,
         capability_id="plugin.gmail.fetch_otp",
@@ -469,17 +464,22 @@ def _fetch_gmail_otp(ctx: Any, router: Any) -> str:
         params=params,
         label="Gmail 取码",
     )
-    result = router.dispatch(
-        event,
-        run_id=str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "") if ctx else "",
-        step_idx=-1,
-        ctx=ctx,
-    )
+    private_result = {}
+    token = OTP_CHILD.set((id(router), dict(params), private_result))
+    try:
+        result = router.dispatch(
+            event,
+            run_id=str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "") if ctx else "",
+            step_idx=-1,
+            ctx=ctx,
+        )
+    finally:
+        OTP_CHILD.reset(token)
     status = result.status.value if hasattr(result.status, "value") else str(result.status)
     raw = dict(getattr(result, "raw_response", None) or {})
     if status not in ("pass", "done"):
         raise GmailOtpError(str(getattr(result, "summary", "") or getattr(result, "error", "") or hint))
-    code = str(raw.get("code") or "").strip()
+    code = str(private_result.get("code") or raw.get("code") or "").strip()
     if not code:
         raise GmailOtpError(hint)
     return code
@@ -542,6 +542,8 @@ def _get_otp(event: PlanEvent, *, ctx: Any, t0: float, router: Any = None) -> Ev
             executor="internal",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
+    from mino_nexus.core.secret_redaction import remember
+    remember(code)
     if ctx is not None:
         acc = dict(getattr(ctx, "picked_account", None) or {})
         acc["otp"] = code
@@ -550,279 +552,10 @@ def _get_otp(event: PlanEvent, *, ctx: Any, t0: float, router: Any = None) -> Ev
     return _result(
         event,
         status=EventStatus.PASS,
-        summary=f"已取验证码（{source}）otp={code}",
+        summary=f"已取验证码（{source}）",
         executor="internal",
         elapsed_ms=int((time.time() - t0) * 1000),
-        raw_response={"otp": code, "source": source},
-    )
-
-
-def _accept_legal_consent(
-    event: PlanEvent,
-    *,
-    ctx: Any,
-    router: Any,
-    t0: float,
-) -> EventResult:
-    from mino_nexus.loop.hierarchy_slots import node_flag
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
-    from mino_nexus.loop.ui_consent import (
-        any_focused_input,
-        find_consent_control,
-        tap_params_for_control,
-    )
-
-    nodes = _hierarchy_nodes(ctx)
-    ctrl = find_consent_control(nodes)
-    if ctrl is None:
-        return _result(
-            event,
-            status=EventStatus.FAIL,
-            summary="未找到可勾选控件（长文案左侧小方框）。请 tap_element 点勾选框本身，不要点长文案。",
-            error="consent control not found",
-            executor="internal",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    if node_flag(ctrl, "checked"):
-        return _result(
-            event,
-            status=EventStatus.PASS,
-            summary="同意框已勾选，无需再点",
-            executor="internal",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    if router is None:
-        return _result(
-            event,
-            status=EventStatus.FAIL,
-            summary="未连接设备，无法勾选同意框",
-            error="no router",
-            executor="internal",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    if ui_channel_from_ctx(ctx) != UiChannel.WEB and any_focused_input(nodes):
-        back = _dispatch_device(
-            router,
-            ctx=ctx,
-            seq=event.seq,
-            cap="press_key",
-            params={"key": "BACK"},
-            label="收起输入法后再勾选",
-        )
-        if not _exec_ok(back):
-            return _result(
-                event,
-                status=EventStatus.FAIL,
-                summary=f"收起输入法失败：{back.summary or back.error}",
-                error=str(back.error or back.summary or "press_key failed"),
-                executor="internal",
-                elapsed_ms=int((time.time() - t0) * 1000),
-            )
-    tap = _dispatch_device(
-        router,
-        ctx=ctx,
-        seq=event.seq,
-        cap="tap_element",
-        params=tap_params_for_control(ctrl, nodes),
-        label="勾选同意框",
-    )
-    if _exec_ok(tap):
-        return _result(
-            event,
-            status=EventStatus.PASS,
-            summary="已点击同意框（长文案左侧控件）",
-            executor="internal+adb",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    return _result(
-        event,
-        status=EventStatus.FAIL,
-        summary=f"勾选同意框失败：{tap.summary or tap.error}",
-        error=str(tap.error or tap.summary or "tap failed"),
-        executor="internal",
-        elapsed_ms=int((time.time() - t0) * 1000),
-    )
-
-
-_WEB_SEND_LABELS = (
-    "发送验证码",
-    "获取验证码",
-    "发送",
-    "Send code",
-    "Send",
-    "Get code",
-    "Verify",
-)
-
-
-def _web_tap_send_code(
-    event: PlanEvent,
-    *,
-    ctx: Any,
-    router: Any,
-    t0: float,
-) -> EventResult:
-    if router is None:
-        return _result(
-            event,
-            status=EventStatus.FAIL,
-            summary="未连接 Web 执行节点，无法点发送",
-            error="no router",
-            executor="internal",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    for lab in _WEB_SEND_LABELS:
-        tap = _dispatch_device(
-            router,
-            ctx=ctx,
-            seq=event.seq,
-            cap="tap_element",
-            params={"selector_text": lab, "text": lab},
-            label=f"Web 发码：点「{lab}」",
-        )
-        if _exec_ok(tap):
-            from mino_nexus.loop.login_verification import record_verification_send
-
-            record_verification_send(ctx)
-            return _result(
-                event,
-                status=EventStatus.PASS,
-                summary=f"已点击 Web 发送控件「{lab}」",
-                executor="internal+playwright",
-                elapsed_ms=int((time.time() - t0) * 1000),
-            )
-    return _result(
-        event,
-        status=EventStatus.FAIL,
-        summary="Web 未找到发送验证码按钮（DOM/文案）。请 tap_element 点发送或检查页面。",
-        error="web send control not found",
-        executor="internal",
-        elapsed_ms=int((time.time() - t0) * 1000),
-    )
-
-
-def _request_sms_code(
-    event: PlanEvent,
-    *,
-    ctx: Any,
-    router: Any,
-    t0: float,
-) -> EventResult:
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx, ui_channel_label
-    from mino_nexus.loop.ui_consent import any_focused_input
-    from mino_nexus.services.otp_resolve import login_kind_from_secrets
-
-    from mino_nexus.loop.ui_sms_request import (
-        credential_field_filled,
-        credential_field_for_login,
-        find_send_code_button,
-        tap_params_for_send_button,
-    )
-
-    nodes = _hierarchy_nodes(ctx)
-    _env, secrets, _otp = _otp_context(ctx)
-    login_kind = login_kind_from_secrets(secrets)
-    channel = ui_channel_from_ctx(ctx)
-    ch_key = ui_channel_label(channel)
-    anchor = credential_field_for_login(nodes, login_kind=login_kind, channel=ch_key)
-    filled = credential_field_filled(nodes, login_kind=login_kind, channel=ch_key)
-    if channel == UiChannel.WEB and filled and anchor is None:
-        return _web_tap_send_code(event, ctx=ctx, router=router, t0=t0)
-    if anchor is None:
-        if login_kind == "email":
-            msg = "未找到邮箱输入框。请先 input_text(field=email) 填入租号邮箱。"
-            err = "email field not found"
-        else:
-            msg = "未找到宽手机号输入框。请先 input_text 填入手机号，或 tap_element 聚焦输入框。"
-            err = "phone field not found"
-        return _result(
-            event,
-            status=EventStatus.FAIL,
-            summary=msg,
-            error=err,
-            executor="internal",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    if not filled:
-        if login_kind == "email":
-            msg = "邮箱框尚无有效地址。请先 input_text(field=email) 填租号邮箱。"
-            err = "email not filled"
-        else:
-            msg = "手机号输入框尚无 11 位号码。请先 input_text(field=phone) 或粘贴已租账号手机号。"
-            err = "phone not filled"
-        return _result(
-            event,
-            status=EventStatus.FAIL,
-            summary=msg,
-            error=err,
-            executor="internal",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    btn = find_send_code_button(nodes, anchor)
-    if btn is None:
-        if channel == UiChannel.WEB:
-            return _web_tap_send_code(event, ctx=ctx, router=router, t0=t0)
-        return _result(
-            event,
-            status=EventStatus.FAIL,
-            summary="未找到手机号同行右侧的发送控件。请 tap_element 点右侧短文案按钮。",
-            error="send control not found",
-            executor="internal",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    if router is None:
-        return _result(
-            event,
-            status=EventStatus.FAIL,
-            summary="未连接设备，无法点击发送控件",
-            error="no router",
-            executor="internal",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    if channel != UiChannel.WEB and any_focused_input(nodes):
-        back = _dispatch_device(
-            router,
-            ctx=ctx,
-            seq=event.seq,
-            cap="press_key",
-            params={"key": "BACK"},
-            label="收起输入法后再点发送",
-        )
-        if not _exec_ok(back):
-            return _result(
-                event,
-                status=EventStatus.FAIL,
-                summary=f"收起输入法失败：{back.summary or back.error}",
-                error=str(back.error or back.summary or "press_key failed"),
-                executor="internal",
-                elapsed_ms=int((time.time() - t0) * 1000),
-            )
-    tap = _dispatch_device(
-        router,
-        ctx=ctx,
-        seq=event.seq,
-        cap="tap_element",
-        params=tap_params_for_send_button(btn, nodes),
-        label="点发送验证码控件",
-    )
-    if _exec_ok(tap):
-        from mino_nexus.loop.login_verification import record_verification_send
-
-        record_verification_send(ctx)
-        return _result(
-            event,
-            status=EventStatus.PASS,
-            summary="已点击手机号同行右侧发送控件",
-            executor="internal+adb",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    return _result(
-        event,
-        status=EventStatus.FAIL,
-        summary=f"点击发送控件失败：{tap.summary or tap.error}",
-        error=str(tap.error or tap.summary or "tap failed"),
-        executor="internal",
-        elapsed_ms=int((time.time() - t0) * 1000),
+        raw_response={"otp_available": True, "source": source},
     )
 
 
@@ -888,498 +621,6 @@ def _dismiss_ime(
     )
 
 
-def _fsm_navigate(
-    event: PlanEvent,
-    *,
-    ctx: Any,
-    t0: float,
-    router: Any = None,
-) -> EventResult:
-    """当前屏 → 目标屏：规划最短路并执行第一步 tap（非仅 advise）。"""
-    from mino_nexus.services import nav_route
-    from mino_nexus.services.nav_state_resolve import plan_route_resolved
-
-    params = dict(event.params or {})
-    from_raw = str(
-        params.get("from_state")
-        or params.get("current_state")
-        or params.get("from")
-        or ""
-    ).strip()
-    to_raw = str(
-        params.get("to_state")
-        or params.get("expected_state")
-        or params.get("goal_state")
-        or params.get("to")
-        or ""
-    ).strip()
-    localized = getattr(ctx, "nav_localized", None)
-    if not isinstance(localized, dict):
-        localized = {}
-    conf = float(getattr(ctx, "nav_localized_confidence", 0) or 0)
-    chosen = str(getattr(ctx, "nav_localized_state", "") or "").strip()
-    if not from_raw and chosen and conf >= 0.35:
-        from_raw = chosen
-    app_id = str(params.get("app_id") or getattr(ctx, "app_id", "") or "").strip()
-    project_id = str(
-        params.get("project_id")
-        or getattr(ctx, "nav_project_id", "")
-        or ""
-    ).strip()
-
-    def _attempt(**kw: Any) -> dict[str, Any]:
-        base = {
-            "from": from_raw,
-            "to": to_raw,
-            "degraded": False,
-        }
-        base.update(kw)
-        return base
-
-    def _degrade(summary: str, error: str, attempt: dict[str, Any]) -> EventResult:
-        attempt["degraded"] = True
-        return _result(
-            event,
-            status=EventStatus.DECLINED,
-            summary=summary,
-            error=error,
-            executor="internal",
-            elapsed_ms=int((time.time() - t0) * 1000),
-            raw_response={
-                "local_reason": "fsm_degraded",
-                "correction_hint": _FSM_DEGRADE_HINT,
-                "nav_attempt": attempt,
-            },
-        )
-
-    if not app_id:
-        return _result(
-            event,
-            status=EventStatus.FAIL,
-            summary="缺少 app_id，无法查路线图",
-            error="missing app_id",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    if not to_raw:
-        return _result(
-            event,
-            status=EventStatus.FAIL,
-            summary="需要 to_state/expected_state（目标逻辑页或 state_id）",
-            error="missing to_state",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    fsm_doc, _ = nav_route.load_fsm_doc(
-        app_id,
-        project_id=project_id,
-        use_live=False,
-        app_version=str(getattr(ctx, "app_version", "") or ""),
-    )
-    fsm = fsm_doc or {}
-    if not fsm:
-        return _degrade(
-            "没有 NavFSM 配置，无法规划路线",
-            "missing fsm",
-            _attempt(plan_ok=False, plan_error="missing fsm"),
-        )
-
-    from mino_nexus.services.nav_route import coerce_oral_nav_ref
-
-    to_raw = coerce_oral_nav_ref(fsm, to_raw)
-    if from_raw:
-        from_raw = coerce_oral_nav_ref(fsm, from_raw)
-
-    fork = getattr(ctx, "nav_guest_tab_fork", None)
-    if fork is not None:
-        from mino_nexus.loop.nav_session_fork import fsm_goal_conflicts_with_guest_fork
-
-        nodes_fork = list(getattr(ctx, "nav_hierarchy_nodes", None) or [])
-        block, fork_hint = fsm_goal_conflicts_with_guest_fork(
-            fork=fork,
-            to_raw=to_raw,
-            hierarchy_nodes=nodes_fork,
-            localized=localized,
-        )
-        if block:
-            return _result(
-                event,
-                status=EventStatus.DECLINED,
-                summary=fork_hint,
-                error="guest_tab_login_fork",
-                executor="internal",
-                elapsed_ms=int((time.time() - t0) * 1000),
-                raw_response={
-                    "local_reason": "nav_guest_fork",
-                    "correction_hint": fork_hint,
-                    "nav_attempt": _attempt(plan_ok=False, plan_error="guest_tab_login_fork"),
-                },
-            )
-
-    scene = getattr(ctx, "case_scene", None) if hasattr(ctx, "case_scene") else {}
-    if not isinstance(scene, dict):
-        scene = {}
-    cur_instr = str(getattr(getattr(ctx, "cursor", None), "instruction", "") or "")
-    cur_exp = str(getattr(getattr(ctx, "cursor", None), "expected", "") or "")
-    from mino_nexus.loop.nav_session_fork import (
-        fsm_blocked_logged_in_session_drift,
-        required_session_from_scene,
-    )
-
-    req_sess = required_session_from_scene(scene)
-    nodes_drift = list(getattr(ctx, "nav_hierarchy_nodes", None) or [])
-    drift_block, drift_hint = fsm_blocked_logged_in_session_drift(
-        required_session=req_sess,
-        instruction=cur_instr,
-        expected=cur_exp,
-        to_raw=to_raw,
-        hierarchy_nodes=nodes_drift,
-        localized=localized,
-    )
-    if drift_block:
-        return _result(
-            event,
-            status=EventStatus.DECLINED,
-            summary=drift_hint,
-            error="logged_in_session_drift",
-            executor="internal",
-            elapsed_ms=int((time.time() - t0) * 1000),
-            raw_response={
-                "local_reason": "logged_in_session_drift",
-                "correction_hint": drift_hint,
-                "nav_attempt": _attempt(plan_ok=False, plan_error="logged_in_session_drift"),
-            },
-        )
-
-    plan_msg = ""
-    step_cap = "tap_element"
-    step_params: dict[str, Any] = {}
-    nav_attempt = _attempt()
-    first: dict[str, Any] = {}
-
-    if from_raw:
-        plan = plan_route_resolved(
-            fsm,
-            from_ref=from_raw,
-            to_ref=to_raw,
-            localized=localized,
-        )
-        resolve = plan.get("resolve") if isinstance(plan.get("resolve"), dict) else {}
-        nav_attempt.update(
-            {
-                "resolved_from": resolve.get("resolved_from") or "",
-                "resolved_to": resolve.get("resolved_to") or "",
-                "name_score": {
-                    "from": resolve.get("from_name_score"),
-                    "to": resolve.get("to_name_score"),
-                },
-                "screen_score": resolve.get("from_screen_score"),
-            }
-        )
-        if plan.get("ok"):
-            hops = int(plan.get("hop_count") or 0)
-            summary = str(plan.get("summary") or "")
-            nav_attempt["plan_ok"] = True
-            if hops == 0:
-                click_label = nav_route.click_label_from_nav_ref(to_raw)
-                if click_label:
-                    plan_msg = (
-                        f"图上已在 {plan.get('to_state')}，仍按目标文案点击「{click_label}」"
-                    )
-                    step_cap = "tap_element"
-                    step_params = {"selector_text": click_label, "text": click_label}
-                    nav_attempt["plan_error"] = ""
-                    nav_attempt["step_pick"] = "same_page_click_label"
-                    nav_attempt["planned_hops"] = 0
-                    nav_attempt["fallback_tab"] = click_label
-                else:
-                    plan_msg = f"已在目标屏 {plan.get('to_state')}"
-                    nav_attempt["plan_error"] = ""
-                    nav_attempt["arrived_at_target"] = True
-                    nav_attempt["hops_remaining"] = 0
-                    hits = getattr(ctx, "_fsm_same_page_hits", None)
-                    if not isinstance(hits, dict):
-                        hits = {}
-                        if ctx is not None:
-                            setattr(ctx, "_fsm_same_page_hits", hits)
-                    same_key = (
-                        f"{nav_attempt.get('resolved_from') or from_raw}"
-                        f"->{nav_attempt.get('resolved_to') or to_raw}"
-                    )
-                    n = int(hits.get(same_key, 0) or 0) + 1
-                    hits[same_key] = n
-                    if n > 1:
-                        return _degrade(
-                            f"{plan_msg}。{_FSM_SAME_PAGE_HINT}",
-                            "same_page_repeat",
-                            nav_attempt,
-                        )
-                    return _result(
-                        event,
-                        status=EventStatus.PASS,
-                        summary=f"{plan_msg}。{_FSM_SAME_PAGE_HINT}",
-                        executor="internal",
-                        elapsed_ms=int((time.time() - t0) * 1000),
-                        raw_response={
-                            "nav_attempt": nav_attempt,
-                            "correction_hint": _FSM_SAME_PAGE_HINT,
-                        },
-                    )
-            else:
-                first, pick_meta = nav_route.pick_fsm_first_step(fsm, plan)
-                nav_attempt["planned_hops"] = int(pick_meta.get("planned_hops") or hops)
-                nav_attempt["step_pick"] = str(pick_meta.get("step_pick") or "")
-                step_cap, step_params = nav_route.dispatch_spec_for_edge(fsm, first)
-                if step_cap == "press_key" and str(step_params.get("key") or "").upper() == "BACK":
-                    if not nav_route.edge_is_system_back(fsm, first):
-                        return _degrade(
-                            f"{summary}；首 hop 非系统返回边，禁止 BACK（D1-C）。"
-                            "请再次 fsm_navigate 或 tap 目标 Tab/入口。",
-                            "back_not_on_route",
-                            nav_attempt,
-                        )
-                    nav_attempt["allow_back"] = True
-                plan_msg = (
-                    f"规划 {hops} 步：{summary}；本步 {first.get('edge_id') or ''} "
-                    f"→ {first.get('to') or ''}"
-                )
-                dest_tab = nav_route.tab_root_label_for_state(
-                    fsm, str(nav_attempt.get("resolved_to") or plan.get("to_state") or "")
-                )
-                if not dest_tab and nav_route.is_oral_home_ref(to_raw):
-                    dest_tab = nav_route.oral_home_tab_label(fsm)
-                if not dest_tab:
-                    want = _fold_tap_label(to_raw)
-                    dest_tab = next(
-                        (lab for lab in nav_route.tab_slot_labels(fsm) if _fold_tap_label(lab) == want),
-                        "",
-                    )
-                if dest_tab:
-                    already_tab = _params_tap_label(step_params) == _fold_tap_label(dest_tab)
-                    tabs_visible = not _skip_tab_fallback(localized, ctx)
-                    if tabs_visible and not already_tab:
-                        step_cap = "tap_element"
-                        step_params = {"selector_text": dest_tab, "text": dest_tab}
-                        nav_attempt["step_pick"] = "tab_bar_visible_direct"
-                        plan_msg = f"{plan_msg}；底栏可见，本步直点 Tab「{dest_tab}」"
-                    elif (not tabs_visible) and step_cap == "tap_element" and not already_tab:
-                        if first and nav_route.edge_is_system_back(fsm, first):
-                            step_cap = "press_key"
-                            step_params = {"key": "BACK"}
-                            nav_attempt["step_pick"] = "tab_target_system_back"
-                            plan_msg = (
-                                f"{plan_msg}；路线图首 hop 为系统返回，"
-                                "本步 press_key BACK 后再 fsm_navigate"
-                            )
-                        else:
-                            nav_attempt["allow_back"] = False
-                            return _degrade(
-                                f"{plan_msg}；目标 Tab「{dest_tab}」但无底栏且首 hop 非返回边，"
-                                "请 tap_element 沿 onboarding 主流程出墙或探索补边（D1-C·开环）。",
-                                "tab_not_visible_no_back_edge",
-                                nav_attempt,
-                            )
-        else:
-            err = str(plan.get("error") or "无路径")
-            nav_attempt["plan_ok"] = False
-            nav_attempt["plan_error"] = err
-            if _skip_tab_fallback(localized, ctx):
-                two_stage = nav_route.tab_root_entry_hint(
-                    fsm, resolve.get("resolved_to") or to_raw
-                )
-                hint = f"{err}；{two_stage or '无 nav 路线（L1 降级），请 tap 探索或补 Atlas 边。'}"
-                nav_attempt["degrade_level"] = 1
-                return _degrade(hint, err, nav_attempt)
-            else:
-                step_params = nav_route.direct_tab_tap_params(
-                    fsm, resolve.get("resolved_to") or to_raw
-                )
-                step_cap = "tap_element"
-                if step_params:
-                    plan_msg = (
-                        f"{err}；尝试直接点击 Tab「{step_params.get('selector_text') or ''}」"
-                    )
-                    nav_attempt["fallback_tab"] = step_params.get("selector_text") or ""
-                else:
-                    return _degrade(err, err, nav_attempt)
-    else:
-        plan_msg = f"未提供当前屏，直接尝试点击目标 Tab「{to_raw}」"
-        step_params = nav_route.direct_tab_tap_params(fsm, to_raw)
-        step_cap = "tap_element"
-        nav_attempt["plan_ok"] = False
-        nav_attempt["plan_error"] = "missing from_state"
-        if not step_params:
-            return _degrade(
-                "需要 from_state/current_state，或提供可识别的目标 Tab 文案",
-                "missing from_state",
-                nav_attempt,
-            )
-
-    if not step_params:
-        msg = f"{plan_msg or '无路径'}（边未配置 target_page，无法执行）"
-        nav_attempt["plan_ok"] = False
-        nav_attempt.setdefault("plan_error", "missing tap params")
-        return _degrade(msg, "missing tap params", nav_attempt)
-
-    if step_cap == "tap_element":
-        nodes = getattr(ctx, "nav_hierarchy_nodes", None)
-        if isinstance(nodes, list) and nodes:
-            from mino_nexus.loop.tap_enrich import enrich_tap_params
-
-            step_params = enrich_tap_params(
-                step_params,
-                nodes,
-                hint=str(step_params.get("selector_text") or ""),
-            )
-            from mino_nexus.ai.coords import lift_selector_target
-
-            lift_selector_target(step_params)
-
-    if step_cap == "tap_element" and isinstance(nodes, list) and nodes:
-        if not _tap_params_has_point(step_params) and not _tap_selector_likely_on_screen(
-            step_params, nodes
-        ):
-            sel = str(step_params.get("selector_text") or step_params.get("text") or "").strip()
-            tabs = _visible_tab_labels(ctx)
-            hint_tabs = f"可见底栏：{' / '.join(tabs[:6])}" if tabs else "当前屏无底栏 Tab 匹配"
-            return _degrade(
-                f"目标「{sel or to_raw}」不在当前层级，跳过盲目 tap。{hint_tabs}。"
-                f"{_FSM_DEGRADE_HINT}",
-                "tap_target_not_on_screen",
-                nav_attempt,
-            )
-
-    if router is None:
-        return _result(
-            event,
-            status=EventStatus.PASS,
-            summary=f"{plan_msg}；未连接设备，仅返回规划",
-            executor="internal",
-            elapsed_ms=int((time.time() - t0) * 1000),
-            raw_response={"nav_attempt": nav_attempt},
-        )
-
-    from mino_nexus.loop.web.web_env import agent_step_idx
-
-    exec_label = step_params.get("selector_text") or step_params.get("key") or step_cap
-    exec_event = PlanEvent(
-        seq=event.seq,
-        capability_id=step_cap,
-        event_kind=step_cap,
-        params=step_params,
-        ai_reasoning=str(event.ai_reasoning or plan_msg or "fsm_navigate"),
-        label=f"FSM→{exec_label}",
-    )
-    scout_run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
-    case_seq = int(getattr(ctx, "case_seq", 0) or 0)
-    nav_attempt["exec_cap"] = step_cap
-    exec_result = router.dispatch(
-        exec_event,
-        run_id=scout_run_id,
-        step_idx=agent_step_idx(case_seq, event.seq),
-    )
-    exec_st = exec_result.status.value if hasattr(exec_result.status, "value") else str(exec_result.status)
-    exec_summary = str(exec_result.summary or exec_result.error or "")
-    nav_attempt["tap_status"] = exec_st
-    if step_cap == "tap_element":
-        nav_attempt["fallback_tab"] = step_params.get("selector_text") or ""
-    if exec_st in ("pass", "done"):
-        verb = "已按键" if step_cap == "press_key" else f"已点击「{step_params.get('selector_text') or ''}」"
-        resolved_to = str(nav_attempt.get("resolved_to") or "").strip()
-        first_to = ""
-        if from_raw and nav_attempt.get("plan_ok"):
-            first_to = str((first or {}).get("to") or "").strip()
-        planned_hops = int(nav_attempt.get("planned_hops") or 0)
-        arrived = bool(resolved_to and first_to and first_to == resolved_to)
-        nav_attempt["arrived_at_target"] = arrived
-        nav_attempt["hops_remaining"] = 0 if arrived else max(0, planned_hops - 1)
-        raw: dict[str, Any] = {"nav_attempt": nav_attempt}
-        summary = f"{plan_msg}；{verb}"
-        recover_hint = str(nav_attempt.get("recover_hint") or "")
-        if recover_hint:
-            raw["correction_hint"] = recover_hint
-        elif not arrived and planned_hops > 1:
-            progress = (
-                f"【导航进行中】本步为路线图第 1/{planned_hops} 步，未到目标「{to_raw}」；"
-                f"请再次 fsm_navigate（当前为 Tab 根时可直点目标 Tab）。"
-            )
-            summary = f"{summary}（{progress}）"
-            raw["correction_hint"] = progress
-        return _result(
-            event,
-            status=EventStatus.PASS,
-            summary=summary,
-            executor="internal+adb",
-            elapsed_ms=int((time.time() - t0) * 1000),
-            raw_response=raw,
-        )
-    fail_verb = "按键失败" if step_cap == "press_key" else "点击失败"
-    return _degrade(
-        f"{plan_msg}；{fail_verb}：{exec_summary}",
-        exec_summary or "exec failed",
-        nav_attempt,
-    )
-
-
-def _check_run_env(event: PlanEvent, *, ctx: Any, t0: float) -> EventResult:
-    """确认本任务运行环境（每 run 一次），摘要供后续用例引用。"""
-    from mino_nexus.catalog import registry as catalog_reg
-    from mino_nexus.runtime.env_names import canon_run_env
-    from mino_nexus.services import run_store
-
-    run_id = str(getattr(ctx, "run_id", "") or "").strip() if ctx is not None else ""
-    doc = run_store.get(run_id) if run_id else None
-    existing = str((doc or {}).get("env_brief") or getattr(ctx, "env_label", "") or "").strip()
-    if existing:
-        if ctx is not None:
-            ctx.env_label = existing
-            ctx.env_fact = {"brief": existing, "confirmed": True}
-        return _result(
-            event,
-            status=EventStatus.PASS,
-            summary=existing,
-            executor="internal",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-
-    env_raw = str((doc or {}).get("env_profile") or getattr(ctx, "env_profile", "") or "test")
-    env = canon_run_env(env_raw) or "test"
-    platform = str(getattr(ctx, "platform", "") or "android") if ctx is not None else "android"
-    flags = getattr(ctx, "connectivity_flags", None) if ctx is not None else {}
-    has_otp = any(
-        cap.id == "get_otp"
-        for cap in catalog_reg.filter_capabilities(
-            flags or {"internal": True},
-            kinds=["generic", "recovery"],
-            platform=platform,
-        )
-    )
-    parts = [f"env={env}", f"platform={platform}", f"channel={platform}"]
-    parts.append("otp_via=get_otp" if has_otp else "otp_via=manual")
-    sn = str(getattr(ctx, "sn", "") or "").strip() if ctx is not None else ""
-    if sn:
-        parts.append(f"sn={sn}")
-    brief = "; ".join(parts)
-    if ctx is not None:
-        ctx.env_profile = env
-        ctx.env_label = brief
-        ctx.env_fact = {
-            "brief": brief,
-            "env": env,
-            "platform": platform,
-            "otp_via": "get_otp" if has_otp else "manual",
-            "confirmed": True,
-        }
-    if run_id and doc is not None:
-        patched = dict(doc)
-        patched["env_brief"] = brief
-        run_store.put(patched)
-    return _result(
-        event,
-        status=EventStatus.PASS,
-        summary=brief,
-        executor="internal",
-        elapsed_ms=int((time.time() - t0) * 1000),
-    )
-
 
 def _wait_screen_ready(
     event: PlanEvent,
@@ -1392,6 +633,11 @@ def _wait_screen_ready(
 ) -> EventResult:
     from mino_nexus.loop.recovery import recover_if_needed
     from mino_nexus.loop.screen_capture import analyze_shot, shot_usable
+    if getattr(ctx, "recovery_write_stopped", False):
+        return _result(event, status=EventStatus.BLOCKED,
+            summary="恢复动作已停止，设备与账号资源仍隔离", error="run_write_stopped",
+            raw_response={"execution_control": {"stop_run": True, "resource_isolated": True,
+                "reason_code": "run_write_stopped"}})
 
     elapsed = lambda: int((time.time() - t0) * 1000)
     facts = analyze_shot(shot)
@@ -1424,6 +670,9 @@ def _wait_screen_ready(
     out = None
     if ctx is not None and router is not None:
         out = recover_if_needed(ctx, router, target_package=target_package, shot=shot)
+        if out and out.stop_run:
+            return _result(event, status=EventStatus.BLOCKED, summary=out.summary(),
+                error=out.error, raw_response=out.raw_response, elapsed_ms=elapsed())
         if out and (out.applied or out.recovered) and hasattr(router, "observe"):
             fresh = router.observe("screenshot", force_fresh=True)
             facts = analyze_shot(fresh)

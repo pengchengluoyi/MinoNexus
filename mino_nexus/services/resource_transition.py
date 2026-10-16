@@ -55,13 +55,13 @@ def mark_web_run_devices(
     package: str = "",
     doc: dict[str, Any] | None = None,
 ) -> None:
-    """网页任务的机态标记。启动写 guest，结束写 logged_out。不改账号 facets。"""
+    """网页作用域标记只供展示；启动 unknown，结束 logged_out。不改账号 facets。"""
     from mino_nexus.runtime.run_context import is_web_slot
     from mino_nexus.services.session_match import normalize_device_session
 
     rid = str(run_id or "").strip()
     sess = normalize_device_session(session)
-    if sess not in ("guest", "logged_out"):
+    if sess not in ("unknown", "guest", "logged_out"):
         return
     body = doc if isinstance(doc, dict) else {}
     if not body and rid:
@@ -86,8 +86,8 @@ def mark_web_run_devices(
             pkg,
             session=sess,
             clear_binding=True,
-            stale=False,
-            stale_reason="",
+            stale=sess == "unknown",
+            stale_reason="browser_context_unobserved" if sess == "unknown" else "",
             lease_run_id=rid[:80],
             source=str(source or "")[:32],
         )
@@ -102,6 +102,8 @@ def emit_device_logout(
     stale_reason: str = "",
     sync_account: bool = True,
 ) -> None:
+    from mino_nexus.loop.observe.session_persist import mark_session_dirty
+    mark_session_dirty(ctx, reason="logout")
     sn = _ctx_sn(ctx)
     pkg = _ctx_package(ctx, package_id)
     if not sn or not pkg:
@@ -120,7 +122,8 @@ def emit_device_logout(
     )
     if sync_account:
         pid, lease_aid = _lease_account(ctx)
-        sync_aid = bound or lease_aid
+        # 租约账号不等于此设备实际退出的账号，禁止凭租约推断关联。
+        sync_aid = bound if bound and bound == lease_aid else ""
         if pid and sync_aid:
             _sync_account_session(pid, sync_aid, "logged_out", source=source, ctx=ctx)
     SLog.i(TAG, f"device_logout sn={sn[:8]} pkg={pkg} source={source}")
@@ -141,6 +144,8 @@ def emit_clear_app_cache(ctx: Any, *, package_id: str = "") -> None:
 def emit_inspect_session(ctx: Any, row: dict[str, Any] | None, *, package_id: str = "") -> None:
     if not isinstance(row, dict) or not row.get("ok"):
         return
+    from mino_nexus.services.login_evidence import normalize_observation
+    row = normalize_observation(row)
     from mino_nexus.services.session_match import normalize_device_session
 
     session = normalize_device_session(row.get("session") or "")
@@ -150,7 +155,12 @@ def emit_inspect_session(ctx: Any, row: dict[str, Any] | None, *, package_id: st
         return
     identity = str(row.get("identity") or "").strip()
     pid, lease_aid = _lease_account(ctx)
-    bound = lease_aid if session == "logged_in" and lease_aid else None
+    evidence = getattr(ctx, "login_evidence", None) or {}
+    from mino_nexus.services.login_evidence import evidence_current
+    submitted = (evidence.get("account_binding_source") == "submitted_account"
+                 and evidence_current(ctx, evidence))
+    identity_matches_lease = identity.lower() == "match" or submitted
+    bound = lease_aid if session == "logged_in" and lease_aid and identity_matches_lease else None
     ident_label = ""
     if lease_aid and pid:
         try:
@@ -170,16 +180,18 @@ def emit_inspect_session(ctx: Any, row: dict[str, Any] | None, *, package_id: st
                 ident_label = account_ident(acc)
         except Exception:
             ident_label = lease_aid[:16]
-    identity_hint = _format_identity_hint(identity, ident_label)
+    identity_hint = ("本次提交账号绑定；UI 身份未知" if submitted
+                     else _format_identity_hint(identity, ident_label))
+    previously_bound = str((get_session(sn, pkg) or {}).get("bound_account_id") or "")
     upsert_session(
         sn,
         pkg,
         session=session,
         bound_account_id=bound,
-        clear_binding=session in ("logged_out", "guest"),
+        clear_binding=not bool(bound),
         identity_hint=identity_hint,
-        stale=False,
-        stale_reason="",
+        stale=session not in {"logged_in", "logged_out", "guest"},
+        stale_reason="observation_unknown" if session not in {"logged_in", "logged_out", "guest"} else "",
         lease_run_id=str(getattr(ctx, "run_id", "") or "")[:80],
         source="inspect_session",
     )
@@ -190,9 +202,10 @@ def emit_inspect_session(ctx: Any, row: dict[str, Any] | None, *, package_id: st
             ctx,
             "inspect_session_logged_in",
             source="inspect_session",
-            meta={"session": session, "identity": identity, "package_id": pkg},
+            meta={"session": session, "identity": identity, "package_id": pkg,
+                  "account_binding_source": evidence.get("account_binding_source", "none")},
         )
-        if lease_aid:
+        if lease_aid and identity_matches_lease:
             setattr(ctx, "_login_flow_transition_emitted", True)
     elif session in ("logged_out", "guest"):
         record_transition(
@@ -201,9 +214,9 @@ def emit_inspect_session(ctx: Any, row: dict[str, Any] | None, *, package_id: st
             source="inspect_session",
             meta={"session": session, "package_id": pkg},
         )
-    if session == "logged_in" and lease_aid:
+    if session == "logged_in" and lease_aid and identity_matches_lease:
         _sync_account_session(pid, lease_aid, "logged_in", source="probe", ctx=ctx)
-    elif pid and lease_aid and session in ("logged_out", "guest"):
+    elif pid and lease_aid and previously_bound == lease_aid and session in ("logged_out", "guest"):
         picked = getattr(ctx, "picked_account", None) or {}
         facets = account_facet_values_for_match(picked if isinstance(picked, dict) else {})
         cur = str(facets.get("session") or "").lower()
@@ -217,28 +230,41 @@ def emit_inspect_session(ctx: Any, row: dict[str, Any] | None, *, package_id: st
             )
 
 
-def _apply_device_login(ctx: Any, *, package_id: str = "", source: str = "flow_block") -> None:
+def _apply_device_login(ctx: Any, *, package_id: str = "", source: str = "flow_block") -> bool:
+    from mino_nexus.services.login_evidence import can_commit
+    if not can_commit(ctx) or (package_id and package_id != _ctx_package(ctx)):
+        return False
     sn = _ctx_sn(ctx)
     pkg = _ctx_package(ctx, package_id)
     pid, lease_aid = _lease_account(ctx)
+    evidence = getattr(ctx, "login_evidence", None) or {}
+    submission_bound = evidence.get("account_binding_source") in {"submitted_account", "login_submission"}
+    bound_aid = lease_aid if submission_bound or evidence.get("identity") == "match" else ""
     if not sn or not pkg:
         return
     upsert_session(
         sn,
         pkg,
         session="logged_in",
-        bound_account_id=lease_aid or None,
+        bound_account_id=bound_aid or None,
+        identity_hint=("本次登录提交账号绑定；未核验 UI 身份" if submission_bound
+            else _format_identity_hint("match") if bound_aid else ""),
         stale=False,
         stale_reason="",
         lease_run_id=str(getattr(ctx, "run_id", "") or "")[:80],
         source=str(source or "flow_block")[:32],
     )
-    if pid and lease_aid:
-        _sync_account_session(pid, lease_aid, "logged_in", source=source, ctx=ctx)
+    if pid and bound_aid:
+        _sync_account_session(pid, bound_aid, "logged_in", source=source, ctx=ctx)
+    return True
 
 
-def emit_login_complete(ctx: Any, *, package_id: str = "") -> None:
-    _apply_device_login(ctx, package_id=package_id, source="flow_block")
+def emit_login_complete(ctx: Any, *, package_id: str = "") -> bool:
+    """Commit verified authentication/identity only, never business-context success."""
+    from mino_nexus.services.login_evidence import can_commit
+    if not can_commit(ctx) or (package_id and package_id != _ctx_package(ctx)):
+        return False
+    return _apply_device_login(ctx, package_id=package_id, source="flow_block")
 
 
 def _sync_account_session(

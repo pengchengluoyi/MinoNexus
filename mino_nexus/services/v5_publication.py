@@ -67,6 +67,10 @@ def preview(case, *, compile_draft=False):
         "step_program_keys": meta.get("v5_draft_step_program_keys", meta.get("step_program_keys", {})),
         "key_compile_warnings": meta.get("key_compile_warnings", [])}
     errors, actions, checks, controls = [], [], [], {}
+    from mino_nexus.services.case_compilation import readiness
+    issue = readiness(case) if not compile_draft else None
+    if issue:
+        errors.append({"reason_code": issue})
     from mino_nexus.services.v5_capabilities import snapshot as capability_snapshot
     try:
         capabilities = capability_snapshot()
@@ -117,7 +121,8 @@ def preview(case, *, compile_draft=False):
                 expected = _expected(point)
                 cid = point.get("control_id")
                 validate_expected(expected, sensitive=bool(identities.get(cid, {}).get("sensitive")))
-                wait = point.get("wait_policy") or {"timeout_ms": 3000, "max_reads": 3}
+                from mino_nexus.services.check_observation_policy import freeze_policy
+                wait = freeze_policy(expected, point.get("wait_policy"))
                 if not 1 <= int(wait.get("max_reads", 0)) <= 3 or not 1 <= int(wait.get("timeout_ms", 0)) <= 3000:
                     raise ValueError("invalid_wait_policy")
                 checks.append({"point_id": str(point.get("point_id") or point.get("id") or ""),
@@ -158,6 +163,9 @@ def preview(case, *, compile_draft=False):
     return {"eligible": not errors, "reason_code": "" if not errors else "v5_ineligible", "errors": errors,
             "actions": actions, "check_program_plan": check_plan, "controls": controls,
             "draft_revision": int(case.get("v5_draft_revision") or 1), "source": source_view(case),
+            "source_revision_id": case.get("source_revision_id"), "source_revision": case.get("source_revision"),
+            "compile_job_id": case.get("latest_compile_job_id"), "compile_job": copy.deepcopy(case.get("compile_job")),
+            "effective_artifact": copy.deepcopy(case.get("effective_artifact")),
             "resource_key": copy.deepcopy(resource), "compiled_keys": compiled.get("step_program_keys", {}),
             "capabilities": capabilities,
             "baseline": baseline,
@@ -171,7 +179,7 @@ def preview(case, *, compile_draft=False):
                     for n, b in bundles.items()}}}
 
 
-def publish(project_id, case_id, expected_revision, *, retry_policy=None, reversible=False):
+def publish(project_id, case_id, expected_revision, *, retry_policy=None, reversible=False, expected_compile_job_id=""):
     from mino_nexus.services.control_registry import _assert_runtime_writable
     _assert_runtime_writable()
     from mino_nexus.core.execution_user import require_user_id
@@ -183,6 +191,11 @@ def publish(project_id, case_id, expected_revision, *, retry_policy=None, revers
     case = get_case(project_id, case_id)
     if not case:
         raise ValueError("case_missing")
+    # A revision can be recompiled without changing its source number. Pin the
+    # exact job the reviewer saw, not whichever job is current on POST arrival.
+    if case.get("source_revision_id") and (not expected_compile_job_id
+            or case.get("latest_compile_job_id") != expected_compile_job_id):
+        raise ValueError("compile_revision_conflict")
     reviewed = preview(case)
     if not reviewed["eligible"]:
         raise ValueError("v5_ineligible")
@@ -201,6 +214,12 @@ def publish(project_id, case_id, expected_revision, *, retry_policy=None, revers
             raise ValueError("case_revision_conflict")
         if extra.get("resource_key") != reviewed["resource_key"]:
             raise ValueError("resource_revision_conflict")
+        from mino_nexus.services.case_compilation import readiness
+        if extra.get("source_revision_id") and (readiness(extra)
+                or extra.get("latest_compile_job_id") != reviewed.get("compile_job_id")
+                or extra.get("source_revision_id") != reviewed.get("source_revision_id")
+                or extra.get("effective_artifact") != reviewed.get("effective_artifact")):
+            raise ValueError("compile_revision_conflict")
         current_meta = extra.get("meta") or {}
         current_keys = current_meta.get("v5_draft_step_program_keys", current_meta.get("step_program_keys", {}))
         if current_keys != reviewed["compiled_keys"]:
@@ -216,6 +235,12 @@ def publish(project_id, case_id, expected_revision, *, retry_policy=None, revers
                 raise ValueError("control_revision_conflict")
         reviewed.update(frozen_revision=int((extra.get("v5_publication") or {}).get("frozen_revision") or 0) + 1,
             published_by=actor, published_at=datetime.now().astimezone().isoformat(), retry_policy=policy, reversible=bool(reversible))
+        # Ordinary consumers and the new frozen publication must share this
+        # compiled revision; retaining the previous plan would mix old actions
+        # with newly reviewed source after a supplement.
+        published_meta = dict(extra.get("meta") or {})
+        published_meta["step_program_keys"] = copy.deepcopy(reviewed["compiled_keys"])
+        extra["meta"] = published_meta
         extra.update(v5_publication=reviewed, v5_plan_state="published", v5_has_unpublished_changes=False)
         row.extra = extra
     return get_case(project_id, case_id)
@@ -237,6 +262,8 @@ def configure_baseline(project_id, case_id, expected_revision, control_id):
         row = db.query(ProjectCase).filter_by(project_id=project_id, case_id=case_id).one_or_none()
         if row is None:
             raise ValueError("case_missing")
+        from mino_nexus.services.case_store import _public
+        previous = _public(row)
         extra = copy.deepcopy(row.extra or {})
         if int(extra.get("v5_draft_revision") or 1) != expected_revision:
             raise ValueError("case_revision_conflict")
@@ -256,4 +283,6 @@ def configure_baseline(project_id, case_id, expected_revision, control_id):
         extra["v5_baseline_updated_by"] = actor
         row.extra = extra
         row.updated_at = datetime.now().astimezone().isoformat()
+        from mino_nexus.services.case_compilation import record_change
+        record_change(db, row, previous, origin={"kind": "baseline_configuration", "control_id": control_id})
     return get_case(project_id, case_id)

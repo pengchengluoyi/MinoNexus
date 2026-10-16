@@ -34,6 +34,7 @@ class Capability(BaseModel):
 
     id: str
     kind: str
+    tier: str = "event"
     display_name: str
     event_kind: str = ""
     category: str = "uncategorized"
@@ -79,6 +80,7 @@ class RecoveryRule(BaseModel):
 
     id: str
     kind: str = "recovery"
+    tier: str = "policy"
     title: str = ""
     enabled: bool = True
     provider: str = "platform"

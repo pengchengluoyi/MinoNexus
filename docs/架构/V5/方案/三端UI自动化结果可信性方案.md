@@ -1,7 +1,16 @@
 # V5 方案二：执行安全、控件事实与固定准出合同
 
+
+> **2026-10-16 用户决定（覆盖此前验收要求）**：Windows（`win`）本版仅要求完成开发，不要求 Windows 真机或业务验证；未做验证须如实记录，但不作为 V5 / N5 / D08 完成的阻塞项。四值合同与 Windows 实现范围保持不变，其他平台验收要求保持。
+> 文档导航：[V5 阅读入口](../README.md)。本文已同步[主修订方案 R4](../V5合同收口与交付修订方案.md)的已确认决定：路线 B、四值平台和弹窗单次检查；实现及真实验收状态另记。实际进展只更新[统一开发记录](../V5执行开发与验收记录.md)。
+
+> **2026-10-14 新的开发方向**：[DOM优先执行与用例全覆盖开发方案](DOM优先执行与用例全覆盖开发方案.md) 将默认观察策略调整为“有效结构优先，结构不足用截图兜底”，并要求 Scout 端提炼、每步截图留证。本文原“看图优先/纯 DOM 不改道”和 Web 首期范围属于原阶段设计；新默认与平台覆盖按新方案实施，既有严格合同的写安全和证据要求继续保留。本轮为文档审计，尚未部署新策略。
+
+
+
+> **前端架构硬约束（2026-10-14）**：Mino 项目只有 **MinoWorkbench** 一个前端。MinoConsole 与 MinoStudio 已取消，不再开发、构建、交付或作为配置/验收入口。管理、用例、环境、控件配置和证据查看全部在 Workbench；Nexus 与 Scout 保持后端和执行节点职责。历史文档中的 Console/Studio 入口均以 Workbench 为准。“三端”仅指 Web、移动、PC 被测平台。
 > R8，2026-10-13。本篇为接口、状态、预算、版本和原因映射的唯一合同真源。
-> [方案一：决策与事实](看图优先与DOM后置混合执行方案.md)；[方案三：交付与验收](执行侧交付与验收清单.md)。以下标为新增的字段、能力、服务及迁移均尚未实现。
+> [方案一：决策与事实](../历史方案/看图优先与DOM后置混合执行方案.md)；[方案三：交付与验收](执行侧交付与验收清单.md)。本篇定义目标合同；实施状态见 [PR-A 开发记录](../V5执行开发与验收记录.md#record-pr-a)，字段存在不代表整个合同已可用。
 > V5 取消生成；EventStatus 保持五态。工具回执 pass 和业务 verified_pass 是两个层次。
 
 ## 1. 归属、派单与 lane 租用
@@ -148,9 +157,9 @@ fixture 文件名为拟新增的合同清单，不代表本轮已生成文件：
 | result_v5_web_screenshot.json | Web 来源字段与 artifact |
 | result_v5_probe_contracts.json | 支持声明和合同版本 |
 | heartbeat_v5_lanes.json | DeviceWorkload 的 lanes_total/lanes_free/lanes_quarantined；旧心跳缺省解码 |
-| 既有 execute/result/desktop fixture | 旧字段缺省解码；旧模式兼容与 Desktop 语义不变 |
+| 既有 execute/result/desktop fixture | 保留历史证据解码；路线 B 新运行平台只收 mac/win/android/web，旧平台/协议拒绝样例与新 SN 同步验收；desktop 执行器及共享锁语义保留 |
 
-语义验收“实际写一次”由 demo 会话完成，round-trip fixture 不证明执行幂等。发布检查覆盖已有全套 fixture 的两端 round-trip、字节相同及 PROTOCOL §8 哈希；当前消息版本是否需递增由该批两仓协议审阅决定，支持声明是 V5 强准入条件，不能仅依赖旧端忽略字典字段。
+语义验收“实际写一次”由 demo 会话完成，round-trip fixture 不证明执行幂等。协议样例覆盖两端 round-trip 和合法/非法载荷；AGENTS.md 与 CLAUDE.md 对 fixture 真源及提交方式存在冲突，按主方案 §13 先统一维护规则，不以 AST 相同代替验收；当前消息版本是否需递增由该批两仓协议审阅决定，支持声明是 V5 强准入条件，不能仅依赖旧端忽略字典字段。
 
 ## 3. 秘密输入与出口
 
@@ -170,8 +179,8 @@ fixture 文件名为拟新增的合同清单，不代表本轮已生成文件：
 
 | 新增字段 | 规则 |
 | --- | --- |
-| revision | 同一 control_id 显式配置修改后递增；Console 使用 expected_revision 并发保存 |
-| publish_state | legacy/draft/published；编译期自动创建的控件为 draft，只有 Console 人工核对 typed locator 后才 published；V5 只选 published，不将 dom_hit 自动升级为可信 |
+| revision | 同一 control_id 显式配置修改后递增；Workbench 使用 expected_revision 并发保存 |
+| publish_state | legacy/draft/published；编译期自动创建的控件为 draft，只有 Workbench 人工核对 typed locator 后才 published；V5 只选 published，不将 dom_hit 自动升级为可信 |
 | locator_spec（JSON） | 渠道分格，P0 只发布 playwright typed locator，含 scope 与 cardinality；不与旧字符串互相覆盖 |
 | sensitive | 配置敏感分类；password 类型强制敏感 |
 | updated_at / updated_by | 配置审计，复用现有操作者身份 |
@@ -180,9 +189,9 @@ binding_context、fact_policy 后移：P0 只有一个 App、一个 Web 平台�
 
 当前表 control_id 没有项目级唯一约束，迁移前做重复/归属审计；正常写入口保证 (project_id,control_id) 唯一，发现重复先报告，不自动合并用户记录。既有 desc_key 唯一约束保留；V5 引用显式 control_id，不以描述相似自动合并两个页面目标。
 
-首期保存当前行与递增 revision；session 的选定配置快照用于历史复核，无需先建全量配置版本仓库。Console 显示现配置和已有会话快照，但不承诺尚未实现的任意历史版本回滚。修订兼容策略见 §6.4。
+首期保存当前行与递增 revision；session 的选定配置快照用于历史复核，无需先建全量配置版本仓库。Workbench 显示现配置和已有会话快照，但不承诺尚未实现的任意历史版本回滚。修订兼容策略见 §6.4。
 
-typed locator 示例，仅为 demo 配置，需经 Console 发布：
+typed locator 示例，仅为 demo 配置，需经 Workbench 发布：
 
 ```json
 {
@@ -197,11 +206,11 @@ typed locator 示例，仅为 demo 配置，需经 Console 发布：
 
 P0 支持主 page 的 test_id/role/label/css；role/label 明确 exact=true，单一指定策略，无候选链。iframe/dialog/shadow/new_window/webview 沿用既有 scope 枚举但不自动声明实现：开工选一个实际需要的 scope，未实现 preflight capability_unavailable；现代 SPA 主 page 无 URL 改变仍可测试。不靠“弹窗”等描述推导 scope，不允许任意 JS selector。
 
-Nexus 固化全部所需控件 revision/内容后下发；同一 run 的动作和事实解析同一副本。Console 修改只影响后续选定配置；紧急停另走实时控制。
+Nexus 固化全部所需控件 revision/内容后下发；同一 run 的动作和事实解析同一副本。Workbench 修改只影响后续选定配置；紧急停另走实时控制。
 
 ### 4.2 发布入口和运行只读
 
-Console 使用“项目详情 → 执行配置 → 控件注册表”，增加渠道 typed locator、明确 scope、敏感标记的轻量编辑，并列出导入产生的 draft 控件待办。列举、expected_revision 保存/发布、只读探测由 control_registry 服务承接，按项目/App 权限；不建第二套目标 CRUD 或录制器。新 UI/API 是开发项，不宣称当前已有编辑入口。
+Workbench 使用“项目详情 → 执行配置 → 控件注册表”，增加渠道 typed locator、明确 scope、敏感标记的轻量编辑，并列出导入产生的 draft 控件待办。列举、expected_revision 保存/发布、只读探测由 control_registry 服务承接，按项目/App 权限；不建第二套目标 CRUD 或录制器。新 UI/API 是开发项，不宣称当前已有编辑入口。
 
 所有控制写入口执行同一守卫：V5 runtime 不得 ensure/fill/发布；published typed 控件只允许显式授权的配置服务修改，旧模式执行/导航也不能回写它。locator_stop_reason、note_execution_locator 和 nav_route 的 capture 写入不得绕过。匹配命中可存 session 诊断，不生成已启用配置；日志写成功也不授权回写。
 
@@ -209,7 +218,7 @@ Console 使用“项目详情 → 执行配置 → 控件注册表”，增加�
 
 ### 4.3 独立动作能力与共享解析器
 
-新增 tap_target/input_target/read_web_target_facts，目录通过 Console 注册，Scout 只实现并声明合同。这是主要 Scout 工作项，包含严格 resolver、动作 API、阶段/超时和事实，不描述为“小改现有输入”。
+新增 tap_target/input_target/read_web_target_facts，目录通过 Workbench 注册，Scout 只实现并声明合同。这是主要 Scout 工作项，包含严格 resolver、动作 API、阶段/超时和事实，不描述为“小改现有输入”。
 
 | 能力 | 操作合同 |
 | --- | --- |
@@ -266,18 +275,18 @@ V5 保留文字（三列）用例作为唯一用例来源，沿用现有导入/�
   → 现有导入解析/编译（可含模型；记录 dispatch_log 引用、prompt/目录版本）
   → 编译预览：每条操作/预期 → 能力、控件、谓词、等待策略
   → V5 资格检查（§6.3）
-  → 缺定位的控件列为待办 → Console 补 typed locator → 人工核对后发布控件
+  → 缺定位的控件列为待办 → Workbench 补 typed locator → 人工核对后发布控件
   → 人工确认预览与预期强度 → 冻结发布
   → 运行只读该版本
 ```
 
-控件在编译期创建：`stamp_compiled_plans`/`ensure_control` 为未登记目标创建 draft 控件（有描述，无 typed locator）。这就是“先导入、再补控件”的自然入口，用户不必事先在 Console 注册。运行期仍不得 ensure/fill。
+控件在编译期创建：`stamp_compiled_plans`/`ensure_control` 为未登记目标创建 draft 控件（有描述，无 typed locator）。这就是“先导入、再补控件”的自然入口，用户不必事先在 Workbench 注册。运行期仍不得 ensure/fill。
 
 ### 6.2 预期到原子谓词的确定性映射
 
 编译预期时，对能确定映射的 key_ref，由代码内一张固定映射表产出 check v2 字段；映射不了的保持原样，交资格检查拦下。映射表为拟议的小表，开工时对照现有 `expected.*` 词表落地，例如 `expected.ui_text` → text_equals/visible，`expected.input_value` → value_equals 或 secret_nonempty，计数类 → count_equals；表中没有的键，V5 不声明可执行。
 
-`verifier_kind` P0 只有 dom、`predicate_contract` 只有 web.atomic.v1，由编译器作为非语义默认值填写，用例作者不写；`wait_policy` 取谓词默认（初读加最多两次额外读，总窗口 3s），可在预览中调整。业务字段（目标、期望文案/数量、required）一律来自用例文字，不默认。
+`verifier_kind` P0 只有 dom、`predicate_contract` 只有 web.atomic.v1，由编译器作为非语义默认值填写，用例作者不写；`wait_policy` 一般取谓词默认（初读加最多两次额外读，总窗口 3s），可在预览中调整；本期弹窗不存在检查明确覆写为就绪后的单次取证，不套用该重复读取默认。业务字段（目标、期望文案/数量、required）一律来自用例文字，不默认。
 
 check plan 使用 mino.check_program_plan.v2，仍由 `case-step-compile` 产出，新增以下明确语义：
 
@@ -327,13 +336,15 @@ Nexus structured_check 消费目标事实；P0 支持 visible/not_visible/text_e
 
 原子结论 true/false/unavailable。固定 all：任一 false 为 false，否则有 unavailable 为 unavailable；固定 any：任一 true 为 true，否则有 unavailable 为 unavailable。只有发布时认可的 any 分支可以提供充分证据，运行不能临时降级分支。Evidence 存实际消费分支与所有已求值子证据，无法读取 required 输入不变成 true。
 
-wait_policy 初次读加最多两次额外读；整体等待受同案 deadline 与该 check 固定窗口约束，不给每次读重置窗口。有效未满足在窗口耗尽为 assertion_mismatch；缺失耗尽为 unverified。登录可用需求认可的单一强可见标记；SPA 无须路由变化。身份需求需实际身份断言；HTTP 200 或 cookie 线索不能替代需求的业务结论。
+本期“刷新后不再弹窗”在刷新完成、页面就绪后的指定检查点只取一次有效观察：未发现则通过，发现则失败，采集失败/作用域不可观察为 unverified；记录观察时刻和来源。该检查不因第一次发现弹窗而等待其消失改判通过，不设 5 秒/500 ms 采样，也不证明持续未出现。该已确认语义随计划版本固化，历史证据不重解释。
+
+其他检查的 wait_policy 初次读加最多两次额外读；整体等待受同案 deadline 与该 check 固定窗口约束，不给每次读重置窗口。有效未满足在窗口耗尽为 assertion_mismatch；缺失耗尽为 unverified。登录可用需求认可的单一强可见标记；SPA 无须路由变化。身份需求需实际身份断言；HTTP 200 或 cookie 线索不能替代需求的业务结论。
 
 ### 6.6 版本与改动策略
 
 predicate_contract 固定语义；verifier_build 随 session 保存实现版本。兼容修复先过受控反例会话，不强迫全库重编译；breaking 语义变更仅影响相关计划，重新校验发布，运行不自动换谓词。
 
-control locator 的兼容修正仍经 Console 发布新 revision，下个 run preflight 重新解析并校验，同案继续用已选快照。控件 identity/scope/敏感属性/事实支持变化标受影响计划 needs_revalidate；数据语义变化不当作 locator 修复。历史结果用当时 session 快照解释，不拿当前控件覆盖。
+control locator 的兼容修正仍经 Workbench 发布新 revision，下个 run preflight 重新解析并校验，同案继续用已选快照。控件 identity/scope/敏感属性/事实支持变化标受影响计划 needs_revalidate；数据语义变化不当作 locator 修复。历史结果用当时 session 快照解释，不拿当前控件覆盖。
 
 ## 7. 唯一预算与写准入
 
@@ -393,3 +404,5 @@ EventStatus：pass=工具回执完成，fail=工具故障，declined=不适配�
 Evidence 至少包含 EventRef={session_id,seq}、check/point_id、predicate_contract/verifier_build、逻辑 after_operation_id 与实际 action_ref、control_id/revision、事实 observation 引用、完整性、脱敏原读数、原子/组合结论及必要 artifact。case verdict 引用全部 required Evidence；receipt、do.plan_digest、模型 done 不能替代 check。
 
 Workbench 展示 verdict→check→动作→事实→原读数/截图与当时配置，另显当前配置、来源版本、profile 和原因映射。截图/事实分别有来源，不声称同时原子采集；文件过期标 expired。指标和验收只在方案三定义。
+
+路线 B 说明：本版平台/执行绑定新合同与本文严格 Web 原子合同是不同维度。四值统一不意味着 Android/mac/win 自动具备严格 Web 的全部保障；本版需验收它们声明支持的实际路线。platform_scope 为新增适用集合语义；host.os 与 platforms_by_sn 复用已有基础并改消费者，详见主方案 §21。

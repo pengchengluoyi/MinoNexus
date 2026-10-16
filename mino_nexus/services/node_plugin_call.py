@@ -34,33 +34,26 @@ def node_for_plugin(kind: str, plugin_id: str, node_id: str = ""):
     from mino_nexus.core.execution_user import require_user_id
     uid = require_user_id()
     reg = get_registry()
-    want = str(node_id or "").strip()
-    if want:
-        node = reg.get_node(want)
-        if node is None or node.owner_user_id != uid:
-            raise PluginCallError("没有这个节点")
-        if not node.alive or node.send is None:
-            raise PluginCallError("节点离线，无法调用插件")
-        return node
-    hits = []
-    for node in reg.nodes():
-        if node.owner_user_id != uid or not node.alive or node.send is None or node.plugins is None:
-            continue
-        for row in node.plugins:
-            row_kind = str(row.get("class") or "")
-            same = row_kind == kind or (plugin_id == "wechat" and {row_kind, kind} <= {"bot", "im"})
-            if (
-                same
-                and row.get("id") == plugin_id
-                and row.get("configured")
-            ):
-                hits.append(node)
-                break
-    if len(hits) == 1:
-        return hits[0]
-    if not hits:
-        raise PluginCallError(f"没有 Scout 节点配好 {kind}/{plugin_id}")
-    raise PluginCallError("有多台节点配了这个插件，请指定 node_id")
+    from mino_nexus.services.execution_dependencies import plugin_fact
+    spec = {"kind": "plugin", "class": kind, "plugin_id": plugin_id}
+    if node_id:
+        spec["node_id"] = str(node_id).strip()
+    result = plugin_fact(reg.nodes(), spec, uid)
+    if result["status"] != "ready":
+        messages = {
+            "plugin_node_unavailable": "没有这个节点",
+            "plugin_node_offline": "节点离线，无法调用插件",
+            "plugin_node_ambiguous": "有多台节点配了这个插件，请指定 node_id",
+            "plugin_manifest_unreported": "节点未上报插件配置，请等待上报或升级 Scout",
+            "plugin_not_configured": "指定插件尚未配置完成",
+        }
+        raise PluginCallError(messages.get(result["reason_code"], "插件依赖不可用"))
+    node = reg.get_node(result["node_id"])
+    if (node is None or node.owner_user_id != uid or not node.alive or node.send is None
+            or node.node_connection_generation != result["node_connection_generation"]
+            or node.scout_process_generation != result["scout_process_generation"]):
+        raise PluginCallError("节点连接已变化，请重试")
+    return node
 
 
 def call_plugin(

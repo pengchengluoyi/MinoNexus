@@ -59,12 +59,12 @@ def available_capabilities(
         kinds=kinds,
         platform=plat,
     )
-    if plat == "desktop":
+    if plat in {"desktop", "mac", "win"}:
         from mino_nexus.services.desktop_catalog import CAPABILITY_IDS, capabilities
 
         available = [cap for cap in available if cap.id not in CAPABILITY_IDS]
         if flags.get("desktop") and "generic" in kinds:
-            available.extend(capabilities(ctx.desktop_capabilities, ctx.desktop_os))
+            available.extend(capabilities(ctx.desktop_capabilities, ctx.desktop_os, platform=plat))
     return available
 
 
@@ -104,17 +104,19 @@ def available_menu_brief(
         if not cap_id or cap_id in seen:
             continue
         cap = plugin_registry.get_capability(cap_id)
-        if plat == "desktop":
+        if plat in {"desktop", "mac", "win"}:
             from mino_nexus.services.desktop_catalog import CAPABILITY_IDS, capabilities
 
             if cap_id in CAPABILITY_IDS:
-                native = capabilities(ctx.desktop_capabilities, ctx.desktop_os) if ctx.connectivity_flags.get("desktop") else []
+                native = capabilities(ctx.desktop_capabilities, ctx.desktop_os, platform=plat) if ctx.connectivity_flags.get("desktop") else []
                 cap = next((candidate for candidate in native if candidate.id == cap_id), None)
         if cap is None:
             continue
         from mino_nexus.catalog.skill_channel import capability_dispatch_ok
 
         if not capability_dispatch_ok(cap_id):
+            continue
+        if (audience == "case" and not menu_caller_ok(cap, phase)) or not _visible_to(cap, audience):
             continue
         if plat and not plugin_registry.platform_ok(list(cap.platforms or []), plat):
             continue
@@ -127,6 +129,20 @@ def available_menu_brief(
             row["parameters"] = parameters
         out.append(row)
         seen.add(cap.id)
+    from mino_nexus.services.local_tool_dependencies import evaluate
+    # Keep unmet tools visible with a safe reason; never label them not_applicable.
+    for row in out:
+        facts = evaluate(row["id"], ctx=ctx)
+        if facts:
+            row["dependencies"] = facts
+    if getattr(ctx, 'execution_contract_version', '') == 'execution_binding.v1':
+        from mino_nexus.services.execution_binding_runtime import menu_projection
+        binding = getattr(ctx, 'execution_binding', None)
+        if not binding:
+            return []
+        check = getattr(ctx, "execution_binding_menu", None)
+        allowed = check(phase) if callable(check) else set()
+        out = [row for row in out if row['id'] in allowed]
     return out
 
 
@@ -142,6 +158,12 @@ def recovery_menu_brief(ctx: RunContext, *, platform: str = "") -> list[dict[str
             "kind": "recovery",
             "summary": summary,
         })
+    if getattr(ctx, 'execution_contract_version', '') == 'execution_binding.v1':
+        from mino_nexus.loop.observe.session_log import active_writer
+        writer = active_writer()
+        check = getattr(ctx, 'execution_binding_menu', None)
+        allowed = check(writer.phase if writer else 'prep') if callable(check) else set()
+        rows = [row for row in rows if row['id'] in allowed]
     return rows
 
 

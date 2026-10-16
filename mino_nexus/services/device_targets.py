@@ -5,15 +5,15 @@ import ntpath
 from fastapi import HTTPException
 from mino_nexus.services import project_store as ps
 
-_NATIVE_OS = {"mac": "macos", "macos": "macos", "pc": "windows", "windows": "windows", "linux": "linux"}
+_NATIVE_OS = {"mac": "macos", "macos": "macos", "win": "windows", "pc": "windows", "windows": "windows", "linux": "linux"}
 _REQUIRED = {"screenshot", "tap_xy", "input_text"}
 
 
-def target_channel(app: dict, row: dict, *, surface="", profile="") -> dict:
+def target_channel(app: dict, row: dict, *, surface="", profile="", env_doc=None) -> dict:
     from mino_nexus.services.app_automation import get_automation_config
     from mino_nexus.services.project_env import resolve_run_env_profile
-    cfg = get_automation_config(app)
-    env = ps.project_env(str(app.get("project_id") or ""))
+    cfg = get_automation_config(app, hydrate_cases=False)
+    env = env_doc if env_doc is not None else ps.project_env(str(app.get("project_id") or ""))
     resolved = resolve_run_env_profile(env, requested=profile, automation_default=str(cfg.get("env_profile") or ""))
     channels = list(env.get("channels") or [])
     chosen = surface or str(cfg.get("env_surface") or "")
@@ -36,11 +36,13 @@ def target_channel(app: dict, row: dict, *, surface="", profile="") -> dict:
     platform = str(channel.get("platform") or "")
     native_os = _NATIVE_OS.get(platform)
     if native_os:
-        if row.get("platform") != "desktop" or row.get("os") != native_os:
+        if ((row.get("platform") in {"mac", "win"} and platform != row.get("platform"))
+                or (row.get("platform") not in {"mac", "win"} and
+                    (row.get("platform") != "desktop" or row.get("os") != native_os))):
             raise ValueError(f"原生 {native_os} 应用需要同系统的 PC 桌面")
     elif platform != row.get("platform"):
         raise ValueError("设备与被测应用渠道不兼容；网站请选择 Web 浏览器")
-    if row.get("platform") == "desktop" and not native_os:
+    if row.get("platform") in {"desktop", "mac", "win"} and not native_os:
         raise ValueError("缺少明确的原生应用目标系统")
     if native_os:
         identifier = str(((env.get("profiles") or {}).get(resolved) or {}).get(channel.get("id"), {}).get(channel.get("field") or "value") or "").strip()
@@ -57,7 +59,7 @@ def target_channel(app: dict, row: dict, *, surface="", profile="") -> dict:
     return {**channel, "env_profile": resolved}
 
 
-def evaluate(row: dict, *, app: dict | None = None, surface="", profile="", headless=True, action_scheme="visual", allow_queue=False) -> dict:
+def evaluate(row: dict, *, app: dict | None = None, surface="", profile="", headless=True, action_scheme="dom_preferred", allow_queue=False) -> dict:
     from mino_nexus.services.device_admission import busy_for
     out = dict(row)
     code, reason = "", ""
@@ -70,7 +72,7 @@ def evaluate(row: dict, *, app: dict | None = None, surface="", profile="", head
         code, reason = "not_owned", "设备不属于当前账号"
     elif not row.get("node_alive", row.get("status") == "online"):
         code, reason = "node_offline", "所属 Scout 节点离线"
-    elif platform == "desktop":
+    elif platform in {"desktop", "mac", "win"}:
         if not row.get("session_generation") or row.get("capabilities") is None:
             code, reason = "desktop_unreported", "未上报桌面能力，请升级 Scout"
         elif row.get("desktop_state") != "ready":
@@ -79,8 +81,8 @@ def evaluate(row: dict, *, app: dict | None = None, surface="", profile="", head
             code, reason = "capability_missing", "桌面缺少截图、点击或输入能力"
         elif row.get("status") != "online":
             code, reason = "channel_offline", "Desktop 执行通道未连接"
-        elif action_scheme != "visual":
-            code, reason = "scheme_unsupported", "Desktop 首版仅支持 visual 方案"
+        elif action_scheme not in ("visual", "dom", "dom_preferred"):
+            code, reason = "scheme_unsupported", "未知执行策略"
     elif platform not in ("android", "ios", "web"):
         code, reason = "platform_unsupported", "设备平台没有对应执行通道"
     elif row.get("status") != "online":
@@ -106,7 +108,7 @@ def select(app: dict, sns: list[str], **kwargs) -> tuple[list[str], dict[str, di
     roster = {r["sn"]: r for r in ui_devices()}
     if not sns:
         # Desktop selection is always explicit, never choose a different PC.
-        candidates = [evaluate(r, app=app, **kwargs) for r in roster.values() if r.get("platform") != "desktop"]
+        candidates = [evaluate(r, app=app, **kwargs) for r in roster.values() if r.get("platform") not in {"desktop", "mac", "win"}]
         sns = [r["sn"] for r in candidates if r["executable"]][:1]
     if not sns:
         raise ValueError("没有兼容且就绪的执行设备，请在 Workbench 选择设备")

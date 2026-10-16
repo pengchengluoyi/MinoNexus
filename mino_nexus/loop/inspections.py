@@ -225,7 +225,9 @@ def refresh_session_block(
     if af_ctx not in ("yes", "") and not nodes:
         slot_sink["session_block"] = ""
         return {"ok": True, "program": True, "reason": "foreground_unknown_skip"}
+    ctx.session_knowledge_hint = str(slot_sink.get("knowledge_hint") or "")[:8000]
     row = inspect_session(
+        run_context=ctx,
         required_session=format_required_session_brief(scene),
         knowledge_hint=str(slot_sink.get("knowledge_hint") or ""),
         accounts_brief=str(getattr(ctx, "accounts_brief", "") or ""),
@@ -236,10 +238,10 @@ def refresh_session_block(
         provider_id=provider_id or None,
     )
     row = reconcile_inspect_session(row, required=req_enum)
-    slot_sink["session_block"] = format_session_block(row, required=req_enum)
     from mino_nexus.loop.observe.session_persist import stamp_session_observation
 
-    stamp_session_observation(ctx, row)
+    row = stamp_session_observation(ctx, row) or row
+    slot_sink["session_block"] = format_session_block(row, required=req_enum)
     layout = row.get("screen_layout") if isinstance(row.get("screen_layout"), dict) else {}
     if nav is not None and layout:
         nav.attach_turn_layout(int(turn_id or 0), layout)

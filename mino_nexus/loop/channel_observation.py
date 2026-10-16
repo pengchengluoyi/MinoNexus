@@ -215,7 +215,11 @@ def capture_decision_frame(proxy: Any, ctx: Any, *, hierarchy: bool = True) -> t
         setattr(ctx, "nav_hierarchy_nodes", [])
         setattr(ctx, "web_focus", {})
     snap = capture(proxy, turn_id=0) if hierarchy and not desktop else None
+    if hierarchy:
+        setattr(ctx, "nav_hierarchy_nodes", [])
+        setattr(ctx, "observation_contract", {"missing": ["capture_failed"]})
     if snap is not None and getattr(snap, "ok", False):
+        setattr(ctx, "observation_contract", dict(getattr(snap, "observation", None) or {}))
         setattr(
             ctx,
             "nav_hierarchy_nodes",
@@ -238,14 +242,14 @@ def capture_decision_frame(proxy: Any, ctx: Any, *, hierarchy: bool = True) -> t
 
 
 def login_credential_form_open(nodes: list[dict[str, Any]] | None) -> bool:
-    """邮箱输入框和验证码输入框同时还在，说明提交后没有离开登录表单。"""
-    from mino_nexus.loop.ui_dom import find_dom_email_field, find_dom_otp_field
+    """手机号/邮箱凭证框与验证码框同时存在时，提交仍停留在登录表单。"""
+    from mino_nexus.loop.ui_dom import find_dom_phone_field, find_dom_email_field, find_dom_otp_field
 
     rows = [n for n in (nodes or []) if isinstance(n, dict)]
-    email = find_dom_email_field(rows)
-    if email is None:
+    credential = find_dom_phone_field(rows) or find_dom_email_field(rows)
+    if credential is None:
         return False
-    return find_dom_otp_field(rows, email_field=email) is not None
+    return find_dom_otp_field(rows, email_field=credential) is not None
 
 
 def read_field_after_input(ctx: Any, proxy: Any, field: str) -> str | None:
@@ -268,8 +272,8 @@ def bind_fresh_observation(ctx: Any, proxy: Any) -> None:
     from mino_nexus.loop.hierarchy_slots import capture
 
     snap = capture(proxy, turn_id=0)
-    if snap.ok:
-        setattr(ctx, "nav_hierarchy_nodes", list(snap.nodes or []))
+    setattr(ctx, "nav_hierarchy_nodes", list(snap.nodes or []) if snap.ok else [])
+    setattr(ctx, "observation_contract", dict(snap.observation or {}) if snap.ok else {"missing": ["capture_failed"]})
     if isinstance(snap.web_focus, dict) and snap.web_focus:
         setattr(ctx, "web_focus", normalize_web_focus(snap.web_focus))
 

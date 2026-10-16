@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import inspect
+import threading
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from mino_nexus.services import auth_store
 from mino_nexus.core import protocol as P
@@ -22,12 +23,21 @@ from mino_nexus.services.node_workload import workload_for_node_id
 
 router = APIRouter(prefix="/runtime", tags=["Runtime"])
 
+_SCOUT_UPDATE_LOCK = threading.Lock()
+_SCOUT_UPDATES: set[str] = set()
+
 _REMOTE_COMMANDS = frozenset({"stop", "restart", "update", "sleep", "wake"})
 
 
 class NodeCommandBody(BaseModel):
     command: str
     reason: str = ""
+
+
+class ScoutUpdateBody(BaseModel):
+    # Never silently accept a version/URL that old Scouts cannot honor.
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(default="mcp", max_length=500)
 
 
 class NodePatchBody(BaseModel):
@@ -484,3 +494,71 @@ async def command_node(
         "error": getattr(result, "error", "") or "",
         "extra": extra,
     })
+
+
+@router.get("/nodes/{node_id}/update-status")
+def scout_update_status(node_id: str, sess: dict = Depends(current_session)):
+    snapshot = _node_row_for_session(node_id, studio_id="", sess=sess)
+    live = get_registry().get_node(node_id)
+    if live is None and stored_node(node_id) is None:
+        raise HTTPException(status_code=404, detail="没有这个节点")
+    online = bool(live and live.alive)
+    with _SCOUT_UPDATE_LOCK:
+        command_inflight = node_id in _SCOUT_UPDATES
+    return ok({
+        "node_id": node_id,
+        "online": online,
+        "running_version": live.scout_version if online else None,
+        "last_reported_version": live.scout_version if live else snapshot.get("scout_version", ""),
+        "process_generation": live.scout_process_generation if online else None,
+        "connection_generation": live.node_connection_generation if online else None,
+        "last_seen": live.last_seen if live else snapshot.get("last_seen"),
+        "update_job": dict(live.update_job or {}) if live else {},
+        "verification": "node_reported" if online else "unverified_offline",
+        "command_inflight": command_inflight,
+    })
+
+
+@router.post("/nodes/{node_id}/update")
+async def update_scout(
+    node_id: str,
+    body: ScoutUpdateBody,
+    sess: dict = Depends(current_session),
+):
+    """Update-only MCP route; do not expose the arbitrary command endpoint."""
+    live = _require_live_node(node_id, sess, "")
+    workload = workload_for_node_id(node_id) or {}
+    if (live.draining or live.busy or live.active_runs or live.device_workload
+            or any(row.get("busy") for row in workload.get("devices", []))):
+        raise HTTPException(status_code=409, detail="节点仍有活动任务，请待任务结束后更新")
+    if (live.update_job or {}).get("active"):
+        raise HTTPException(status_code=409, detail="节点正在更新，请查询 scout_update_status，勿重复提交")
+    previous_version = live.scout_version
+    with _SCOUT_UPDATE_LOCK:
+        if node_id in _SCOUT_UPDATES:
+            raise HTTPException(status_code=409, detail="节点更新请求正在处理，请查询 scout_update_status")
+        _SCOUT_UPDATES.add(node_id)
+    try:
+        response = await command_node(
+            node_id, NodeCommandBody(command="update", reason=body.reason), studio_id="", sess=sess,
+        )
+    finally:
+        with _SCOUT_UPDATE_LOCK:
+            _SCOUT_UPDATES.discard(node_id)
+    result = response["data"]
+    if str(result.get("status") or "").lower() not in {"pass", "passed", "ok", "success"}:
+        # A remote failure may follow a partially completed install. Keep the
+        # existing MCP receipt uncertain rather than automatically retrying.
+        raise HTTPException(status_code=502, detail={
+            "message": result.get("error") or result.get("summary") or "Scout 更新未成功",
+            "node_id": node_id, "status": result.get("status"),
+        })
+    return ok({
+        **result,
+        "status": "accepted",
+        "scout_status": result.get("status"),
+        "previous_version": previous_version,
+        "running_version_verified": False,
+        "version_policy": "configured_manifest",
+        "next_tool": "scout_update_status",
+    }, msg="Scout 已应答更新请求；请查询更新状态和重连后的运行版本，尚未确认新版本生效")

@@ -107,7 +107,7 @@ def compatible_devices(args: dict[str, Any], devices: list[dict[str, Any]]) -> l
             except (ValueError, KeyError):
                 continue
         out.append(evaluate(device, app=app, surface=str(args.get("env_surface") or ""),
-            profile=str(args.get("env_profile") or ""), action_scheme=str(args.get("action_scheme") or "visual"),
+            profile=str(args.get("env_profile") or ""), action_scheme=str(args.get("action_scheme") or "dom_preferred"),
             headless=bool(args.get("playwright_headless", True))))
     return out
 

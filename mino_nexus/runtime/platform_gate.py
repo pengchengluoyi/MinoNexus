@@ -95,14 +95,14 @@ def platform_label(platforms: set[str]) -> str:
 
 def bind_case_execution_target(
     case: dict[str, Any], target: dict[str, Any], *, surface: str,
-    action_scheme: str = "visual", package: str = "",
+    action_scheme: str = "dom_preferred", package: str = "",
 ) -> dict[str, Any]:
     """为明确选中的原生应用生成运行副本，原用例及任务快照保持不变。
 
     通用 Web 视觉用例可复用于原生应用；指定 Web 渠道、DOM 方案或
     Web 专属机态的用例不能借此绕过设备/应用的准入校验。
     """
-    if target.get("platform") != "desktop" or action_scheme != "visual":
+    if target.get("platform") != "desktop" or action_scheme not in ("visual", "dom", "dom_preferred"):
         return case
     native = _norm_device_platform(str(target.get("target_platform") or ""))
     if native not in {"macos", "windows", "linux"}:
@@ -162,6 +162,22 @@ def platform_skip_reason(
     case: dict[str, Any], device_platform: str, *, device_os: str = "",
 ) -> Optional[str]:
     """设备平台与用例渠道不兼容时返回 skip 说明。"""
+    # New native targets never interpret Mobile/pc/desktop/empty as permission.
+    if device_platform in {"mac", "win"}:
+        from mino_nexus.core.platform_contract import TARGET_PLATFORMS, coverage
+        if "platform_scope" in case:
+            try:
+                declared = coverage(case)
+                if declared["platform_scope"] == "all" or device_platform in declared["platforms"]:
+                    return None
+            except ValueError:
+                return "用例平台合同无效，请明确平台后重新发布"
+        elif case.get("platform") in TARGET_PLATFORMS:
+            if case["platform"] == device_platform:
+                return None
+        else:
+            return "用例平台尚未迁移确认，请明确 mac / win / android / web 后重新发布"
+        return f"用例平台与执行设备 {device_platform} 不匹配"
     want = parse_case_platforms(case)
     if not want:
         return None

@@ -64,7 +64,8 @@ class ExploreCursor:
     def finish_prep(self) -> None:
         self.phase = "do"
 
-    def record_step_op(self) -> None:
+    def record_step_op(self, cap_id: str = "", *, params: dict[str, Any] | None = None,
+                       count_nav_intent: bool = True) -> None:
         self.step_ops += 1
 
     def bump_advise_recovery(self, rule_id: str) -> int:
@@ -133,6 +134,10 @@ class ExploreCursor:
             idle_steps=self.idle_steps,
             max_idle_steps=self.max_idle_steps,
         )
+
+    def prompt_block_full(self) -> str:
+        """探索只有一个目标，完整追踪与当前提示使用同一指针。"""
+        return self.prompt_block()
 
     def prompt_block(self) -> str:
         lines = [

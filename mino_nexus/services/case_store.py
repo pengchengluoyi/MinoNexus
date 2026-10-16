@@ -35,6 +35,19 @@ def _public(row) -> dict[str, Any]:
     }
     from mino_nexus.services.case_key_registry import stored_preview_lines
 
+    if out.get("source_revision_id"):
+        from mino_nexus.services.case_compilation import readiness
+        meta = dict(out.get("meta") or {})
+        if readiness(out):
+            # Do not display an old frozen plan as the understanding of new text.
+            meta["step_program_keys"] = {}
+            for key in ("steps_parsed", "expected_parsed", "automation_details", "precondition_parsed", "payload"):
+                out.pop(key, None)
+            out["meta"] = meta
+            return out
+        if "v5_draft_step_program_keys" in meta:
+            meta["step_program_keys"] = meta["v5_draft_step_program_keys"]
+            out["meta"] = meta
     steps_parsed, expected_parsed = stored_preview_lines(out)
     out["steps_parsed"] = steps_parsed
     out["expected_parsed"] = expected_parsed
@@ -89,7 +102,8 @@ def list_case_page(project_id: str, *, limit: int, offset: int = 0, search: str 
         cases = [{"case_id": row.case_id, "title": row.name or row.case_id, "name": row.name or row.case_id,
                   "module": row.module or "", "platform": row.platform or "", "precondition": (row.precondition or "")[:300],
                   "steps": [str(value)[:300] for value in (row.steps or [])[:3]],
-                  "expected": [str(value)[:300] for value in (row.expected or [])[:3]]} for row in rows]
+                  "expected": [str(value)[:300] for value in (row.expected or [])[:3]],
+                  **{key: (row.extra or {}).get(key) for key in ("source_revision", "source_revision_id", "compile_state", "compile_job", "effective_artifact")}} for row in rows]
         return {"cases": cases, "total": total, "limit": limit, "offset": offset, "project_id": project_id}
 
 
@@ -204,19 +218,34 @@ def _row_fields(
     force_recompile_resource_key: bool = False,
     compiled: bool = False,
 ) -> dict[str, Any]:
-    from mino_nexus.services.case_resource_claim import sync_case_resource_metadata
-
+    from copy import deepcopy
     from mino_nexus.services.v5_publication import guard_case_row
+    from mino_nexus.services.case_compilation import CHAIN_FIELDS, COMPILED_META
+    raw = deepcopy(raw)
+    cid = str(raw.get("case_id") or "").strip()
+    old = get_case(project_id, cid)
+    for key in CHAIN_FIELDS:
+        raw.pop(key, None)
+    meta = dict(raw.get("meta") or {})
+    for key in COMPILED_META:
+        meta.pop(key, None)
+    if old:
+        for key in COMPILED_META:
+            if key in (old.get("meta") or {}):
+                meta[key] = deepcopy(old["meta"][key])
+    raw["meta"] = meta
+    # The source transaction is deterministic. Preview/client compiled output is
+    # never an authoritative artifact; only the fenced worker can activate it.
+    raw["name"] = str(raw.get("name") or raw.get("title") or cid)
+    raw["precondition"] = str(raw.get("precondition") or raw.get("pre") or "")
+    for field in ("steps", "expected"):
+        raw[field] = list(raw.get(field) or [])
+        raw[field + "_raw"] = str(raw.get(field + "_raw") or "")
+    raw["platform"] = str(raw.get("platform") or "")
     raw = guard_case_row({**raw, "project_id": project_id})
-    raw = sync_case_resource_metadata(
-        dict(raw),
-        project_id=project_id,
-        force_recompile=force_recompile_resource_key,
-    )
-    from mino_nexus.services.case_step_key_compiler import sync_case_step_program_keys
-
-    if not compiled:
-        raw = sync_case_step_program_keys(raw)
+    if force_recompile_resource_key:
+        raw.pop("resource_key", None)
+        raw["meta"].pop("resource_key", None)
     cid = str(raw.get("case_id") or "").strip()
     extra = dict(raw)
     return dict(
@@ -245,6 +274,11 @@ def _retain_publication(obj, fields):
     from copy import deepcopy
     old = dict(obj.extra or {})
     new = dict(fields["extra"])
+    from mino_nexus.services.v5_publication import source_view
+    from mino_nexus.services.case_review import sync as sync_review
+    # Rebase server-owned revision/history on the row held by this transaction.
+    new["v5_draft_revision"] = int(old.get("v5_draft_revision") or 1) + int(source_view(_public(obj)) != source_view(new))
+    new = sync_review(new, old)
     if old.get("v5_publication"):
         new["v5_publication"] = deepcopy(old["v5_publication"])
         changed_resource = new.get("resource_key") != old["v5_publication"].get("resource_key")
@@ -254,6 +288,26 @@ def _retain_publication(obj, fields):
         new["meta"] = meta
     fields["extra"] = new
 
+
+
+def _persist_fields(db, fields, obj=None, *, origin=None):
+    from mino_nexus.models.case import ProjectCase
+    from mino_nexus.services.case_compilation import record_change
+    previous = _public(obj) if obj is not None else None
+    if previous is not None:
+        from copy import deepcopy
+        previous["meta"] = deepcopy((obj.extra or {}).get("meta") or {})
+    if obj is None:
+        obj = ProjectCase(**fields)
+        db.add(obj)
+    else:
+        _retain_publication(obj, fields)
+        for key, value in fields.items():
+            setattr(obj, key, value)
+    db.flush()
+    record_change(db, obj, previous, origin=origin)
+    db.flush()
+    return obj
 
 def save_case(project_id: str, row: dict[str, Any], *, requirement_id: str = "") -> dict[str, Any]:
     from mino_nexus.core.database import session_scope
@@ -278,20 +332,14 @@ def save_case(project_id: str, row: dict[str, Any], *, requirement_id: str = "")
         sort_index=int(row.get("index") or 0),
         force_recompile_resource_key=force_rk,
     )
+    from sqlalchemy import text
     with session_scope() as db:
-        obj = (
-            db.query(ProjectCase)
-            .filter(ProjectCase.project_id == pid, ProjectCase.case_id == cid)
-            .first()
-        )
-        if obj is None:
-            obj = ProjectCase(**fields)
-            db.add(obj)
-        else:
-            _retain_publication(obj, fields)
-            for key, val in fields.items():
-                setattr(obj, key, val)
-        db.flush()
+        db.execute(text("BEGIN IMMEDIATE"))
+        obj = db.query(ProjectCase).filter_by(project_id=pid, case_id=cid).one_or_none()
+        # Preparation happened before the lock; reject concurrent source saves.
+        if (existing is None) != (obj is None) or (obj is not None and obj.updated_at != existing.get("updated_at")):
+            raise ValueError("case_revision_conflict")
+        _persist_fields(db, fields, obj)
     saved = get_case(pid, cid)
     return saved or {**row, "case_id": cid, "project_id": pid, "requirement_id": rid}
 
@@ -314,30 +362,24 @@ def upsert_cases(
     incoming = [x for x in rows if isinstance(x, dict) and str(x.get("case_id") or "").strip()]
     if replace and rid and not incoming:
         return list_cases(pid, rid)
+    from sqlalchemy import text
+    expected_rows = {raw["case_id"]: get_case(pid, raw["case_id"]) for raw in incoming}
+    prepared = [_row_fields(raw, project_id=pid, requirement_id=rid, sort_index=i) for i, raw in enumerate(incoming)]
     with session_scope() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        for fields in prepared:
+            current = db.query(ProjectCase).filter_by(project_id=pid, case_id=fields["case_id"]).one_or_none()
+            expected = expected_rows[fields["case_id"]]
+            if (current is None) != (expected is None) or current is not None and current.updated_at != expected["updated_at"]:
+                raise ValueError("case_revision_conflict")
+        incoming_ids = {fields["case_id"] for fields in prepared}
         if replace and rid:
-            for old in db.query(ProjectCase).filter(
-                ProjectCase.project_id == pid,
-                ProjectCase.requirement_id == rid,
-            ).all():
-                if not (old.extra or {}).get("v5_publication"):
+            for old in db.query(ProjectCase).filter_by(project_id=pid, requirement_id=rid).all():
+                if old.case_id not in incoming_ids and not (old.extra or {}).get("v5_publication"):
                     db.delete(old)
-        for i, raw in enumerate(incoming):
-            cid = str(raw.get("case_id") or "").strip()
-            fields = _row_fields(raw, project_id=pid, requirement_id=rid, sort_index=i)
-            obj = (
-                db.query(ProjectCase)
-                .filter(ProjectCase.project_id == pid, ProjectCase.case_id == cid)
-                .first()
-            )
-            if obj is None:
-                obj = ProjectCase(**fields)
-                db.add(obj)
-            else:
-                _retain_publication(obj, fields)
-                for key, val in fields.items():
-                    setattr(obj, key, val)
-        db.flush()
+        for fields in prepared:
+            obj = db.query(ProjectCase).filter_by(project_id=pid, case_id=fields["case_id"]).one_or_none()
+            _persist_fields(db, fields, obj, origin={"kind": "upsert"})
     return list_cases(pid, rid)
 
 
@@ -349,61 +391,46 @@ def apply_import_row(
     on_conflict: ConflictAction = "skip",
     compiled: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
-    """导入单行。返回 (created|updated|skipped, case_dict)。"""
+    """Legacy callers share the same transactional revision/job path."""
+    from sqlalchemy import text
     from mino_nexus.core.database import session_scope
+    prepared = prepare_import_row(project_id, requirement_id, row, on_conflict=on_conflict, compiled=compiled)
+    if prepared.get("status") == "skipped":
+        return "skipped", get_case(project_id, prepared["case_id"])
+    with session_scope() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        return apply_prepared_import(db, prepared)
+
+
+def prepare_import_row(project_id, requirement_id, row, *, on_conflict="skip", compiled=False, expected_updated_at=None):
+    payload = dict(row)
+    case_id = str(payload.get("case_id") or "").strip()
+    existing = get_case(project_id, case_id) if case_id else find_similar_case(project_id, requirement_id, payload)
+    if existing and on_conflict == "skip":
+        return {"status": "skipped", "case_id": existing["case_id"]}
+    if existing and compiled and expected_updated_at is None:
+        raise ValueError("import_target_changed")
+    if existing and expected_updated_at is not None and existing.get("updated_at") != expected_updated_at:
+        raise ValueError("import_target_changed")
+    case_id = str(existing["case_id"]) if existing else case_id or allocate_case_id(project_id)
+    payload.update(case_id=case_id, source=payload.get("source") or "import")
+    fields = _row_fields(payload, project_id=project_id, requirement_id=requirement_id,
+        sort_index=int(payload.get("index") or (existing or {}).get("index") or 0), compiled=compiled)
+    return {"fields": fields, "expected_updated_at": existing.get("updated_at") if existing else None,
+            "expected_exists": bool(existing)}
+
+
+def apply_prepared_import(database, prepared):
+    from copy import deepcopy
     from mino_nexus.models.case import ProjectCase
 
-    pid = str(project_id or "").strip()
-    rid = str(requirement_id or "").strip()
-    if not pid or not rid:
-        raise ValueError("缺少 project_id 或 requirement_id")
-    payload = dict(row)
-    cid = str(payload.get("case_id") or "").strip()
-    if not cid:
-        similar = find_similar_case(pid, rid, payload)
-        if similar:
-            if on_conflict == "skip":
-                return "skipped", similar
-            cid = str(similar.get("case_id") or "").strip()
-            payload["case_id"] = cid
-    if not cid:
-        cid = allocate_case_id(pid)
-        payload["case_id"] = cid
-    existing = get_case(pid, cid)
-    if existing:
-        if on_conflict == "skip":
-            return "skipped", existing
-        fields = _row_fields(
-            {**payload, "source": payload.get("source") or "import"},
-            project_id=pid,
-            requirement_id=rid,
-            sort_index=int(payload.get("index") or existing.get("index") or 0),
-            compiled=compiled,
-        )
-        with session_scope() as db:
-            obj = (
-                db.query(ProjectCase)
-                .filter(ProjectCase.project_id == pid, ProjectCase.case_id == cid)
-                .first()
-            )
-            if obj is None:
-                return "skipped", existing
-            _retain_publication(obj, fields)
-            for key, val in fields.items():
-                setattr(obj, key, val)
-            db.flush()
-        return "updated", get_case(pid, cid)
-    fields = _row_fields(
-        {**payload, "source": payload.get("source") or "import"},
-        project_id=pid,
-        requirement_id=rid,
-        sort_index=int(payload.get("index") or 0),
-        compiled=compiled,
-    )
-    with session_scope() as db:
-        db.add(ProjectCase(**fields))
-        db.flush()
-    return "created", get_case(pid, cid)
+    fields = deepcopy(prepared["fields"])
+    existing = database.query(ProjectCase).filter_by(project_id=fields["project_id"], case_id=fields["case_id"]).one_or_none()
+    if bool(existing) != prepared["expected_exists"] or existing and existing.updated_at != prepared["expected_updated_at"]:
+        raise ValueError("import_target_changed")
+    status = "updated" if existing is not None else "created"
+    existing = _persist_fields(database, fields, existing, origin=prepared.get("origin") or {"kind": "import"})
+    return status, _public(existing)
 
 
 def delete_case(project_id: str, case_id: str) -> bool:

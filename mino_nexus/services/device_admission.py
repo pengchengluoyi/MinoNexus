@@ -13,7 +13,13 @@ class ResourceBusy(ValueError):
 def resource_group(row: dict, *, headless=True) -> str:
     sn, platform = str(row.get("sn") or ""), str(row.get("platform") or row.get("type") or "")
     node = str(row.get("node_id") or row.get("current_scout_id") or "")
-    if platform == "desktop" or (platform == "web" and not headless):
+    if platform in ("mac", "win"):
+        from mino_nexus.core.platform_contract import native_sn
+        if sn != native_sn(platform, node):
+            raise ValueError("native_identity_conflict")
+        # Device identities change; host desktop contention never splits.
+        return f"desktop:{node}:console"
+    if platform in {"desktop", "mac", "win"} or (platform == "web" and not headless):
         return f"desktop:{node}:console"
     return f"web:{sn}" if platform == "web" else f"device:{sn}"
 
@@ -27,7 +33,7 @@ def _recorded_target(db, payload: dict, sn: str) -> dict:
         row["platform"] = (payload.get("platforms_by_sn") or {}).get(sn) or (stored.platform if stored else payload.get("platform"))
     if not row.get("node_id"):
         row["node_id"] = stored.node_id if stored else ""
-    if not row["node_id"] and row.get("platform") == "desktop" and str(sn).startswith("desktop:"):
+    if not row["node_id"] and row.get("platform") in {"desktop", "mac", "win"} and str(sn).startswith(("desktop:", "mac:", "win:")):
         row["node_id"] = str(sn).split(":")[1]
     return row
 
@@ -59,6 +65,9 @@ def admit_in_transaction(db, doc: dict) -> None:
     from mino_nexus.models.run import AppRegressionRun
     rid = str(doc["run_id"])
     if doc.get("status") not in ("running", "queued"):
+        from mino_nexus.services.run_write_safety import unresolved
+        if unresolved(doc):
+            return  # Task terminal != worker stopped. Keep its lane/desktop reservation.
         db.query(DeviceReservation).filter_by(run_id=rid).delete()
         return
     previous = db.get(AppRegressionRun, rid)
@@ -66,6 +75,12 @@ def admit_in_transaction(db, doc: dict) -> None:
         return
     # Existing runs made before this upgrade also participate in admission.
     live = db.query(AppRegressionRun).filter(AppRegressionRun.status.in_(("running", "queued"))).all()
+    from mino_nexus.services.run_write_safety import unresolved
+    reserved = {row.run_id for row in db.query(DeviceReservation).all()}
+    known = {row.run_id for row in live}
+    if reserved - known:
+        live += [row for row in db.query(AppRegressionRun).filter(AppRegressionRun.run_id.in_(reserved - known))
+                 if unresolved(row.payload)]
     acquired = set()
     for sn in doc.get("sns") or [doc.get("sn")]:
         if not sn:

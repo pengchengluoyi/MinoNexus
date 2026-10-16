@@ -1,5 +1,5 @@
 id: inspect-session
-version: 3
+version: 8
 label: 会话观察
 summary: 观察当前屏登录态
 engine: observe
@@ -26,7 +26,7 @@ slots:
   required: false
 call:
   temperature: 0.0
-  max_tokens: 320
+  max_tokens: 640
   timeout_sec: 60
   json_mode: true
 image:

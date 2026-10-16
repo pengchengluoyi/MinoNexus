@@ -12,13 +12,18 @@ from pydantic import BaseModel
 from mino_nexus.services import app_automation as aas
 from mino_nexus.services import project_store as ps
 from mino_nexus.core.http_util import ok
-from mino_nexus.routers.deps import current_session
+from mino_nexus.routers.deps import app_maintainer, current_session
 
 router = APIRouter(prefix="/app-automation", tags=["App Automation"])
 
 
 class PlaybookSaveBody(BaseModel):
     playbook: dict[str, Any] = {}
+
+
+class LoginEvidencePolicyBody(BaseModel):
+    policy: dict[str, Any]
+    expected_policy: dict[str, Any]
 
 
 class SkillsBlock(BaseModel):
@@ -139,7 +144,7 @@ def get_automation_config(app_id: str, _sess: dict = Depends(current_session)):
     return ok(aas.config_payload(_app(app_id)))
 
 
-@router.put("/config/{app_id}")
+@router.put("/config/{app_id}", dependencies=[Depends(app_maintainer)])
 def update_automation_config(app_id: str, body: AutomationConfigUpdate, _sess: dict = Depends(current_session)):
     app = _app(app_id)
     payload: dict[str, Any] = {}
@@ -157,11 +162,34 @@ def get_app_playbook(app_id: str, _sess: dict = Depends(current_session)):
     return ok({"playbook": pb, "package": pkg})
 
 
-@router.put("/playbook/{app_id}")
+@router.put("/playbook/{app_id}", dependencies=[Depends(app_maintainer)])
 def save_app_playbook(app_id: str, body: PlaybookSaveBody, _sess: dict = Depends(current_session)):
     app = _app(app_id)
     pb = aas.save_playbook(app, body.playbook or {})
     return ok({"playbook": pb}, msg="已保存应用基础逻辑")
+
+
+@router.get("/login-evidence-policy/{app_id}")
+def get_login_evidence_policy(app_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.login_evidence_policy import normalize_policy
+    policy = normalize_policy(aas.get_playbook(_app(app_id)).get("login_evidence_policy"))
+    return ok({"policy": policy})
+
+
+@router.put("/login-evidence-policy/{app_id}", dependencies=[Depends(app_maintainer)])
+def save_login_evidence_policy(app_id: str, body: LoginEvidencePolicyBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.login_evidence_policy import normalize_policy
+    app = _app(app_id)
+    try:
+        policy = normalize_policy(body.policy)
+        expected = normalize_policy(body.expected_policy)
+        current = normalize_policy(aas.get_playbook(app).get("login_evidence_policy"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if expected != current:
+        raise HTTPException(status_code=409, detail="登录校验配置已被修改，请重新读取后保存")
+    aas.save_playbook(app, {"login_evidence_policy": policy})
+    return ok({"policy": policy}, msg="应用登录校验配置已保存；新任务生效")
 
 
 @router.get("/qa-process/summary")
@@ -332,7 +360,7 @@ def _tick_in_background(
         cover_jobs.reset(job_tok)
 
 
-@router.post("/qa-process/import/{app_id}")
+@router.post("/qa-process/import/{app_id}", dependencies=[Depends(app_maintainer)])
 def qa_import(app_id: str, body: CoverImportBody, _sess: dict = Depends(current_session)):
     from mino_nexus.services.qa_cover import import_cover
 
@@ -355,7 +383,7 @@ def qa_import(app_id: str, body: CoverImportBody, _sess: dict = Depends(current_
     return ok(result)
 
 
-@router.post("/qa-process/publish-mindmap/{app_id}")
+@router.post("/qa-process/publish-mindmap/{app_id}", dependencies=[Depends(app_maintainer)])
 def qa_mindmap(app_id: str, body: PublishMindmapBody, _sess: dict = Depends(current_session)):
     from mino_nexus.services.qa_cover import publish_mindmap
 
@@ -370,7 +398,7 @@ def qa_mindmap(app_id: str, body: PublishMindmapBody, _sess: dict = Depends(curr
     return ok(result)
 
 
-@router.post("/qa-process/hide-mindmap-wiki/{app_id}")
+@router.post("/qa-process/hide-mindmap-wiki/{app_id}", dependencies=[Depends(app_maintainer)])
 def qa_hide(app_id: str, body: HideMindmapWikiBody, _sess: dict = Depends(current_session)):
     from mino_nexus.services.qa_cover import hide_mindmap
 
@@ -385,7 +413,7 @@ def qa_hide(app_id: str, body: HideMindmapWikiBody, _sess: dict = Depends(curren
     return ok(result)
 
 
-@router.post("/qa-process/atlas-patch/{app_id}")
+@router.post("/qa-process/atlas-patch/{app_id}", dependencies=[Depends(app_maintainer)])
 def qa_atlas(app_id: str, body: AtlasPatchBody, _sess: dict = Depends(current_session)):
     from mino_nexus.services.qa_cover import apply_atlas_patch
 
@@ -413,7 +441,7 @@ def atlas_aliases(app_id: str, _sess: dict = Depends(current_session)):
     return ok({"items": aliases.list_aliases(app_id)})
 
 
-@router.patch("/qa-process/atlas-aliases/{app_id}/{alias_id}")
+@router.patch("/qa-process/atlas-aliases/{app_id}/{alias_id}", dependencies=[Depends(app_maintainer)])
 def patch_alias(app_id: str, alias_id: str, body: AtlasAliasUpdateBody, _sess: dict = Depends(current_session)):
     from mino_nexus.services import atlas_aliases as aliases
 
@@ -424,7 +452,7 @@ def patch_alias(app_id: str, alias_id: str, body: AtlasAliasUpdateBody, _sess: d
     return ok(row)
 
 
-@router.delete("/qa-process/atlas-aliases/{app_id}/{alias_id}")
+@router.delete("/qa-process/atlas-aliases/{app_id}/{alias_id}", dependencies=[Depends(app_maintainer)])
 def delete_alias(app_id: str, alias_id: str, _sess: dict = Depends(current_session)):
     from mino_nexus.services import atlas_aliases as aliases
 
@@ -478,7 +506,7 @@ def figma_sync(app_id: str, body: FigmaSyncBody, _sess: dict = Depends(current_s
     )
 
 
-@router.post("/config/{app_id}/figma/apply-logic")
+@router.post("/config/{app_id}/figma/apply-logic", dependencies=[Depends(app_maintainer)])
 def figma_apply(app_id: str, body: FigmaApplyLogicBody, _sess: dict = Depends(current_session)):
     from mino_nexus.services import figma_logic as fls
     from mino_nexus.services import settings_store as ss

@@ -50,12 +50,12 @@ def otp_value_present(nodes: list[dict[str, Any]] | None) -> bool:
     return False
 
 
-def _match_phrases(row: dict[str, Any], nodes: list[dict[str, Any]] | None) -> list[str]:
+def _match_phrases(row: dict[str, Any], nodes: list[dict[str, Any]] | None, facts: frozenset[str]) -> list[str]:
     phrases = list(_phrases(row, "match"))
     when_rows = row.get("match_when")
     if not isinstance(when_rows, list):
         return phrases
-    otp_ok = otp_value_present(nodes)
+    otp_ok = "otp_filled" in facts or otp_value_present(nodes)
     for item in when_rows:
         if not isinstance(item, dict):
             continue
@@ -63,8 +63,8 @@ def _match_phrases(row: dict[str, Any], nodes: list[dict[str, Any]] | None) -> l
         cond = str(item.get("when") or "").strip()
         if not text:
             continue
-        if cond == "otp_filled" and not otp_ok:
-            continue
+        if cond != "otp_filled" or not otp_ok:
+            continue  # Unknown conditions must not silently become unconditional matches.
         if text not in phrases:
             phrases.append(text)
     return phrases
@@ -74,6 +74,7 @@ def classify_label(
     label: str,
     row: dict[str, Any],
     nodes: list[dict[str, Any]] | None = None,
+    *, facts: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[str, str]:
     """返回 (match|exclude|none, 命中的表面形式)。排除优先于可点。"""
     if not str(label or "").strip():
@@ -81,7 +82,7 @@ def classify_label(
     excluded = _listed(label, _phrases(row, "exclude"))
     if excluded:
         return "exclude", excluded
-    matched = _listed(label, _match_phrases(row, nodes))
+    matched = _listed(label, _match_phrases(row, nodes, frozenset(facts)))
     if matched:
         return "match", matched
     return "none", ""

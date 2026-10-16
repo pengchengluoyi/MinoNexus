@@ -65,6 +65,10 @@ def try_dispatch_block_hook(
     writer: Any = None,
 ) -> Optional[dict[str, Any]]:
     """若当前里程碑有待执行 hook，dispatch 对应 cap（与 catalog 步骤对齐）。"""
+    from mino_nexus.loop.navigation_policy import dispatch_pending
+    navigation = dispatch_pending(proxy, ctx, cursor, turn_seq=turn_seq, writer=writer)
+    if navigation is not None:
+        return navigation
     state = read_state(cursor)
     pending = first_pending_hook_milestone(state)
     if not pending:
@@ -78,6 +82,10 @@ def try_dispatch_block_hook(
     cap = str(pending.get("hook_cap") or "").strip()
     if not cap and step:
         cap = str(step.get("hook_cap") or step.get("cap") or "").strip()
+    from mino_nexus.loop.conditional_steps import gate
+    conditional_result = gate(pending, state, cursor, ctx, proxy, turn_seq=turn_seq, writer=writer)
+    if conditional_result is not None:
+        return conditional_result
     if not cap:
         return None
     if str(pending.get("kind") or "").strip().lower() != "hook":
@@ -202,8 +210,75 @@ def try_dispatch_block_hook(
     from mino_nexus.core.schemas import PlanEvent
     from mino_nexus.core.protocol import EventStatus
 
+    if cap == "operation.check_box" and mid == "legal_consent":
+        from mino_nexus.action_space.scheme import execution_scheme, structure_target_available, use_visual_fallback
+        from mino_nexus.loop.hierarchy_slots import node_flag
+        from mino_nexus.loop.milestones import write_state
+        from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+        from mino_nexus.loop.ui_consent import find_consent_control, tap_params_for_control
+
+        nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
+        ctrl = find_consent_control(nodes)
+        if ctrl is not None and not node_flag(ctrl, "checked"):
+            # 可见的未勾协议是必需动作；optional 仅用于确证界面没有该控件。
+            pending["optional"] = False
+            write_state(cursor, state)
+            if ui_channel_from_ctx(ctx) == UiChannel.ANDROID:
+                from mino_nexus.loop.local_executors import _dispatch_device, _exec_ok
+                from mino_nexus.loop.recovery import collect_evidence, invalidate_evidence_cache
+
+                evidence = collect_evidence(ctx, proxy, target_package=str(getattr(ctx, "target_package", "") or ""))
+                if evidence.ime_shown == "yes":
+                    back = _dispatch_device(proxy, ctx=ctx, seq=turn_seq, cap="press_key",
+                                            params={"key": "BACK"}, label="收起键盘后重新观察协议控件")
+                    invalidate_evidence_cache(ctx)
+                    ok = _exec_ok(back)
+                    if writer:
+                        writer.append("program/consent_observe", {"milestone_id": mid, "status": "defer" if ok else "blocked",
+                                      "reason": "keyboard_dismissed" if ok else "keyboard_dismiss_failed", "fresh_observation_required": True})
+                    return {"ok": False, "defer": ok, "case_fail": not ok, "status": "defer" if ok else "blocked",
+                            "error_kind": "" if ok else "program_hook_failed", "capability_id": cap,
+                            "milestone_id": mid, "step_id": mid, "block_id": block_id,
+                            "summary": "键盘已收起；下一回合重新观察并处理协议，当前协议仍未完成。" if ok else str(back.error or back.summary)}
+            params = tap_params_for_control(ctrl, nodes)
+            if ctrl.get("resource_id"):
+                params["target"] = {"resource_id": ctrl["resource_id"]}
+            if ctrl.get("node_ref"):
+                params["node_ref"] = ctrl["node_ref"]
+                params["snapshot_id"] = ctrl.get("snapshot_id", "")
+            checked_known = (node_flag(ctrl, "checkable") and ctrl.get("checked") is not None
+                             and ("checked_known" not in ctrl or node_flag(ctrl, "checked_known")))
+            if pending.get("requirement") != "conditional" and execution_scheme(ctx) == "dom" and (
+                not checked_known or not structure_target_available("tap_element", params, ctx)
+            ):
+                pending["kind"] = "visual_tap"
+                pending["device_cap"] = "tap_element"
+                pending.pop("hook_cap", None)
+                pending["converted_from_hook"] = cap
+                pending["title"] = "勾选同意协议（点复选框本身并回看勾选状态，不点协议链接）"
+                write_state(cursor, state)
+                use_visual_fallback(ctx, reason="consent_target_or_checked_state_unavailable", writer=writer)
+                if writer:
+                    writer.append("milestone/consent_visual", {"milestone_id": mid, "reason": "no_structure_anchor",
+                                  "execution_started": False})
+                return None
+
     hook_params = dict(step.get("params") or {}) if step else {}
     hook_params.update(dict(pending.get("params") or {}))
+    if cap == 'operation.check_box' and mid == 'legal_consent':
+        if ctrl is None:
+            return {'ok': False, 'case_fail': True, 'status': 'blocked', 'error_kind': 'consent_target_unavailable',
+                    'capability_id': cap, 'milestone_id': mid, 'summary': '协议控件尚不可定位，不能猜测勾选状态'}
+        hook_params.update(tap_params_for_control(ctrl, nodes))
+        hook_params['checked'] = True
+        if ctrl.get('resource_id'):
+            hook_params['target'] = {'resource_id': ctrl['resource_id']}
+        if ctrl.get('node_ref'):
+            hook_params['node_ref'] = ctrl['node_ref']
+            hook_params['snapshot_id'] = ctrl.get('snapshot_id', '')
+        if not ctrl.get('resource_id') and not ctrl.get('node_ref'):
+            hook_params['target'] = {key: ctrl.get(key) for key in ('bounds', 'class', 'text', 'content_desc')}
+            hook_params['snapshot_id'] = str((getattr(ctx, 'observation_contract', None) or {}).get('snapshot_id') or '')
     event = PlanEvent(
         seq=int(turn_seq),
         capability_id=cap,
@@ -235,6 +310,77 @@ def try_dispatch_block_hook(
         executor_used=executor_used,
         result=res,
     )
+    if (
+        cap == "confirm_login_state" and phase == "prep" and not ok
+        and str(getattr(res, "error", "") or "") == "login_observation_unavailable"
+        and str(pending.get("source") or "") == "prep_program"
+    ):
+        # 首页缺少身份线索不等于登录失败；保留程序核验，先取得可核验的界面。
+        from mino_nexus.loop.milestones import write_state
+        from mino_nexus.loop.prep_program_plan import schedule_prep_session_navigation, schedule_prep_reauthentication
+
+        if schedule_prep_session_navigation(cursor, ctx, pending, writer=writer):
+            return {
+                "ok": False, "defer": True, "status": "wait", "capability_id": cap, "milestone_id": mid,
+                "summary": "登录态未知，按应用配置只读取证；原前置仍待独立核验",
+                "session_logged": "flow_block",
+            }
+        if schedule_prep_reauthentication(cursor, ctx, pending, writer=writer):
+            return {
+                "ok": False, "defer": True, "status": "wait", "capability_id": cap, "milestone_id": mid,
+                "summary": "身份未知，按应用配置退出后重新登录；前置仍待本次账号核验",
+                "session_logged": "flow_block",
+            }
+
+        observe_id = "prep_observe_session"
+        rows = [dict(row) for row in state.get("milestones") or [] if isinstance(row, dict)]
+        if not getattr(cursor, "prep_session_navigation_guard", None) and not any(str(row.get("id") or "") == observe_id for row in rows):
+            for row in rows:
+                if str(row.get("id") or "") == mid:
+                    row["status"] = "pending"
+            observe_row = {
+                "id": observe_id, "kind": "visual_action", "status": "in_progress",
+                "optional": False, "source": "prep_session_observation",
+                "title": "导航到能确认当前登录态的被测应用界面；仅观察身份/登录入口，保持登录态",
+                "expected_result": "到达能辨认当前登录态的界面，随后由登录态观察工具重新核验；不能猜测已登录",
+            }
+            index = next((i for i, row in enumerate(rows) if str(row.get("id") or "") == mid), 0)
+            rows.insert(index, observe_row)
+            state["milestones"] = rows
+            state["status"] = "in_progress"
+            state["exit_allowed"] = False
+            write_state(cursor, state)
+            if writer is not None:
+                writer.append("prep/session_observe", {
+                    "milestone_id": mid, "observation_milestone_id": observe_id,
+                    "session": "unknown", "required_session": str(pending.get("required_session") or ""),
+                    "status": "pending", "reason": "current_screen_has_no_session_evidence",
+                })
+            return {
+                "ok": False, "defer": True, "status": "wait",
+                "capability_id": cap, "milestone_id": mid,
+                "summary": "当前屏缺少登录态证据，先导航观察；前置仍未完成，随后重新核验",
+                "session_logged": "flow_block",
+            }
+        # 未配置、作用域不符或步数耗尽时明确阻断，不能把未知身份放行。
+    if ok and cap == "confirm_login_state" and phase == "prep" and pending.get("source") == "prep_program":
+        from mino_nexus.loop.prep_program_plan import finish_prep_reauthentication
+
+        finish_prep_reauthentication(cursor)
+        state = read_state(cursor)
+    if ok and pending.get('requirement') == 'conditional':
+        from mino_nexus.loop.milestones import write_state
+        pending['condition_resolution'] = 'satisfied'
+        from mino_nexus.services.step_requirements import checkbox_post_proof
+        checked_observation = (res.raw_response if isinstance(res.raw_response, dict) else {}).get('checked_observation')
+        proof = checkbox_post_proof(pending.get('condition_proof'), checked_observation)
+        if proof is None:
+            ok = False
+            pending['condition_resolution'] = 'unknown'
+            hook_summary = 'checkbox_post_state_proof_unavailable'
+        else:
+            pending['condition_proof'] = proof
+        write_state(cursor, state)
     if ok:
         note_tool_pass_milestone(
             cursor,
@@ -244,25 +390,6 @@ def try_dispatch_block_hook(
             tool_summary=hook_summary,
             ctx=ctx,
         )
-    elif cap == "accept_legal_consent" and pending.get("optional"):
-        state = read_state(cursor)
-        for row in state.get("milestones") or []:
-            if isinstance(row, dict) and str(row.get("id") or "") == mid:
-                row["status"] = "skipped"
-                row["skip_reason"] = "no_consent_control"
-        from mino_nexus.loop.milestones import write_state
-
-        write_state(cursor, state)
-        return {
-            "ok": True,
-            "status": "skipped",
-            "summary": "屏上没有协议控件，跳过同意协议",
-            "capability_id": cap,
-            "block_id": block_id,
-            "step_id": mid,
-            "milestone_id": mid,
-            "session_logged": "flow_block",
-        }
     blocked = not ok and not (cap == "get_otp" and mid == "otp_fill")
     return {
         "ok": ok,
@@ -615,11 +742,9 @@ def try_review_login_submission(
     shot: Any,
     writer: Any = None,
 ) -> Optional[dict[str, Any]]:
-    from mino_nexus.action_space.scheme import action_scheme
+    from mino_nexus.action_space.scheme import execution_scheme as action_scheme
     from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
 
-    if action_scheme(ctx) != "visual":
-        return None
     prior = getattr(cursor, "visual_prior", None)
     state = read_state(cursor)
     focus = in_progress_milestone(state) or {}
@@ -664,6 +789,52 @@ def _visual_login_form_open(shot: Any) -> bool | None:
     return not bool(getattr(result, "passed", False))
 
 
+def _schedule_login_evidence_navigation(cursor, *, ctx=None, shot=None, block_id, writer=None,
+                                        review_submit=False, inspection=None, restore=False):
+    """有界只读导航；导航通过不代表登录、身份或业务通过。"""
+    from mino_nexus.loop.milestones import write_state
+    from mino_nexus.loop.login_evidence_navigation import NAV_LIMIT, RESTORE_LIMIT, remember_context, navigation_title
+    state = read_state(cursor)
+    rows = [dict(row) for row in state.get("milestones") or [] if isinstance(row, dict)]
+    goal = next((row for row in rows if row.get("id") == "login_state"), None)
+    counter = "login_context_restore_count" if restore else "login_evidence_navigation_count"
+    count = int(getattr(cursor, counter, 0) or 0)
+    limit = RESTORE_LIMIT if restore else NAV_LIMIT
+    if goal is None or count >= limit or ctx is None or not remember_context(cursor, ctx, shot):
+        return False
+    if review_submit:
+        submit = next((row for row in rows if row.get("id") == "submit_login"), None)
+        if submit is None:
+            return False
+        submit.update(status="pass", evidence="form_left_login_unverified")
+        cursor.visual_prior = None
+        cursor.pending_visual_review = None
+        cursor.review_wait_budget = None
+        cursor.login_review_cache = None
+    # 起点要求已经执行过，不能在身份取证时继续要求退出已登录账号。
+    cursor.login_session_hint = "【登录取证】表单提交已结束；现在只核验当前登录账号和恢复业务上下文，禁止退出、换号或重填凭据。"
+    goal["status"] = "pending"
+    count += 1
+    nav_id = f"login_context_restore_{count}" if restore else f"login_evidence_nav_{count}"
+    from mino_nexus.services.login_evidence_policy import policy_for_context, submitted_account_enabled
+    policy = policy_for_context(ctx) if not restore and submitted_account_enabled(ctx) else {}
+    navigation_hint = policy.get("authenticated_content_hint") or policy.get("logout_navigation_hint", "")
+    rows.insert(rows.index(goal), {"id": nav_id, "kind": "visual_action", "status": "in_progress",
+        "optional": False, "source": "login_context_restore" if restore else "login_evidence_observation",
+        "source_block": block_id, "exec_caps": ["tap_element", "swipe_direction", "press_key"],
+        "title": navigation_title(cursor, inspection or {}, restore=restore),
+        "navigation_target": navigation_hint,
+        "expected_result": "本次只读导航引起可见页面变化；登录、身份及原上下文由随后程序观察核验"})
+    state.update(milestones=rows, status="in_progress", exit_allowed=False)
+    write_state(cursor, state)
+    setattr(cursor, counter, count)
+    if writer:
+        writer.append("login/context_restore_navigation" if restore else "login/evidence_navigation",
+            {"milestone_id": nav_id, "attempt": count, "limit": limit,
+             "login_verified": bool(restore), "business_context": "unverified"})
+    return True
+
+
 def _dispatch_login_state(
     proxy: Any,
     ctx: Any,
@@ -674,94 +845,31 @@ def _dispatch_login_state(
     writer: Any,
     shot: Any = None,
     review_submit: bool = False,
+    visual_fallback: bool = False,
 ) -> dict[str, Any]:
-    """登录块结尾：先采层级再截屏，用这一对判断是否离开登录表单。"""
-    from mino_nexus.loop.channel_observation import (
-        capture_decision_frame,
-        login_credential_form_open,
-    )
+    """提交后只观察一次页面切换；不补证、不恢复页面、不重试。"""
+    from mino_nexus.loop.login_transition import confirm_submission_transition
+
+    result = confirm_submission_transition(proxy, ctx, cursor, shot=shot, writer=writer)
+    if not result["ok"]:
+        return {"ok": False, "case_fail": True, "status": result["status"],
+                "error_kind": result["error_kind"], "summary": result["summary"],
+                "capability_id": "confirm_login_state", "milestone_id": "login_state",
+                "step_id": "login_state", "block_id": block_id, "session_logged": "flow_block"}
+    return _complete_login_state(cursor, ctx, block_id=block_id, writer=writer,
+                                 review_submit=review_submit)
+
+
+def _complete_login_state(cursor, ctx, *, block_id, writer=None, frame_thumb="", review_submit=False):
+    from mino_nexus.services.login_evidence import can_commit
+    if not can_commit(ctx):
+        if writer:
+            writer.append("login/completion_blocked", {"reason_code": "login_evidence_invalid"})
+        return {"ok": False, "case_fail": True, "status": "blocked", "error_kind": "login_evidence_invalid",
+                "capability_id": "confirm_login_state", "milestone_id": "login_state", "step_id": "login_state",
+                "block_id": block_id, "summary": "登录证据已过期、作用域改变或身份未证实，不能完成登录步骤"}
+    cursor.login_state_waits = 0
     from mino_nexus.loop.milestones import note_tool_pass_milestone
-
-    params = dict(step.get("params") or {}) if step else {}
-    try:
-        max_turns = max(1, int(params.get("max_turns") or 3))
-    except (TypeError, ValueError):
-        max_turns = 3
-    from mino_nexus.action_space.scheme import action_scheme
-
-    visual = action_scheme(ctx) == "visual"
-    if visual and shot is not None:
-        _shot, frame_thumb = shot, ""
-    else:
-        _shot, frame_thumb = capture_decision_frame(proxy, ctx, hierarchy=not visual)
-    if visual:
-        import hashlib
-
-        prior = getattr(cursor, "visual_prior", None) or {}
-        attempt_ref = str(prior.get("attempt_ref") or "") if review_submit else ""
-        image_data = str(getattr(_shot, "image_base64", "") or "")
-        image_hash = hashlib.sha256(image_data.encode("ascii", errors="ignore")).hexdigest() if image_data else ""
-        cache = getattr(cursor, "login_review_cache", None) or {}
-        if attempt_ref and image_hash and cache.get("attempt_ref") == attempt_ref and cache.get("image_hash") == image_hash:
-            form_open = cache["form_open"]
-            if writer:
-                writer.append("login/review_reused", {"attempt_ref": attempt_ref, "image_hash": image_hash[:20]})
-        else:
-            form_open = _visual_login_form_open(_shot)
-            if attempt_ref and image_hash:
-                cursor.login_review_cache = {"attempt_ref": attempt_ref, "image_hash": image_hash, "form_open": form_open}
-        if form_open is None:
-            cursor.login_state_waits = int(getattr(cursor, "login_state_waits", 0) or 0) + 1
-            if cursor.login_state_waits >= max_turns:
-                return {
-                    "ok": False, "case_fail": True, "status": "blocked",
-                    "error_kind": "login_observation_unavailable",
-                    "summary": "登录结果连续无法验证，已停止，不能判定登录成功或失败",
-                    "capability_id": "confirm_login_state", "milestone_id": "login_state",
-                }
-            return {
-                "ok": False,
-                "status": "wait",
-                "defer": True,
-                "summary": "看图未能判断是否还在登录表单，下一回合再看当前屏",
-                "capability_id": "confirm_login_state",
-                "block_id": block_id,
-                "step_id": "login_state",
-                "milestone_id": "login_state",
-                "session_logged": "flow_block",
-                "thumb": frame_thumb,
-            }
-    else:
-        nodes = getattr(ctx, "nav_hierarchy_nodes", None)
-        form_open = login_credential_form_open(nodes if isinstance(nodes, list) else None)
-    if form_open:
-        streak = int(getattr(cursor, "login_state_waits", 0) or 0) + 1
-        cursor.login_state_waits = streak
-        if streak >= max_turns:
-            return {
-                "ok": False,
-                "status": "fail",
-                "case_fail": True,
-                "summary": "提交后仍在登录页，登录未成功",
-                "capability_id": "confirm_login_state",
-                "block_id": block_id,
-                "step_id": "login_state",
-                "milestone_id": "login_state",
-                "session_logged": "flow_block",
-                "thumb": frame_thumb,
-            }
-        return {
-            "ok": False,
-            "status": "wait",
-            "defer": True,
-            "summary": "登录页还在，下一回合再看当前屏",
-            "capability_id": "confirm_login_state",
-            "block_id": block_id,
-            "step_id": "login_state",
-            "milestone_id": "login_state",
-            "session_logged": "flow_block",
-            "thumb": frame_thumb,
-        }
     cursor.login_state_waits = 0
     if review_submit:
         from mino_nexus.loop.visual_review import _confirm_visual_prior
@@ -787,13 +895,17 @@ def _dispatch_login_state(
         capability_id="confirm_login_state",
         milestone_id="login_state",
         writer=writer,
-        tool_summary="已离开登录表单",
+        tool_summary="登录提交后已切换页面；后续业务预期由 check 独立核验",
         ctx=ctx,
     )
+    cursor.login_navigation_reference = None
+    cursor.login_navigation_proof = None
+    cursor.login_evidence_navigation_count = 0
+    cursor.login_context_restore_count = 0
     return {
         "ok": True,
         "status": "pass",
-        "summary": "已离开登录表单",
+        "summary": "登录提交后已切换页面；后续业务预期由 check 独立核验",
         "capability_id": "confirm_login_state",
         "block_id": block_id,
         "step_id": "login_state",

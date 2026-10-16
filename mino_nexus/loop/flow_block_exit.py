@@ -265,6 +265,16 @@ def evaluate_login_block_exit_shadow(
                     issues.append("otp_fill_exit_eval_not_pass")
             elif not row.get("optional"):
                 issues.append("otp_fill_incomplete")
+    from mino_nexus.services.step_requirements import condition_complete
+    if any(r.get('requirement') == 'conditional' and not condition_complete(r) for r in ms):
+        issues.append('conditional_requirement_unverified')
+    login_result = next((r for r in ms if isinstance(r, dict) and r.get("id") == "login_state"), None)
+    submitted = next((r for r in ms if isinstance(r, dict) and r.get("id") == "submit_login"), None)
+    if submitted is not None and (submitted.get("status") != "pass" or not submitted.get("evidence")):
+        issues.append("submit_login_not_verified")
+    if submitted is not None and (login_result is None or login_result.get("status") != "pass"
+                                 or not login_result.get("evidence")):
+        issues.append("login_result_not_verified")
     would_block = bool(issues)
     if writer:
         writer.append(

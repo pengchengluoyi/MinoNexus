@@ -372,6 +372,10 @@ def create_app(
     owner: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     require_project(project_id)
+    from mino_nexus.core.platform_contract import platform_set
+    if not isinstance(platforms, str):
+        raise ValueError("platform_set_required")
+    platforms = ",".join(platform_set(platforms.split(",") if platforms else []))
     root = _root()
     now = _now()
     row = {
@@ -408,16 +412,21 @@ def update_app_env(app_id: str, env: dict) -> dict[str, Any]:
     app = require_app(app_id)
     pid = str(app.get("project_id") or "")
     project = require_project(pid)
-    root = _root()
+    from mino_nexus.services.project_env import validate_environment_write
     doc = normalize_project_env(project.get("env") or default_project_env())
-    doc["profiles"]["test"] = normalize_project_env(env or {})["profiles"]["test"]
-    for p in root["projects"]:
-        if p.get("id") == pid:
-            p["env"] = doc
-            p["updated_at"] = _now()
-            break
-    _save(root)
-    return doc
+    validate_environment_write(doc)
+    # This legacy endpoint edits values only. Channel/platform changes use project env.
+    if not isinstance(env, dict) or any(k in env for k in ("channels", "profiles", "environments")):
+        raise ValueError("请使用项目环境入口修改渠道或环境结构")
+    channels = {ch["id"]: ch for ch in doc["channels"]}
+    for cid, block in env.items():
+        if cid not in channels or not isinstance(block, dict):
+            raise ValueError("应用环境包含未知渠道；请使用项目环境入口")
+    test = dict(doc.get("profiles", {}).get("test") or {})
+    for cid, block in env.items():
+        test[cid] = {**(test.get(cid) or {}), **block}
+    doc.setdefault("profiles", {})["test"] = test
+    return save_project_env(pid, doc)
 
 
 def save_project_env(project_id: str, doc: dict[str, Any]) -> dict[str, Any]:
@@ -430,8 +439,12 @@ def save_project_env(project_id: str, doc: dict[str, Any]) -> dict[str, Any]:
     )
 
     pid = str(project_id or "").strip()
-    require_project(pid)
+    previous = require_project(pid)
     src = dict(doc or {})
+    from mino_nexus.services.project_env import validate_environment_write
+    previous_channels = normalize_project_env(previous.get("env") or default_project_env())["channels"]
+    if src.get("channels") != previous_channels:
+        validate_environment_write(src)
     pool_patch = extract_pool_config_from_doc(src)
     if pool_patch:
         save_pool_config(pid, pool_patch)
@@ -447,6 +460,12 @@ def save_project_env(project_id: str, doc: dict[str, Any]) -> dict[str, Any]:
 
 
 def update_app_record(app_id: str, **fields: Any) -> dict[str, Any]:
+    if "platforms" in fields and fields["platforms"] is not None:
+        from mino_nexus.core.platform_contract import platform_set
+        value = fields["platforms"]
+        if not isinstance(value, str):
+            raise ValueError("platform_set_required")
+        fields["platforms"] = ",".join(platform_set(value.split(",") if value else []))
     require_app(app_id)
     root = _root()
     for a in root["apps"]:

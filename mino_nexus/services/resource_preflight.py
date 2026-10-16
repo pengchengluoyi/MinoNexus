@@ -53,12 +53,18 @@ def effective_device_session(
     dirty = bool(getattr(ctx, "session_dirty", False))
     from mino_nexus.services.session_match import normalize_device_session
 
-    if fs and not dirty:
+    if dirty or fact.get("stale_reason"):
+        return "unknown"
+    if fs:
         return normalize_device_session(fs)
+    from mino_nexus.runtime.run_context import is_web_slot
+    if is_web_slot(sn, str(getattr(ctx, "platform", "") or "")):
+        # 浏览器记录只供展示；本次 context 未观察时不能继承上次任务。
+        return "unknown"
     from mino_nexus.services.device_app_session_store import get_session
 
     row = get_session(sn, package_id)
-    if row:
+    if row and not row.get("stale"):
         return normalize_device_session(row.get("session") or "")
     return normalize_device_session(fs)
 
@@ -102,12 +108,16 @@ def run_start_resource_blockers(
     needs_guest = req_sess in ("guest", "logged_out") or scene_row.get("required_session") == "guest"
     if not needs_guest:
         return blockers
+    from mino_nexus.runtime.session_gate import session_prep_intent
+    # 差异可由前置退出修复，prep 完成时仍须当前观察证明未登录。
+    if plat == "web" or session_prep_intent(scene=scene_row) == "logout":
+        return blockers
     from mino_nexus.services.device_app_session_store import get_session
 
     row = get_session(str(sn).strip(), str(package_id).strip()) or {}
     from mino_nexus.services.session_match import normalize_device_session
 
-    cur = normalize_device_session(row.get("session") or "")
+    cur = "unknown" if row.get("stale") else normalize_device_session(row.get("session") or "")
     if cur != "logged_in":
         return blockers
     if claim_requires_clear_cache(claim, scene_row, pre):
@@ -214,25 +224,13 @@ def prep_resource_gate_issues(
         and not bool(getattr(ctx, "_login_flow_transition_emitted", False))
         and bool(getattr(ctx, "login_flow_macro_active", False))
     )
-    skip_prep_session_registry_check = (
-        req_sess == "logged_in" and prep_intent == "skip"
-    )
     if (
         req_sess
         and req_sess not in ("any", "")
         and not defer_device_session_gate
-        and not skip_prep_session_registry_check
     ):
         cur = effective_device_session(ctx, sn=sn, package_id=pkg)
-        defer_unknown = False
-        if req_sess == "logged_in" and cur == "unknown":
-            if bool(getattr(ctx, "session_dirty", False)):
-                defer_unknown = False
-            else:
-                fact = dict(getattr(ctx, "session_fact", None) or {})
-                if str(fact.get("session") or "").strip().lower() == "logged_in":
-                    defer_unknown = True
-        if not defer_unknown and not _session_allows_required(req_sess, cur, allow):
+        if not _session_allows_required(req_sess, cur, allow):
             hint = ""
             if req_sess == "logged_in" and cur == "unknown":
                 hint = "请先完成登录流块或刷新登记簿机态。"
@@ -253,7 +251,6 @@ def prep_resource_gate_issues(
         binding == "must_match_lease"
         and req_sess == "logged_in"
         and not defer_device_session_gate
-        and not skip_prep_session_registry_check
     ):
         pid, lease_aid = "", ""
         lease = getattr(ctx, "resource_lease", None) or {}

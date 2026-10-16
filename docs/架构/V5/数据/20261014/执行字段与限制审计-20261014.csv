@@ -1,0 +1,57 @@
+﻿category,field_group,current_risk,target_disposition,source_anchor,status
+归属,project_id/app_id/case_id,跨项目选择控件、资源或同名用例,保留；入口解析唯一作用域,Nexus mino_nexus/services/case_store.py,设计审计；尚未按本方案改造
+归属,owner_user_id/plugin_user_id/node_id,设备、模型与插件执行身份混用,保留真实执行账号与节点归属，禁止隐式借用,Nexus mino_nexus/runtime/run_context.py,设计审计；尚未按本方案改造
+用例,name/steps/steps_raw,空定义按 name 生成操作，双份文字错位,源文字版本为真源；占位不能猜测,Nexus mino_nexus/loop/step_pointer.py,设计审计；尚未按本方案改造
+用例,expected/expected_raw/expected_parsed,编号错位，括号和否定语义丢失,保留源句，显式分组为复合检查,Nexus mino_nexus/services/case_store.py,设计审计；尚未按本方案改造
+用例,meta.step_program_keys/catalog_version/compile_contract_revision,旧编译缓存、目录版本改变后语义不同,保留版本；维护期编译，任务使用确定快照,Nexus mino_nexus/services/case_step_key_compiler.py,设计审计；尚未按本方案改造
+可执行性,meta.ui_automation.coverable,一个 bool 成为所有执行入口总门闩,改成派生解释，区分可兜底/缺输入/真实未支持,Nexus mino_nexus/services/case_preflight.py,设计审计；尚未按本方案改造
+可执行性,blocked_by/reason/source_clause,uncovered 被当产品不能做,保留原句和来源；通用动作/断言可覆盖则编译,Nexus mino_nexus/services/case_clause_events.py,设计审计；尚未按本方案改造
+可执行性,compile_warnings/fallback_lines,诊断与运行阻断混同,集中分类；不能静默删除未覆盖子句,Nexus mino_nexus/services/case_step_key_compiler.py,设计审计；尚未按本方案改造
+合同,execution_mode/v5_publication/v5_plan_state,合同与渠道混同，未发布全部拒跑,执行合同独立；严格合同不静默降级,Nexus mino_nexus/loop/case_runner.py,设计审计；尚未按本方案改造
+合同,frozen_revision/baseline/resource_key,冻结目标改变后还使用旧计划,严格合同保留；普通入口不自动猜发布状态,Nexus mino_nexus/loop/v5_case_exec.py,设计审计；尚未按本方案改造
+策略,action_scheme,默认 visual、dom 不互相兜底,DOM 优先缺省，保留显式 visual,Nexus mino_nexus/action_space/scheme.py,设计审计；尚未按本方案改造
+策略,schemes,新策略字符串使旧 visual/dom 事件失效,策略映射到实现集合；不逐处加新分支,Nexus mino_nexus/services/case_clause_events.py,设计审计；尚未按本方案改造
+平台,platform/env_surface/env_profile,平台、应用渠道和环境配置混同,统一标准化；环境解析一次，下传实际目标,Nexus mino_nexus/services/device_targets.py,设计审计；尚未按本方案改造
+平台,sn/os/session_generation,PC 被误认为 Android 或 Web,desktop+os 与 Web 槽明确区分,Nexus mino_nexus/services/device_targets.py,设计审计；尚未按本方案改造
+资源,device_need/target_package/target_app.package,缺真实应用目标或默认猜包名,保留必要目标；单配置解析，多候选说明选择,Nexus mino_nexus/services/case_resource_claim.py,设计审计；尚未按本方案改造
+目录,enabled/lifecycle/ui_coverable,能力在编译与菜单被多次否决,目录为真源；统一解析并解释具体拒绝来源,Nexus mino_nexus/catalog/registry.py,设计审计；尚未按本方案改造
+目录,platforms/platforms_json/CHANNEL_PLATFORMS,业务确认能力仅 web，必要节点 skipped,按真实实现选择；必要语义缺失不 skip,Nexus mino_nexus/catalog/skill_channel.py,设计审计；尚未按本方案改造
+目录,caller/visible_to,program 事件需要执行却不在模型菜单,程序与模型调用者分开，不要求程序 hook 入模型菜单,Nexus mino_nexus/catalog/skill_channel.py,设计审计；尚未按本方案改造
+目录,kind/phases,三阶段和菜单筛选重复卡点,只在统一分派解析阶段权限一次,Nexus mino_nexus/catalog/skill_channel.py,设计审计；尚未按本方案改造
+执行,executor_order/selected_impl/low_level/device_hint,缺字段下发导致 Scout 静默用默认实现,保留执行必需；由装配层填，模型不维护,Nexus mino_nexus/loop/router_proxy.py,设计审计；尚未按本方案改造
+观察,nodes/accessibility_json/hierarchy_text/aria_snapshot,多份重复、空树误当目标不存在,Scout 提炼；仅注入当前目标相关语义,Scout mino_scout/dom_hierarchy.py,设计审计；尚未按本方案改造
+观察,include_aria_snapshot/aria_max_chars,空参数关闭 ARIA、截断没有覆盖解释,明确启用/失败；预算内部配置，不加用户负担,Scout mino_scout/dom_hierarchy.py,设计审计；尚未按本方案改造
+观察,MAX/MAX_DEPTH,固定首批节点漏结果文本或框架,目标相关排序、覆盖标记、定向补取,Scout mino_scout/dom_collect.js,设计审计；尚未按本方案改造
+观察,bounds/center/w/h,CSS 像素、设备像素、截图坐标混用,保持单位和作用域；仅适配层变换,Nexus mino_nexus/loop/hierarchy_slots.py,设计审计；尚未按本方案改造
+观察,frame_path/iframe_path/shadow_host,跨 frame/shadow 目标坐标或 Locator 错域,Scout 同作用域查询与执行，失效重新观察,Scout mino_scout/playwright_context.py,设计审计；尚未按本方案改造
+观察,stale/turn_id/screenshot_turn_id/snapshot_id,旧 DOM 绑定新截图，旧目标写入,保留新鲜度；未知走重新观察或视觉，不猜 pass,Nexus mino_nexus/loop/hierarchy_slots.py,设计审计；尚未按本方案改造
+截图,thumb/raw_image_hash/capture_id/source,日志截图被误当默认模型输入,截图留证与模型附件分离，关联同一动作结果,Nexus mino_nexus/loop/agent_loop.py,设计审计；尚未按本方案改造
+结构状态,checked/checkable/selected/disabled/focused/editable,勾选和不可用状态缺失，靠 click pass 代替,结构适配补齐必要状态并验证结果,Scout mino_scout/dom_collect.js,设计审计；尚未按本方案改造
+FSM,state_id/confidence/guard_id,识别不到状态就拒跑,FSM 加速，缺图退回通用 UI 路径,Nexus mino_nexus/loop/nav_runtime.py,设计审计；尚未按本方案改造
+FSM,edge_id/control_id/key_ref,渠道定位缺格、跨项目路线或边失效,保留身份/作用域，运行不回写发布配置,Nexus mino_nexus/services/nav_route.py,设计审计；尚未按本方案改造
+控件,control_id/locator_value/locator_spec,永久配置与临时节点引用互相污染,控制身份持久，临时节点绑定观察，严格目标不绕过,Nexus mino_nexus/services/control_registry.py,设计审计；尚未按本方案改造
+控件,revision/publish_state/pending_merge,发布配置与运行发现混用,保留发布版本；维护在 Workbench,Nexus mino_nexus/services/control_registry.py,设计审计；尚未按本方案改造
+逻辑块,block_id/source_block/version/block_dependencies,块展开或依赖失效，未更新目录缓存,按普通子步骤展开，依赖版本明确,Nexus mino_nexus/services/nav_flow_block_catalog.py,设计审计；尚未按本方案改造
+逻辑块,hook_cap/device_cap/cap/exec_caps,hook 成功被误认为设备业务动作成功,按子步骤的真实完成谓词验证,Nexus mino_nexus/loop/flow_block_runner_v2.py,设计审计；尚未按本方案改造
+逻辑块,optional/skip_reason/skipped_by,空 DOM 或无平台探针导致业务节点跳过,必填不 skip；可选需证明不适用,Nexus mino_nexus/loop/milestone_orchestrator.py,设计审计；尚未按本方案改造
+阶段,status/ui_status/exit_allowed/step_goal_met,动作点过就 all pass，阶段提前准出,结果先验证，程序再聚合状态,Nexus mino_nexus/loop/milestones.py,设计审计；尚未按本方案改造
+回看,prior_status/visual_prior/pending_visual_review,pass 与下一动作冲突，待执行动作被吞,回看目标与结果引用验证后更新，未执行不是完成,Nexus mino_nexus/loop/visual_review.py,设计审计；尚未按本方案改造
+阶段,check_oracle_status/checkpoint_results,输出缺项或 hidden_scope 被当通过,保留完整逐点结果契约；结构/视觉同语义,Nexus mino_nexus/loop/vision_assert.py,设计审计；尚未按本方案改造
+阶段,verify_with_milestone/input_refocus_required,聚焦与填写关系错位，必要恢复被熔断,合并合法聚焦+填写，但必须真实 focus_ref,Nexus mino_nexus/loop/visual_review.py,设计审计；尚未按本方案改造
+写安全,run_id/step_idx/request_key,辅助编号复键、ACK 异常重放业务,保留单一 wire 分配与幂等冲突检测,Nexus mino_nexus/core/wire_identity.py,设计审计；尚未按本方案改造
+写安全,execution_started/result_status,结果未知被当未执行、坐标兜底重复写,保持未知停止写入，不在同 run 重放,Nexus mino_nexus/loop/agent_loop.py,设计审计；尚未按本方案改造
+输入,focus_ref/target_mode,缺真实焦点引用或失效引用继续写,保留真实 wire 焦点；只读观察不清焦点,Scout mino_scout/executors/adb_executor.py,设计审计；尚未按本方案改造
+输入,mode/field/text/_field_value_read,append/replace 混用，输入未验证,实现按平台声明，敏感值本地验证,Nexus mino_nexus/loop/flow_block_exit.py,设计审计；尚未按本方案改造
+输入,focused/resource_id/bounds/package,唯一输入目标边界轻微漂移被换框,稳定身份与有效焦点优先，已有容差保留,Scout mino_scout/executors/adb_executor.py,设计审计；尚未按本方案改造
+登录需求,resource_key/device_app.required_session/case_scene.required_session,多个派生 JSON 相互覆盖需求,一个执行需求快照，旧层只适配,Nexus mino_nexus/services/case_resource_claim.py,设计审计；尚未按本方案改造
+登录需求,session_prep/auth_under_test/prep_items,被测登录/退出被自动准备提前做掉,按作者起点与 auth 被测意图编排,Nexus mino_nexus/runtime/session_gate.py,设计审计；尚未按本方案改造
+登录事实,session_fact/task_session/session_dirty,缓存事实被当即时证据或 unknown=guest,分开未知和已退出，按新鲜度确认,Nexus mino_nexus/loop/login_state_probe.py,设计审计；尚未按本方案改造
+登录事实,device_app_sessions.session/stale/stale_reason/bound_account_id,跨设备复用身份、外部清除没更新,设备应用作用域持久事实，失效先 unknown,Nexus mino_nexus/services/device_app_session_store.py,设计审计；尚未按本方案改造
+Web 会话,browser context/lane/profile/storage_state/origin,跨任务会话串用、关闭浏览器被认为服务端退出,新 context 默认隔离；持久 profile 显式配置,Scout mino_scout/playwright_hub.py,设计审计；尚未按本方案改造
+账号,locked/lease/resource_lease/lease_run_id,租约释放与退出混用，同任务重复租,保留占用真源，登录位置不作为永久账号资格,Nexus mino_nexus/models/pool_account.py,设计审计；尚未按本方案改造
+账号,facets/requirements/all/prefer/env,业务资格与全局 session facet 混同,业务资格保留，设备会话另判断,Nexus mino_nexus/services/account_allocate.py,设计审计；尚未按本方案改造
+验证码,otp_sent_at/max_turns,旧 OTP、无限取码、跨用户插件,发送时间窗和有限预算，归属保留,Nexus mino_nexus/loop/login_verification.py,设计审计；尚未按本方案改造
+设备,node_alive/owner_user_id/busy/lane,离线与临时忙被当用例不支持,认证事实准入；忙可排队，离线给可恢复原因,Nexus mino_nexus/services/device_targets.py,设计审计；尚未按本方案改造
+设备,awake/locked/target_alive/app_foreground/permissions,恢复无关窗口或权限不足无限空转,Scout 按本目标有限恢复，不扩大控制范围,Nexus mino_nexus/loop/agent_loop.py,设计审计；尚未按本方案改造
+预算,wall_budget_sec/case_deadline_ts/max_turns,不同层各加预算或回合导致续命,一个 monotonic 总 deadline，保留合理覆盖,Nexus mino_nexus/loop/step_pointer.py,设计审计；尚未按本方案改造
+预算,case_budget_credit_sec/fuse_block_streak/review_wait_budget,补信用与重复回看隐藏卡点,移除续命，未执行恢复共享总预算,Nexus mino_nexus/loop/agent_loop.py,设计审计；尚未按本方案改造

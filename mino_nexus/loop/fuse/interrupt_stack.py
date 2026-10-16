@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any, Optional
+from copy import deepcopy
 
 from mino_nexus.loop.llm_step_context import step_scope_key
 from mino_nexus.loop.milestone_orchestrator import ensure_single_in_progress, in_progress_milestone
@@ -145,9 +146,13 @@ def push_interrupt(
         "reason": str(reason or "")[:200],
         "saved_milestones": saved,
         "interrupt_ids": [str(m.get("id") or "") for m in interrupt_ms],
+        "visual_prior": deepcopy(getattr(cursor, "visual_prior", None)),
+        "pending_visual_review": deepcopy(getattr(cursor, "pending_visual_review", None)),
     }
     frames.append(frame)
     _set_stack(cursor, frames)
+    cursor.visual_prior = None
+    cursor.pending_visual_review = None
     state["milestones"] = interrupt_ms
     state["status"] = "in_progress"
     write_state(cursor, state)
@@ -214,6 +219,16 @@ def maybe_pop_interrupt(cursor: Any, *, writer: Any = None) -> bool:
     state = _sync_scope(cursor, read_state(cursor))
     state["milestones"] = restored
     state["status"] = "in_progress"
+    if interrupt_passed:
+        obstacle = state.get("screen_obstacle") or {}
+        recovery_ids = {str(mid) for mid in obstacle.get("recovery_ids") or []}
+        if not frames or recovery_ids and recovery_ids <= iids:
+            state.pop("screen_obstacle", None)
+        cursor.visual_prior = deepcopy(frame.get("visual_prior"))
+        cursor.pending_visual_review = deepcopy(frame.get("pending_visual_review"))
+    else:
+        cursor.visual_prior = None
+        cursor.pending_visual_review = None
     write_state(cursor, state)
     ensure_single_in_progress(cursor, writer=writer)
     if writer:

@@ -38,6 +38,8 @@ class RunContext:
     # 任务归属：落到 trace，供按应用/任务查询用例历史
     app_id: str = ""
     batch_id: str = ""
+    # 项目是应用的服务端归属，不能用 app_id 作为控件命名空间。
+    project_id: str = ""
 
     # 设备元信息
     device_type: str = ""
@@ -84,7 +86,10 @@ class RunContext:
     app_version: str = ""
     env_profile: str = ""
     env_surface: str = ""
-    action_scheme: str = "visual"
+    action_scheme: str = "dom_preferred"
+    observation_mode: str = ""
+    observation_fallback_reason: str = ""
+    observation_contract: dict[str, Any] = field(default_factory=dict)
     env_label: str = ""
     env_fact: dict[str, Any] = field(default_factory=dict)
     # 发码时刻（unix），Gmail IMAP 取码时间窗
@@ -216,7 +221,7 @@ def from_node(
     ctx.ios = _state_for("ios", "ios_wda")
     ctx.playwright = _state_for("playwright", "playwright")
     ctx.desktop = _state_for("desktop", "desktop")
-    ctx.desktop_os = str(getattr(dev, "os", "") or "")
+    ctx.desktop_os = platform if platform in {"mac", "win"} else str(getattr(dev, "os", "") or "")
     ctx.desktop_capabilities = list(getattr(dev, "capabilities", None) or [])
     ctx.session_generation = str(getattr(dev, "session_generation", "") or "")
 
@@ -252,7 +257,9 @@ def build_run_context(sn: str, **kwargs: Any) -> RunContext:
     if node is None:
         SLog.w(TAG, f"构造 RunContext 失败：{why}")
         ctx = RunContext(sn=sn, platform=str(kwargs.get("platform") or "android"),
-                         run_id=str(kwargs.get("run_id") or ""))
+                         run_id=str(kwargs.get("run_id") or ""),
+                         app_id=str(kwargs.get("app_id") or ""),
+                         batch_id=str(kwargs.get("batch_id") or kwargs.get("run_id") or ""))
         for attr in ("adb", "remote", "ios", "playwright"):
             setattr(ctx, attr, _channel("disconnected", reason=why))
         ctx.vlm = _probe_vlm(str(kwargs.get("provider_id") or ""), str(kwargs.get("model_name") or ""))
@@ -261,6 +268,31 @@ def build_run_context(sn: str, **kwargs: Any) -> RunContext:
     kwargs.pop("platform", None)
     return from_node(node, sn, **{k: v for k, v in kwargs.items() if k in {
         "run_id", "app_id", "batch_id", "provider_id", "model_name", "target_package"}})
+
+
+def bind_case_project(ctx: RunContext, case: dict[str, Any]) -> str:
+    """在恢复租约、知识检索及设备执行前绑定真实项目；旧用例可省略项目键。"""
+    from mino_nexus.services import project_store
+
+    app_id = str(ctx.app_id or "").strip()
+    if not app_id:
+        raise ValueError("运行应用归属缺失，无法确定控件所属项目")
+    try:
+        app = project_store.require_app(app_id)
+    except KeyError:
+        raise ValueError("运行应用不存在，无法确定控件所属项目") from None
+    project_id = str(app.get("project_id") or "").strip()
+    if not project_id:
+        raise ValueError("运行应用尚未关联项目，请在 Workbench 修正应用归属")
+    case_project_id = str(case.get("project_id") or "").strip()
+    if case_project_id and case_project_id != project_id:
+        raise ValueError("用例所属项目与运行应用所属项目不一致，请在 Workbench 核对归属")
+    context_project_id = str(ctx.project_id or "").strip()
+    if context_project_id and context_project_id != project_id:
+        raise ValueError("运行上下文项目与应用所属项目不一致，已停止执行")
+    ctx.project_id = project_id
+    ctx.case = case
+    return project_id
 
 
 def _probe_vlm(provider_id: str = "", model_name: str = "") -> dict[str, Any]:
@@ -337,8 +369,8 @@ def device_platform_kind(device_type: str = "", channels: Any = None, sn: str = 
     dt = str(device_type or "").lower()
     if dt in ("web", "browser", "playwright"):
         return "web"
-    if dt == "desktop":
-        return "desktop"
+    if dt in {"desktop", "mac", "win"}:
+        return dt
     if _looks_ios_token(dt) or _looks_ios_token(sn):
         return "ios"
     ios_channel = (channels or {}).get("ios") if isinstance(channels, dict) else None

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from mino_nexus.core.http_util import ok
-from mino_nexus.routers.deps import current_session, require_packs_writer
+from mino_nexus.routers.deps import app_maintainer, current_session, require_packs_writer
 from mino_nexus.services.nav_flow_block_catalog import (
     get_overrides,
     list_catalog,
@@ -110,7 +110,7 @@ def get_app_flow_block_overrides(app_id: str, _sess: dict = Depends(current_sess
     return ok({"app_id": app_id, "overrides": get_overrides(app_id)})
 
 
-@router.put("/apps/{app_id}/overrides")
+@router.put("/apps/{app_id}/overrides", dependencies=[Depends(app_maintainer)])
 def put_app_flow_block_overrides(
     app_id: str,
     body: FlowBlockOverridesBody,

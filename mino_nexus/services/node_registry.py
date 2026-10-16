@@ -10,6 +10,9 @@
 from __future__ import annotations
 
 import threading
+import uuid
+from copy import deepcopy
+from dataclasses import asdict
 import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Optional
@@ -45,6 +48,15 @@ def _channel_connected(channels: Any) -> bool:
 
 def _device_identity_valid(device: P.DeviceManifest, node_id: str, host_platform: str) -> bool:
     """A node cannot move another account's host slot by reporting its SN."""
+    if device.platform in {"mac", "win"} or device.sn.startswith(("mac:", "win:")):
+        from mino_nexus.core.platform_contract import device_identity
+        from dataclasses import asdict
+        system = {"darwin": "mac", "macos": "mac", "mac": "mac", "windows": "win", "win32": "win", "win": "win", "linux": "linux"}.get(host_platform.lower())
+        try:
+            device_identity({k: v for k, v in asdict(device).items() if k != "os" or v}, node_id=node_id, host={"os": system})
+        except ValueError:
+            return False
+        return True
     if device.platform == "desktop" or device.sn.startswith("desktop:"):
         os_name = {"darwin": "macos", "macos": "macos", "windows": "windows", "win32": "windows", "linux": "linux"}.get(host_platform.lower())
         return bool(device.platform == "desktop" and device.sn == f"desktop:{node_id}:console"
@@ -236,6 +248,11 @@ class NodeSession:
     plugins: Optional[list[dict[str, Any]]] = None
     plugins_reported: threading.Event = field(default_factory=threading.Event, repr=False, compare=False)
     runtime_capabilities: Optional[list[dict[str, Any]]] = None
+    node_connection_generation: str = ""
+    scout_process_generation: str = ""
+    capability_revision: str = ""
+    execution_binding_version: int = 0
+    binding_unavailable_reason: str = "execution_binding_unsupported"
     plugin_job: dict[str, Any] = field(default_factory=dict)
     # 发一条消息并等应答；由 websocket/node.py 注入
     send: Optional[Callable[..., Any]] = None
@@ -260,7 +277,13 @@ class NodeSession:
         return {ex_id: True for ex_id in self.available_executors()}
 
     def brief(self) -> dict[str, Any]:
+        from mino_nexus.core.platform_contract import registration_shadow
+        platform_audit = registration_shadow(
+            self.host, [asdict(device) for device in self.devices.values()], self.runtime_capabilities)
+        platform_audit.update(mode="enforced", activated=True)
         return {
+            "platform_contract_version": 1,
+            "platform_contract_audit": platform_audit,
             "node_id": self.node_id,
             "scout_id": self.node_id,
             "platform": self.platform,
@@ -333,13 +356,15 @@ class NodeRegistry:
         owner_user_id: str = "",
     ) -> list[str]:
         """处理 REGISTER，返回要放进 REGISTERED.warnings 的提示。"""
+        from mino_nexus.core.platform_contract import validate_platform_announcement
+        validate_platform_announcement(reg)
         warnings: list[str] = []
         with self._lock:
             prev = self._nodes.get(reg.node_id)
             if prev is not None:
                 SLog.i(TAG, f"节点 {reg.node_id} 重新注册（覆盖上一次会话）")
 
-            accepted_devices = [d for d in reg.devices if _device_identity_valid(d, reg.node_id, reg.platform)]
+            accepted_devices = [d for d in reg.devices if _device_identity_valid(d, reg.node_id, reg.host["os"])]
             if len(accepted_devices) != len(reg.devices):
                 warnings.append("已拒绝与节点身份或宿主系统不匹配的设备槽")
             incoming = {d.sn: d for d in accepted_devices}
@@ -351,7 +376,7 @@ class NodeRegistry:
                 for sn, old in prev.devices.items():
                     if sn in devices:
                         continue
-                    if is_legacy_web_sn(sn):
+                    if is_legacy_web_sn(sn) or old.platform == "desktop":
                         continue
                     if self._owner.get(sn, reg.node_id) != reg.node_id:
                         continue
@@ -371,7 +396,7 @@ class NodeRegistry:
             owner = owner or sanitize_id(str(stored.get("owner_user_id") or ""))
             session = NodeSession(
                 node_id=reg.node_id,
-                platform=reg.platform,
+                platform=reg.host["os"],
                 arch=reg.arch,
                 scout_version=reg.scout_version,
                 executors={e.id: e for e in reg.executors},
@@ -383,7 +408,10 @@ class NodeRegistry:
                 host=dict(getattr(reg, "host", {}) or {}),
                 plugins=sanitize_plugins(getattr(reg, "plugins", None)),
                 runtime_capabilities=getattr(reg, "runtime_capabilities", None),
+                node_connection_generation=uuid.uuid4().hex,
+                scout_process_generation=reg.scout_process_generation,
             )
+            self._update_binding_epoch(session, reg)
             self._nodes[reg.node_id] = session
             if session.plugins:
                 session.plugins_reported.set()
@@ -500,18 +528,37 @@ class NodeRegistry:
             for other in self._nodes.values():
                 other.devices.pop(sn, None)
 
-    def heartbeat(self, hb: P.Heartbeat) -> None:
+    def heartbeat(self, hb: P.Heartbeat, *, send=None) -> None:
         with self._lock:
             node = self._nodes.get(hb.node_id)
             if node is None:
                 SLog.w(TAG, f"收到未注册节点的心跳: {hb.node_id}")
                 return
+            if send is not None and node.send != send:
+                return  # A retired connection cannot mutate its replacement.
+            if hb.node_connection_generation and hb.node_connection_generation != node.node_connection_generation:
+                return
+            from mino_nexus.core.platform_contract import validate_platform_announcement
+            validate_platform_announcement(hb, fallback_host=node.host)
+            if hb.host and hb.host.get("os") != node.host.get("os"):
+                raise ValueError("host_os_changed_requires_registration")
             node.last_seen = time.time()
             node.busy = hb.busy
             node.active_runs = list(hb.active_runs or [])
             node.device_workload = list(hb.device_workload or [])
-            for executor in getattr(hb, "executors", None) or []:
-                node.executors[executor.id] = executor
+            reported_executors = getattr(hb, "executors", None)
+            if reported_executors is not None:
+                snapshot_version = getattr(hb, "executor_snapshot_version", 0)
+                if type(snapshot_version) is int and snapshot_version == 1:
+                    node.executors = {executor.id: executor for executor in reported_executors}
+                elif type(snapshot_version) is int and snapshot_version == 0:
+                    # Old installed Scouts report desktop-only deltas. Never treat
+                    # that payload as a full snapshot during a rolling upgrade.
+                    for executor in reported_executors:
+                        node.executors[executor.id] = executor
+                else:
+                    node.executors = {}
+                    SLog.w(TAG, "心跳 executor 快照版本不支持，已停止使用该节点的执行能力")
             host = getattr(hb, "host", None)
             if isinstance(host, dict) and host:
                 node.host = dict(host)
@@ -522,6 +569,7 @@ class NodeRegistry:
             caps = getattr(hb, "runtime_capabilities", None)
             if caps is not None:
                 node.runtime_capabilities = list(caps)
+            self._update_binding_epoch(node, hb)
             ver = str(getattr(hb, "scout_version", "") or "").strip()
             if ver:
                 node.scout_version = ver
@@ -544,6 +592,48 @@ class NodeRegistry:
             self._purge_orphaned_legacy_web_slots()
             if node is not None:
                 node.persist_snapshot()
+
+    def _update_binding_epoch(self, node, announcement):
+        from mino_nexus.core.capability_epoch import capability_revision
+        node.execution_binding_version = 0
+        node.capability_revision = ""
+        reason = "execution_binding_unsupported"
+        version = announcement.execution_binding_version
+        if type(version) is int and version == 1:
+            reason = "capability_snapshot_inconsistent"
+            try:
+                expected = capability_revision(list(node.executors.values()), node.runtime_capabilities)
+                valid = (bool(node.scout_process_generation)
+                    and announcement.scout_process_generation == node.scout_process_generation
+                    and announcement.capability_revision == expected
+                    and (not isinstance(announcement, P.Heartbeat)
+                         or announcement.node_connection_generation == node.node_connection_generation
+                         and (announcement.executors is None or announcement.executor_snapshot_version == 1)))
+                if valid:
+                    node.execution_binding_version = 1
+                    node.capability_revision = expected
+                    reason = ""
+            except (ValueError, TypeError, KeyError):
+                pass
+        node.binding_unavailable_reason = reason
+
+    def execution_snapshot(self, sn: str):
+        """One connection/manifest view for the caller's authenticated binding input."""
+        with self._lock:
+            owner = self._owner.get(sn)
+            node = self._nodes.get(owner) if owner else None
+            device = node.devices.get(sn) if node else None
+            if node is None or device is None:
+                return None
+            return deepcopy({"node_id": node.node_id, "owner_user_id": node.owner_user_id,
+                "online": node.alive and node.send is not None, "device": asdict(device),
+                "executors": [asdict(row) for row in node.executors.values()],
+                "runtime_capabilities": node.runtime_capabilities,
+                "node_connection_generation": node.node_connection_generation,
+                "scout_process_generation": node.scout_process_generation,
+                "capability_revision": node.capability_revision,
+                "execution_binding_version": node.execution_binding_version,
+                "binding_unavailable_reason": node.binding_unavailable_reason})
 
     def note_host_mode(self, node_id: str, mode: str) -> None:
         """休眠/启动的回执先于下一次心跳。立刻改 mode，避免列表还显示旧状态。"""

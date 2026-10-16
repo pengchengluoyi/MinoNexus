@@ -5,6 +5,8 @@ from typing import Any
 
 _LABEL_KEYS = (
     "target",
+    "node_ref",
+    "snapshot_id",
     "selector_text",
     "description",
     "label",

@@ -175,7 +175,8 @@ def login_flow_do_may_finish(
 
     block = effective_session_block(ctx, "") if ctx is not None else ""
     sess = parse_session_value(block)
-    if sess == "logged_in":
+    from mino_nexus.services.login_evidence import can_commit
+    if sess == "logged_in" and can_commit(ctx):
         return True, ""
     if not _final_login_submit_done(history_lines, ctx=ctx):
         return (
@@ -184,7 +185,7 @@ def login_flow_do_may_finish(
         )
     return (
         False,
-        "已点提交但仍为未登录(session≠logged_in)：继续登录流程或检查验证码是否正确，勿 signal_done。",
+        "已点提交但当前登录态或所需身份缺少证据；继续观察核验，不能仅凭表单消失或租约账号 signal_done。",
     )
 
 

@@ -1,0 +1,24 @@
+id: app.login_evidence_policy_get
+version: 2
+title: 读取应用登录校验配置
+description: 应用级配置；提交账号绑定仅在明确环境与渠道生效，仍需实际填写、提交及页面已登录证据，UI身份仍未知。保存须维护权限及读取到的expected_policy，新任务生效。
+route: GET /app-automation/login-evidence-policy/{app_id}
+risk: read
+async: false
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    app_id:
+      type: string
+      minLength: 1
+  required:
+  - app_id
+param_resolvers: {}
+result_pick:
+- data
+card: answer
+surfaces:
+- im
+- mcp
+enabled: true

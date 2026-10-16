@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from mino_nexus.models.resource_ops import DeviceResourceLease
+from mino_nexus.services.run_write_safety import protected
 
 DEFAULT_TTL_SEC = 7200
 
@@ -67,7 +68,7 @@ def acquire_device_lease(
             .all()
         )
         for row in list(rows):
-            if _expired(str(row.expires_at or "")):
+            if _expired(str(row.expires_at or "")) and not protected(str(row.run_id or ""), db=db):
                 db.delete(row)
         db.flush()
         rows = (
@@ -77,6 +78,8 @@ def acquire_device_lease(
         )
         for row in rows:
             holder = str(row.run_id or "").strip()
+            if protected(holder, db=db):
+                return False, f"设备存在未确认停止的写动作，任务 {holder} 的资源仍隔离"
             if holder == rid:
                 row.expires_at = _expiry(ttl_sec)
                 row.case_id = str(case_id or "")[:64]
@@ -84,7 +87,7 @@ def acquire_device_lease(
                 return True, ""
             if web_slot:
                 continue
-            if _expired(str(row.expires_at or "")):
+            if _expired(str(row.expires_at or "")) and not protected(str(row.run_id or ""), db=db):
                 continue
             if not _holder_run_still_live(holder):
                 db.delete(row)
@@ -120,6 +123,8 @@ def release_device_lease(sn: str, package_id: str, run_id: str) -> int:
     from mino_nexus.core.database import session_scope
 
     with session_scope() as db:
+        if protected(rid, db=db):
+            return 0
         n = (
             db.query(DeviceResourceLease)
             .filter(
@@ -140,7 +145,7 @@ def purge_expired_device_leases() -> int:
         rows = db.query(DeviceResourceLease).all()
         n = 0
         for row in rows:
-            if _expired(str(row.expires_at or "")):
+            if _expired(str(row.expires_at or "")) and not protected(str(row.run_id or ""), db=db):
                 db.delete(row)
                 n += 1
         db.commit()
@@ -154,6 +159,8 @@ def release_device_leases_for_run(run_id: str) -> int:
     from mino_nexus.core.database import session_scope
 
     with session_scope() as db:
+        if protected(rid, db=db):
+            return 0
         n = (
             db.query(DeviceResourceLease)
             .filter(DeviceResourceLease.run_id == rid)
@@ -178,7 +185,7 @@ def get_active_lease(sn: str, package_id: str) -> dict[str, Any] | None:
             .all()
         )
         for row in rows:
-            if _expired(str(row.expires_at or "")):
+            if _expired(str(row.expires_at or "")) and not protected(str(row.run_id or ""), db=db):
                 continue
             return {
                 "sn": row.sn,

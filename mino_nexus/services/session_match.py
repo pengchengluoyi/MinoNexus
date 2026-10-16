@@ -43,11 +43,11 @@ def precondition_account_session(value: str) -> str:
 
 
 def normalize_device_session(value: str) -> str:
-    """机态只有 logged_in / logged_out / guest。空值和 unknown 都是 guest。"""
+    """登录观察未知不能按游客处理；清理后的 stale/dirty 必须重新取证。"""
     sess = str(value or "").strip().lower()
-    if sess in DEVICE_SESSIONS:
+    if sess in DEVICE_SESSIONS or sess in {"unknown", "stale", "dirty"}:
         return sess
-    return "guest"
+    return "unknown"
 
 
 def device_session_meets(required: str, current: str, allow: list[str] | None = None) -> bool:

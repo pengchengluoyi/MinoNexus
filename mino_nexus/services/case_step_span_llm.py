@@ -5,7 +5,7 @@ import json
 import re
 from typing import Any
 
-_GLUE = set(" \t\r\n，,。；;、")
+_GLUE = set(" \t\r\n，,。；;、并")
 _RELATION = {
     "右侧": "right",
     "右边": "right",
@@ -52,6 +52,8 @@ def layer_menu(layer: str) -> list[dict[str, Any]]:
             }
             if slot.get("enum"):
                 row["enum"] = [str(x) for x in slot.get("enum") or []]
+            if slot.get("description"):
+                row["description"] = str(slot["description"])
             params.append(row)
         cfg = [str(x) for x in (ent.get("config_keys") or []) if str(x)]
         hook = ""
@@ -65,6 +67,7 @@ def layer_menu(layer: str) -> list[dict[str, Any]]:
             {
                 "key_ref": ref,
                 "name": str(ent.get("event_name") or ent.get("write_category") or ref),
+                "description": str(ent.get("runtime") or ""),
                 "kind": str(ent.get("kind") or ""),
                 "block_id": str(ent.get("block_id") or ""),
                 "platforms": [str(x) for x in (ent.get("platforms") or []) if str(x)],
@@ -125,10 +128,23 @@ def _hit_from_span(
     start: int,
     end: int,
 ) -> tuple[dict[str, Any] | None, list[str]]:
+    # Catalog param_slots describe the schema; they are not model output values.
+    # Reject this shape before missing-slot classification so a provider format
+    # error is never presented as missing business input.
+    if "param_slots" in span:
+        return None, ["模型输出结构错误：span 不得输出 param_slots；参数值必须放在 params 对象，例如 params.direction，而不是 id/value 数组"]
+    if "params" in span and not isinstance(span["params"], dict):
+        return None, ["模型输出结构错误：params 必须是参数名到值的 JSON 对象"]
+    if "slots" in span and (not isinstance(span["slots"], list) or any(not isinstance(slot, dict) for slot in span["slots"])):
+        return None, ["模型输出结构错误：slots 必须是含 id 和原文 quote 的对象数组"]
     errors: list[str] = []
     quote = str(span.get("quote") or "")
     if spec.get("key_ref") == "operation.login_flow" and re.match(r"\s*(?:点击|点按|单击|点一下)", quote) and not re.search(r"输入|填写|密码|验证码", quote):
         return None, ["单独点击登录按钮应选择目录中的点击事件，不是完整登录流程；请重新分类"]
+    if (spec.get("key_ref") in {"operation.tap", "operation.dynamic_visual"}
+            and re.match(r"\s*(?:输入|填写)\s*(?:手机号|手机号码|账号|帐号|验证码|邮箱|密码)", quote)
+            and "登录" in quote):
+        return None, ["原句要求填写凭证并完成登录，应选择完整登录流；单独点击事件不能吞掉填写动作，请重新分类"]
     raw_params = span.get("params") if isinstance(span.get("params"), dict) else {}
     allowed = {str(s.get("id") or "") for s in (spec.get("param_slots") or [])}
     rules: dict[str, Any] = {}
@@ -177,6 +193,7 @@ def _hit_from_span(
     slots_out: list[dict[str, Any]] = []
     declared = {str(s.get("id") or ""): s for s in (spec.get("slots") or [])}
     occupied_child: list[tuple[int, int]] = []
+    seen_slot_ids: set[str] = set()
     parent = source[start:end]
     for slot in span.get("slots") or []:
         if not isinstance(slot, dict):
@@ -185,8 +202,13 @@ def _hit_from_span(
         if sid not in declared:
             errors.append(f"槽 {sid or '未命名'} 不在 {spec.get('key_ref')} 上")
             continue
+        if sid in seen_slot_ids:
+            errors.append(f"槽 {sid} 重复声明")
+            continue
+        seen_slot_ids.add(sid)
         child_quote = str(slot.get("quote") or "")
-        local = _find_quote(parent, child_quote, occupied_child)
+        # 子槽描述不同语义角色，可以引用同一段作者原文；父事件之间仍禁止重叠。
+        local = _find_quote(parent, child_quote, [])
         if local is None:
             errors.append(f"槽 {sid} 的摘录不在这一步里")
             continue
@@ -199,8 +221,7 @@ def _hit_from_span(
                 "text": child_quote[:80],
             }
         )
-    if str(spec.get("key_ref") or "") == "operation.login_flow":
-        slots_out = _fill_login_slots(parent, start, slots_out, declared)
+    # 高层登录目标由完整逻辑块展开，不补造作者没写的凭证/提交槽。
     for sid, slot in declared.items():
         if slot.get("required") and sid not in {str(s.get("id") or "") for s in slots_out}:
             missing.append(sid)
@@ -257,49 +278,6 @@ def _hit_from_span(
     return hit, []
 
 
-def _fill_login_slots(
-    parent: str,
-    base: int,
-    slots: list[dict[str, Any]],
-    declared: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """登录块已选中时，把父摘录里没进槽的字补进相邻槽；末尾补提交。"""
-    if "submit" not in declared:
-        return slots
-    rows = sorted(slots, key=lambda item: int(item.get("start") or 0))
-    if not rows:
-        return slots
-
-    def _rel(abs_pos: int) -> int:
-        return abs_pos - base
-
-    if not any(str(item.get("id") or "") == "submit" for item in rows):
-        last = max(_rel(int(item.get("end") or base)) for item in rows)
-        tail = parent[last:].lstrip("".join(_GLUE))
-        if tail:
-            found = parent.find(tail, last)
-            if found >= 0:
-                rows.append({
-                    "id": "submit",
-                    "start": base + found,
-                    "end": base + found + len(tail),
-                    "text": tail[:80],
-                })
-                rows.sort(key=lambda item: int(item.get("start") or 0))
-    # 槽与槽之间、以及父摘录开头没被盖住的字，并进旁边的槽。
-    cursor = 0
-    for item in rows:
-        rel_start = _rel(int(item.get("start") or base))
-        if rel_start > cursor:
-            item["start"] = base + cursor
-            item["text"] = parent[cursor:_rel(int(item.get("end") or base))].lstrip("".join(_GLUE))[:80]
-        cursor = _rel(int(item.get("end") or base))
-    if rows:
-        rows[-1]["end"] = base + len(parent)
-        rows[-1]["text"] = parent[_rel(int(rows[-1]["start"])):][:80]
-    return rows
-
-
 def _text_covered(source: str, occupied: list[tuple[int, int]]) -> bool:
     for i, ch in enumerate(source):
         if ch in _GLUE:
@@ -328,7 +306,9 @@ def assess_spans(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """把模型摘录收成跨度。失败时 hits 为空，errors 给下一次调用。"""
     if not isinstance(raw_spans, list):
-        return [], ["返回不是 spans 数组"]
+        return [], ["模型输出结构错误：spans 必须为数组"]
+    if any(not isinstance(span, dict) for span in raw_spans):
+        return [], ["模型输出结构错误：spans 的每一项必须是对象"]
     index = _menu_index(menu)
     other: dict[str, str] = {}
     if layer in ("operation", "expected"):
@@ -363,17 +343,11 @@ def assess_spans(
                 errors.append(f"{ref or '空'} 不在这一层目录")
             continue
         quote = str(span.get("quote") or "")
-        raw = source.find(quote) if quote else -1
-        if raw < 0:
+        placed = _find_quote(source, quote, occupied)
+        if placed is None:
             if occupied and _text_covered(source, occupied):
                 continue
             errors.append(f"摘录对不上原文：{quote[:40]}")
-            continue
-        placed = (raw, raw + len(quote))
-        if any(a <= placed[0] and placed[1] <= b for a, b in occupied):
-            continue
-        if any(not (placed[1] <= a or placed[0] >= b) for a, b in occupied):
-            errors.append("摘录与已有跨度重叠，不要拆成两条：" + quote[:40])
             continue
         hit, slot_errors = _hit_from_span(
             source, span, spec, layer=layer, start=placed[0], end=placed[1]
@@ -392,7 +366,20 @@ def assess_spans(
             continue
         uncovered.append(ch)
     if uncovered and (occupied or not errors):
-        errors.append("这几个字没有落进任何事件：" + "".join(uncovered)[:80])
+        # Give the model exact source positions, rather than the ambiguous generic
+        # failure that previously caused an identical second response. Keep all
+        # author text; modifiers must be included in the appropriate span quote.
+        positions = [i for i, ch in enumerate(source)
+            if ch not in _GLUE and not any(a <= i < b for a, b in occupied)]
+        ranges = []
+        for index in positions:
+            if ranges and index == ranges[-1][1]:
+                ranges[-1][1] = index + 1
+            else:
+                ranges.append([index, index + 1])
+        detail = "、".join(f"[{a},{b})「{source[a:b][:60]}」" for a, b in ranges[:8])
+        errors.append("原步骤未完整映射到事件；未覆盖的原文区间：" + detail
+            + "。请把修饰语纳入相应事件的 quote，保持完整原句，不从残余字符推断新增操作")
     if errors:
         return [], errors
     hits.sort(key=lambda row: int(row.get("start") or 0))
@@ -432,14 +419,16 @@ def _fold_reload_wait(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _reason_from_errors(errors: list[str]) -> tuple[str, str]:
     detail = "；".join(errors)[:240]
     blob = detail
+    if "模型输出结构错误" in blob:
+        return "compile_span_schema_invalid", detail
     if "摘录对不上" in blob or "不在这一步里" in blob:
         return "quote_miss", detail
     if "不属于这一栏" in blob:
         return "layer_mismatch", detail
-    if blob.startswith("槽 ") or "缺少" in blob or "还没进槽" in blob:
+    if any(error.startswith("槽 ") or "还没进槽" in error for error in errors):
         return "missing_slot", detail
-    if "没有落进任何事件" in blob:
-        return "uncovered", detail.split("：", 1)[-1]
+    if "没有落进任何事件" in blob or "未完整映射到事件" in blob:
+        return "uncovered", "原步骤未完整映射到事件，请核对完整原句和编译预览"
     if "不在这一层目录" in blob or "不是 spans" in blob:
         return "unmapped", detail
     return "unmapped", detail
@@ -450,14 +439,16 @@ def _ask(payload: dict[str, Any]) -> tuple[Any, str]:
     from mino_nexus.ai.llm_client import call_chat_text, resolve_regression_provider
     from mino_nexus.ai.prompt_render import JobRenderError, render
 
-    provider, gate = resolve_regression_provider()
+    provider, _gate = resolve_regression_provider()
     if provider is None:
-        return None, str((gate or {}).get("reason") or "没有可用的模型")
+        # Infrastructure failure is not a semantic mismatch. Do not retry the
+        # same missing dependency for every clause or export raw provider details.
+        raise ValueError("compile_provider_unavailable")
     slots = {"payload_json": json.dumps(payload, ensure_ascii=False)}
     try:
         messages, job_meta = render(JOB_ID, slots)
-    except JobRenderError:
-        return None, f"编译任务 {JOB_ID} 还没有种下"
+    except JobRenderError as exc:
+        raise ValueError("compile_prompt_unavailable") from exc
     call = dict(job_meta.get("call") or {})
     tok = bind(
         trigger="case_step_compile",
@@ -479,8 +470,14 @@ def _ask(payload: dict[str, Any]) -> tuple[Any, str]:
         reset(tok)
     from mino_nexus.services.compile_provenance import record
     record(meta, job_meta)
+    # The client may salvage a valid JSON prefix from a truncated response.
+    # Such a prefix is not a complete compilation, even if its spans validate.
+    if (meta or {}).get("truncated") or (meta or {}).get("salvaged"):
+        raise ValueError("compile_model_response_incomplete")
     if not isinstance(parsed, dict):
-        return None, str((meta or {}).get("error") or "非法 JSON")
+        # The client already owns transport/JSON retries and their time budget.
+        # Never feed raw provider failures back as semantic repair instructions.
+        raise ValueError("compile_model_call_failed")
     return parsed.get("spans"), ""
 
 

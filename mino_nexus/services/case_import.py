@@ -15,8 +15,6 @@ from mino_nexus.services import cover_import as ci
 from mino_nexus.services import project_store as ps
 from mino_nexus.services import case_import_preview_store as preview_store
 from mino_nexus.services.case_store import (
-    apply_import_row,
-    count_cases,
     find_similar_case,
     get_case,
     list_cases,
@@ -71,26 +69,22 @@ def _requirement_title(project_id: str, requirement_id: str) -> str:
 
 
 def _resolve_import_platform(value: str, env_doc: dict | None, *, default: str = "") -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return str(default or "").strip()
-    channels = env_doc.get("channels") if isinstance(env_doc, dict) else None
-    if not isinstance(channels, list):
+    from mino_nexus.core.platform_contract import TARGET_PLATFORMS
+    raw = str(value or default or "").strip()
+    if raw in TARGET_PLATFORMS:
         return raw
-    low = raw.lower()
-    for ch in channels:
-        if not isinstance(ch, dict):
-            continue
-        cid = str(ch.get("id") or "").strip()
-        label = str(ch.get("label") or "").strip()
-        alias = str(ch.get("alias") or "").strip()
-        if cid and (raw == cid or low == cid.lower()):
-            return cid
-        if label and (raw == label or label in raw or raw in label):
-            return cid
-        if alias and (raw == alias or alias in raw or raw in alias):
-            return cid
-    return raw
+    if not raw:
+        raise ValueError("missing_platform")
+    channels = (env_doc or {}).get("channels") or []
+    matches = [ch for ch in channels if isinstance(ch, dict) and
+               raw in {str(ch.get(k) or "").strip() for k in ("id", "label", "alias")}]
+    if len(matches) != 1:
+        raise ValueError("ambiguous_platform" if matches else "invalid_platform")
+    channel = matches[0]
+    platform = channel.get("platform")
+    if channel.get("kind") == "server" or platform not in TARGET_PLATFORMS:
+        raise ValueError("invalid_platform")
+    return platform
 
 
 def _norm_import_row(
@@ -116,6 +110,12 @@ def _norm_import_row(
             f"{i}. {x}" for i, x in enumerate(expected_list, 1)
         )
     cid = str(raw.get("case_id") or "").strip()
+    input_platform = str(raw.get("platform") or default_platform or "").strip()
+    platform_error = ""
+    try:
+        platform = _resolve_import_platform(input_platform, env_doc)
+    except ValueError as exc:
+        platform, platform_error = input_platform, str(exc)
     return {
         **raw,
         "case_id": cid,
@@ -126,10 +126,8 @@ def _norm_import_row(
         "expected": expected_list,
         "steps_raw": steps_raw,
         "expected_raw": expected_raw,
-        "platform": _resolve_import_platform(
-            str(raw.get("platform") or default_platform or "").strip(),
-            env_doc,
-        ),
+        "platform": platform,
+        "platform_error": platform_error,
         "aspect": str(raw.get("aspect") or "正向"),
         "point_ids": [str(x) for x in (raw.get("point_ids") or []) if str(x).strip()],
         "index": index,
@@ -150,6 +148,7 @@ def _similar_case_info(
     return {
         "exists": True,
         "existing_case_id": ex.get("case_id") or "",
+        "existing_updated_at": ex.get("updated_at"),
         "existing_name": ex.get("name") or "",
         "existing_requirement_id": existing_rid,
         "existing_requirement_title": _requirement_title(project_id, existing_rid),
@@ -174,6 +173,7 @@ def _conflict_info(
     return {
         "exists": True,
         "existing_case_id": cid,
+        "existing_updated_at": existing.get("updated_at"),
         "existing_name": existing.get("name") or "",
         "existing_requirement_id": existing_rid,
         "existing_requirement_title": _requirement_title(project_id, existing_rid),
@@ -234,6 +234,8 @@ def preview_import(
             from mino_nexus.services.case_resource_claim import compile_resource_key_from_precondition
             from mino_nexus.services.resource_claim_summary import resource_claim_summary
 
+            if row.get("platform_error"):
+                raise ValueError(row["platform_error"])
             preview_plat = str(row.get("platform") or default_plat or "").strip()
             claim = compile_resource_key_from_precondition(
                 str(pre),
@@ -250,7 +252,7 @@ def preview_import(
             claim_summary = ""
         steps = row.get("steps") or []
         expected = row.get("expected") or []
-        flags: list[str] = []
+        flags: list[str] = [row["platform_error"]] if row.get("platform_error") else []
         header_names = {
             "用例名称", "名称", "用例编号", "编号", "模块", "端", "前置条件",
             "步骤", "测试步骤", "预期", "预期效果", "预期结果",
@@ -281,12 +283,13 @@ def preview_import(
             "expected_preview": "\n".join(expected),
             "steps_parsed": [],
             "expected_parsed": [],
-            "remark": "标题、操作、预期缺一列，不解析" if incomplete else "",
+            "remark": ("平台需明确为 mac / win / android / web：" + row["platform_error"]) if row.get("platform_error") else ("标题、操作、预期缺一列，不解析" if incomplete else ""),
             "step_key_validation": {},
             "ui_automation": {"coverable": False, "blocked_by": []} if incomplete else {"coverable": True, "blocked_by": []},
-            "parse_status": "incomplete" if incomplete else "pending",
+            "parse_status": "invalid_platform" if row.get("platform_error") else ("incomplete" if incomplete else "pending"),
             "flags": flags,
-            "selected_by_default": (not incomplete) and "likely_header" not in flags,
+            "selected_by_default": (not incomplete) and not row.get("platform_error") and "likely_header" not in flags,
+            "platform_error": row.get("platform_error", ""),
             "conflict": conflict,
             "payload": row,
         })
@@ -398,7 +401,7 @@ def _compile_preview_batches(token: str, worker_id: str) -> None:
             batch = pending[: max(1, min(4, int(doc.get("batch_size") or 5)))]
             with ThreadPoolExecutor(max_workers=len(batch)) as executor:
                 futures = {
-                    executor.submit(copy_context().run, import_row_key_summary, row.get("payload") or {}, app_id=str(doc.get("app_id") or ""), env_doc=doc.get("env_doc")): row["row_index"]
+                    executor.submit(copy_context().run, import_row_key_summary, row.get("payload") or {}, project_id=str(doc.get("project_id") or ""), app_id=str(doc.get("app_id") or ""), env_doc=doc.get("env_doc")): row["row_index"]
                     for row in batch
                 }
                 for future in as_completed(futures):
@@ -446,12 +449,22 @@ def commit_import(
     default_on_conflict: ConflictAction = "skip",
     default_platform: str = "",
     block_on_step_key_issues: bool = False,
+    client_request_id: str = "",
 ) -> dict[str, Any]:
     pid = str(project_id or "").strip()
     rid = str(requirement_id or "").strip()
     if not pid or not rid:
         raise ValueError("缺少 project_id 或 requirement_id")
     _require_project(pid)
+    from mino_nexus.services import case_import_receipts as receipts
+    request_id, digest = receipts.request_identity({
+        "requirement_id": rid, "preview_token": preview_token, "rows": rows,
+        "default_on_conflict": default_on_conflict, "default_platform": default_platform,
+        "block_on_step_key_issues": block_on_step_key_issues,
+    }, client_request_id, preview_token)
+    receipt_id = receipts.find(pid, request_id, digest)
+    if receipt_id:
+        return receipts.resume(pid, receipt_id)
     work_rows: list[dict[str, Any]] = []
     fill_plat = str(default_platform or "").strip()
     if preview_token:
@@ -499,74 +512,43 @@ def commit_import(
         if str(app.get("id") or ""):
             app_id = str(app.get("id") or "")
             break
-    created = updated = skipped = 0
-    blocked = 0
-    results: list[dict[str, Any]] = []
-    for item in work_rows:
-        if not isinstance(item, dict):
-            continue
-        if item.get("selected") is False:
-            skipped += 1
-            continue
-        payload = item.get("payload") if isinstance(item.get("payload"), dict) else item
-        if not isinstance(payload, dict):
-            skipped += 1
-            continue
-        payload = dict(payload)
-        if fill_plat and not str(payload.get("platform") or "").strip():
-            payload["platform"] = fill_plat
-        idx = int(payload.get("index") or item.get("row_index") or 0)
-        row = _norm_import_row(payload, idx, "", env_doc)
-        if block_on_step_key_issues:
-            from mino_nexus.services.case_key_registry import import_row_key_summary
+    if any(not isinstance(item, dict) for item in work_rows):
+        raise ValueError("导入来源行重复或格式错误")
+    work_rows = copy.deepcopy(work_rows)
+    for ordinal, item in enumerate(work_rows):
+        if not preview_token and item.get("row_index") is None:
+            item["row_index"] = ordinal
+    indexes = [item.get("row_index") for item in work_rows]
+    if any(type(index) is not int or index < 0 for index in indexes) or len(indexes) != len(set(indexes)):
+        raise ValueError("导入来源行重复或格式错误")
+    receipt_id = receipts.create(pid, request_id, digest, {
+        "project_id": pid, "requirement_id": rid, "rows": work_rows, "env_doc": env_doc,
+        "app_id": app_id, "compiled": bool(preview_token), "default_platform": fill_plat,
+        "default_on_conflict": default_on_conflict, "block_on_step_key_issues": block_on_step_key_issues,
+    })
+    return receipts.resume(pid, receipt_id)
 
-            summary = item.get("step_key_validation") if preview_token else import_row_key_summary(row, app_id=app_id, env_doc=env_doc)
-            if summary.get("issues"):
-                blocked += 1
-                results.append({
-                    "row_index": item.get("row_index"),
-                    "status": "blocked",
-                    "reason": "step_key_issues",
-                    "step_key_validation": summary,
-                })
-                continue
-        if not str(row.get("platform") or "").strip():
-            skipped += 1
-            results.append({
-                "row_index": item.get("row_index"),
-                "case_id": str(row.get("case_id") or ""),
-                "status": "skipped",
-                "reason": "missing_platform",
-            })
-            continue
-        action_raw = str(item.get("on_conflict") or default_on_conflict or "skip").strip().lower()
-        on_conflict: ConflictAction = "overwrite" if action_raw == "overwrite" else "skip"
-        status, saved = apply_import_row(pid, rid, row, on_conflict=on_conflict, compiled=bool(preview_token))
-        if status == "created":
-            created += 1
-        elif status == "updated":
-            updated += 1
-        else:
-            skipped += 1
-        results.append({
-            "row_index": item.get("row_index"),
-            "case_id": (saved or {}).get("case_id") or row.get("case_id") or "",
-            "status": status,
-        })
-    if preview_token:
-        preview_store.remove(str(preview_token))
-    total = count_cases(pid, rid)
-    return {
-        "project_id": pid,
-        "requirement_id": rid,
-        "created": created,
-        "updated": updated,
-        "skipped": skipped,
-        "blocked": blocked,
-        "total": total,
-        "results": results,
-        "action": "imported_cases",
-    }
+
+def prepare_receipt_line(snapshot, item):
+    from mino_nexus.services.case_store import prepare_import_row
+
+    if item.get("selected") is False:
+        return {"status": "excluded"}
+    payload = dict(item.get("payload") if isinstance(item.get("payload"), dict) else item)
+    if snapshot["default_platform"] and not str(payload.get("platform") or "").strip():
+        payload["platform"] = snapshot["default_platform"]
+    index = int(payload.get("index") or item.get("row_index") or 0)
+    row = _norm_import_row(payload, index, "", snapshot["env_doc"])
+    if row.get("platform_error"):
+        return {"status": "blocked", "reason": row["platform_error"], "case_id": str(row.get("case_id") or "")}
+    # Confirmation imports the original source, even when preview compilation
+    # has gaps. The durable job reports those gaps after the atomic source write.
+    if not str(row.get("platform") or "").strip():
+        return {"status": "skipped", "reason": "missing_platform", "case_id": str(row.get("case_id") or "")}
+    conflict = item.get("conflict") or {}
+    on_conflict = "overwrite" if item.get("on_conflict", snapshot["default_on_conflict"]) == "overwrite" else "skip"
+    return prepare_import_row(snapshot["project_id"], snapshot["requirement_id"], row,
+        on_conflict=on_conflict, compiled=snapshot["compiled"], expected_updated_at=conflict.get("existing_updated_at"))
 
 
 def cases_payload(project_id: str) -> dict[str, Any]:

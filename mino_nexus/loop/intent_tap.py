@@ -19,7 +19,7 @@ def tap_surface_blocks_pass(
     ctx: Any = None,
 ) -> bool:
     """DOM 落点落在排除表时不记 pass。看图点下去即成功，不查这张表。"""
-    from mino_nexus.action_space.scheme import action_scheme
+    from mino_nexus.action_space.scheme import execution_scheme as action_scheme
 
     if action_scheme(ctx) != "dom":
         return False
@@ -100,6 +100,9 @@ def dom_intent_tap_decision(cursor: Any, ctx: Any, writer: Any = None) -> Option
     params["text"] = phrase
     params["target"] = {"text": phrase, "content_desc": phrase}
     params["intent_dom"] = True
+    if node.get("node_ref"):
+        params["node_ref"] = node["node_ref"]
+        params["snapshot_id"] = node["snapshot_id"]
     if writer:
         writer.append(
             "semantic/dom",
@@ -143,6 +146,24 @@ def dom_checkbox_tap_decision(
             writer.append("semantic/miss", {"milestone_id": mid, "role": "checkbox", "count": len(hits)})
         return True, None
     node = hits[0]
+    if node.get("enabled") is False or node.get("checked_known") is False:
+        return True, None
+    if isinstance(rules.get("checked"), bool) and bool(node.get("checked")) == rules["checked"]:
+        # This is observed satisfaction of an explicit state goal, not a fabricated tool call.
+        from mino_nexus.loop.milestones import write_state
+        from mino_nexus.loop.milestone_orchestrator import advance_in_progress_focus
+        state = read_state(cursor)
+        for current in state.get("milestones") or []:
+            if isinstance(current, dict) and current.get("id") == mid:
+                current["status"] = "pass"
+                current["evidence"] = "structure:checkbox_state"
+        write_state(cursor, state)
+        if writer:
+            writer.append("milestone/observed", {"milestone_id": mid, "checked": bool(node.get("checked")),
+                          "snapshot_id": str(node.get("snapshot_id") or getattr(ctx, "observation_contract", {}).get("snapshot_id") or ""),
+                          "execution_started": False})
+        advance_in_progress_focus(cursor, writer=writer)
+        return False, None
     from mino_nexus.loop.ui_consent import tap_params_for_control
 
     tap = tap_params_for_control(node, nodes)

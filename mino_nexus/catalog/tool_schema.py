@@ -244,7 +244,8 @@ SIGNAL_GIVE_UP = "signal_give_up"
 SIGNAL_ASK_HUMAN = "signal_ask_human"
 SIGNAL_SKIP = "signal_skip"
 CONFIRM_ACTION_RESULT = "confirm_action_result"
-CONTROL_TOOL_NAMES = frozenset({SIGNAL_DONE, SIGNAL_GIVE_UP, SIGNAL_ASK_HUMAN, SIGNAL_SKIP, CONFIRM_ACTION_RESULT})
+REPORT_SCREEN_OBSTACLE = "report_screen_obstacle"
+CONTROL_TOOL_NAMES = frozenset({SIGNAL_DONE, SIGNAL_GIVE_UP, SIGNAL_ASK_HUMAN, SIGNAL_SKIP, CONFIRM_ACTION_RESULT, REPORT_SCREEN_OBSTACLE})
 
 _TOOL_META_PROPS: dict[str, Any] = {
     "thought": {
@@ -294,7 +295,7 @@ def _with_tool_meta(parameters: dict[str, Any], *, slim: bool = False) -> dict[s
     meta = _TOOL_META_SLIM if slim else _TOOL_META_PROPS
     for key, schema in meta.items():
         if key not in props:
-            props[key] = schema
+            props[key] = deepcopy(schema)
     spec["type"] = spec.get("type") or "object"
     spec["properties"] = props
     return spec
@@ -332,22 +333,6 @@ CONTROL_TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {"thought": {"type": "string"}},
                 "required": ["thought"],
-            }),
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": SIGNAL_ASK_HUMAN,
-            "description": "需要人提供能填进界面的信息。禁止让人去设备上点。已租账号时不要用这个要手机号或验证码。",
-            "parameters": _with_tool_meta({
-                "type": "object",
-                "properties": {
-                    "thought": {"type": "string"},
-                    "question": {"type": "string"},
-                    "field": {"type": "string", "enum": ["sms_code", "phone", "text"]},
-                },
-                "required": ["question"],
             }),
         },
     },
@@ -612,6 +597,9 @@ def tools_for_menu(
     include_control_tools: bool = True,
     require_prior_status: bool = False,
     include_review_confirmation: bool = False,
+    review_transition: dict[str, Any] | None = None,
+    review_only: bool = False,
+    execution_scheme: str = "visual",
 ) -> list[dict[str, Any]]:
     """当前 Run 可用能力；可选控制信号。assert / 资源网关能力不进 tools。"""
     tools: list[dict[str, Any]] = []
@@ -620,7 +608,11 @@ def tools_for_menu(
         if not isinstance(row, dict):
             continue
         cid = str(row.get("id") or "").strip()
-        if not cid or cid in seen or cid in CONTROL_TOOL_NAMES:
+        from mino_nexus.catalog.skill_channel import V5_EXCLUDED_IDS
+        from mino_nexus.services.business_event_contract import RETIRED
+        if not cid or cid.startswith("guard.") or cid in seen or cid in CONTROL_TOOL_NAMES or cid in V5_EXCLUDED_IDS or cid in RETIRED or cid.startswith("plugin."):
+            continue
+        if review_only and cid not in {"wait_ms", "wait_screen_ready"}:
             continue
         if cid in {"release_account", "pick_account", "get_phone"}:
             continue
@@ -639,6 +631,23 @@ def tools_for_menu(
             deepcopy(row["parameters"]) if isinstance(row.get("parameters"), dict) else params_schema_for(cid, catalog_params),
             slim=slim_envelope,
         )
+        if execution_scheme == "dom" and cid in {"tap_element", "long_press_element", "multi_tap"}:
+            parameters = tool["function"]["parameters"]
+            parameters["required"] = [key for key in parameters.get("required", []) if key not in {"x", "y"}]
+        if execution_scheme == "dom" and cid == "input_text":
+            parameters = tool["function"]["parameters"]
+            parameters["description"] = "按本轮唯一可编辑 DOM 节点输入；text 是输入值，selector_text/node_ref 定位输入框。无法定位时交给截图聚焦兜底。"
+            props = parameters.setdefault("properties", {})
+            props["selector_text"] = {"type": "string", "description": "本轮输入框的真实标签，不是要填入的值"}
+            props["target"] = {"type": "object", "properties": {
+                "text": {"type": "string"}, "content_desc": {"type": "string"}, "resource_id": {"type": "string"},
+            }, "description": "本轮输入框结构锚点"}
+        if require_prior_status and cid in {"wait_screen_ready", "wait_ms"}:
+            tool["function"]["description"] += " 仅当前画面仍在加载或缺少 prior_action.expected 的具体证据时等待；若结果已可见，选择结果确认或 if_pass，不能以旧 in_progress 状态继续等待。"
+        if cid == "tap_element" or (execution_scheme == "dom" and cid == "input_text"):
+            props = tool["function"]["parameters"].setdefault("properties", {})
+            props["node_ref"] = {"type": "string", "description": "本轮结构观察的真实节点引用；不得编造"}
+            props["snapshot_id"] = {"type": "string", "description": "与 node_ref 同一轮观察的 snapshot_id"}
         if slim_envelope:
             parameters = tool["function"]["parameters"]
             if require_prior_status and cid not in {"wait_screen_ready", "wait_ms"}:
@@ -647,18 +656,46 @@ def tools_for_menu(
                 ]))
             else:
                 parameters["properties"].pop("prior_status", None)
+        if slim_envelope and require_prior_status and isinstance(review_transition, dict) and cid not in {"wait_screen_ready", "wait_ms"}:
+            # Publish the same branch contract the result consumer enforces.
+            # A device redo cannot simultaneously confirm a terminal result.
+            statuses = []
+            following = review_transition.get("if_pass") or {}
+            failed = review_transition.get("if_fail") or {}
+            if not following.get("program_owned") and cid in following.get("capabilities", []):
+                statuses.append("pass")
+            if cid in failed.get("capabilities", []):
+                statuses.append("fail")
+            if not statuses:
+                continue
+            tool["function"]["parameters"]["properties"]["prior_status"]["enum"] = statuses
+            if statuses == ["fail"]:
+                tool["function"]["description"] += " 待回看时此工具只用于 prior_status=fail 的原目标重做；画面已满足 prior_action.expected 必须调用 confirm_action_result，不再操作设备。"
         tools.append(tool)
     if include_control_tools and not slim_envelope:
-        tools.extend(CONTROL_TOOLS)
+        tools.extend(tool for tool in CONTROL_TOOLS if tool["function"]["name"] != SIGNAL_ASK_HUMAN)
     if include_review_confirmation and require_prior_status:
         tools.append(openai_tool(
             CONFIRM_ACTION_RESULT,
-            "确认已执行动作的可见结果，不操作设备；画面已证明 prior_action.expected 达成时调用。若下一步操作已明确，不要单独调用本工具，直接调用下一步操作并在其参数里填 prior_status=pass（省一轮模型调用）。",
+            "确认已执行动作的可见结果，不操作设备。当前图已满足 prior_action.expected，且 review_transition.if_pass 为空或 program_owned=true 时，调用本工具并说明画面证据；只有 if_pass 明确给出下一设备目标时，才可直接调用那个目标并填 prior_status=pass。恢复弹窗只确认恢复结果，不确认原业务完成。",
             {"type": "object", "properties": {
-                "prior_status": {"type": "string", "enum": ["pass"]},
+                "prior_status": {"type": "string", "enum": ["pass", "fail"] if review_only else ["pass"]},
             }, "required": ["thought", "prior_status"], "additionalProperties": False},
             slim=True,
         ))
+    if review_only and include_review_confirmation and require_prior_status:
+        tools[-1]["function"]["description"] = "只核验 prior_action.expected 的可见结果，必须给 pass 或 fail 和画面证据；不操作设备。证据不足用等待或挡屏报告，不猜测。"
+    # 本地控制工具不依赖设备能力目录，也不要求回看结论。挡屏不能证明业务动作成败。
+    tools.append(openai_tool(
+        REPORT_SCREEN_OBSTACLE,
+        "报告当前目标被弹窗或加载层遮挡，不操作设备、不完成业务里程碑；程序安排独立恢复后继续原目标。",
+        {"type": "object", "properties": {
+            "kind": {"type": "string", "enum": ["consent", "permission", "overlay", "loading"]},
+            "summary": {"type": "string", "description": "可见挡屏及被阻挡的当前目标，不得包含账号或验证码"},
+        }, "required": ["kind", "summary", "thought"], "additionalProperties": False},
+        slim=True,
+    ))
+    tools[-1]["function"]["parameters"]["properties"].pop("prior_status", None)
     return tools
 
 
@@ -788,14 +825,8 @@ def decision_from_tool_calls(
         out["status"] = "give_up"
         return out
     if name == SIGNAL_ASK_HUMAN:
-        out["status"] = "ask_human"
-        out["action"] = {
-            "capability_id": "human_input_text",
-            "params": {
-                "question": str(args.get("question") or thought or "需要你提供信息"),
-                "field": str(args.get("field") or "text"),
-            },
-        }
+        out["status"] = "give_up"
+        out["thought"] = "V5 不支持人工输入能力"
         return out
     if name == SIGNAL_SKIP:
         reason = str(args.get("reason") or thought or "当前渠道无法执行本条用例").strip()

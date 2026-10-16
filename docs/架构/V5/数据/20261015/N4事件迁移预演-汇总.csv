@@ -1,0 +1,23 @@
+target,plan,catalog_rows,db_struct_refs,db_text_refs,ref_sources,history_runs,code_files,code_hits,ambiguities,derived_recompile_cases
+request_sms_code,迁入 fb.global.login 的 send_code 步骤；generic+recovery 两条退役,generic(on)+recovery(on),0,0,,76,18,57,0,0
+accept_legal_consent,迁入登录块 legal_consent 步骤，底层 operation.check_box；两条退役,generic(on)+recovery(on),6,0,project_cases.meta.step_program_keys=5;nav_flow_block_catalog=1,133,16,29,1,5
+relogin,由 fb.global.login 整体承担；事件退役,generic(on),0,0,,167,20,35,0,0
+confirm_login_state,改为 tool 层检查事件；登录块 login_state 步骤引用,generic(on),6,0,project_cases.meta.step_program_keys=5;nav_flow_block_catalog=1,108,8,24,0,5
+open_app,合并为 launch_app(package)；旧 id 删除，引用迁移，不留别名,generic(on),0,0,,0,10,24,0,0
+open_url,合并为 launch_app(url)；旧 id 删除，引用迁移，不留别名,generic(on),0,0,,0,8,18,0,0
+fsm_navigate,归 policy/block，不作事件,recovery(on),1,3,catalog_entries[base]=3;nav_fsm.meta=1,40,25,63,0,0
+check_run_env,已停用，退役,generic(off),0,0,,0,9,12,0,0
+operation.open_cart,从代码目录移除，由项目 FSM nav_target 表达,-,0,0,,0,2,4,0,0
+guard.action_fuse,tier=policy，移出事件平台判断,base(on),0,0,,0,5,7,0,0
+guard.block_assert_in_do,tier=policy，移出事件平台判断,base(on),0,0,,0,3,4,0,0
+guard.block_back_without_nav_back_semantics,tier=policy，移出事件平台判断,base(on),0,0,,0,4,5,0,0
+guard.block_fsm_off_step_target,tier=policy，移出事件平台判断,base(on),0,0,,0,3,4,0,0
+guard.block_login_flow_unless_step_scope,tier=policy，移出事件平台判断,base(on),0,0,,0,0,0,0,0
+guard.block_repeat_get_otp_when_ready,tier=policy，移出事件平台判断,base(on),0,0,,0,4,5,0,0
+guard.deny_mutate,tier=policy，移出事件平台判断,base(on),0,0,,0,4,5,0,0
+guard.exec_script_params,tier=policy，移出事件平台判断,base(on),0,0,,0,3,4,0,0
+guard.force_case_expectation,tier=policy，移出事件平台判断,base(on),0,0,,0,4,6,0,0
+guard.limit_recovery_retry,tier=policy，移出事件平台判断,base(on),0,0,,0,4,7,0,0
+guard.prep_clear_before_launch,tier=policy，移出事件平台判断,base(on),0,0,,0,3,4,0,0
+guard.require_otp_before_login_tap,tier=policy，移出事件平台判断,base(on),0,0,,0,4,6,0,0
+guard.require_sms_send_before_otp,tier=policy，移出事件平台判断,base(on),0,0,,0,5,7,0,0

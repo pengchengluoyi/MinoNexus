@@ -1,0 +1,32 @@
+{
+  "checks": [
+    "no evidence cannot commit",
+    "no session written",
+    "reject weak positive 2",
+    "reject weak positive 3",
+    "reject weak positive 4",
+    "reject weak positive 5",
+    "reject weak positive 6",
+    "positive authentication verified",
+    "commit positive",
+    "actual SQLite logged in",
+    "business not inferred",
+    "dirty blocks commit",
+    "identity unknown prevents completion",
+    "match without evidence rejected",
+    "wrong identity blocked",
+    "matching visible identity accepted",
+    "cross-run evidence rejected",
+    "changed lease invalidates proof",
+    "unknown identity clears old binding",
+    "legacy helper cannot invent proof",
+    "legacy direct write rejects no evidence",
+    "legacy rule rejects no evidence",
+    "logout invalidates prior proof",
+    "case scope change rejects proof",
+    "unknown identity not exposed as ready session",
+    "prompt repository loads"
+  ],
+  "count": 26,
+  "scope": "production functions and isolated SQLite; controlled observations, no real model/device login"
+}

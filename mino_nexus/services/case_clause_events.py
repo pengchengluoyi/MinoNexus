@@ -450,17 +450,17 @@ def user_message(
         current = names.get(str(platform or "").strip().lower(), platform or "未知")
         return f"{head}无法执行：{event_name or '该事件'}只在 {where} 执行，当前平台是 {current}。"
     if reason == "scheme_unsupported":
-        got = "看图" if scheme == "visual" else "DOM" if scheme == "dom" else scheme or "当前路线"
+        got = "看图" if scheme == "visual" else "DOM 优先" if scheme in ("dom", "dom_preferred") else scheme or "当前路线"
         other_scheme = "、".join("看图" if s == "visual" else "DOM" if s == "dom" else s for s in (supported_schemes or []))
         return f"{head}无法执行：当前任务是{got}，{event_name or '该事件'}只实现了{other_scheme or '另一路线'}。"
     if reason == "params_incomplete":
         return f"{head}无法验证：{event_name or '该检查'}缺少{detail or '必要参数'}。"
+    if reason == "compile_span_schema_invalid":
+        return f"{head}尚未编译：模型输出字段格式与编译合同不一致，请维护者检查模型输出后重新编译；原文已保留。"
     if reason == "missing_slot":
         if "credential" in detail:
             return f"{head}尚未执行：当前登录流程没有可用测试账号，请检查项目当前环境的账号配置。"
-        names = {"submit": "提交按钮", "entry": "页面入口", "credential": "测试账号"}
-        readable = "、".join(names.get(value, "必要操作信息") for value in detail.split("、") if value)
-        return f"{head}尚未执行：缺少{readable or '必要操作信息'}，请在用例编辑页补充。"
+        return f"{head}尚未编译：编译结果缺少所需操作参数，请核对系统理解与原文；确认原文确有缺失后再补充。"
     if reason == "uncovered":
         if layer == "expected" and re.search(r"[（(].*[）)]|即可", text):
             return f"{head}尚未完整编译：请把括号内的页面说明改成明确检查点，保留需要验证的内容；句末语气词可删除。"

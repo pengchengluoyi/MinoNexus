@@ -32,7 +32,7 @@ MinoNexus 是服务端大脑。它决定"下一步做什么"，让 [MinoScout](.
 
 ### 2.1 能力目录是唯一真源，且只在本仓
 
-`catalog_entries` 声明"能做什么、用什么实现"，**不写"什么时候做、按什么顺序做"** —— 后者是 LLM 的事。`kind` 为 `prep` / `do` / `check` / `generic` / `recovery`，与执行阶段和 `/packs?kind=` 同一套。空库不灌目录，能力只经 Workbench 写入。
+`catalog_entries` 声明"能做什么、用什么实现"，**不写"什么时候做、按什么顺序做"** —— 后者是 LLM 的事。`kind` 为 `prep` / `do` / `check` / `generic` / `recovery`，与执行阶段和 `/packs?kind=` 同一套。业务能力由 Workbench 维护。程序直接派发的系统能力由程序在启动时自动注册与升级，不要求用户在 Workbench 点升级；代码声明维护其平台、caller、phases 和版本合同，不能仅改常量而遗留现库旧平台。
 
 Scout 不读 YAML。所以**凡是 Scout 执行时需要知道的东西，必须由 Nexus 算完塞进 `EXECUTE` 载荷**：`executor_order`、`low_level`、`selected_impl`、`device_hint`。
 

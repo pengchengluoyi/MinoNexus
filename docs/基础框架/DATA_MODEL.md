@@ -13,7 +13,8 @@
 | 项目号池配置（扩展字段 / 启用模板 / 本地模板） | `project_pool_config` | Studio 号池与模板；`projects.env` 中对应键仅迁移来源 |
 | 用例资源声明（Claim 词汇 / 示例） | 用例 `meta.resource_key` + `case_scene`（真源词汇见 `case_resource_key_catalog.py`） | Console「用例密钥」；见 [CASE_RESOURCE_KEY.md](CASE_RESOURCE_KEY.md) |
 | 用例、前置、预期 | `project_cases`（按 `project_id` + `requirement_id`；需求/脑图仍在 `apps.env.automation.qa_process`） | UI / QA 推进 |
-| 用例导入预览 | `case_import_previews`（账号与项目隔离，24 小时有效；解析结果逐行持久化，提交后移除） | 导入预览 / 确认导入 API；工作租约避免多进程重复解析，进程退出后恢复未完成行 |
+| 用例导入预览 | `case_import_previews`（账号与项目隔离，24 小时有效；解析结果逐行持久化，生命周期独立于提交回执） | 导入预览 API；工作租约避免多进程重复解析，进程退出后恢复未完成行 |
+| 用例导入回执 | `case_import_receipts` / `case_import_receipt_lines`（账号、项目、提交身份唯一；不随预览过期删除） | 确认导入与回执查询/续交 API；保存原始行、决策及实际用例 revision 快照，每行用例与结果原子提交 |
 | `AppRegressionRun`（批次结果） | `app_regression_runs` | Nexus 的循环 |
 | 逐步 trace / baseline | `m_case_run_trace` / `m_case_baseline` | Nexus 的循环 |
 | 设备身份 | `m_device` | **连通性来自 Scout 上报**，其余来自 UI |
@@ -119,3 +120,39 @@ Scout 密钥命名空间包含已确认 owner；本地 IM channel 以服务 orig
 - 历史无 owner 节点认领在 SQLite 事务内同时更新 `nodes`、未归属的 `m_device` 与 `node_credentials`。旧 studio/plugin 字段不授予账号权限。
 
 以上使用现有数据库建表流程，不增加 JSON 真源。验证必须使用新的 `MINO_NEXUS_DATA_DIR`，禁止修改已有运行库。
+
+## 项目维护者（2026-10-15）
+
+- 新表 `project_members`：主键 `(project_id, user_id)`，`role` 固定 `maintainer`，`added_by` / `added_at` 记录管理员操作。项目创建者（`projects.created_by`）隐式为维护者，不写入该表；管理员不需要成员行。删除项目同时删除其成员行。由 `create_all` 建表，无 JSON 真源。
+
+
+### 显式平台迁移回执（N4 开发中）
+
+`platform_migration_receipts(plan_id,state,reviewer,backup_path)` 仅由显式审阅后的 `services.platform_migration_apply` 在成功的业务数据迁移事务内创建/写入，不由启动自动执行。state 为 applied/reverted，回执与字段更新同事务；重复调用仍验证对应字段摘要，漂移则拒绝。业务库启用仍依赖三仓消费者和完整引用清单验收，不能根据该工具存在推定已迁移。session、历史 run、原文、冻结 publication 和锁键不在该工具可写范围。
+
+## N2 普通绑定与原子终结（2026-10-15）
+
+复用 session_events/session_meta；不新增 JSON 真源。`execution/bound` 与 `runtime_context.execution_binding` 同事务写入，并保存事件引用；绑定内容不可变，同 ID 同内容幂等，不同内容拒绝。runtime_context 深合并，禁止覆盖绑定/终结身份；最终幂等摘要覆盖 context。SQLite 并发更新仍在事务内串行分配事件序号，超时完整回滚。
+
+绑定正文超过 256 KiB 写 `binding_size_warning`（字节数、操作数和唯一实现数），不截断、不因超线直接拒绝。实际存储失败才阻断派发。普通 SessionWriter.close/force_close 走原子 finalizer，将 session/end、普通 unverified verdict、finalization_id、finished_at 和证据范围一起提交；取消与未知写隔离优先，不将普通 pass 提升为严格 verified_pass。终结后拒绝新增事件或覆盖终态，重复相同终结幂等。
+
+读取返回 `binding_record.status=legacy|supported|unsupported|invalid`。没有 binding 的旧会话保留原证据；未知版本不按当前目录补造详情。Workbench 显示版本提示、当时的操作/实现装配和普通终结保证范围。
+
+
+## V5 持久化编译与逐项复核（2026-10-15）
+
+- `case_revisions`：`revision_id`、owner/project/case、单案递增 revision、不可变 source/source_digest、冻结 compile_input/input_digest、来源 receipt/line 或补充理由、时间。原文和资源配置形成候选版本；旧版本没有更新或删除入口，删除用例也保留历史。首次接管旧用例只登记当前可见快照，`legacy_snapshot` 不伪造旧解析来源。
+- `case_compile_jobs`：owner/project/case/request_id 唯一；revision 引用、构建身份、状态、claim token/worker/租约、取消标记、恢复父任务、产物/诊断/实际 dispatch/model/catalog provenance。状态为 queued/running/succeeded/failed/interrupted/cancelled。领取原子；租约失效标 interrupted，不自动重复模型调用。显式恢复创建新关联 job，同一请求重试返回同一 job。
+- `case_review_records`：轻量追加记录，不是新工单系统。保存 revision/item/context、诊断快照、确认分类、理由、实际复检结果、reviewer/time 和可选 session 引用；不覆盖自动 verdict。静态复检消失记 fixed_pending_run；只有 owner/项目/用例/原文/编译 job/冻结版本匹配且在问题记录之后的 verified_pass session 才能标 verified_resolved。
+- `project_cases.extra` 的 `source_revision_id/source_revision/source_digest/latest_compile_job_id/compile_job/effective_artifact` 是服务端投影。客户端不能写入编译成功或有效产物。保存原文与 revision+queued job 在同一事务；导入行状态/快照/结果也在该事务。receipt result 保存 `revision_id/compile_job_id/source_digest`，不再把预览缓存当权威产物。
+- worker 只在事务外复用既有 resource/step 编译器；恢复固化 owner，不复制项目环境、服务商密钥或账号整包。结果落盘时校验 claim、租约、取消、owner、最新 revision/job 和冻结输入；旧结果只入历史。新任务使旧有效产物失效；旧 publication 仍可读，必须重审发布才可执行新原文。
+
+
+### N4 SN 引用迁移补充（2026-10-16）
+
+显式映射支持 `operation=rename_key`，仅限 `device_targets` 和 `platforms_by_sn` 的字典键。path 指向旧键，before 为旧 desktop:{node}:console，after 为同一 node 的 mac/win:{node}:console；引用值原样移动，不导出到计划。新键已存在、旧键不存在、跨宿主、未知映射及受保护历史路径均拒绝。需要同时改嵌套平台时，先列 rename_key，再列新键下的 set；同一字段 CAS 与同一事务提交，回退按逆序执行。共享 resource_key、历史 session/run/frozen publication 不参与改名。
+
+预演、prepare 与 apply/rollback 同时检查 tasks 的 pending/queued/running、case_compile_jobs 的 queued/running；有未结束工作时阻止切换。编译任务的输入/产物/历史不直接迁移。任意未分类字典中的 desktop SN 键会输出脱敏阻断项，不能因尚未支持改写便从盘点中消失。该扩展不代替完整引用审阅、业务写入暂停及三仓消费者验收。
+
+
+N4 预演/静默窗口按持久 write_safety 动作账本核对停止状态：完整 settled 回执，或 recovered 且包含同 action_ref/SN 的 write_stop.v1、审核者与有效进程/执行 lane 停止证明，才能忽略历史 cases 中保留的隔离摘要。缺失/空账本沿用旧数据保守检查，畸形账本、独立顶层隔离、未知写及证明不完整仍阻断；不修改历史 verdict 或解除实际租约。apps.platforms 继续按现有逗号字符串存储合同盘点，不误报必须改成 JSON 数组；嵌套 platforms 仍须数组。

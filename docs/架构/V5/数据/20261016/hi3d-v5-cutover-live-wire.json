@@ -1,0 +1,30 @@
+{
+  "negative_wire_checks": [
+    {
+      "check": "old contract",
+      "accepted": false
+    },
+    {
+      "check": "nested platform alias",
+      "accepted": false
+    },
+    {
+      "check": "invalid input pair",
+      "accepted": false
+    }
+  ],
+  "health": {
+    "ok": true,
+    "nexus_version": "0.1.32",
+    "protocol_version": 2,
+    "catalog": {
+      "root": "catalog_entries",
+      "capabilities_count": 44,
+      "recovery_count": 7,
+      "errors": []
+    },
+    "nodes": 1,
+    "nodes_alive": 1
+  },
+  "business_execution": false
+}

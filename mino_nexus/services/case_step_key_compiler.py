@@ -13,7 +13,7 @@ _BLOCK_RE = re.compile(r"【块[:：]\s*([^】]+)】")
 _NAV_RE = re.compile(r"【导航[:：]\s*([^】]+)】")
 _CAP_RE = re.compile(r"【cap[:：]\s*([^】]+)】", re.I)
 _KEY_REF_RE = re.compile(r"\b((?:operation|expected)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)\b", re.I)
-_COMPILE_CONTRACT_REVISION = 3
+_COMPILE_CONTRACT_REVISION = 12
 _SLUG_BAD = re.compile(r"[^\w]+", re.UNICODE)
 _SPATIAL_HINTS: tuple[tuple[str, str], ...] = (
     ("右上", "top_right"),
@@ -174,6 +174,7 @@ def _blocked_item(
     event_id: str = "",
     user_message: str = "",
     event_name: str = "",
+    detail: str = "",
 ) -> dict[str, Any]:
     row = {
         "phase": phase,
@@ -186,6 +187,8 @@ def _blocked_item(
         row["event_name"] = event_name
     if user_message:
         row["user_message"] = user_message[:400]
+    if detail:
+        row["detail"] = str(detail)[:240]
     return row
 
 
@@ -358,6 +361,11 @@ def _step_from_hit(hit: dict[str, Any], *, case_step: int, sub_idx: int) -> dict
     schemes = list(hit.get("schemes") or ["visual", "dom"])
     layer = str(hit.get("layer") or "")
     if layer == "expected":
+        from mino_nexus.services.checkpoint_text_policy import compiled_text_rules
+        rules = compiled_text_rules(str(hit.get("assert_mode") or "vlm"), rules, clause)
+        target = hit.get("target") if isinstance(hit.get("target"), dict) else {}
+        if target:
+            element = {**element, **{key: value for key, value in target.items() if value}}
         assert_payload: dict[str, Any] = {
             "mode": str(hit.get("assert_mode") or "vlm"),
             "element": element,
@@ -365,8 +373,9 @@ def _step_from_hit(hit: dict[str, Any], *, case_step: int, sub_idx: int) -> dict
         }
         if hit.get("bind"):
             assert_payload["bind"] = hit["bind"]
-        if not element and not rules and clause:
-            assert_payload["expectation"] = clause[:240]
+        if clause:
+            # 结构参数只能提炼信息，完整原句始终保留逻辑关系与视觉约束。
+            assert_payload["expectation"] = clause
         row = {
             "id": f"ck_s{case_step}_{sub_idx}"[:64],
             "key_ref": str(hit.get("key_ref") or ""),
@@ -394,6 +403,10 @@ def _step_from_hit(hit: dict[str, Any], *, case_step: int, sub_idx: int) -> dict
     target = hit.get("target") if isinstance(hit.get("target"), dict) else {}
     if target:
         params["target"] = {k: v for k, v in target.items() if v}
+    if str(hit.get("hook_cap") or "") == "swipe_direction":
+        params["direction"] = str(rules.get("direction") or "")
+        if "duration_ms" in rules:
+            params["duration_ms"] = rules["duration_ms"]
     if rules.get("wait_ms"):
         try:
             params["wait_ms"] = int(rules["wait_ms"])
@@ -556,6 +569,7 @@ def compile_operation_text(
                         case_step=case_step,
                         clause=clause,
                         reason=reason,
+                        detail=str(hit.get("detail") or ""),
                         user_message=user_message(
                             case_step=case_step,
                             layer="operation",
@@ -737,6 +751,7 @@ def compile_expected_text(
                         case_step=case_step,
                         clause=body,
                         reason=reason,
+                        detail=uncovered,
                         user_message=user_message(
                             case_step=case_step,
                             layer="expected",
@@ -985,9 +1000,12 @@ from mino_nexus.services.compile_provenance import capture as capture_provenance
 @capture_provenance
 def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
     """整案编译 → step_program_keys + 各步 plan 缓存 + warnings + ui_automation。"""
-    project_id = str(case.get("project_id") or case.get("app_id") or "").strip()
+    project_id = str(case.get("project_id") or "").strip()
     if not project_id or project_id == "_project":
         raise ValueError("control_project_missing: 请从项目内导入或编译用例")
+    from mino_nexus.services.project_store import require_project
+
+    require_project(project_id)  # 应用 ID 不是控件项目命名空间。
     case = {**case, "project_id": project_id}
     step_keys: dict[str, Any] = {}
     all_warnings: list[dict[str, Any]] = []
@@ -1016,6 +1034,12 @@ def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
                 platform=platform,
                 do_steps=list(do_plan.get("steps") or []),
             )
+        from mino_nexus.services.execution_requirements import compile_steps, case_source_revision
+        do_plan["binding_source_revision"] = ck_plan["binding_source_revision"] = case_source_revision(case)
+        do_plan["binding_event_contract"] = ck_plan["binding_event_contract"] = 3
+        do_plan["binding_requirement_contract"] = ck_plan["binding_requirement_contract"] = 1
+        do_plan["binding_steps"] = compile_steps(do_plan, app_id=app_id)
+        ck_plan["binding_steps"] = compile_steps(ck_plan, app_id=app_id)
         do_plan["block_dependencies"] = _block_dependencies(do_plan, app_id)
         ck_plan["block_dependencies"] = _block_dependencies(ck_plan, app_id)
         required_caps = {

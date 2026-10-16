@@ -109,7 +109,7 @@ def list_catalog(*, app_id: str = "", channel: str = "") -> list[dict[str, Any]]
 
 def _block_matches_channel(row: dict[str, Any], channel: str) -> bool:
     bid = str(row.get("block_id") or "")
-    if bid in ("fb.global.login", "fb.global.login.email_web", "fb.global.system_dialog"):
+    if bid.startswith("fb.global.login.") or bid in ("fb.global.login", "fb.global.system_dialog"):
         return True
     if channel == "web":
         return "email_web" in bid or ".web" in bid

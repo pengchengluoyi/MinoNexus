@@ -269,7 +269,7 @@ def ui_devices_for_node(node: NodeSession, registry: Optional[NodeRegistry] = No
     return [
         d for d in ui_devices(registry, account_scoped=False, include_history=False)
         if d.get("node_id") == node.node_id
-        and (d.get("platform") in ("desktop", "web") or device_channels_online(d.get("channels")))
+        and (d.get("platform") in ("desktop", "mac", "win", "web") or device_channels_online(d.get("channels")))
     ]
 
 

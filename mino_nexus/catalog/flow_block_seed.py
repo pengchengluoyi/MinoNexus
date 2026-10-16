@@ -28,6 +28,7 @@ _UNIFIED_LOGIN_STEPS = [
         "kind": "visual_tap",
         "title": "发送验证码",
         "cap": "tap_element",
+        "exec_caps": ["press_key", "probe_device_state", "hierarchy", "screenshot"],
         "match": ["Send", "Send code", "Get code", "Resend", "发送验证码", "获取验证码", "重新发送"],
         "exclude": [
             "Continue",
@@ -48,6 +49,17 @@ _UNIFIED_LOGIN_STEPS = [
         "hook_cap": "get_otp",
     },
     {
+        "id": "legal_consent",
+        "kind": "hook",
+        "title": "同意协议",
+        "hook_cap": "operation.check_box",
+        "params": {"checked": True},
+        "exec_caps": ["tap_element", "press_key", "probe_device_state", "hierarchy", "screenshot"],
+        "optional": False,
+        "requirement": "conditional",
+        "condition": {"kind": "login_consent", "max_observations": 3},
+    },
+    {
         "id": "otp_field",
         "kind": "visual_tap",
         "title": "聚焦验证码输入框",
@@ -58,13 +70,6 @@ _UNIFIED_LOGIN_STEPS = [
         "kind": "hook",
         "title": "填写验证码",
         "cap": "input_text",
-    },
-    {
-        "id": "legal_consent",
-        "kind": "hook",
-        "title": "同意协议",
-        "hook_cap": "accept_legal_consent",
-        "optional": True,
     },
     {
         "id": "submit_login",
@@ -112,9 +117,9 @@ def seed_global_flow_blocks() -> int:
             {
                 "block_id": LOGIN_BLOCK_ID,
                 "display_name": "登录流（通用）",
-                "description": "登录入口→填账号→发码→取码→填验证码→同意协议→提交→确认登录态。lease_account / get_otp 按用例给凭证。",
+                "description": "登录入口→填账号→发码→取码→核验协议→聚焦并填验证码→提交→确认登录态。lease_account / get_otp 按用例给凭证。",
                 "steps_json": list(_UNIFIED_LOGIN_STEPS),
-                "version": "v10",
+                "version": "v13",
             },
             {
                 "block_id": SYSTEM_DIALOG_BLOCK_ID,
@@ -123,6 +128,11 @@ def seed_global_flow_blocks() -> int:
                 "steps_json": list(_SYSTEM_DIALOG_STEPS),
             },
         ]
+        for step_id in ('send_code', 'legal_consent'):
+            rows.append({'block_id': LOGIN_BLOCK_ID + '.' + step_id,
+                'display_name': '登录步骤：' + step_id, 'description': '登录块的独立业务步骤；不是事件别名。',
+                'steps_json': [{**{k:v for k,v in step.items() if k not in {'condition', 'requirement'}}, 'optional': False} for step in _UNIFIED_LOGIN_STEPS if step['id'] == step_id],
+                'version': 'v13'})
         for row in rows:
             bid = str(row["block_id"])
             existing = (
@@ -153,7 +163,7 @@ def seed_global_flow_blocks() -> int:
                     existing.display_name = str(row["display_name"])
                     n += 1
                 ver = str(row.get("version") or "")
-                if ver in ("v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10") and str(existing.version or "") != ver:
+                if ver in ("v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13") and str(existing.version or "") != ver:
                     existing.steps_json = row["steps_json"]
                     existing.version = ver
                     existing.display_name = str(row["display_name"])

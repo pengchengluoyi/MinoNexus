@@ -857,6 +857,9 @@ def observe_session_from_probe(session_block: str) -> dict[str, str]:
 def lease_expired(lease: dict[str, Any], *, now: Optional[datetime] = None) -> bool:
     if not isinstance(lease, dict):
         return True
+    from mino_nexus.services.run_write_safety import protected
+    if protected(str(lease.get("run_id") or "")):
+        return False
     exp = str(lease.get("expires_at") or "").strip()
     if not exp:
         return False

@@ -1,0 +1,41 @@
+id: case.recompile
+version: 2
+title: 排队编译指定用例
+description: 排队重新编译指定用例，保留原文和 case_id，立即返回持久 job_id；不代表编译已完成。先用 case_version_chain 读取当前 expected_revision，再传 expected_revision 和稳定的 client_request_id；相同请求重试保持同一标识。用 case_compile_job 查询状态，失败或中断不自动重放模型调用。
+route: POST /project/{project_id}/cases/{case_id}/compile-jobs
+risk: write
+async: true
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    project_id:
+      type: string
+      minLength: 1
+      description: 项目 id 或项目名，用于限定用例归属
+    case_id:
+      type: string
+      minLength: 1
+      description: 当前用例 id；先用 case_list 核对，不使用已删除或其他项目的 id
+    expected_revision:
+      type: integer
+      minimum: 1
+      description: case_version_chain 返回的当前 expected_revision；版本冲突后刷新审阅，不自动重试
+    client_request_id:
+      type: string
+      minLength: 1
+      maxLength: 160
+      description: 本次编译的稳定请求标识；响应丢失时查询原 job，不更换标识重复提交
+  required:
+  - project_id
+  - case_id
+  - expected_revision
+  - client_request_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

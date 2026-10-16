@@ -491,7 +491,14 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
     if isinstance(raw_action, dict) and raw_action.get("capability_id"):
         params = raw_action.get("params") if isinstance(raw_action.get("params"), dict) else {}
         prepare_xy_params_for_execute(params, width, height)
-        lift_selector_target(params)
+        if str(raw_action.get("capability_id")) == "input_text":
+            # 输入值（包括租号凭证）不得被当作 DOM 定位文本。
+            selector_params = {k: v for k, v in params.items() if k != "text"}
+            lift_selector_target(selector_params)
+            if selector_params.get("target"):
+                params["target"] = selector_params["target"]
+        else:
+            lift_selector_target(params)
         action = AgentAction(capability_id=str(raw_action.get("capability_id")), params=params)
     if status in {"continue", "ask_human"} and action is None:
         warnings.append(f"status={status} 但无有效 action")
@@ -739,6 +746,8 @@ def vision_exec_turn(
     height: int,
     image_base64: str,
     image_mime: str = "image/png",
+    reference_image_base64: str = "",
+    reference_image_mime: str = "image/png",
     hierarchy_text: str = "",
     knowledge_hint: str = "",
     knowledge_body: str = "",
@@ -752,7 +761,8 @@ def vision_exec_turn(
     tool_kinds: Optional[list[str]] = None,
 ) -> AgentDecision:
     """看图执行单步：只出 capability，规划由 agent-vision-plan 负责。"""
-    from mino_nexus.catalog.tool_schema import CONFIRM_ACTION_RESULT, tools_chat_payload, tools_for_menu
+    from mino_nexus.action_space.scheme import execution_scheme
+    from mino_nexus.catalog.tool_schema import CONFIRM_ACTION_RESULT, REPORT_SCREEN_OBSTACLE, tools_chat_payload, tools_for_menu
 
     criteria = json.loads(assemble_vision_exec_slots(menu=[], success_criteria=success_criteria)["success_criteria"])
     review_confirmation = bool(criteria.get("prior_action")) and isinstance(criteria.get("review_transition"), dict)
@@ -784,6 +794,7 @@ def vision_exec_turn(
                 thought=f"当前阶段能力菜单不包含所需能力：{focused}；依赖阻塞，未执行动作",
                 parse_warnings=["focused cap missing from menu"],
             )
+    menu.append({"id": REPORT_SCREEN_OBSTACLE, "summary": "只报告挡屏，由程序安排独立恢复，不点击设备，不完成原目标。"})
     if review_confirmation:
         menu.append({
             "id": CONFIRM_ACTION_RESULT,
@@ -811,16 +822,32 @@ def vision_exec_turn(
         image_base64=image_base64,
         image_mime=image_mime,
     )
+    if reference_image_base64:
+        reference_image_base64, reference_image_mime = _llm_image(reference_image_base64, reference_image_mime)
+    slots["reference_image_base64"] = reference_image_base64
+    slots["reference_image_mime"] = reference_image_mime
+    slots["reference_image_label"] = "取证前真实页面；只读导航恢复同一对象，不作为当前登录或业务结果证据" if reference_image_base64 else ""
     criteria = json.loads(slots["success_criteria"])
+    reask = getattr(cursor, "visual_prior_reask", None)
+    review_only = bool(review_confirmation and isinstance(reask, dict) and reask.get(
+        str((criteria.get("prior_action") or {}).get("milestone_id") or "")))
     tool_payload = tools_chat_payload(tools_for_menu(
         menu,
         slim_envelope=True,
         include_control_tools=False,
         require_prior_status=bool(criteria.get("prior_action")),
         include_review_confirmation=review_confirmation,
+        review_transition=criteria.get("review_transition") if review_confirmation else None,
+        review_only=review_only,
+        execution_scheme=execution_scheme(run_context),
     ))
     try:
         messages, job_meta = render("agent-vision-exec", slots)
+        if reference_image_base64 and image_base64:
+            messages.insert(1, {"role": "user", "content": [
+                {"type": "text", "text": slots["reference_image_label"]},
+                {"type": "image_url", "image_url": {"url": f"data:{reference_image_mime};base64,{reference_image_base64}"}},
+            ]})
     except JobRenderError as e:
         return AgentDecision(status="ask_human", thought=str(e), raw_llm={"meta": {"error": str(e), "fail_kind": "prompt_configuration"}}, parse_warnings=["job render failed"])
     call = job_meta.get("call") or {}
@@ -854,8 +881,7 @@ def vision_exec_turn(
             parse_warnings=["llm failed"],
         )
     decision = _parse_agent_decision(raw, width, height)
-    allow_ids = {str(c.get("id") or "") for c in menu}
-    allow_ids.add("human_input_text")
+    allow_ids = {str(t["function"]["name"]) for t in tool_payload.get("tools", [])}
     if review_confirmation:
         allow_ids.add(CONFIRM_ACTION_RESULT)
     if decision.action and str(decision.action.capability_id or "") not in allow_ids:
@@ -907,10 +933,12 @@ def decide_next_action(
         if not menu:
             return AgentDecision(status="give_up", thought="备会话菜单为空（连通性丢失）",
                                  parse_warnings=["empty session menu"])
-    from mino_nexus.catalog.tool_schema import tools_chat_payload, tools_for_menu
+    from mino_nexus.catalog.tool_schema import REPORT_SCREEN_OBSTACLE, tools_chat_payload, tools_for_menu
 
+    menu.append({"id": REPORT_SCREEN_OBSTACLE, "summary": "只报告挡屏，由程序安排独立恢复，不点击设备，不完成原目标。"})
     image_base64, image_mime = _llm_image(image_base64, image_mime)
-    tool_payload = tools_chat_payload(tools_for_menu(menu))
+    from mino_nexus.action_space.scheme import execution_scheme
+    tool_payload = tools_chat_payload(tools_for_menu(menu, execution_scheme=execution_scheme(run_context)))
     provider, gate = resolve_regression_provider(provider_id)
     if provider is None:
         return AgentDecision(status="ask_human", thought=f"未启用 AI 视觉：{gate.get('reason')}",
@@ -1069,12 +1097,16 @@ def inspect_session(
     screen_h: int = 0,
     provider_id: Optional[str] = None,
     timeout_sec: int = 60,
+    run_context: Any = None,
 ) -> dict[str, Any]:
     """观察当前屏登录态。空输出/解析失败重试；耗尽后 ok=False，不当成功。"""
+    from mino_nexus.services.login_evidence import normalize_observation, observation_ref
+    observed_at = time.monotonic()
+    evidence_ref = observation_ref(image_base64)
     width = int(screen_w or 0) or 1080
     height = int(screen_h or 0) or 1920
     empty = {
-        "session": "guest",
+        "session": "unknown",
         "identity": "unknown",
         "seen": "",
         "probe": False,
@@ -1090,6 +1122,10 @@ def inspect_session(
     if provider is None:
         empty["reason"] = f"未启用 AI：{gate.get('reason')}"
         return empty
+    from mino_nexus.services.login_evidence_policy import configured_session_knowledge
+    configured_knowledge = configured_session_knowledge(run_context)
+    if configured_knowledge:
+        knowledge_hint = str(knowledge_hint or "") + "\n" + configured_knowledge
     slots = assemble_inspect_session_slots(
         required_session=required_session,
         knowledge_hint=knowledge_hint,
@@ -1106,17 +1142,30 @@ def inspect_session(
     last_err = "LLM 返回空/解析失败"
     attempts = 3
     for attempt in range(1, attempts + 1):
+        deadline = _case_model_deadline(run_context)
+        if deadline is not None and time.monotonic() >= deadline:
+            empty.update(reason="登录观察超出用例截止时间", error_kind="case_deadline_exceeded")
+            return empty
         raw, meta = _chat(
             job="inspect-session",
             provider=provider, messages=messages,
             job_meta=job_meta,
             temperature=float(call.get("temperature", 0.1)),
             max_tokens=int(call.get("max_tokens", 512)),
-            timeout_sec=int(call.get("timeout_sec", timeout_sec)),
+            timeout_sec=_clamp_to_case_deadline(run_context, int(call.get("timeout_sec", timeout_sec))),
+            deadline_monotonic=deadline,
             json_mode=bool(call.get("json_mode", True)),
         )
+        if deadline is not None and time.monotonic() >= deadline:
+            empty.update(reason="登录观察结果迟到，未采纳登录结论", error_kind="case_deadline_exceeded")
+            return empty
         if isinstance(raw, dict) and str(raw.get("session") or "").strip():
             row = _parse_inspect_session_raw(raw, width=width, height=height)
+            row.update(authentication_evidence=raw.get("authentication_evidence"),
+                       unauthentication_evidence=raw.get("unauthentication_evidence"),
+                       identity_evidence=raw.get("identity_evidence"), observation_ref=evidence_ref,
+                       observed_at_monotonic=observed_at)
+            row = normalize_observation(row)
             if attempt > 1:
                 SLog.i(TAG, f"inspect_session recovered on attempt {attempt}")
             return row

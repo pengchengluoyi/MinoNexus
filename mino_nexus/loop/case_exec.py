@@ -97,6 +97,7 @@ def _run_case_list(
         run_case_list(run_id, cases, doc)
         return
     from mino_nexus.loop.agent_loop import run_case
+    from mino_nexus.services.run_write_safety import protected
     from mino_nexus.loop.device_run_continuity import (
         continuity_blockers,
         get_sn_state,
@@ -108,6 +109,14 @@ def _run_case_list(
     for case_seq, case in enumerate(cases):
         if not _task_still_running(run_id):
             break
+        if protected(run_id):
+            for untouched in cases[case_seq:]:
+                if str(untouched.get("status") or "pending") not in ("pending", "running"):
+                    continue
+                run_store.patch_case(run_id, str(untouched.get("case_id") or ""), status="blocked",
+                    summary="前序动作停止未确认，本条未执行；设备与账号资源仍隔离",
+                    reason_code="resource_isolated", execution_started="no", resource_isolated=True)
+            break
         cid = str(case.get("case_id") or "")
         sn = str(case.get("sn") or doc.get("sn") or "")
         from mino_nexus.ai import dispatch_log
@@ -118,7 +127,7 @@ def _run_case_list(
         case = bind_case_execution_target(
             case, (doc.get("device_targets") or {}).get(sn) or {},
             surface=str(doc.get("env_surface") or ""),
-            action_scheme=str(doc.get("action_scheme") or "visual"), package=package,
+            action_scheme=str(doc.get("action_scheme") or "dom_preferred"), package=package,
         )
         run_store.patch_case(run_id, cid, status="running")
         emit_testing_task({
@@ -350,6 +359,8 @@ def _run_case_list(
                 skill_id=result.get("skill_id") or "",
                 view_id=result.get("view_id") or "",
                 slots=result.get("slots") if isinstance(result.get("slots"), dict) else {},
+                resource_isolated=bool(result.get("resource_isolated")),
+                reason_code=str(result.get("reason_code") or ""),
                 **_case_trace_fields(run_id, case),
             )
             emit_testing_task({
@@ -442,13 +453,16 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
         app_id = str((latest or doc or {}).get("app_id") or "")
         from mino_nexus.services.resource_transition import mark_web_run_devices
 
-        mark_web_run_devices(
-            run_id,
-            "logged_out",
-            source="task_end",
-            package=str((latest or doc or {}).get("package") or package or ""),
-            doc=latest if isinstance(latest, dict) else doc,
-        )
+        from mino_nexus.services.run_write_safety import protected
+
+        if not protected(run_id):
+            mark_web_run_devices(
+                run_id,
+                "logged_out",
+                source="task_end",
+                package=str((latest or doc or {}).get("package") or package or ""),
+                doc=latest if isinstance(latest, dict) else doc,
+            )
         release_run_lease(run_id, app_id=app_id)
         release_device_leases_for_run(run_id)
         sns = list(latest.get("sns") or [])
@@ -459,4 +473,5 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
             run_id,
             sns=sns,
             platforms_by_sn=latest.get("platforms_by_sn") if isinstance(latest.get("platforms_by_sn"), dict) else {},
+            allow_unbound_cleanup=False,
         )

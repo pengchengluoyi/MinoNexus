@@ -1,0 +1,31 @@
+id: case.compile_job
+version: 1
+title: 查询持久编译任务
+description: 读取一条本账号发起的编译任务状态、产物、诊断和实际模型来源。queued/running 继续查询同一 job；failed/interrupted/cancelled 不等于成功。只读，不领取、不恢复、不编译；其他账号的任务详情不可读。
+route: GET /project/{project_id}/cases/{case_id}/compile-jobs/{job_id}
+risk: read
+async: false
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    project_id:
+      type: string
+      minLength: 1
+    case_id:
+      type: string
+      minLength: 1
+    job_id:
+      type: string
+      minLength: 1
+  required:
+  - project_id
+  - case_id
+  - job_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+surfaces:
+- mcp
+enabled: true

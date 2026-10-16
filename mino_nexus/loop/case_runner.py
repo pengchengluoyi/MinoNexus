@@ -1,5 +1,7 @@
 """创建回归任务并落库。逐条执行在 case_exec。"""
 from __future__ import annotations
+
+from mino_nexus.action_space.scheme import normalize_action_scheme
 from mino_nexus.core.execution_user import user_thread, owned_job, require_user_id
 
 
@@ -117,7 +119,7 @@ def run_cases(
     playwright_headless: bool = True,
     env_profile: str = "",
     env_surface: str = "",
-    action_scheme: str = "visual",
+    action_scheme: str = "dom_preferred",
     plugin_user_id: str = "",
     execution_mode: str = "legacy",
 ) -> dict[str, Any]:
@@ -127,6 +129,7 @@ def run_cases(
     def mark(name: str) -> None:
         phases.append((name, int((time.perf_counter() - t0) * 1000)))
 
+    action_scheme = normalize_action_scheme(action_scheme)
     require_user_id(plugin_user_id or None)
     execution_mode = "legacy" if execution_mode in {"", "agent"} else execution_mode
     if execution_mode not in {"legacy", "v5"}:
@@ -257,7 +260,7 @@ def run_cases(
         "device_targets": device_targets,
         "env_profile": resolved_env,
         "env_surface": env_surface_id,
-        "action_scheme": "dom" if str(action_scheme or "").strip().lower() == "dom" else "visual",
+        "action_scheme": normalize_action_scheme(action_scheme),
         "owner_user_id": require_user_id(plugin_user_id or None),
         "plugin_user_id": require_user_id(plugin_user_id or None),
         "package": package,
@@ -296,9 +299,9 @@ def run_cases(
 
     fail_reason = ""
     if not device_sns:
-        fail_reason = "没有在线设备。请在 Studio 安装并连接 Scout，再选一台设备下发。"
+        fail_reason = "没有在线设备。请在 Workbench 安装并连接 Scout，再选一台设备下发。"
     elif not provider and execution_mode != "v5":
-        fail_reason = gate.get("reason") or "未配置用例执行大模型（Studio → 密钥 → 大模型 Key → 可用 + 用例）"
+        fail_reason = gate.get("reason") or "未配置用例执行大模型（Workbench → 大模型设置 → 可用 + 用例）"
 
     if fail_reason:
         for case in doc["cases"]:
@@ -361,6 +364,7 @@ def run_explore(
                                         headless=playwright_headless)
     platform = str(device_targets[device_sns[0]]["platform"])
     explore_case = build_explore_case(
+        platform=platform,
         instruction=str(instruction or "").strip(),
         max_steps=max_steps,
         max_idle_steps=max_idle_steps,
@@ -392,6 +396,7 @@ def run_explore(
         "engine": "agent",
         "run_type": "explore",
         "session_kind": "explore",
+        "action_scheme": normalize_action_scheme(None),
         "app_id": str(app.get("id") or ""),
         "app_name": str(app.get("name") or ""),
         "sn": device_sns[0] if device_sns else "",
@@ -430,14 +435,14 @@ def run_explore(
 
     fail_reason = ""
     if not device_sns:
-        fail_reason = "没有在线设备。请在 Studio 连接 Scout 后再发起探索。"
+        fail_reason = "没有在线设备。请在 Workbench 连接 Scout 后再发起探索。"
     elif device_sns and not any(
         d.get("status") == "online" and d.get("sn") == device_sns[0]
         for d in ui_devices.ui_devices()
     ):
         fail_reason = f"设备 {device_sns[0]} 已离线，请连接 Scout 后重试。"
     elif not provider:
-        fail_reason = gate.get("reason") or "未配置用例执行大模型（Studio → 密钥 → 大模型 Key）"
+        fail_reason = gate.get("reason") or "未配置用例执行大模型（Workbench → 大模型设置）"
 
     if fail_reason:
         run_store.patch_case(run_id, explore_case["case_id"], status="fail", summary=fail_reason, error=fail_reason)
@@ -463,6 +468,21 @@ def retry_failed(task_id: str, *, sn: str = "") -> dict[str, Any]:
     doc = run_store.get(task_id)
     if not doc:
         return {"ok": False, "code": 404, "reason": "任务不存在"}
+    uid = require_user_id()
+    if str(doc.get("owner_user_id") or "") != uid:
+        return {"ok": False, "code": 403, "reason": "任务归属缺失或与当前账号不一致"}
+    selected_sns = [sn] if sn else list(doc.get("sns") or ([doc["sn"]] if doc.get("sn") else []))
+    from mino_nexus.core.platform_contract import TARGET_PLATFORMS
+    from mino_nexus.services.node_registry import get_registry
+    current = {row["sn"]: row for row in get_registry().devices()}
+    for selected in selected_sns:
+        row = current.get(selected)
+        node = get_registry().get_node(str((row or {}).get("node_id") or ""))
+        if (row is None or node is None or node.owner_user_id != uid
+                or row.get("platform") not in TARGET_PLATFORMS):
+            return {"ok": False, "code": 409, "reason": "历史设备身份无法按当前平台合同确认，请重新选择执行设备"}
+    if not selected_sns:
+        return {"ok": False, "code": 409, "reason": "请重新选择执行设备"}
     failed_ids = [
         str(c.get("case_id"))
         for c in (doc.get("cases") or [])
@@ -473,10 +493,10 @@ def retry_failed(task_id: str, *, sn: str = "") -> dict[str, Any]:
     app = ps.require_app(str(doc.get("app_id") or ""))
     snapshot = run_cases(
         app,
-        sn=sn or str(doc.get("sn") or ""),
-        sns=[sn] if sn else list(doc.get("sns") or []),
+        sn=selected_sns[0],
+        sns=selected_sns,
         coverage=str(doc.get("coverage") or "once"),
-        platform=str(doc.get("platform") or "android"),
+        platform=str(current[selected_sns[0]]["platform"]),
         case_ids=failed_ids,
         run_type=str(doc.get("run_type") or "manual"),
         requirement_id=str(doc.get("requirement_id") or ""),
@@ -485,8 +505,8 @@ def retry_failed(task_id: str, *, sn: str = "") -> dict[str, Any]:
         playwright_headless=bool(doc.get("playwright_headless", True)),
         env_profile=str(doc.get("env_profile") or ""),
         env_surface=str(doc.get("env_surface") or ""),
-        action_scheme=str(doc.get("action_scheme") or "visual"),
-        plugin_user_id=str(doc.get("plugin_user_id") or ""),
+        action_scheme=str(doc.get("action_scheme") or "dom_preferred"),
+        plugin_user_id=uid,
         execution_mode=str(doc.get("execution_mode") or "legacy"),
     )
     return {"ok": True, "code": 200, "case_ids": failed_ids, "data": snapshot}

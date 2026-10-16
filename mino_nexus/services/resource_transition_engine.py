@@ -72,7 +72,7 @@ def _rules_for_trigger(trigger_id: str, platform: str) -> list[dict[str, Any]]:
     return fallback
 
 
-def _apply_effect(ctx: Any, effect: dict[str, Any], *, package_id: str = "", meta: dict[str, Any]) -> None:
+def _apply_effect(ctx: Any, effect: dict[str, Any], *, package_id: str = "", meta: dict[str, Any]) -> bool | None:
     from mino_nexus.services.resource_transition import _apply_device_login, emit_device_logout
 
     action = str(effect.get("action") or "").strip()
@@ -87,7 +87,7 @@ def _apply_effect(ctx: Any, effect: dict[str, Any], *, package_id: str = "", met
             sync_account=bool(effect.get("sync_account", True)),
         )
     elif action == "device_login":
-        _apply_device_login(ctx, package_id=pkg, source=src)
+        return _apply_device_login(ctx, package_id=pkg, source=src)
 
 
 def _write_audit(
@@ -191,8 +191,8 @@ def fire_transition(
         for effect in rule.get("effects_json") or []:
             if not isinstance(effect, dict):
                 continue
-            _apply_effect(ctx, effect, package_id=package_id, meta=extra)
-            applied = True
+            if _apply_effect(ctx, effect, package_id=package_id, meta=extra) is not False:
+                applied = True
     if applied:
         audit_payload = {**extra, "rule_ids": [r.get("rule_id") for r in rules]}
         _write_audit(ctx, trigger_id=tid, source=source, platform=plat, payload=audit_payload)

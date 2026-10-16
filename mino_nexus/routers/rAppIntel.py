@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from mino_nexus.core.http_util import ok
-from mino_nexus.routers.deps import current_session
+from mino_nexus.routers.deps import app_maintainer, current_session
 from mino_nexus.services import app_intel as intel
 
 router = APIRouter(prefix="/apps", tags=["AppIntel"])
@@ -208,7 +208,7 @@ def intel_create_proposal(
     return ok(result)
 
 
-@router.post("/{app_id}/intel/proposals/{proposal_id}/review")
+@router.post("/{app_id}/intel/proposals/{proposal_id}/review", dependencies=[Depends(app_maintainer)])
 def intel_review_proposal(
     app_id: str,
     proposal_id: str,
@@ -250,7 +250,7 @@ def intel_list_links(
     })
 
 
-@router.post("/{app_id}/intel/links")
+@router.post("/{app_id}/intel/links", dependencies=[Depends(app_maintainer)])
 def intel_add_link(
     app_id: str,
     body: LinkBody,

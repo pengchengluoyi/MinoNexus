@@ -1,0 +1,28 @@
+编号,仓库,源码路径,行号,语义,当前形态,目标与处置,证据等级
+PF01,MinoNexus,mino_nexus/core/protocol.py,95,协议设备/宿主/派发,desktop/os 与 host platform 混用,按实体区分 platform 四值及 host.os；双端同步,源码静态核对；未运行/未查业务库
+PF02,MinoNexus,mino_nexus/models/project.py,29,应用覆盖,字符串,四值数组合同；持久字段迁移与消费者一起改,源码静态核对；未运行/未查业务库
+PF03,MinoNexus,mino_nexus/models/case.py,19,用例适用,单字符串,单值四选一或显式集合，保留原句,源码静态核对；未运行/未查业务库
+PF04,MinoNexus,mino_nexus/models/device.py,14,设备事实,字符串,新注册四值校验，历史按原合同读,源码静态核对；未运行/未查业务库
+PF05,MinoNexus,mino_nexus/services/project_env.py,29,环境渠道,pc/ios/server,pc 专用 Windows schema 可迁 win；server 拆 kind；引用整体迁移,源码静态核对；未运行/未查业务库
+PF06,MinoNexus,mino_nexus/services/device_targets.py,8,目标选择,desktop+os,只读规范 platform；不以未知默认 android,源码静态核对；未运行/未查业务库
+PF07,MinoNexus,mino_nexus/runtime/platform_gate.py,8,准入及用例映射,多套别名,统一词表；all/mixed 单列集合语义,源码静态核对；未运行/未查业务库
+PF08,MinoNexus,mino_nexus/services/node_registry.py,46,注册身份,SN+os+platform,宿主/设备分开，SN 与锁不能混淆,源码静态核对；未运行/未查业务库
+PF09,MinoNexus,mino_nexus/services/device_admission.py,17,共享锁,desktop 竞争域,保留 headed web 与 native 同锁，禁止按新 SN 分裂,源码静态核对；未运行/未查业务库
+PF10,MinoNexus,mino_nexus/loop/case_runner.py,194,任务聚合,mixed,platforms_by_sn + 集合；真实设备只有单值,源码静态核对；未运行/未查业务库
+PF11,MinoNexus,mino_nexus/services/case_import.py,73,导入,环境默认/映射,一次性转换有来源；歧义待补充，禁止猜 Android,源码静态核对；未运行/未查业务库
+PF12,MinoNexus,mino_nexus/services/resource_preflight.py,94,资源引用,嵌套 platform,claim/device_app/冻结计划联合校验迁移,源码静态核对；未运行/未查业务库
+PF13,MinoScout,mino_scout/protocol.py,95,协议,同名不同语义,与 Nexus 同步合同及合法/非法载荷验证,源码静态核对；未运行/未查业务库
+PF14,MinoScout,mino_scout/core.py,906,运行归一化,别名与 SN 猜测,新合同删除运行别名与默认猜测,源码静态核对；未运行/未查业务库
+PF15,MinoScout,mino_scout/input_contract.py,10,输入组合,desktop,原生按真实 mac/win 注册；executor desktop 保留,源码静态核对；未运行/未查业务库
+PF16,MinoScout,mino_scout/desktop.py,46,宿主探测,macos/windows/linux,边界映射 host.os；Linux 不注册原生桌面，保留宿主支持,源码静态核对；未运行/未查业务库
+PF17,MinoScout,mino_scout/desktop.py,248,设备注册,desktop SN+os,SN 迁移按事实选择 mac/win；外部驱动 OS 约定不替换,源码静态核对；未运行/未查业务库
+PF18,MinoScout,mino_scout/host_sample.py,41,系统 API,darwin,外部边界保留，不属于被测平台,源码静态核对；未运行/未查业务库
+PF19,MinoWorkbench,src/domains/testing/apps/CreateDialog.tsx,36,应用创建,Mobile 默认,改四值选择；旧 Mobile 不能直接推 Android,源码静态核对；未运行/未查业务库
+PF20,MinoWorkbench,src/domains/testing/apps/CreateDialog.tsx,168,历史语义证据,Mobile 包含两平台,无条件 Mobile→android 作废，权威事实确认,源码静态核对；未运行/未查业务库
+PF21,MinoWorkbench,src/domains/testing/config/envModel.ts,52,环境配置,pc/ios/server,平台与 kind 分开；ID 引用整体迁移,源码静态核对；未运行/未查业务库
+PF22,MinoWorkbench,src/api/run.ts,68,设备展示 API,desktop+os,展示四值，删除重复目标判断，不丢宿主信息,源码静态核对；未运行/未查业务库
+PF23,MinoWorkbench,src/api/nodes.ts,279,宿主/发布包,darwin 等,保留外部包契约；节点 host.os 与被测 platform 分开,源码静态核对；未运行/未查业务库
+PF24,MinoWorkbench,src/domains/testing/cases/DeviceSelect.tsx,81,设备选择,desktop,mac/win 原生分组，提交规范值,源码静态核对；未运行/未查业务库
+PF25,MinoWorkbench,src/domains/testing/sessions/DesktopEvidence.tsx,29,证据读取,desktop,新版 mac/win，旧 schema 原样读，desktop 证据名保留,源码静态核对；未运行/未查业务库
+PF26,MinoWorkbench,src/domains/testing/tasks/CreateTaskDialog.tsx,83,严格运行支持,web only,四值词表不扩展严格合同支持,源码静态核对；未运行/未查业务库
+PF27,MinoWorkbench,src/domains/testing/cases/caseImportTable.ts,7,导入列,自由平台文本,导入预览规范化需来源；未知不默许,源码静态核对；未运行/未查业务库

@@ -34,6 +34,9 @@ def upsert(kind: str, entry_id: str, body: dict[str, Any], *, create_only: bool 
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.catalog import CatalogEntry
 
+    from mino_nexus.catalog.skill_channel import V5_EXCLUDED_IDS
+    if str(entry_id or body.get("id") or "") in V5_EXCLUDED_IDS:
+        raise CatalogWriteError("V5 不注册人工输入或 persona 能力")
     url_ck = resolve_kind(kind)
     target_ck = _target_kind(url_ck, body)
     eid = str(entry_id or body.get("id") or "").strip()
@@ -189,7 +192,6 @@ def _clean_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 continue
             row = dict(it)
             row.pop("cost", None)
-            row.pop("requires_caps", None)
             cleaned.append(row)
         out["implementations"] = cleaned
     return out
@@ -230,6 +232,17 @@ def _prepare(kind: str, eid: str, body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate(kind: str, fields: dict[str, Any]) -> None:
+    from mino_nexus.catalog.skill_channel import V5_EXCLUDED_IDS
+    from mino_nexus.services.business_event_contract import RETIRED, references
+    if str(fields.get('id') or '').startswith('guard.') and (kind != RECOVERY_KIND or not is_recovery_rule_payload(fields.get('payload_json') or {})):
+        raise CatalogWriteError('guard_requires_policy_rule')
+    if fields.get('id') in RETIRED or references(fields.get('payload_json') or {}):
+        raise CatalogWriteError('business_event_migration_required')
+    if fields.get('id') in V5_EXCLUDED_IDS:
+        raise CatalogWriteError('V5 不注册人工输入或 persona 能力')
+    if any(row.get('executor') in {'hitl', 'ai_persona'} for row in
+           (fields.get('payload_json') or {}).get('implementations', []) if isinstance(row, dict)):
+        raise CatalogWriteError('V5 不注册人工输入或 persona 实现')
     payload = dict(fields.get("payload_json") or {})
     eid = fields["id"]
     try:

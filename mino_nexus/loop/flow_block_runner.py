@@ -89,6 +89,12 @@ def try_run_login_flow_macro(
     steps = resolve_effective_steps(app_id=app_id, block_id=LOGIN_BLOCK_ID)
     if not steps:
         return None
+    from mino_nexus.services.business_event_contract import references
+    if references(steps) or any(step.get('kind') for step in steps):
+        return {'ok': False, 'status': 'blocked', 'case_fail': True,
+                'summary': '登录逻辑块需要通过当前编译计划执行，请重新编译用例。',
+                'error_kind': 'login_block_requires_compiled_plan',
+                'block_id': LOGIN_BLOCK_ID, 'interrupt': bool(interrupt)}
     for step in steps:
         if not _step_ready(
             step,
@@ -128,25 +134,9 @@ def try_run_login_flow_macro(
             label=f"宏·{sid}",
         )
         from mino_nexus.core.protocol import EventStatus
-        from mino_nexus.loop.local_executors import _dispatch_device, dispatch_local
-        from mino_nexus.loop.router_proxy import is_local_cap
-
-        if is_local_cap(cap):
-            res = dispatch_local(
-                event,
-                ctx=ctx,
-                router=proxy,
-                target_package=str(getattr(ctx, "target_package", "") or ""),
-            )
-        else:
-            res = _dispatch_device(
-                proxy,
-                ctx=ctx,
-                seq=int(turn_seq),
-                cap=cap,
-                params=params,
-                label=f"宏·{sid}",
-            )
+        from mino_nexus.loop.local_executors import _dispatch_device
+        res = _dispatch_device(proxy, ctx=ctx, seq=int(turn_seq), cap=cap,
+                               params=params, label=f"宏·{sid}")
         st = res.status.value if hasattr(res.status, "value") else str(res.status)
         ok = str(st) in ("pass", EventStatus.PASS.value)
         if ok:
@@ -210,7 +200,8 @@ def maybe_emit_login_flow_complete(
         return False
     from mino_nexus.services.resource_transition_engine import fire_transition
 
-    fire_transition(ctx, "login_flow_complete", source="flow_block")
+    if not fire_transition(ctx, "login_flow_complete", source="flow_block"):
+        return False
     setattr(ctx, "_login_flow_transition_emitted", True)
     setattr(ctx, "login_flow_macro_active", False)
     return True

@@ -458,41 +458,8 @@ CHECK_RUN_ENV_DESCRIPTION = (
 
 
 def upgrade_check_run_env_capability() -> int:
-    """补 prep 能力 check_run_env（Nexus 本地执行）。"""
-    from mino_nexus.core.database import session_scope
-    from mino_nexus.models.catalog import CatalogEntry
-
-    updated = 0
-    with session_scope() as db:
-        row = (
-            db.query(CatalogEntry)
-            .filter(CatalogEntry.kind == "generic", CatalogEntry.id == "check_run_env")
-            .first()
-        )
-        if row:
-            if str(row.description or "").strip() != CHECK_RUN_ENV_DESCRIPTION:
-                row.description = CHECK_RUN_ENV_DESCRIPTION
-                updated = 1
-            return updated
-        db.add(
-            CatalogEntry(
-                kind="generic",
-                id="check_run_env",
-                display_name="确认运行环境",
-                description=CHECK_RUN_ENV_DESCRIPTION,
-                enabled=True,
-                lifecycle="active",
-                platforms_json=["android", "ios", "web"],
-                payload_json={},
-                sort_order=5,
-            )
-        )
-        updated = 1
-    if updated:
-        from mino_nexus.catalog.loader import force_reload
-
-        force_reload()
-    return updated
+    """Retired; retain historical rows without re-registering an event."""
+    return 0
 
 
 FSM_NAVIGATE_DESCRIPTION = (
@@ -507,42 +474,8 @@ _FSM_NAVIGATE_PAYLOAD: dict[str, Any] = {
 
 
 def upgrade_fsm_navigate_capability() -> int:
-    """recovery 扩展：FSM 导航路径规划（Nexus 本地，读 nav_fsm 表）。"""
-    from mino_nexus.core.database import session_scope
-    from mino_nexus.models.catalog import CatalogEntry
-
-    updated = 0
-    with session_scope() as db:
-        row = (
-            db.query(CatalogEntry)
-            .filter(CatalogEntry.kind == "recovery", CatalogEntry.id == "fsm_navigate")
-            .first()
-        )
-        if row:
-            if str(row.description or "").strip() != FSM_NAVIGATE_DESCRIPTION:
-                row.description = FSM_NAVIGATE_DESCRIPTION
-                row.payload_json = dict(_FSM_NAVIGATE_PAYLOAD)
-                updated = 1
-            return updated
-        db.add(
-            CatalogEntry(
-                kind="recovery",
-                id="fsm_navigate",
-                display_name="FSM 导航路径",
-                description=FSM_NAVIGATE_DESCRIPTION,
-                enabled=True,
-                lifecycle="active",
-                platforms_json=["android", "ios"],
-                payload_json=dict(_FSM_NAVIGATE_PAYLOAD),
-                sort_order=30,
-            )
-        )
-        updated = 1
-    if updated:
-        from mino_nexus.catalog.loader import force_reload
-
-        force_reload()
-    return updated
+    """Retired; retain historical rows without re-registering an event."""
+    return 0
 
 
 GET_OTP_DESCRIPTION = (
@@ -626,26 +559,8 @@ def upgrade_consent_ime_capabilities() -> int:
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.catalog import CatalogEntry
 
-    specs = [
-        {
-            "id": "accept_legal_consent",
-            "display_name": "勾选同意框",
-            "description": ACCEPT_LEGAL_CONSENT_DESCRIPTION,
-            "sort_order": 28,
-        },
-        {
-            "id": "dismiss_ime",
-            "display_name": "收起输入法",
-            "description": DISMISS_IME_DESCRIPTION,
-            "sort_order": 29,
-        },
-        {
-            "id": "request_sms_code",
-            "display_name": "点发送验证码",
-            "description": REQUEST_SMS_CODE_DESCRIPTION,
-            "sort_order": 30,
-        },
-    ]
+    specs = [{"id": "dismiss_ime", "display_name": "收起输入法",
+              "description": DISMISS_IME_DESCRIPTION, "sort_order": 29}]
     updated = 0
     with session_scope() as db:
         for spec in specs:

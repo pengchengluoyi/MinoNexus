@@ -37,7 +37,10 @@ _CAPS = {
 CAPABILITY_IDS = frozenset(_CAPS)
 
 
-def capabilities(reported: list[str], os_name: str) -> list[Capability]:
+def capabilities(reported: list[str], os_name: str, *, platform: str = "desktop") -> list[Capability]:
+    os_name = {"mac": "macos", "win": "windows"}.get(os_name, os_name)
+    if platform not in {"desktop", "mac", "win"} or (platform == "mac" and os_name != "macos") or (platform == "win" and os_name != "windows"):
+        return []
     if os_name not in ("macos", "windows"):
         return []
     available = set(reported or [])
@@ -57,7 +60,7 @@ def capabilities(reported: list[str], os_name: str) -> list[Capability]:
             ]
         out.append(Capability(
             id=cap_id, kind="generic", display_name=label, description=description,
-            platforms=["desktop"], caller="case", phases=["prep", "do"],
+            platforms=[platform], caller="case", phases=["prep", "do"],
             visible_to=list(current.visible_to) if current is not None else ["case", "system"],
             implementations=[Implementation(id="desktop.cua", executor="desktop", display_name="Cua Desktop")],
             parameters=parameters,

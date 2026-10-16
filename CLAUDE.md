@@ -32,7 +32,7 @@ MinoNexus 是服务端大脑。它决定"下一步做什么"，让 [MinoScout](.
 
 ### 2.1 能力目录是唯一真源，且只在本仓
 
-`catalog_entries` 声明"能做什么、用什么实现"，**不写"什么时候做、按什么顺序做"** —— 后者是 LLM 的事。`kind` 为 `prep` / `do` / `check` / `generic` / `recovery`，与执行阶段和 `/packs?kind=` 同一套。空库不灌目录，能力只经 Workbench 写入。
+`catalog_entries` 声明"能做什么、用什么实现"，**不写"什么时候做、按什么顺序做"** —— 后者是 LLM 的事。`kind` 为 `prep` / `do` / `check` / `generic` / `recovery`，与执行阶段和 `/packs?kind=` 同一套。业务能力由 Workbench 维护。程序直接派发的系统能力由程序在启动时自动注册与升级，不要求用户在 Workbench 点升级；代码声明维护其平台、caller、phases 和版本合同，不能仅改常量而遗留现库旧平台。
 
 Scout 不读 YAML。所以**凡是 Scout 执行时需要知道的东西，必须由 Nexus 算完塞进 `EXECUTE` 载荷**：`executor_order`、`low_level`、`selected_impl`、`device_hint`。
 
@@ -127,16 +127,15 @@ mino_nexus/
 
 协议在两个仓库各有一份 `protocol.py`（本仓 `mino_nexus/protocol.py`，Scout `mino_scout/protocol.py`）。**没有共享包** —— 只有两个仓库，不引入第三个。
 
-契约真源是 **golden fixtures**：`tests/fixtures/protocol/*.json`，两仓字节相同。
+契约真源是两仓同步的协议文档和对应 `protocol.py` 实现；与本仓 `AGENTS.md §5` 一致。`tests/fixtures/protocol/*.json` 仅供本地调试，不提交 Git。
 
-改协议的流程，**四步必须同一个 PR 周期内完成**：
+改协议的流程，**同一个 PR 周期内完成**：
 
-1. 改 `docs/PROTOCOL.md`（两仓同一份文本）
-2. 改/加 `tests/fixtures/protocol/*.json`
-3. 两仓各自改 `protocol.py`，使其能 round-trip 全部 fixture
-4. 两仓各自确认 `protocol.py` 能 round-trip 全部 fixture
+1. 同步两仓协议文档
+2. 同步两仓 `protocol.py` 实现
+3. 若本地有 fixture，两仓分别确认 round-trip 并保持本地样例一致，不提交样例
 
-哈希记录在 `docs/PROTOCOL.md` §8。两仓不一致 = 协议漂移。
+协议文档 §8 的哈希仅供本地 fixture 核对。AST 比较只作辅助；真实消费者与 session 证据不能由静态比较替代。不新增已提交测试文件，不运行 pytest。
 
 ---
 

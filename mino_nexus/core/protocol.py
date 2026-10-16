@@ -1,10 +1,6 @@
-"""MinoNexus ⇄ MinoScout 协议模型。
+"""MinoNexus ⇄ MinoScout shared wire contract; stdlib only.
 
-字段级契约见两仓同步的 docs/PROTOCOL.md；本文件须与 Scout 的实现保持一致。
-tests/fixtures/protocol/*.json 仅供本地 round-trip 校验，不作为发布依赖。
-
-刻意零依赖（只用 stdlib dataclasses），便于两仓各自 round-trip golden fixture。
-可以用裸 python3 跑，不需要装环境。
+Contract: synchronized docs/PROTOCOL.md and this module. Local fixtures are not shipped.
 """
 from __future__ import annotations
 
@@ -50,6 +46,10 @@ class EventStatus(str, Enum):
 
 
 # 框架层 capability_id。N→S 是节点指令，S→N 是节点事件，形状与设备能力相同。
+# Strategy is task metadata; actual point_policy remains node/coordinate.
+OBSERVATION_STRATEGIES = ("visual", "dom_preferred")
+OBSERVATION_CONTRACT_VERSION = 1
+
 NODE_COMMAND_CAPS = frozenset({
     "node.stop", "node.restart", "node.update", "node.log_tail",
     "node.sleep", "node.wake",
@@ -122,6 +122,10 @@ class Register:
     # None：旧节点没报运行能力。不能用版本号猜测是否支持当前焦点输入。
     runtime_capabilities: Optional[list[dict[str, Any]]] = None
     host: dict[str, Any] = field(default_factory=dict)
+    scout_process_generation: str = ""
+    capability_revision: str = ""
+    execution_binding_version: int = 0
+    platform_contract_version: int = 0
 
 
 @dataclass
@@ -134,8 +138,10 @@ class Registered:
     reason: str = ""
     warnings: list[str] = field(default_factory=list)
     node_id: str = ""
+    platform_contract_version: int = 0
     node_token: str = ""
     owner_user_id: str = ""
+    node_connection_generation: str = ""
 
 
 @dataclass
@@ -162,6 +168,12 @@ class Heartbeat:
     plugins: Optional[list[dict[str, Any]]] = None
     runtime_capabilities: Optional[list[dict[str, Any]]] = None
     executors: Optional[list[ExecutorManifest]] = None
+    executor_snapshot_version: int = 0  # 0: legacy delta; 1: complete executors snapshot
+    scout_process_generation: str = ""
+    node_connection_generation: str = ""
+    capability_revision: str = ""
+    execution_binding_version: int = 0
+    platform_contract_version: int = 0
 
 
 @dataclass
@@ -180,6 +192,14 @@ class Execute:
     timeout_sec: float = 30.0
     device_id: str = ""
     platform: str = ""  # android | ios | web | playwright | other
+    execution_contract_version: str = ""
+    binding_id: str = ""
+    binding_revision: int = 0
+    input_contract_version: int = 0
+    operation_ref: str = ""
+    node_connection_generation: str = ""
+    scout_process_generation: str = ""
+    capability_revision: str = ""
 
 
 @dataclass
@@ -250,7 +270,7 @@ def _encode(value: Any) -> Any:
             raw = getattr(value, f.name)
             if f.name == "data" and not raw:
                 continue
-            if f.name in ("device_id", "platform", "node_id", "node_token") and not raw:
+            if f.name in ("device_id", "platform", "node_id", "node_token") and not raw and not (isinstance(value, Register) and f.name == "platform"):
                 continue
             if f.name == "host" and not raw:
                 continue

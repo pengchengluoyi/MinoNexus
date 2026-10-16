@@ -1,0 +1,26 @@
+{
+  "scope": [
+    "real_dependency_facts",
+    "N4_reviewed_transaction_engine",
+    "app_platform_write_boundary"
+  ],
+  "checks": {
+    "dependencies": 28,
+    "migration": 23,
+    "browser": 13,
+    "typescript": "passed"
+  },
+  "production_database_modified": false,
+  "device_calls": 0,
+  "model_calls": 0,
+  "full_N4_cutover_completed": false,
+  "full_ordinary_runner_dependencies_completed": false,
+  "remaining": [
+    "scout_registration_nested_capabilities_SN",
+    "environment_all_write_paths",
+    "import_recovery",
+    "automatic_full_reference_inventory",
+    "business_event_migration",
+    "real_session_acceptance"
+  ]
+}

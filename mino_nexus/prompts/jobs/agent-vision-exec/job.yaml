@@ -1,7 +1,7 @@
 id: agent-vision-exec
-version: 17
-label: 看图执行
-summary: 按 plan_digest 输出单步 capability；里程碑由 agent-vision-plan 维护
+version: 33
+label: 单步执行
+summary: 按当前结构或截图与 plan_digest 输出单步 capability；里程碑由 agent-vision-plan 维护
 engine: vision_decide
 role: test-engineer
 output_schema: agent_decision
@@ -47,6 +47,12 @@ slots:
   kind: text
 - name: task_context_json
   kind: text
+- name: reference_image_base64
+  kind: image
+- name: reference_image_mime
+  kind: text
+- name: reference_image_label
+  kind: text
 call:
   temperature: 0.1
   max_tokens: 768
@@ -56,7 +62,7 @@ call:
 image:
   slot: image_base64
   position: after_text
-  required: true
+  required: false
 system:
 - id: main
   file: system/10-main.md
@@ -106,3 +112,14 @@ user:
   slot: image_base64
   kind: image
   mime_slot: image_mime
+- id: restore_reference_label
+  slot: reference_image_label
+  heading: ==== 恢复原上下文参考 ====
+  skip_if_empty: true
+- id: restore_reference
+  slot: reference_image_base64
+  kind: image
+  mime_slot: reference_image_mime
+  skip_if_empty: true
+- id: current_image_role
+  text: 若本轮附图，最后一张图是本轮当前页面。此前标注为取证前真实页面的图片仅为恢复目标，不能据此选择当前点击位置。

@@ -109,7 +109,22 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(30)
 
     delivery_task = asyncio.create_task(_assistant_delivery_loop())
+    async def _case_compile_loop() -> None:
+        import uuid
+        from mino_nexus.services.case_compilation import interrupt_expired, run_one
+        worker_id = "nexus-" + uuid.uuid4().hex
+        while True:
+            try:
+                await asyncio.to_thread(interrupt_expired)
+                worked = await asyncio.to_thread(run_one, worker_id)
+            except Exception as exc:
+                SLog.w(TAG, f"case compile tick: {type(exc).__name__}")
+                worked = False
+            await asyncio.sleep(0.2 if worked else 2)
+
+    compile_task = asyncio.create_task(_case_compile_loop())
     yield
+    compile_task.cancel()
     doc_sync_task.cancel()
     delivery_task.cancel()
     await unregister_beacon(handle)

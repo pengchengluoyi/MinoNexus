@@ -523,9 +523,10 @@ def _import_automation_details(case: dict[str, Any], env_doc: dict[str, Any] | N
     return details
 
 
-def import_row_key_summary(row: dict[str, Any], *, app_id: str = "", env_doc: dict[str, Any] | None = None) -> dict[str, Any]:
+def import_row_key_summary(row: dict[str, Any], *, project_id: str, app_id: str = "", env_doc: dict[str, Any] | None = None) -> dict[str, Any]:
     case_like = {
         **row,
+        "project_id": project_id,
         "app_id": app_id or row.get("app_id") or "",
         "precondition": row.get("precondition") or "",
         "steps": row.get("steps") or [],

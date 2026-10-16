@@ -140,6 +140,7 @@ class HierarchySnapshot:
     source: str = ""
     format: str = HIERARCHY_FORMAT
     web_focus: dict[str, Any] = field(default_factory=dict)
+    observation: dict[str, Any] = field(default_factory=dict)
 
     def usable(self) -> bool:
         """能不能拿来判 guard / effect_assert。空层级不算可用 —— 无输入不误判。"""
@@ -191,7 +192,10 @@ def capture(proxy: Any, *, turn_id: int, screenshot_turn_id: int | None = None) 
         return HierarchySnapshot(
             ok=True,
             nodes=nodes,
-            text=flatten(nodes),
+            text=("观察范围=" + str((detail.get("observation") or {}).get("scope") or "unknown")
+                  + "；截断=" + str(bool((detail.get("observation") or {}).get("truncated")))
+                  + "；缺口=" + ",".join((detail.get("observation") or {}).get("missing") or [])
+                  + "\n" + flatten(nodes)),
             turn_id=safe_int(turn_id, 0),
             stale=stale,
             elapsed_ms=safe_int(
@@ -200,6 +204,7 @@ def capture(proxy: Any, *, turn_id: int, screenshot_turn_id: int | None = None) 
             ),
             source=str(detail.get("source") or getattr(shot, "source", "") or ""),
             web_focus=web_focus,
+            observation=dict(detail.get("observation") or {}),
         )
     except Exception as exc:  # noqa: BLE001 — 脏 bounds 只降级，不让整案崩溃
         return HierarchySnapshot(
@@ -278,6 +283,13 @@ def normalize_nodes(raw: Any) -> list[dict[str, Any]]:
             "bounds": int_list(item.get("bounds"), 4),
             "center": int_list(item.get("center"), 2),
         }
+        for key in ("node_ref", "snapshot_id", "role", "value", "frame_path", "cross_origin", "sensitive", "checked_known", "selected", "visible"):
+            if key in item:
+                row[key] = item[key]
+        row["enabled"] = node_flag(item, "enabled") if "enabled" in item else True
+        if row.get("checkable") or "checkbox" in str(row.get("class") or "").lower() or row.get("role") in {"checkbox", "radio", "switch"}:
+            row["checkable"] = True
+            row["checked_known"] = node_flag(item, "checked_known") if "checked_known" in item else "checked" in item and item["checked"] is not None
         if is_system_ui_noise(row):
             continue
         out.append(row)
@@ -305,11 +317,21 @@ def flatten(nodes: list[dict[str, Any]]) -> str:
         rid = rid_short(node.get("resource_id", ""))
         text = str(node.get("text") or "").strip()
         desc = str(node.get("content_desc") or "").strip()
-        if is_status_bar_chrome_text(text) or is_status_bar_chrome_text(desc):
+        labels = [value for value in (text, desc) if value]
+        # 空辅助文案不是噪声证据；仅所有实际标签都是系统文案时丢弃节点。
+        if labels and all(is_status_bar_chrome_text(value) for value in labels):
             continue
-        if not (rid or text or desc):
+        if not (rid or text or desc or node.get("node_ref") or node.get("editable")):
             continue
         bits = []
+        if node.get("node_ref"):
+            bits.append(f"ref={node['node_ref']}")
+        if node.get("role"):
+            bits.append(f"role={node['role']}")
+        if node.get("enabled") is False:
+            bits.append("disabled")
+        if node.get("checkable"):
+            bits.append(f"checked={bool(node.get('checked'))}" if node.get("checked_known", True) else "checked=unknown")
         if rid:
             bits.append(f"id={rid}")
         if text:

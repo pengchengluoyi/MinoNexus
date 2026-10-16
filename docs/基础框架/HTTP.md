@@ -89,7 +89,10 @@ HITL 问人界面、排期 cron、基线库、从设计稿/定位抽登录图标
 | GET | `/project/{project_id}/cases/{case_id}` | 单条用例 + `step_keys_summary`。`coverable=false` 时 Studio 选用例应禁用开跑 |
 | GET | `/project/{project_id}/requirements` | 导入可选需求（项目内各 App 聚合） |
 | POST | `/project/{project_id}/cases/import/preview` | 解析表格。每行：`steps_parsed` / `expected_parsed`（编译出的事件）、`remark`（不可覆盖的人话）、`ui_automation`。`flags` 仍是机器码。**不拦入库** |
-| POST | `/project/{project_id}/cases/import/commit` | 写入；body 含 `preview_token`、各行 `on_conflict`；`block_on_step_key_issues` 省略时用 `GET /settings/case-import` 默认 |
+| POST | `/project/{project_id}/cases/import/commit` | 写入；body 含稳定 `client_request_id`、`preview_token`、各行 `on_conflict`；同身份同输入复用回执，输入变化 409。`block_on_step_key_issues` 省略时用设置默认；旧预览调用可回退到 token 身份，直接 rows 提交必须提供身份 |
+| GET | `/project/{project_id}/cases/import/receipts/by-request/{client_request_id}` | 按本账号/项目的提交身份只读查询；预览删除或过期不影响回执 |
+| GET | `/project/{project_id}/cases/import/receipts/{receipt_id}` | 按回执 ID 查询原始行、逐行结果、汇总、`pending`、`receipt_state`；他人/不存在 404 |
+| POST | `/project/{project_id}/cases/import/receipts/{receipt_id}/resume` | 明确续交待处理行；有效准备租约不重领，已写行不重放。失败/受阻行需新建预览，原始输入准备中断不自动重复解析 |
 | DELETE | `/project/{project_id}/cases/{case_id}` | 删除单条用例 |
 | POST | `/project/{project_id}/cases/delete` | 批量删除；body `{ case_ids: [] }` |
 | POST | `/project/{project_id}/cases/{case_id}/resource-key/compile` | 从前置编译 `resource_key` |
@@ -294,6 +297,14 @@ IM 工具 `device.list`、`case.run`、`app.explore` 支持 `project_id/app_id/e
 Scout `REGISTER.account_isolation_version=1` 才可接入；旧客户端在安装码消费前拒绝并提示升级。`REGISTERED.owner_user_id` 确认本地插件命名空间，不能用新账号或新服务继承旧凭据。
 
 
+## V5 执行绑定预检
+
+`GET /project/{project_id}/cases/{case_id}/v5/execution-preview` 要求认证，查询参数为 `app_id`、`sn`，可选 `env_profile`、`env_surface`。用例必须存在已发布计划，应用必须属于同一项目，设备必须属于当前账号且与应用渠道兼容。
+
+成功信封中的 `data` 包含 `status=ready|blocked|needs_input|not_applicable`、`binding` 和逐操作 `diagnostics`；固定返回 `scope=execution_binding_only`、`runnable_now=false`。`ready` 只表示当前快照可解析执行绑定，不表示资源已租用、页面基线或业务用例已经可运行。接口不创建 session、预约或绑定事件；真实 attempt 重新解析并原子写入 `execution/bound` 和绑定上下文，不能直接复用预检结果。未发布计划返回 409，目标配置输入错误返回 400；跨账号项目/设备沿用 404。
+
+绑定使用验证过的节点连接代际、Scout 进程代际和能力修订，不按 Scout 版本字符串推断支持。旧节点未声明 `execution_binding_version=1` 时返回阻断诊断。严格 Web 的 `web.strict.v1` 为显式版本适配；业务原子仍按目录的 enabled、lifecycle、caller、phases 和实现合同约束，接口不会自动改业务目录。控件 `/probe` 使用独立的项目配置绑定，仍不产生用例通过结论。旧普通合同保持原行为；普通 runner 全面迁移仍待后续。
+
 ## V4 Desktop 选择与管理员入口
 
 | 方法 | 路径 | 行为 |
@@ -307,3 +318,92 @@ Scout `REGISTER.account_isolation_version=1` 才可接入；旧客户端在安�
 `GET /runtime/nodes` 的每个节点新增宿主 `host` 摘要；设备保持 `platform/os/session_key/session_generation/desktop_state/capabilities/readiness`。管理员可查看未归属节点的宿主状态以便认领；已归属节点与任务设备仍按账号隔离。离线行不丢失这些字段。
 
 模型供应商的 `GET /settings/ai/providers` 与 `PUT /settings/ai/providers/{id}` 支持 `pc_compress_ratio`：默认 1，取值 1–10，禁止非有限数。字段仍按当前执行账号隔离存储，不新增共享密钥或配置表。旧客户端省略该字段时保留现有 PC 设置。Desktop 采集使用该比例，模型输入不再叠加 Plan 压缩；返回的捕获原始尺寸与 capture 引用仍用于坐标映射。
+
+## 项目维护者权限（2026-10-15）
+
+项目写接口要求 **管理员、项目创建者或 `project_members` 中的维护者**；读接口不变。非维护者返回 403，`detail = {reason_code: "project_maintainer_required", message}`。存量项目由 `projects.created_by` 隐式成为维护者，无需数据迁移。路径段填 app id 的兼容入口按所属项目判定；`/nav-fsm`、`/app-automation`、`/flow-blocks/apps`、`/apps/{app_id}/intel` 的持久写按 app 所属项目判定，app 与项目都查不到时交给原处理函数。
+
+受保护：项目环境、应用创建/删除/环境、账号池与模板、登录态改写、分配日志恢复、删除项目；用例保存/删除、导入提交与续交、步骤与资源键编译、待补充、控件、v5 基线/编译/发布；导航图草稿/发布/编辑、应用自动化配置与脑图发布、逻辑块应用覆盖、AppIntel 审核与关联。不受保护：创建项目、导入预览/取消/重试、校验、控件探测、账号分配/挑选、资源试跑、导航路由计算与校准。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/project/{project_id}/maintainers` | 任何登录账号可读；返回 `items[{user_id,name,email,source: creator\|member,added_by,added_at}]`、`can_edit`、`can_manage` |
+| POST | `/project/{project_id}/maintainers` | 仅管理员；body `{user_id}`，账号不存在 400 `user_not_found` |
+| DELETE | `/project/{project_id}/maintainers/{user_id}` | 仅管理员；创建者不可移除（400 `creator_is_implicit_maintainer`） |
+
+Workbench 入口：项目配置 → 「项目维护者」。
+
+
+### V5 应用平台新写入边界
+
+`POST /project/app/create` 的 `platforms` 仍为逗号分隔字符串，成员严格限制 `mac / win / android / web`；重复值、旧别名（Mobile/pc/desktop/iOS 等）返回 422。空字符串表示未选择；不会自动解释成全平台或补出 Android。服务层更新应用 platforms 使用同一校验。历史读取暂保留原标签，数据转换必须走审阅迁移，不通过读接口隐式重写。本节仅说明应用写入口，不代表环境、导入、恢复的 N4 全量切换已完成。
+
+## 普通/严格执行绑定预检（2026-10-15）
+
+`GET /project/{project_id}/cases/{case_id}/execution-preview`，保留 `/v5/execution-preview` 别名。必需 `app_id`、`sn`；可选 `env_profile`、`env_surface`、`action_scheme`、`provider_id`、`execution_mode=legacy|v5`（默认 v5 兼容旧入口）。Workbench 新建任务显式传当前模式。
+
+只读返回 `status`、`binding`（仅 ready）、`diagnostics`、`scope=execution_binding_only`、`runnable_now=false`。不写 session、不触发旧环境懒迁移、不租号/预约、不操作设备、不调用模型。项目读权限保持现有共享规则，设备与模型配置仍限定认证账号。编译缺失/原文变化返回 needs_input；离线、隔离、策略拒绝等返回 blocked。诊断包含来源和恢复入口；可选分支有 `blocking:false`。ready 仅表示当前绑定资格，启动时重新解析，不承诺队列许可或业务通过。
+
+Workbench 的“预检所选用例”按当前完整选择逐条调用；选择设备/环境/用例/方案/模式改变后原结果标为过期，不替用户创建任务。
+
+
+### V5 导入平台与历史任务重跑边界
+
+用例导入直接平台值限 mac/win/android/web；环境通道 ID、label 或 alias 仅允许精确唯一匹配并解析到通道的四值 platform。server、旧别名、歧义与未知值在预览行返回 platform_error，parse_status=invalid_platform，selected_by_default=false；不进入模型编译。提交和导入回执续交再次校验，失败以逐行 blocked + reason 返回，不跳过或默认 Android。
+
+失败任务重跑要求当前认证 owner 与任务 owner 一致，所选 SN 在当前登记中属于当前账号且具有四值平台。无法确认的旧身份返回 409 并要求重选；不会按 SN 前缀猜平台或迁移历史任务。该检查不代替实际开跑的资源隔离、占用、节点在线和应用兼容性准入。
+
+
+### V5 项目环境新写入合同
+
+`PUT /project/{project_id}/env` 的渠道在规范化之前校验：目标 platform 为 mac/win/android/web，kind 分别为 app/app/app/web；kind=server 时省略 platform 字段。无效值、kind 冲突、重复/非法 ID 返回 422，配置不写入。渠道 ID 可含字母、数字、下划线、点号、连字符，长度 1–64；不要求等于 platform，不自动改名。旧配置仍可读，保存前需先按审阅方案迁移。
+
+部分请求未提供 profiles/channels/pipeline 时保留原值，不能因只修改默认环境清空其他环境。旧 `PUT /project/app/{app_id}/env` 只接受已登记渠道的配置块，合并到 test，拒绝未知渠道与 channels/profiles/environments 结构改写（422）；渠道平台改动使用项目环境入口。
+
+## V5 持久化编译与待审闭环（2026-10-15）
+
+以下接口均要求认证；项目原文和任务摘要沿用共享读取，新增写接口复用现有管理员/项目创建者/显式维护者权限。模型调用始终使用持久 job 的发起账号；完整单 job 产物仅其 owner 可读取，目标设备与 session 证据仍按当前账号隔离。GET 不领取、不恢复、不编译。
+
+| 方法/项目用例路径 | 输入与结果 |
+| --- | --- |
+| `GET /project/{pid}/cases/{cid}/version-chain` | 当前原文、最新 job、有效 artifact、publication 与实际 revision/job 历史 |
+| `GET .../compile-jobs/{job_id}` | 单个任务状态、产物、诊断、真实 provenance；仅本账号/项目/用例 |
+| `POST .../v5/publish` | `{expected_revision,expected_compile_job_id,reviewed_expected_strength,retry_policy?,reversible?}`；已登记版本链必须携带审阅时 preview 的 `compile_job_id`。同一原文重编后旧 job 或缺 job 均返回 409 `compile_revision_conflict`，须刷新并重新审阅；没有版本链的历史用例保持原接口兼容 |
+| `POST .../compile-jobs` | `{expected_revision,client_request_id}`；排队同版本重编，有在途任务时复用；返回 job，不等待模型 |
+| `POST .../compile-jobs/{job_id}/cancel` | `{expected_revision}`；取消激活资格；不能保证远程模型调用已停止 |
+| `POST .../compile-jobs/{job_id}/recover` | `{expected_revision,client_request_id}`；仅最新 failed/interrupted/cancelled 任务可显式创建关联新 job；可能再次调用模型 |
+| `GET .../review-requirements` | 当前 source/revision/job，编译、发布、断言/资源及已检查目标的诊断；来源、六类建议根因或根因待确认、缺项、point/operation、动作、逐项历史 |
+| `PUT .../review-requirements` | 原有 `{expected_revision,source:{precondition,steps_raw,expected_raw},reason}`；原文与新 revision+queued job 原子落盘，不同步编译 |
+| `POST .../review-requirements/{item_id}/review` | `{expected_revision,expected_job_id,reason,category?}`；category 允许 case_definition/semantic_parsing/capability_gap/configuration/execution_toolchain/external_evidence，null 表示暂不定责；只登记人工意见，不解除运行阻塞 |
+| `POST .../review-requirements/recheck` | `{expected_revision,expected_job_id,reason,context?,evidence_session_id?}`；context 为当前项目应用及 owned 设备 `{app_id,sn,env_profile,env_surface,execution_mode?,action_scheme?,provider_id?}`。实际重算静态资格、目标绑定和资源登记检查，不租设备、不调用执行器。目标诊断按上下文保存，省略目标不能清除原目标问题；观察超过 60 秒或版本改变标过时 |
+
+原有 `POST .../v5/compile`、`.../step-keys/compile`、`.../resource-key/compile` 统一进入队列，仍返回 `{case,job,preview}`。新客户端发送上述稳定请求身份；兼容无 body 的旧入口可复用在途工作，不能把 HTTP 返回当编译已完成。保存/导入不再被模型时延阻塞；预览的解析仍是可丢弃候选，确认导入保留原文并以持久任务报告编译缺口。
+
+来源/任务变化或恢复父任务不一致返回 409；无项目维护权限返回 403，不存在或非本账号的完整 job/设备/session 资源返回 404 或证据不匹配；复核理由/分类/证据不合约返回 400。queued/running/failed/interrupted/cancelled 最新版本均不能悄悄使用旧 artifact 或旧 publication 执行。发布快照保存 source_revision_id/source_revision/compile_job_id/effective_artifact，并在提交时再次比较引用。
+
+
+### 2026-10-16：MCP 节点更新、写安全复核与多语言证据
+
+- MCP `scout_list` / `scout_update` / `scout_update_status` 复用当前 owner 的节点接口。`scout_update` 只请求节点已配置发布清单的最新版本，不接受任意本地包路径、任意 URL 或指定未发布版本；离线不能宣称升级成功，须通过状态和重新连接核对运行版本。本地未发布修复包的备份安装另记交付记录。
+- `POST /case-runner/tasks/{task_id}/write-safety/recheck`（MCP `task_write_safety_recheck`）：仅当前 owner 的已结束任务可显式复核；其他账号任务 404、在途任务 409。只重新获取 Scout 停止证明，不重放原设备写动作。证明缺失仍 `resource_isolated=true`；成功返回逐动作 `recovered`、`mode`、`reason_code`、`baseline_required`，并明确 `business_result_unchanged=true`。跨进程必须有旧代际退役证明，新进程在线本身不是停止证明。释放后下一任务仍需新观察，历史失败或阻断不改成通过。
+- 文案检查点冻结 `rules.text_match=exact|intent`。作者指定固定文案仍精确检查；明确跨语言意图按原用例含义核验，保留 `observed_text`、`observed_language`、`evidence` 与逐项 `semantic_checks`。新策略通过新编译/草稿生效，不改写历史发布。缺原文、缺逐项证据、输出语言标签非法等仍拒绝，不能退化成普通布尔断言。
+- 单次观察回看可证明某个语言检查点符合，不自动回写整条业务用例结果。身份、协议、交互能力、完整 check 和严格 `verified_pass` 仍各自按合同核验。
+
+
+## 应用登录校验配置（2026-10-16）
+
+`GET /app-automation/login-evidence-policy/{app_id}` 读取当前应用的非凭据配置。
+`PUT /app-automation/login-evidence-policy/{app_id}` 需要应用维护权限，body 为 `policy` 与读取到的 `expected_policy`；当前值改变时返回 409，非法配置返回 422。该接口只合并 `app.env.automation.playbook.login_evidence_policy`，不返回或修改其他登录凭据、OTP 或 playbook 字段。
+
+- `mode=ui_identity`：默认要求页面可见的账号身份与租号一致。
+- `mode=submitted_account`：用于应用没有身份展示入口的业务设计。必须显式指定非空 `env_profiles` 与 `env_surfaces`，仅匹配范围启用；其他应用/环境/渠道保持默认。
+- `submitted_account` 仍要求本作用域实际填写的账号与租约一致且输入结果已核验、真实提交动作成功回执，以及提交后当前截图的已登录正向证据。配置值、租约、输入完成、表单消失均不能单独证明已登录。页面 `identity` 保持 `unknown`，账号绑定来源另记 `submitted_account`；明确 mismatch 必须阻断。
+- 配置从数据库应用配置读取，随新任务快照，不向业务代码写入应用 ID、包名、特定账号或该应用的身份展示规则。Workbench：应用 → 配置 → 登录校验。
+- MCP 对应 `app_login_evidence_policy_get` / `app_login_evidence_policy_set`。保存需要稳定请求标识并使用正式维护权限；该接口不启动任务、不改变原判定。
+
+
+### 登录专属页面说明与多语言完整意图
+
+登录校验配置另支持 `authenticated_content_hint`（最多1200字，默认空串），用于描述应用维护者确认的登录后专属页面特征。该说明仅进入配置范围 `env_profiles` / `env_surfaces` 匹配的新任务；实际当前截图必须命中完整特征，配置存在本身不等于登录成功。它与账号来源独立，不能替代实际账号填写、提交回执或可见身份核验。Web 首次引导遮挡身份时，可显式配置 submitted_account，而不是修改代码或伪造 UI identity=match。说明通过 Workbench「登录专属页面说明」或 MCP policy 字段维护。
+
+多语言 intent 检查要求完整含义一致：泛化欢迎/入门标题不能替代具体问题，单个示例尝试不能替代兴趣收集与多选推荐；主题接近不能当成等义。agent-vision-assert/assert-vision v9、agent-text-assert v4；inspect-session v6。实际不符保留 fail，不把不同语言本身当成失败原因。

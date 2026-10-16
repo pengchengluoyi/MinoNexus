@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from mino_nexus.core.http_util import ok
-from mino_nexus.routers.deps import current_session
+from mino_nexus.routers.deps import app_maintainer, current_session
 from mino_nexus.services import nav_calibration_store as calib
 from mino_nexus.services import nav_capture_store as capture
 from mino_nexus.services import nav_candidate_compiler as compiler
@@ -170,7 +170,7 @@ def get_screen_key_refs(app_id: str, _sess: dict = Depends(current_session)):
     return ok({"app_id": app_id, "items": list_screen_rows(app_id)})
 
 
-@router.put("/{app_id}/screen-key-refs")
+@router.put("/{app_id}/screen-key-refs", dependencies=[Depends(app_maintainer)])
 def put_screen_key_refs(app_id: str, body: ScreenKeyRefsBody, sess: dict = Depends(current_session)):
     from mino_nexus.services.nav_screen_key_refs import patch_screen_key_refs
 
@@ -204,7 +204,7 @@ def get_nav_fsm(app_id: str, version: str = store.DEFAULT_VERSION, _sess: dict =
     )
 
 
-@router.put("/{app_id}")
+@router.put("/{app_id}", dependencies=[Depends(app_maintainer)])
 def put_nav_fsm(app_id: str, body: NavFsmBody, sess: dict = Depends(current_session)):
     try:
         saved = store.save(
@@ -217,12 +217,12 @@ def put_nav_fsm(app_id: str, body: NavFsmBody, sess: dict = Depends(current_sess
     return ok(saved)
 
 
-@router.delete("/{app_id}")
+@router.delete("/{app_id}", dependencies=[Depends(app_maintainer)])
 def delete_nav_fsm(app_id: str, version: str = store.DEFAULT_VERSION, _sess: dict = Depends(current_session)):
     return ok({"deleted": store.delete(app_id, version=version)})
 
 
-@router.put("/{app_id}/atlas-flow-groups")
+@router.put("/{app_id}/atlas-flow-groups", dependencies=[Depends(app_maintainer)])
 def put_atlas_flow_groups(app_id: str, body: AtlasFlowGroupsBody, sess: dict = Depends(current_session)):
     """架构页保存业务流展示分组（meta.atlas_flow_groups）。"""
     try:
@@ -237,7 +237,7 @@ def put_atlas_flow_groups(app_id: str, body: AtlasFlowGroupsBody, sess: dict = D
     return ok(row)
 
 
-@router.put("/{app_id}/atlas-manual-edges")
+@router.put("/{app_id}/atlas-manual-edges", dependencies=[Depends(app_maintainer)])
 def put_atlas_manual_edges(app_id: str, body: AtlasManualEdgesBody, sess: dict = Depends(current_session)):
     """架构页只保存手动跳转，不覆盖正式 NavFSM states/edges。"""
     try:
@@ -266,7 +266,7 @@ def plan_nav_route(app_id: str, body: NavRouteBody, _sess: dict = Depends(curren
     return ok(result)
 
 
-@router.patch("/{app_id}/states/{state_id}/labels")
+@router.patch("/{app_id}/states/{state_id}/labels", dependencies=[Depends(app_maintainer)])
 def patch_state_labels(
     app_id: str,
     state_id: str,
@@ -378,7 +378,7 @@ def patch_state_labels(
     return ok(saved)
 
 
-@router.post("/{app_id}/atlas-merge-states")
+@router.post("/{app_id}/atlas-merge-states", dependencies=[Depends(app_maintainer)])
 def post_atlas_merge_states(
     app_id: str,
     body: AtlasMergeStatesBody,
@@ -397,7 +397,7 @@ def post_atlas_merge_states(
     return ok(row)
 
 
-@router.post("/{app_id}/atlas-pin-capture")
+@router.post("/{app_id}/atlas-pin-capture", dependencies=[Depends(app_maintainer)])
 def post_atlas_pin_capture(
     app_id: str,
     body: AtlasPinCaptureBody,
@@ -417,7 +417,7 @@ def post_atlas_pin_capture(
     return ok(row)
 
 
-@router.post("/{app_id}/atlas-split-capture")
+@router.post("/{app_id}/atlas-split-capture", dependencies=[Depends(app_maintainer)])
 def post_atlas_split_capture(
     app_id: str,
     body: AtlasSplitCaptureBody,
@@ -484,7 +484,7 @@ def post_atlas_morph_vlm(
     return ok(verdict)
 
 
-@router.post("/{app_id}/alias-governance/apply")
+@router.post("/{app_id}/alias-governance/apply", dependencies=[Depends(app_maintainer)])
 def post_alias_governance_apply(
     app_id: str,
     body: DraftBody,
@@ -546,7 +546,7 @@ def get_capture_turn_screen(
     return FileResponse(path, media_type="image/jpeg")
 
 
-@router.delete("/{app_id}/captures")
+@router.delete("/{app_id}/captures", dependencies=[Depends(app_maintainer)])
 def clear_captures(
     app_id: str,
     also_config: bool = False,
@@ -694,7 +694,7 @@ def compile_version_expectations(app_id: str, _sess: dict = Depends(current_sess
     return ok(batch)
 
 
-@router.post("/{app_id}/candidates/{candidate_id}/review")
+@router.post("/{app_id}/candidates/{candidate_id}/review", dependencies=[Depends(app_maintainer)])
 def review_candidate(
     app_id: str,
     candidate_id: str,
@@ -713,7 +713,7 @@ def review_candidate(
     return ok(batch)
 
 
-@router.post("/{app_id}/candidates/apply-to-draft")
+@router.post("/{app_id}/candidates/apply-to-draft", dependencies=[Depends(app_maintainer)])
 def apply_candidates_to_draft(app_id: str, _sess: dict = Depends(current_session)):
     try:
         merged = compiler.apply_accepted_to_draft(app_id)
@@ -733,7 +733,7 @@ def apply_candidates_to_draft(app_id: str, _sess: dict = Depends(current_session
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.post("/{app_id}/publish")
+@router.post("/{app_id}/publish", dependencies=[Depends(app_maintainer)])
 def publish_nav_fsm(app_id: str, sess: dict = Depends(current_session)):
     """一键发布：自动接受高置信候选、填平草稿、校验后写入正式配置。"""
     try:
@@ -836,19 +836,19 @@ def get_draft(app_id: str, _sess: dict = Depends(current_session)):
     return ok({"doc": doc, "pending": tpl.pending_marks(doc)})
 
 
-@router.put("/{app_id}/draft")
+@router.put("/{app_id}/draft", dependencies=[Depends(app_maintainer)])
 def put_draft(app_id: str, body: DraftBody, _sess: dict = Depends(current_session)):
     """存半成品。允许残留 `__CALIBRATE__`，落在 `data_dir` 而不是库里。"""
     doc = calib.save_draft(app_id, body.doc)
     return ok({"pending": tpl.pending_marks(doc), "saved": True})
 
 
-@router.delete("/{app_id}/draft")
+@router.delete("/{app_id}/draft", dependencies=[Depends(app_maintainer)])
 def delete_draft(app_id: str, _sess: dict = Depends(current_session)):
     return ok({"deleted": calib.delete_draft(app_id)})
 
 
-@router.post("/{app_id}/draft/promote")
+@router.post("/{app_id}/draft/promote", dependencies=[Depends(app_maintainer)])
 def promote_draft(app_id: str, sess: dict = Depends(current_session)):
     """草稿 → 正式配置。还有占位符没填就 422，并告诉你差哪些字段。"""
     try:

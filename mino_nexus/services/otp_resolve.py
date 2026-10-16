@@ -33,69 +33,42 @@ def resolve_effective_secrets(
     return env_secrets(doc, env_key)
 
 
-def _inbox_from_scout(*, node_id: str = "", sn: str = "") -> str:
-    """收件箱在执行那台 Scout 的插件清单里，不在服务器的插件表。"""
+def _inbox_from_scout(*, plugin_user_id: str = "", node_id: str = "", sn: str = "") -> str:
+    """Only the authenticated owner's configured, live execution node is eligible."""
+    from mino_nexus.core.execution_user import require_user_id
     from mino_nexus.services.node_registry import get_registry
+    from mino_nexus.services.execution_dependencies import plugin_fact
 
+    uid = require_user_id(plugin_user_id or None)
     reg = get_registry()
-    nodes = []
     nid = str(node_id or "").strip()
-    device = str(sn or "").strip()
+    if sn:
+        node, _ = reg.resolve(sn)
+        if node is None or (nid and nid != node.node_id):
+            return ""
+        nid = node.node_id
+    spec = {"kind": "plugin", "class": "mail", "plugin_id": "gmail"}
     if nid:
-        node = reg.get_node(nid)
-        if node is not None:
-            nodes = [node]
-    elif device:
-        node, _reason = reg.resolve(device)
-        if node is not None:
-            nodes = [node]
-    else:
-        nodes = list(reg.nodes())
-    found: list[str] = []
-    for node in nodes:
-        for row in node.plugins or []:
-            if str(row.get("class") or "") != "mail" or str(row.get("id") or "") != "gmail":
-                continue
+        spec["node_id"] = nid
+    result = plugin_fact(reg.nodes(), spec, uid)
+    if result["status"] != "ready":
+        return ""
+    node = reg.get_node(result["node_id"])
+    if (node is None or node.owner_user_id != uid or not node.alive or node.send is None
+            or node.node_connection_generation != result["node_connection_generation"]
+            or node.scout_process_generation != result["scout_process_generation"]):
+        return ""
+    for row in node.plugins or []:
+        if row.get("class") == "mail" and row.get("id") == "gmail" and row.get("configured") is True:
             values = row.get("values") if isinstance(row.get("values"), dict) else {}
             inbox = str(values.get("inbox_address") or "").strip()
-            if "@" in inbox:
-                found.append(inbox)
-    unique = list(dict.fromkeys(found))
-    if len(unique) == 1:
-        return unique[0]
+            return inbox if "@" in inbox else ""
     return ""
 
 
-def gmail_inbox_address(
-    env_doc: dict | None,
-    *,
-    plugin_user_id: str = "",
-    node_id: str = "",
-    sn: str = "",
-) -> str:
+def gmail_inbox_address(env_doc: dict | None, *, plugin_user_id: str = "", node_id: str = "", sn: str = "") -> str:
     del env_doc
-    scout_inbox = _inbox_from_scout(node_id=node_id, sn=sn)
-    if scout_inbox:
-        return scout_inbox
-    uid = str(plugin_user_id or "").strip()
-    if uid:
-        try:
-            from mino_nexus.services import plugins_store
-
-            plug = plugins_store.get_gmail_inbox_address(uid)
-            if plug:
-                return plug
-        except Exception:
-            pass
-    try:
-        from mino_nexus.services import plugins_store
-
-        fallback = plugins_store.first_configured_gmail_inbox()
-        if fallback:
-            return fallback
-    except Exception:
-        pass
-    return ""
+    return _inbox_from_scout(plugin_user_id=plugin_user_id, node_id=node_id, sn=sn)
 
 
 def plugin_user_id_from_ctx(ctx: Any) -> str:

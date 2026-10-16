@@ -1,0 +1,18 @@
+id: scout.list
+version: 1
+title: 查询 Scout 节点
+description: 列出当前账号可见的 Scout 节点，含 node_id、在线状态、上报版本和更新进度。更新前先据此选择准确节点。
+route: GET /runtime/nodes
+risk: read
+params_schema:
+  type: object
+  additionalProperties: false
+  properties: {}
+param_resolvers: {}
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true
+async: false

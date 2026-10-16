@@ -25,7 +25,7 @@ def ui_channel_from_ctx(ctx: Any | None) -> UiChannel:
     plat = str(getattr(ctx, "platform", "") or "").strip().lower()
     if is_web_slot(sn, plat) or plat in ("web", "playwright"):
         return UiChannel.WEB
-    if plat == "desktop":
+    if plat in {"desktop", "mac", "win"}:
         return UiChannel.DESKTOP
     if plat == "ios":
         return UiChannel.IOS

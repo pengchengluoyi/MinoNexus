@@ -1,6 +1,8 @@
 """用例运行库。任务中心与 GET /case-runner/run 共用，落 app_regression_runs。"""
 from __future__ import annotations
 
+from mino_nexus.action_space.scheme import normalize_action_scheme
+
 import copy
 from mino_nexus.core.execution_user import current_user_id
 import json
@@ -171,6 +173,12 @@ def _upsert_run(doc: dict[str, Any]) -> None:
     from mino_nexus.services.device_admission import admit_in_transaction
     with session_scope() as db:
         db.execute(text("BEGIN IMMEDIATE"))
+        from mino_nexus.models.run import AppRegressionRun
+        from mino_nexus.services.run_write_safety import merge
+        previous = db.get(AppRegressionRun, str(doc.get("run_id") or ""))
+        guards = merge(previous.payload if previous else None, doc)
+        if guards:
+            doc["write_safety"] = guards
         admit_in_transaction(db, doc)
         db.merge(_run_row(doc))
 
@@ -187,10 +195,11 @@ def _trim_runs(keep: int = _KEEP_RUNS) -> None:
         if extra <= 0:
             return
         old = conn.execute(
-            text("SELECT run_id FROM app_regression_runs WHERE status NOT IN ('running', 'queued') ORDER BY started_at ASC LIMIT :n"),
+            text("SELECT run_id, payload FROM app_regression_runs WHERE status NOT IN ('running', 'queued') ORDER BY started_at ASC LIMIT :n"),
             {"n": extra},
         ).fetchall()
-        ids = [str(r[0]) for r in old if r and r[0]]
+        from mino_nexus.services.run_write_safety import unresolved
+        ids = [str(r[0]) for r in old if r and r[0] and not unresolved(_parse_payload(r[1]))]
         if not ids:
             return
         binds = {f"id{i}": rid for i, rid in enumerate(ids)}
@@ -324,6 +333,9 @@ def seed_case(run_id: str, raw: dict[str, Any], index: int, *, sn: str = "", cov
         "v5_publication": copy.deepcopy(raw.get("v5_publication")),
         "v5_plan_state": raw.get("v5_plan_state", "draft"),
         "wall_budget_sec": raw.get("wall_budget_sec", 0),
+        **({key: copy.deepcopy(raw[key]) for key in
+            ("source", "case_scene", "success_criteria", "max_steps", "max_idle_steps") if key in raw}
+           if cid == "__explore__" and raw.get("source") == "explore" else {}),
     }
 
 
@@ -358,6 +370,8 @@ def _recompute(doc: dict[str, Any]) -> dict[str, Any]:
 
 
 def to_task_json(doc: dict[str, Any] | None, *, include_cases: bool = True) -> dict[str, Any]:
+    from mino_nexus.services.run_write_safety import unresolved
+
     doc = _recompute(copy.deepcopy(doc or {}))
     sns = [str(x).strip() for x in (doc.get("sns") or []) if str(x).strip()]
     sn = str(doc.get("sn") or (sns[0] if sns else ""))
@@ -376,7 +390,8 @@ def to_task_json(doc: dict[str, Any] | None, *, include_cases: bool = True) -> d
         "platforms_by_sn": dict(doc.get("platforms_by_sn") or {}),
         "env_profile": doc.get("env_profile") or "",
         "env_surface": doc.get("env_surface") or "",
-        "action_scheme": "dom" if str(doc.get("action_scheme") or "").strip().lower() == "dom" else "visual",
+        "action_scheme": normalize_action_scheme(doc.get("action_scheme")),
+        "resource_isolated": bool(unresolved(doc)),
         "package": doc.get("package") or "",
         "requirement_id": doc.get("requirement_id") or "",
         "release_id": doc.get("release_id") or "",

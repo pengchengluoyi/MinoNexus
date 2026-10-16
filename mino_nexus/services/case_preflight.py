@@ -9,8 +9,27 @@ def partition_cases(cases: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], 
 
     runnable, blocked = [], []
     for case in cases:
+        from mino_nexus.services.case_compilation import readiness
+        compilation_issue = readiness(case)
+        if compilation_issue:
+            blocked.append({"case_id": str(case.get("case_id") or ""), "name": str(case.get("name") or ""),
+                "reasons": ["最新原文的编译任务尚未形成有效产物，请在用例详情处理编译状态。"],
+                "blocked_by": [{"reason": compilation_issue, "job_id": case.get("latest_compile_job_id")}]})
+            continue
         meta = case.get("meta") if isinstance(case.get("meta"), dict) else {}
         automation = meta.get("ui_automation") if isinstance(meta.get("ui_automation"), dict) else {}
+        if case.get("v5_publication") and case.get("v5_has_unpublished_changes"):
+            blocked.append({"case_id": str(case.get("case_id") or ""), "name": str(case.get("name") or ""),
+                "reasons": ["原文已补充但冻结计划尚未更新，请在用例详情重新核验并发布；未创建本条执行、未占用资源。"],
+                "blocked_by": [{"reason": "draft_requires_republish", "review_status": "needs_revalidate"}]})
+            continue
+        from mino_nexus.services.execution_requirements import ordinary_compilation_diagnostics
+        binding_issues = ordinary_compilation_diagnostics(case)
+        if binding_issues:
+            blocked.append({"case_id": str(case.get("case_id") or ""), "name": str(case.get("name") or ""),
+                "reasons": list(dict.fromkeys(item["user_message"] for item in binding_issues)),
+                "blocked_by": binding_issues})
+            continue
         if automation.get("coverable") is True:
             runnable.append(case)
             continue

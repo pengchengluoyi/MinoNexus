@@ -1,9 +1,9 @@
-"""用例密钥（ResourceClaim）词汇表：Console「用例密钥」页与编译器共用真源。"""
+"""用例密钥（ResourceClaim）词汇表：Workbench「用例密钥」页与编译器共用真源。"""
 from __future__ import annotations
 
 from typing import Any
 
-CATALOG_VERSION = 10
+CATALOG_VERSION = 12
 
 # Claim 落库：case.meta.resource_key（v1）；与 case_scene 合并时 case_scene 优先同名字段。
 CLAIM_STORAGE = {
@@ -295,7 +295,7 @@ def _entries() -> list[dict[str, Any]]:
             resource="nav_flow_block_catalog",
             config_keys=["block_id"],
             dsl="【块:{block_id}】",
-            runtime="do_program_plan kind=flow_block",
+            runtime="完整登录目标由 fb.global.login 展开；作者槽只记录显式要求，不替代运行时必填里程碑",
             key_layer="operation",
             key_ref="operation.block_ref",
         ),
@@ -322,8 +322,8 @@ def _entries() -> list[dict[str, Any]]:
             block_id="fb.global.login",
             slots=[
                 {"id": "entry", "label": "入口", "required": False},
-                {"id": "credential", "label": "凭证", "required": True},
-                {"id": "submit", "label": "提交", "required": True},
+                {"id": "credential", "label": "凭证", "required": False},
+                {"id": "submit", "label": "提交", "required": False},
             ],
         ),
         _entry(
@@ -483,6 +483,11 @@ def _entries() -> list[dict[str, Any]]:
             runtime="agent-vision-exec",
             key_layer="operation",
             key_ref="operation.swipe",
+            param_slots=[
+                {"id": "direction", "required": True, "enum": ["up", "down", "left", "right"],
+                 "description": "手指滑动方向；滑动后点击必须是后续独立事件"},
+                {"id": "duration_ms", "required": False},
+            ],
         ),
         _entry(
             section="operation",
@@ -510,22 +515,6 @@ def _entries() -> list[dict[str, Any]]:
             key_ref="operation.dynamic_visual",
             kind="hook",
             observe="visual_each_run",
-        ),
-        _entry(
-            section="operation",
-            write_category="购物车",
-            write_examples=["打开购物车", "进入购物车"],
-            claim_path="case.meta.step_program_keys.{n}.operations[]",
-            resource="Nav / 视觉",
-            config_keys=["nav", "tap"],
-            dsl="nav 或 visual_action",
-            runtime="compound 可拆多 step",
-            key_layer="operation",
-            key_ref="operation.open_cart",
-            expands_to=[
-                {"title": "打开购物车入口", "kind": "nav", "nav_target": "screen_cart", "key_ref": "operation.open_cart.nav"},
-                {"title": "确认购物车页", "kind": "visual_action", "key_ref": "operation.open_cart.confirm"},
-            ],
         ),
         _entry(
             section="operation",
@@ -588,6 +577,32 @@ def _entries() -> list[dict[str, Any]]:
             param_slots=[
                 {"id": "wait_ms", "required": False},
             ],
+        ),
+        _entry(
+            section="expected",
+            write_category="多语言意图检查",
+            write_examples=["多语言提示含义为{meaning}，不要求逐字", "提示意图与{meaning}一致"],
+            claim_path="case.meta.step_program_keys.{n}.expected[]",
+            resource="agent-text-assert / DOM 可见文本；截图兜底",
+            config_keys=["assert.mode=language_intent"],
+            dsl="language_intent",
+            runtime="非指定文案按意图一致验证；保留主体、否定、数量、条件。指定文案仍精确匹配；语言仅在明确要求时限制。",
+            key_layer="expected",
+            key_ref="expected.language_intent",
+            event_name="多语言意图检查",
+            schemes=["visual", "dom"],
+            param_slots=[
+                {"id": "meaning", "required": True, "description": "完整预期含义；不得丢掉主体、否定、数量和条件"},
+                {"id": "expected_language", "required": False, "description": "仅作者明确指定语言时填写，如 zh / en / en-US；不能由作者写作语言推断"},
+                {"id": "target.role", "required": False},
+                {"id": "target.name", "required": False},
+            ],
+            compile_patterns=[{
+                "priority": 90,
+                "regex": r"(?:多语言(?:提示)?(?:含义|意图)(?:为|是)|提示(?:含义|意图)(?:为|是))(?P<meaning>.+)",
+                "assert_mode": "language_intent",
+                "rules_from": ["meaning"],
+            }],
         ),
         _entry(
             section="expected",

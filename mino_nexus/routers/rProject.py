@@ -16,8 +16,8 @@ from mino_nexus.services.project_env import (
     public_test_accounts,
     save_test_accounts,
 )
-from mino_nexus.services import project_store as ps
-from mino_nexus.routers.deps import current_session
+from mino_nexus.services import auth_store, project_store as ps
+from mino_nexus.routers.deps import app_maintainer, current_session, project_maintainer, require_project_write
 
 router = APIRouter(prefix="/project", tags=["Project"])
 
@@ -33,6 +33,10 @@ class AppCreate(BaseModel):
     description: Optional[str] = None
     platforms: str = ""
     env: dict[str, Any] = {}
+
+
+class MaintainerBody(BaseModel):
+    user_id: str
 
 
 class AppEnvUpdate(BaseModel):
@@ -150,7 +154,7 @@ def list_project_resource_allocation_logs(
     return ok(payload)
 
 
-@router.post("/{project_id}/resource-allocation-logs/{log_id}/restore")
+@router.post("/{project_id}/resource-allocation-logs/{log_id}/restore", dependencies=[Depends(project_maintainer)])
 def restore_project_account_from_log(
     project_id: str,
     log_id: int,
@@ -170,7 +174,7 @@ def restore_project_account_from_log(
     return ok({"account": public, "log_id": log_id}, msg="已从资源日志恢复账号模板状态")
 
 
-@router.patch("/{project_id}/accounts/{account_id}/template-state")
+@router.patch("/{project_id}/accounts/{account_id}/template-state", dependencies=[Depends(project_maintainer)])
 def patch_account_template_state(
     project_id: str,
     account_id: str,
@@ -299,6 +303,7 @@ def create_project(item: ProjectCreate, sess: dict = Depends(current_session)):
 
 @router.post("/app/create")
 def create_app(item: AppCreate, sess: dict = Depends(current_session)):
+    require_project_write(item.project_id, sess)
     try:
         return ps.create_app(
             item.project_id,
@@ -311,13 +316,15 @@ def create_app(item: AppCreate, sess: dict = Depends(current_session)):
     except KeyError as exc:
         _missing(exc)
 
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 @router.get("/list")
 def list_projects(_sess: dict = Depends(current_session)):
     return ps.list_projects()
 
 
-@router.delete("/app/{app_id}")
+@router.delete("/app/{app_id}", dependencies=[Depends(app_maintainer)])
 def delete_app(app_id: str, _sess: dict = Depends(current_session)):
     try:
         data = ps.delete_app(app_id)
@@ -334,12 +341,14 @@ def get_app(app_id: str, _sess: dict = Depends(current_session)):
         _missing(exc)
 
 
-@router.put("/app/{app_id}/env")
+@router.put("/app/{app_id}/env", dependencies=[Depends(app_maintainer)])
 def update_app_env(app_id: str, item: AppEnvUpdate, _sess: dict = Depends(current_session)):
     try:
         doc = ps.update_app_env(app_id, item.env or {})
     except KeyError as exc:
         _missing(exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ok(doc, msg="已保存到项目环境(测试)")
 
 
@@ -360,7 +369,7 @@ def get_project_env(project_id: str, _sess: dict = Depends(current_session)):
     })
 
 
-@router.put("/{project_id}/env")
+@router.put("/{project_id}/env", dependencies=[Depends(project_maintainer)])
 def update_project_env(project_id: str, item: ProjectEnvUpdate, _sess: dict = Depends(current_session)):
     try:
         project = ps.require_project(project_id)
@@ -384,11 +393,12 @@ def update_project_env(project_id: str, item: ProjectEnvUpdate, _sess: dict = De
             merged_envs.append(row)
         incoming_envs = merged_envs
     body: dict[str, Any] = {
-        "default_profile": item.default_profile,
-        "profiles": item.profiles,
+        **prev,
+        "default_profile": item.default_profile if "default_profile" in item.model_fields_set else prev.get("default_profile"),
+        "profiles": item.profiles if "profiles" in item.model_fields_set else prev.get("profiles"),
         "environments": incoming_envs,
-        "channels": item.channels,
-        "pipeline": item.pipeline,
+        "channels": item.channels if item.channels is not None else prev.get("channels"),
+        "pipeline": item.pipeline if item.pipeline is not None else prev.get("pipeline"),
     }
     if item.channel_secrets is not None:
         body["channel_secrets"] = item.channel_secrets
@@ -402,6 +412,11 @@ def update_project_env(project_id: str, item: ProjectEnvUpdate, _sess: dict = De
         body["channel_phone_seq"] = item.channel_phone_seq
     elif prev.get("channel_phone_seq"):
         body["channel_phone_seq"] = prev.get("channel_phone_seq")
+    from mino_nexus.services.project_env import validate_environment_write
+    try:
+        validate_environment_write(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     doc = normalize_project_env(body)
     env_keys = {e["key"] for e in doc.get("environments") or []}
     prev_norm = normalize_project_env(prev) if isinstance(prev, dict) else {}
@@ -480,7 +495,7 @@ def list_project_accounts(project_id: str, env: str = "", _sess: dict = Depends(
     })
 
 
-@router.put("/{project_id}/accounts")
+@router.put("/{project_id}/accounts", dependencies=[Depends(project_maintainer)])
 def save_project_accounts(project_id: str, body: TestAccountSaveBody, _sess: dict = Depends(current_session)):
     project_id = _resolve_project_id(project_id)
     from mino_nexus.services.pool_account_store import env_has_test_accounts_blob, persist_env_strip_test_accounts_if_needed
@@ -504,7 +519,7 @@ def save_project_accounts(project_id: str, body: TestAccountSaveBody, _sess: dic
     )
 
 
-@router.patch("/{project_id}/accounts/{account_id}")
+@router.patch("/{project_id}/accounts/{account_id}", dependencies=[Depends(project_maintainer)])
 def patch_project_account(
     project_id: str,
     account_id: str,
@@ -573,7 +588,7 @@ def patch_project_account(
     return ok({"account": public, "warnings": errors}, msg="已保存")
 
 
-@router.post("/{project_id}/accounts")
+@router.post("/{project_id}/accounts", dependencies=[Depends(project_maintainer)])
 def create_project_account(
     project_id: str,
     body: TestAccountPatchBody,
@@ -715,7 +730,7 @@ async def preview_project_accounts_import_file(
     return ok(out)
 
 
-@router.post("/{project_id}/accounts/import/commit")
+@router.post("/{project_id}/accounts/import/commit", dependencies=[Depends(project_maintainer)])
 def commit_project_accounts_import(
     project_id: str,
     body: AccountImportBody,
@@ -744,7 +759,7 @@ def commit_project_accounts_import(
     return ok(out, msg="导入完成")
 
 
-@router.post("/{project_id}/accounts/import/commit-file")
+@router.post("/{project_id}/accounts/import/commit-file", dependencies=[Depends(project_maintainer)])
 async def commit_project_accounts_import_file(
     project_id: str,
     file: UploadFile = File(...),
@@ -780,7 +795,7 @@ async def commit_project_accounts_import_file(
     return ok(out, msg="导入完成")
 
 
-@router.delete("/{project_id}/accounts/{account_id}")
+@router.delete("/{project_id}/accounts/{account_id}", dependencies=[Depends(project_maintainer)])
 def delete_project_account(
     project_id: str,
     account_id: str,
@@ -819,7 +834,7 @@ def get_project_account_pool_local(project_id: str, _sess: dict = Depends(curren
     return ok(project_pool_payload(doc))
 
 
-@router.put("/{project_id}/account-pool-local")
+@router.put("/{project_id}/account-pool-local", dependencies=[Depends(project_maintainer)])
 def put_project_account_pool_local(
     project_id: str,
     body: ProjectAccountPoolLocalBody,
@@ -847,7 +862,7 @@ class ProjectPoolExtensionFieldsBody(BaseModel):
     fields: list[dict[str, Any]] = []
 
 
-@router.put("/{project_id}/account-pool-local/templates/{template_id}")
+@router.put("/{project_id}/account-pool-local/templates/{template_id}", dependencies=[Depends(project_maintainer)])
 def put_project_pool_local_template(
     project_id: str,
     template_id: str,
@@ -870,7 +885,7 @@ def put_project_pool_local_template(
     return ok(project_pool_payload(saved), msg="已保存项目模板")
 
 
-@router.put("/{project_id}/account-pool-local/builtin/{template_id}/fields")
+@router.put("/{project_id}/account-pool-local/builtin/{template_id}/fields", dependencies=[Depends(project_maintainer)])
 def put_project_pool_builtin_fields(
     project_id: str,
     template_id: str,
@@ -891,7 +906,7 @@ def put_project_pool_builtin_fields(
     return ok(project_pool_payload(saved), msg="已保存该模板字段")
 
 
-@router.delete("/{project_id}/account-pool-local/templates/{template_id}")
+@router.delete("/{project_id}/account-pool-local/templates/{template_id}", dependencies=[Depends(project_maintainer)])
 def delete_project_pool_local_template(
     project_id: str,
     template_id: str,
@@ -908,7 +923,7 @@ def delete_project_pool_local_template(
     return ok(project_pool_payload(saved), msg="已删除项目模板")
 
 
-@router.put("/{project_id}/account-template-ids")
+@router.put("/{project_id}/account-template-ids", dependencies=[Depends(project_maintainer)])
 def put_project_account_template_ids(
     project_id: str,
     body: AccountTemplateIdsBody,
@@ -988,7 +1003,7 @@ def list_project_device_app_sessions(
     return ok(payload)
 
 
-@router.patch("/{project_id}/device-app-sessions/{sn}/{package_id}")
+@router.patch("/{project_id}/device-app-sessions/{sn}/{package_id}", dependencies=[Depends(project_maintainer)])
 def patch_project_device_app_session(
     project_id: str,
     sn: str,
@@ -1085,7 +1100,7 @@ def get_account_facet_extensions(project_id: str, _sess: dict = Depends(current_
     return ok({"extensions": _facet_extensions(doc)})
 
 
-@router.put("/{project_id}/account-facet-extensions")
+@router.put("/{project_id}/account-facet-extensions", dependencies=[Depends(project_maintainer)])
 def put_account_facet_extensions(project_id: str, body: FacetExtensionsBody, _sess: dict = Depends(current_session)):
     from mino_nexus.services.account_facet_schema import normalize_extensions, save_extensions_to_env
 
@@ -1098,7 +1113,7 @@ def put_account_facet_extensions(project_id: str, body: FacetExtensionsBody, _se
     return ok({"extensions": _facet_extensions(saved)}, msg="已保存扩展字段")
 
 
-@router.post("/{project_id}/account-facet-extensions/ai-expand")
+@router.post("/{project_id}/account-facet-extensions/ai-expand", dependencies=[Depends(project_maintainer)])
 def ai_expand_account_facet_extensions(
     project_id: str,
     body: FacetAiExpandBody,
@@ -1128,10 +1143,46 @@ def ai_expand_account_facet_extensions(
     return ok({"extensions": merged, "message": err or "仅预览，未写入"})
 
 
-@router.delete("/{project_id}")
+def _maintainer_call(fn, *args):
+    try:
+        return ok(fn(*args))
+    except KeyError as exc:
+        _missing(exc)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail={"reason_code": str(exc), "message": "需要管理员才能调整项目维护者"}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"reason_code": str(exc)}) from exc
+
+
+@router.get("/{project_id}/maintainers")
+def list_project_maintainers(project_id: str, sess: dict = Depends(current_session)):
+    from mino_nexus.services import project_members as pm
+    data = _maintainer_call(pm.list_maintainers, project_id)
+    data["data"] = {"items": data["data"], "can_edit": pm.is_maintainer(project_id, sess),
+                    "can_manage": auth_store.is_admin_role(str(sess.get("role") or ""))}
+    return data
+
+
+@router.post("/{project_id}/maintainers")
+def add_project_maintainer(project_id: str, body: MaintainerBody, sess: dict = Depends(current_session)):
+    from mino_nexus.services import project_members as pm
+    return _maintainer_call(pm.add_maintainer, project_id, body.user_id, sess)
+
+
+@router.delete("/{project_id}/maintainers/{user_id}")
+def remove_project_maintainer(project_id: str, user_id: str, sess: dict = Depends(current_session)):
+    from mino_nexus.services import project_members as pm
+    return _maintainer_call(pm.remove_maintainer, project_id, user_id, sess)
+
+
+@router.delete("/{project_id}", dependencies=[Depends(project_maintainer)])
 def delete_project(project_id: str, _sess: dict = Depends(current_session)):
     try:
         data = ps.delete_project(project_id)
     except KeyError as exc:
         _missing(exc)
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.project_member import ProjectMember
+    with session_scope() as db:
+        db.query(ProjectMember).filter_by(project_id=project_id).delete()
     return ok(data, msg="deleted")

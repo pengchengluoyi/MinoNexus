@@ -1,5 +1,5 @@
 id: case.run
-version: 4
+version: 5
 title: 跑用例
 description: 在指定设备上执行用例，返回任务 id。用户说跑一下、执行、回归时用。
 route: POST /case-runner/run
@@ -52,9 +52,11 @@ params_schema:
     action_scheme:
       type: string
       enum:
+      - dom_preferred
       - visual
       - dom
-      description: 执行方案；原生 PC 应用仅支持 visual
+      default: dom_preferred
+      description: 执行策略；默认 dom_preferred，有有效结构用 DOM，无法定位时用截图兜底；visual 为纯视觉，旧 dom 兼容映射到 dom_preferred。平台执行能力由设备与渠道准入判断。
   required:
   - app_id
 param_resolvers:

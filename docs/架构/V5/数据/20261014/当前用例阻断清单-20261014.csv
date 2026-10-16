@@ -1,0 +1,11 @@
+﻿project_id,case_id,name,platform,phase,case_step,reason,source_clause,user_message,priority,basis
+9bd609c0-144a-437d-ba5b-069c83c65ebc,case-sync1,t,,do,1,uncovered,t,步骤 1 操作「t」无法执行：这几个字没有落进任何事件：t。,待补业务定义,stored meta.ui_automation.blocked_by
+ad7e96eb-d629-47ae-ac2c-5fdd9d1f60c2,case-sync1,t,,do,1,uncovered,t,步骤 1 操作「t」无法执行：这几个字没有落进任何事件：t。,待补业务定义,stored meta.ui_automation.blocked_by
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-0cc1d95f,点击底部「我的」Tab 时未登录 → 全屏登录页 → 成功后进拍摄流程（见形象与权限）,android,do,2,uncovered,在登录页完成验证码登录,操作步骤 2「在登录页完成验证码登录」未执行：在登录页完成验证码登录,P0,stored meta.ui_automation.blocked_by
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-0cc1d95f,点击底部「我的」Tab 时未登录 → 全屏登录页 → 成功后进拍摄流程（见形象与权限）,android,check,2,uncovered,进入选择你的形象配置页(包含多个头像、完成按钮),预期步骤 2「进入选择你的形象配置页(包含多个头像、完成按钮)」未执行：(包含多个头像完成按钮),P0,stored meta.ui_automation.blocked_by
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-0cc1d95f,点击底部「我的」Tab 时未登录 → 全屏登录页 → 成功后进拍摄流程（见形象与权限）,android,check,3,uncovered,进入拍摄页(页面底部有几个圆形按钮) 即可,预期步骤 3「进入拍摄页(页面底部有几个圆形按钮) 即可」未执行：()即可,P0,stored meta.ui_automation.blocked_by
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-d0536328,首页「开始造物」→ 先进拍摄页 → 拍摄/选图成功但未登录 → 登录 → 成功后进「生成中页」（不丢失当次任务）,android,check,1,uncovered,进入拍摄页(包含实拍或取景框或页面底部左下角图库、右下角翻转) 即可,预期步骤 1「进入拍摄页(包含实拍或取景框或页面底部左下角图库、右下角翻转) 即可」未执行：即可,P0,stored meta.ui_automation.blocked_by
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-54c993b3,个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄,android,do,2,uncovered,"页面中向上滑动点击退出登录,并点击确认","操作步骤 2「页面中向上滑动点击退出登录,并点击确认」未执行：页面中并",P0,stored meta.ui_automation.blocked_by
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-54c993b3,个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄,android,do,3,uncovered,页面向下滑动并点击「去登录」,操作步骤 3「页面向下滑动并点击「去登录」」未执行：并,P0,stored meta.ui_automation.blocked_by
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-54c993b3,个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄,android,check,4,uncovered,进入选择你的形象配置页(包含多个头像、完成按钮即可),预期步骤 4「进入选择你的形象配置页(包含多个头像、完成按钮即可)」未执行：(包含多个头像完成按钮即可),P0,stored meta.ui_automation.blocked_by
+fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc,case-7effbeed,灵感帖子详情点「做成真的」→ 登录后回详情继续下单，不进拍摄页,android,check,1,uncovered,进入该帖子详情页(包含点赞、关注即可),预期步骤 1「进入该帖子详情页(包含点赞、关注即可)」未执行：进入该帖子详情页(包含点赞关注即可),P0,stored meta.ui_automation.blocked_by

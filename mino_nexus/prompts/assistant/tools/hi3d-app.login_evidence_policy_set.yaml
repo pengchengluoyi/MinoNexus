@@ -1,0 +1,55 @@
+id: app.login_evidence_policy_set
+version: 3
+title: 保存应用登录校验配置
+description: 应用级配置；提交账号绑定仅在明确环境与渠道生效，仍需实际填写、提交及页面已登录证据，UI身份仍未知。保存须维护权限及读取到的expected_policy，新任务生效。
+route: PUT /app-automation/login-evidence-policy/{app_id}
+risk: write
+async: false
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    app_id:
+      type: string
+      minLength: 1
+    policy: &id001
+      type: object
+      additionalProperties: false
+      properties:
+        mode:
+          type: string
+          enum:
+          - ui_identity
+          - submitted_account
+        env_profiles:
+          type: array
+          items:
+            type: string
+        env_surfaces:
+          type: array
+          items:
+            type: string
+        authenticated_content_hint:
+          type: string
+          maxLength: 1200
+        logout_navigation_hint:
+          type: string
+          maxLength: 1200
+          description: 适用环境和渠道下的退出入口与导航路径；仅提交绑定模式且前置要求登录、当前身份未知时，允许退出后执行本次账号完整登录。留空则不自动退出。
+      required:
+      - mode
+      - env_profiles
+      - env_surfaces
+    expected_policy: *id001
+  required:
+  - app_id
+  - policy
+  - expected_policy
+param_resolvers: {}
+result_pick:
+- data
+card: answer
+surfaces:
+- im
+- mcp
+enabled: true

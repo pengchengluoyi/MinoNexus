@@ -92,15 +92,19 @@ def _control_left_of_label(ctrl: dict[str, Any], label: dict[str, Any]) -> bool:
     return bc[0] < bl[0] and cw < lw / 2
 
 
-def find_consent_control(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+def find_consent_control(
+    nodes: list[dict[str, Any]], *, require_unique: bool = False,
+) -> Optional[dict[str, Any]]:
     """长文案左侧的小方框。已勾选则仍返回该控件（调用方决定是否跳过）。"""
-    pool = [n for n in (nodes or []) if isinstance(n, dict)]
+    pool = [n for n in (nodes or []) if isinstance(n, dict)
+            and n.get("visible", True) and n.get("enabled", True) and not n.get("cross_origin")]
     if not pool:
         return None
     sw, sh = _screen_wh(pool)
     labels = [n for n in pool if is_long_label(n)]
     controls = [n for n in pool if is_small_control(n, sw=sw, sh=sh)]
     best: tuple[int, dict[str, Any]] | None = None
+    candidates: dict[tuple[int, ...], tuple[int, dict[str, Any]]] = {}
     for label in labels:
         for ctrl in controls:
             if ctrl is label:
@@ -116,8 +120,15 @@ def find_consent_control(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]
                 score += 10
             if node_flag(ctrl, "checked"):
                 score += 5
+            identity = tuple(_bounds(ctrl))
+            previous = candidates.get(identity)
+            if previous is None or score > previous[0]:
+                candidates[identity] = (score, ctrl)
             if best is None or score > best[0]:
                 best = (score, ctrl)
+    if require_unique and best is not None:
+        if sum(1 for score, _ in candidates.values() if score == best[0]) != 1:
+            return None
     return None if best is None else best[1]
 
 

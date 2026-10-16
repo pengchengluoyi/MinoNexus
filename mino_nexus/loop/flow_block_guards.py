@@ -39,6 +39,13 @@ def evaluate_flow_block_guards(ctx: dict[str, Any], cursor: Any) -> Optional[Flo
     """登录块 milestones 激活时，按 steps_json guards/fuse 求值。"""
     from mino_nexus.loop.milestones import login_flow_under_milestones, read_state
 
+    from mino_nexus.loop.login_evidence_navigation import rejected_navigation_action
+    if rejected_navigation_action(cursor, ctx.get("run_ctx") or ctx.get("ctx"),
+                                  str(ctx.get("cap_id") or ""), ctx.get("params")):
+        return FlowBlockGuardVerdict(allowed=False, guard_id="navigation:no_change_repeat",
+            code="navigation_no_change_repeat", dispatch_gate_code="navigation_no_change_repeat",
+            reason="上一只读导航已独立核验为无可见变化，禁止重复；选择其他可见入口或相反滚动方向，不能重复无效返回。")
+
     if not login_flow_under_milestones(cursor):
         return None
 
@@ -262,6 +269,11 @@ def _evaluate_fuse_repeat_tap(
     if not isinstance(store, dict):
         store = {}
     key = sel.lower()
+    if focus_mid.startswith(("login_evidence_nav_", "login_context_restore_", "prep_reauth_nav_")):
+        from mino_nexus.loop.llm_step_context import step_scope_key
+
+        case_step, phase = step_scope_key(cursor)
+        key = f"navigation:{case_step}:{phase}:{focus_mid}:{key}"
     store[key] = int(store.get(key) or 0) + 1
     setattr(cursor, "flow_block_tap_streak", store)
     limit = 2
@@ -271,7 +283,7 @@ def _evaluate_fuse_repeat_tap(
             limit = min(limit, int(fuse["same_target_repeat"]))
     if store[key] < limit:
         return None
-    reason = f"逻辑块 fuse：同一控件「{sel[:24]}」重复点击 {store[key]} 次，请换步或 signal_ask_human。"
+    reason = f"逻辑块 fuse：同一控件「{sel[:24]}」重复点击 {store[key]} 次，请检查当前页面与目标，停止重复点击。"
     return FlowBlockGuardVerdict(
         allowed=False,
         guard_id="flow_block:fuse_repeat_tap",

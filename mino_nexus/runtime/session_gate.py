@@ -476,7 +476,7 @@ def observe_session(
     if observed == "logged_in":
         reason = reason or "看图判定已登录"
     elif not reason:
-        reason = "看图没有已登录凭据，按 guest" if observed == "guest" else "看图判定未登录"
+        reason = "观察明确未登录" if observed in {"guest", "logged_out"} else "登录态尚未确认，需要重新观察"
 
     wx_blob = f"{seen} {reason}" if inspect_ok else ""
     return {
@@ -558,7 +558,7 @@ def can_reuse_task_session(
     sess = task_session if isinstance(task_session, dict) else {}
     from mino_nexus.services.session_match import normalize_device_session
 
-    observed = normalize_device_session(sess.get("observed") or "")
+    observed = normalize_device_session(sess.get("observed") or sess.get("session") or "")
     logged_in = bool(sess.get("logged_in")) or observed == "logged_in"
     want = str(required or "any").strip().lower() or "any"
     phone = re.sub(r"\s+", "", str(picked_phone or ""))
@@ -570,5 +570,5 @@ def can_reuse_task_session(
     if want == "guest":
         return observed == "guest" or (not logged_in and observed in {"guest", "logged_out"})
     if want == "any":
-        return bool(observed)
+        return observed in {"logged_in", "logged_out", "guest"}
     return False

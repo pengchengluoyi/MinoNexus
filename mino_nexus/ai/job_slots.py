@@ -178,7 +178,10 @@ def assemble_vision_exec_slots(
     active = next((row for row in sc_obj.get("milestones") or []
                    if isinstance(row, dict) and str(row.get("id") or "") == active_id), {})
     if sc_obj.get("prior_action") and sc_obj.get("review_transition"):
-        active = {"awaiting_review": active, **sc_obj["review_transition"]}
+        active = {"review_result_expected": sc_obj["prior_action"].get("expected", ""),
+                  "review_milestone_id": sc_obj["prior_action"].get("milestone_id", ""),
+                  "dispatched_action": sc_obj["prior_action"].get("capability_id", ""),
+                  **sc_obj["review_transition"]}
     return {
         "success_criteria": json.dumps(sc_obj, ensure_ascii=False, indent=2),
         "active_milestone": json.dumps(active, ensure_ascii=False, indent=2) if active else "",

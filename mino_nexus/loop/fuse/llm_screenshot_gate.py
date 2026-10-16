@@ -30,6 +30,9 @@ def foreign_foreground_active(ctx: Any) -> bool:
 
 
 def should_withhold_llm_image(ctx: Any, *, shot: Any = None) -> bool:
+    from mino_nexus.action_space.scheme import action_scheme, execution_scheme
+    if action_scheme(ctx) == "dom_preferred" and execution_scheme(ctx) == "dom":
+        return True
     if case_foreign_image_policy(ctx) == "allow_always":
         return False
     detail = dict(getattr(shot, "remote_detail", None) or {})

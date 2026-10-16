@@ -59,10 +59,15 @@ def _trace_device_result(
         "scout_ms": int(res.elapsed_ms or 0) if res is not None else 0,
         "executor_used": res.executor_used if res is not None else "",
     }
+    if req.binding_id:
+        fields["execution_binding"] = {key: getattr(req, key) for key in ("binding_id", "operation_ref",
+            "node_connection_generation", "scout_process_generation", "capability_revision")}
     if req.step_idx > 0:
         fields["action_ref"] = _action_ref(req)
         fields["logical_seq"] = logical_seq
     raw = {**dict(res.extra or {}), **dict(res.data or {})} if res is not None else {}
+    from mino_nexus.loop.observe.execution_diagnostics import execution_result_metadata
+    fields.update(execution_result_metadata(raw))
     for key in ("target_active", "verification_required"):
         if isinstance(raw.get(key), bool):
             fields[key] = raw[key]
@@ -86,7 +91,7 @@ def _trace_device_result(
     details = " ".join(f"{k}={v}" for k, v in fields.items() if k not in ("capability_id", "purpose", "step_idx"))
     message = f"[{req.run_id}] result cap={req.capability_id} step={req.step_idx} purpose={_DIAGNOSTIC_PURPOSES[purpose]} {details}"
     (SLog.i if status == "pass" else SLog.w)(TAG, message)
-    if req.step_idx > 0 or req.capability_id == "get_foreground_app" or purpose in ("recovery_evidence", "recovery_action"):
+    if req.binding_id or req.step_idx > 0 or req.capability_id == "get_foreground_app" or purpose in ("recovery_evidence", "recovery_action"):
         from mino_nexus.loop.observe.session_log import active_writer
 
         writer = active_writer()
@@ -157,8 +162,91 @@ class RouterProxy:
         self.run_context = run_context
         self.execution_mode = execution_mode
         self.execution_control = execution_control
+        self.execution_binding = None
+        self._binding_required = execution_mode == 'v5'
+        self._binding_requirements = None
+        self._binding_target = None
+        self._binding_session_id = ''
+        self._binding_phase_override = ''
         # 协议 §6：等 RESULT 用 payload.timeout_sec + 宽限
         self.timeout_pad_sec = timeout_pad_sec
+
+    def bind_execution(self, requirements, *, session_id, env_profile='', env_surface='', probe_url='', deadline=None):
+        """Enable the new contract only after its binding transaction commits."""
+        from copy import deepcopy
+        from mino_nexus.services.execution_binding_runtime import bind_attempt
+        from mino_nexus.services.execution_binding import CONTRACT
+        self._binding_required = True
+        self.execution_binding = None
+        self._binding_requirements = self._binding_target = None
+        self._binding_session_id = ''
+        if self.run_context is not None:
+            self.run_context.execution_contract_version = CONTRACT
+            self.run_context.execution_binding = None
+        target = {'sn': self.sn, 'env_profile': env_profile, 'env_surface': env_surface,
+                  'attempt_id': session_id, 'task_id': self.task_id, 'headless': self.playwright_headless}
+        if probe_url:
+            target['probe_url'] = probe_url
+        binding = bind_attempt(session_id, requirements, target, deadline=deadline)
+        self.execution_binding = deepcopy(binding)
+        self._binding_requirements = deepcopy(requirements)
+        self._binding_target = target
+        self._binding_session_id = session_id
+        if self.run_context is not None:
+            self.run_context.execution_binding = deepcopy(binding)
+            self.run_context.execution_binding_menu = self.binding_menu
+        return deepcopy(binding)
+
+    def _binding_projection(self, event, options):
+        from mino_nexus.services.execution_binding_runtime import BindingAdmissionError, committed_projection
+        from mino_nexus.loop.observe.session_log import active_writer
+        writer = active_writer()
+        phase = options.get('binding_phase') or self._binding_phase_override or (writer.phase if writer else '')
+        if self.execution_binding is None or not self._binding_session_id:
+            raise BindingAdmissionError('binding_not_committed')
+        if options.get('binding_run_id', self.run_id) != self.run_id:
+            raise BindingAdmissionError('binding_run_mismatch')
+        combination = None
+        if event.capability_id == 'input_text':
+            from mino_nexus.action_space.assemble import stamp_scheme_params
+            from mino_nexus.action_space.scheme import execution_scheme
+            params = stamp_scheme_params(event.capability_id, event.params, execution_scheme(self.run_context or self))
+            combination = {'contract_version': 2, 'target_mode': params.get('target_mode') or params.get('point_policy'),
+                           'write_mode': params.get('mode') or 'replace'}
+        return committed_projection(self._binding_session_id, self.execution_binding['binding_id'],
+            self._binding_requirements, self._binding_target, event_id=event.capability_id,
+            operation_ref=options.get('operation_ref') or getattr(event, 'operation_ref', ''), phase=phase,
+            dynamic_target=(event.params or {}).get('url') or (event.params or {}).get('package') or self.target_package,
+            input_combination=combination)
+
+    def binding_menu(self, phase):
+        """Menus use the same committed/fresh projection as dispatch; fail closed."""
+        from mino_nexus.services.execution_binding_runtime import committed_projection, menu_projection
+        binding = self.execution_binding
+        if not binding or self._task_aborted():
+            return set()
+        rows = [row for row in binding['operations'] if row['phase'] == phase]
+        if not rows:
+            return set()
+        row = rows[0]
+        try:
+            committed_projection(self._binding_session_id, binding['binding_id'],
+                self._binding_requirements, self._binding_target, event_id=row['event_id'],
+                operation_ref=row['operation_ref'], phase=phase)
+        except Exception as exc:
+            # Preserve the actual admission failure. An empty bound menu must
+            # never erase an epoch/resource failure into a generic missing tool.
+            from mino_nexus.loop.observe.session_log import active_writer
+            writer = active_writer()
+            if writer is not None:
+                writer.append("binding/menu_blocked", {
+                    "binding_id": binding['binding_id'], "phase": phase,
+                    "reason_code": getattr(exc, 'reason_code', 'binding_menu_resolution_failed'),
+                    "diagnostics": [{key: item[key] for key in ('reason_code', 'operation_ref', 'responsibility', 'missing_fields') if key in item}
+                                    for item in getattr(exc, 'diagnostics', ())],
+                    "execution_started": "no"})
+            return set()
+        return menu_projection(binding, phase)
 
     def _task_aborted(self) -> bool:
         tid = self.task_id
@@ -213,7 +301,7 @@ class RouterProxy:
             plat = _device_platform(self.sn, node) if node is not None else ""
             if compress_ratio is None:
                 compress_ratio = channel_screenshot_compress_ratio(plat)
-            note_channel_capture_ratio(float(compress_ratio or 1.0), authoritative=plat == "desktop")
+            note_channel_capture_ratio(float(compress_ratio or 1.0), authoritative=plat in {"desktop", "mac", "win"})
         shot = _run_sync(
             self.observe_async(
                 kind, prefer=prefer, force_fresh=force_fresh,
@@ -224,7 +312,7 @@ class RouterProxy:
         if kind == "screenshot":
             note_channel_capture_ratio(
                 float((shot.remote_detail or {}).get("compress_ratio") or compress_ratio or 1.0),
-                authoritative=plat == "desktop",
+                authoritative=plat in {"desktop", "mac", "win"},
             )
         return shot
 
@@ -267,6 +355,14 @@ class RouterProxy:
         started = _now_iso()
         t0 = time.time()
 
+        # N0 复用当前 session，后续 N2 在同一守卫上加入绑定事务。
+        # 观察也可能带副作用前置（如开启浏览器），因此持久化失效后不再派发。
+        from mino_nexus.loop.observe.session_log import active_writer
+
+        session_writer = active_writer()
+        if session_writer is not None:
+            session_writer.require_persisted()
+
         if self.execution_mode == "v5":
             return await self._dispatch_v5(event, run_id or self.run_id, started, t0, kwargs)
 
@@ -299,6 +395,9 @@ class RouterProxy:
             )
 
         if str(event.capability_id or "").startswith("plugin."):
+            if self._binding_required:
+                return await self._dispatch_bound_otp(event, started=started, t0=t0,
+                    run_id=run_id or self.run_id, options=kwargs)
             return await self._dispatch_host_plugin(
                 event, started=started, t0=t0, run_id=run_id, step_idx=step_idx,
             )
@@ -314,10 +413,19 @@ class RouterProxy:
             )
 
         if is_local_cap(event.capability_id):
+            if self._binding_required:
+                try:
+                    local_projection = self._binding_projection(event, {**kwargs, 'binding_run_id': run_id or self.run_id})
+                    if local_projection['runs_on'] != 'nexus':
+                        raise ValueError('binding_local_assembly_invalid')
+                except Exception as exc:
+                    reason = str(exc) if isinstance(exc, ValueError) else 'binding_store_unavailable'
+                    return _fail(event, started, t0, reason, executor_used='router_proxy', local_reason=reason,
+                        raw_response={'execution': {'execution_started': 'no', 'phase': 'binding', 'reason_code': reason}})
             ctx = kwargs.get("ctx") or self.run_context
             # 本地能力里还会再 dispatch（例如 relogin → read_web_auth）。
             # 放在线程里，事件循环才能接着把这次 EXECUTE 发给 Scout。
-            return await asyncio.to_thread(
+            local_result = await asyncio.to_thread(
                 _dispatch_local_in_runtime,
                 event,
                 shot=kwargs.get("shot"),
@@ -325,24 +433,44 @@ class RouterProxy:
                 router=self,
                 target_package=self.target_package,
             )
+            if self._binding_required:
+                local_result.raw_response = {**(local_result.raw_response or {}), "execution_binding": {
+                    "binding_id": local_projection['binding_id'], "operation_ref": local_projection['operation_ref'],
+                    "runs_on": "nexus"}}
+            return local_result
 
         node, why = get_registry().resolve(self.sn)
         if node is None:
             return _fail(event, started, t0, why, executor_used="router_proxy")
 
-        if _device_platform(self.sn, node) == "desktop":
+        if _device_platform(self.sn, node) in {"desktop", "mac", "win"}:
             from mino_nexus.services.device_admission import owns_desktop
             dev = node.devices.get(self.sn)
             hint = self._device_hint(node)
             task_id = self.task_id or (run_id or self.run_id).split("::", 1)[0]
             if not dev or dev.desktop_state != "ready" or hint.get("session_generation") != dev.session_generation or not owns_desktop(task_id, node.node_id):
                 return _fail(event, started, t0, "桌面未就绪、会话已变化或没有独占租约", executor_used="router_proxy", local_reason="desktop_not_admitted")
+        projection = None
         try:
-            order, impl = self._plan_route(event, node)
+            if self._binding_required:
+                projection = self._binding_projection(event, {**kwargs, 'binding_run_id': run_id or self.run_id})
+                order, impl = projection['executor_order'], projection['selected_impl']
+            else:
+                order, impl = self._plan_route(event, node)
+        except ValueError as exc:
+            return _fail(event, started, t0, str(exc), executor_used='router_proxy',
+                local_reason=str(exc), raw_response={'execution': {
+                    'execution_started': 'no', 'phase': 'binding', 'reason_code': str(exc)}})
         except NoRouteError as exc:
             msg = str(exc)
             reason = "no_impl_for_device" if "无可用实现" in msg else "cap_not_in_catalog"
             return _fail(event, started, t0, msg, executor_used="router_proxy", local_reason=reason)
+        except Exception:
+            if not self._binding_required:
+                raise
+            return _fail(event, started, t0, 'binding_store_unavailable', executor_used='router_proxy',
+                local_reason='binding_store_unavailable', raw_response={'execution': {
+                    'execution_started': 'no', 'phase': 'binding', 'reason_code': 'binding_store_unavailable'}})
 
         plat = _device_platform(self.sn, node)
         family = set(executors_for_platform(plat))
@@ -374,10 +502,10 @@ class RouterProxy:
             low_level=(impl or {}).get("low_level"),
         )
         from mino_nexus.action_space.assemble import stamp_scheme_params, visual_point_missing
-        from mino_nexus.action_space.scheme import action_scheme
+        from mino_nexus.action_space.scheme import execution_scheme as action_scheme
 
         ctx = kwargs.get("ctx") or self.run_context
-        scheme = action_scheme(ctx) if ctx is not None else str(getattr(self, "action_scheme", "") or "visual")
+        scheme = action_scheme(ctx if ctx is not None else self)
         focus_ref = str(params.get("focus_ref") or "")
         params = stamp_scheme_params(event.capability_id, params, scheme)
         if scheme != "dom" and visual_point_missing(event.capability_id, params):
@@ -397,9 +525,15 @@ class RouterProxy:
                     local_reason="focus_reference_invalid",
                 )
             params["focus_ref"] = focus_ref
-        if _device_platform(self.sn, node) == "desktop" and event.capability_id in ("tap_element", "tap_xy"):
+        if _device_platform(self.sn, node) in {"desktop", "mac", "win"} and event.capability_id in ("tap_element", "tap_xy"):
             params["focus_ref"] = f"focus:{run_id or self.run_id}:{event.seq}"
         event.params = params
+        if projection is not None and event.capability_id == 'input_text':
+            combination = projection['input_combination']
+            if ((params.get('target_mode') or params.get('point_policy')) != combination.get('target_mode')
+                    or (params.get('mode') or 'replace') != combination.get('write_mode')):
+                return _fail(event, started, t0, 'binding_input_combination_changed',
+                    executor_used='router_proxy', local_reason='binding_input_combination_changed')
 
         req = P.Execute(
             run_id=run_id or self.run_id,
@@ -414,23 +548,51 @@ class RouterProxy:
             timeout_sec=_timeout_for(event),
             device_id=self.sn,
             platform=_device_platform(self.sn, node),
+            **_binding_wire_fields(projection),
         )
+        if projection is not None:
+            req.device_hint = {**projection['device_hint_template'], **req.device_hint}
 
         purpose = _diagnostic_purpose(kwargs.get("diagnostic_purpose"))
         from mino_nexus.core.secret_redaction import register_inputs
         register_inputs(req.params)
         register_inputs(req.device_hint)
         SLog.i(TAG, f"[{req.run_id}] dispatch cap={req.capability_id} step={req.step_idx} purpose={_DIAGNOSTIC_PURPOSES[purpose]} order={order} impl={(impl or {}).get('id')}")
+        from mino_nexus.services import run_write_safety
+        # Unknown capabilities are conservatively writes; only known framework reads are exempt.
+        from mino_nexus.services.execution_binding import effect_class
+        is_write = effect_class(req.capability_id) != "read"
+        try:
+            ticket = run_write_safety.begin(self.task_id, req, node_id=node.node_id, scout_process_generation=node.scout_process_generation) if is_write and self.task_id else ""
+        except run_write_safety.WriteAdmissionError as exc:
+            if session_writer is not None:
+                session_writer.append("guard/block", {"reason_code": exc.reason_code,
+                    "capability_id": req.capability_id, "action_ref": _action_ref(req),
+                    "blocking_actions": exc.blocking_actions, "execution_started": "no"})
+                session_writer.require_persisted()
+            result = _fail(event, started, t0, str(exc), executor_used="router_proxy",
+                raw_response={"execution": {"execution_started": "no", "phase": "admission", "reason_code": exc.reason_code},
+                              "execution_control": {"stop_run": True, "reason_code": exc.reason_code}})
+            result.status = EventStatus.BLOCKED
+            return result
         res = await self._send_with_retry(node, P.MsgType.EXECUTE, req, req.timeout_sec)
         _trace_device_result(req, res, total_ms=int((time.time() - t0) * 1000), purpose=purpose, logical_seq=event.seq)
         if res is None:
-            return _fail(
-                event, started, t0,
-                f"scout timeout（node={node.node_id}，重发一次仍无 RESULT）",
-                executor_used="router_proxy",
-                raw_response={"scout": _request_metadata(node, req), "action_ref": _action_ref(req)},
-            )
-        return _event_result_from(event, res, started, node=node, request=req)
+            result = _fail(event, started, t0,
+                f"scout 未返回 RESULT（node={node.node_id}）；动作结果未核验，停止未确认",
+                executor_used="router_proxy", raw_response={"scout": _request_metadata(node, req),
+                    "action_ref": _action_ref(req), "execution": {"execution_started": "unknown", "phase": "transport", "reason_code": "result_missing"}})
+        else:
+            result = _event_result_from(event, res, started, node=node, request=req)
+        if ticket:
+            if session_writer is not None:
+                session_writer.require_persisted()
+            isolated = run_write_safety.finish(self.task_id, ticket, result.raw_response, passed=result.status is EventStatus.PASS)
+            if isolated:
+                result.status = EventStatus.BLOCKED
+                result.summary = "写动作结果未核验，已阻止后续写入并隔离设备与账号资源"
+                result.raw_response["resource_isolated"] = True
+        return result
 
     async def _dispatch_v5(self, event, run_id, started, t0, options):
         from mino_nexus.core.secret_redaction import register_inputs
@@ -439,15 +601,6 @@ class RouterProxy:
         cleanup = {"cancel_run", "close_web_v5"}
         writes = {"open_web_v5", "tap_target", "input_target"}
         cap = event.capability_id
-        from mino_nexus.services.v5_capabilities import CAPABILITIES, snapshot as capability_snapshot
-        impl = {"id": "web.strict.v1", "executor": "playwright"}
-        if cap in CAPABILITIES:
-            try:
-                selected = getattr(self, "v5_capabilities", None) or capability_snapshot()
-                impl = selected[cap]["selected_impl"]
-            except (ValueError, KeyError):
-                return _fail(event, started, t0, "capability_unavailable", executor_used="router_proxy",
-                             raw_response={"execution": {"execution_started": "no", "phase": "admission", "reason_code": "capability_unavailable"}})
         monotonic_start = time.monotonic()
         control = self.execution_control
         reason = ""
@@ -471,12 +624,20 @@ class RouterProxy:
             return _fail(event, started, t0, reason, executor_used="router_proxy",
                 raw_response={"execution": {"execution_started": "no", "phase": "admission", "reason_code": reason},
                               "execution_control": stopped})
+        try:
+            projection = self._binding_projection(event, {**options, 'binding_run_id': run_id})
+        except Exception as exc:
+            reason = str(exc) if isinstance(exc, ValueError) else 'binding_store_unavailable'
+            return _fail(event, started, t0, reason, executor_used='router_proxy',
+                raw_response={'execution': {'execution_started': 'no', 'phase': 'binding', 'reason_code': reason}})
+        impl = projection['selected_impl']
         register_inputs(event.params)
         req = P.Execute(run_id=run_id, step_idx=_next_wire_step_idx(run_id) if cap in writes else _next_read_idx(run_id),
             sn=self.sn, capability_id=cap, params={**event.params, "timeout_profile": PROFILE},
-            executor_order=["playwright"], selected_impl=impl,
-            device_hint={"execution_mode": "v5", "headless": self.playwright_headless, "node_id": node.node_id},
-            timeout_sec=max(.001, available - min(1, available / 4)), device_id=self.sn, platform="web")
+            executor_order=projection['executor_order'], selected_impl=impl, low_level=projection['low_level'],
+            device_hint={**projection['device_hint_template'], "execution_mode": "v5", "headless": self.playwright_headless, "node_id": node.node_id},
+            timeout_sec=max(.001, available - min(1, available / 4)), device_id=self.sn, platform="web",
+            **_binding_wire_fields(projection))
         try:
             res = await node.send(P.MsgType.EXECUTE, req, timeout=available)
         except Exception:
@@ -509,6 +670,67 @@ class RouterProxy:
             result.status = EventStatus.FAIL
         return result
 
+    async def _dispatch_bound_otp(self, event, *, started, t0, run_id, options):
+        from mino_nexus.services.otp_binding import GMAIL_EVENT, GMAIL_EXECUTOR, OTP_CHILD
+        from mino_nexus.services.local_tool_dependencies import evaluate
+        ctx = options.get('ctx') or self.run_context
+        try:
+            child = OTP_CHILD.get()
+            if event.capability_id != GMAIL_EVENT or child is None or child[:2] != (id(self), event.params):
+                raise ValueError('binding_plugin_child_denied')
+            facts = evaluate('get_otp', ctx=ctx, execution=True)
+            if any(fact['status'] != 'ready' for fact in facts):
+                raise ValueError(next(fact['reason_code'] for fact in facts if fact['status'] != 'ready'))
+            opts = {**options, 'binding_run_id': run_id}
+            parent = PlanEvent(seq=0, capability_id='get_otp', event_kind='get_otp', params={})
+            self._binding_projection(parent, opts)
+            projection = self._binding_projection(event, opts)
+            if projection['runs_on'] != 'scout' or projection['executor_order'] != [GMAIL_EXECUTOR]:
+                raise ValueError('binding_plugin_assembly_invalid')
+            node, _ = get_registry().resolve(self.sn)
+            from mino_nexus.core.execution_user import require_user_id
+            if node is None or node.owner_user_id != require_user_id():
+                raise ValueError('plugin_node_unavailable')
+            left = float(event.params['deadline_ts']) - time.time()
+            timeout = min(left, float(event.params['max_wait_ms']) / 1000.0)
+            if timeout <= 0 or self._task_aborted():
+                raise ValueError('otp_wait_stopped')
+        except (ValueError, PermissionError, KeyError, TypeError) as exc:
+            reason = str(exc) if isinstance(exc, ValueError) else 'otp_binding_invalid'
+            return _fail(event, started, t0, reason, executor_used='router_proxy', local_reason=reason)
+        req = P.Execute(run_id=run_id, step_idx=_next_read_idx(run_id), sn=self.sn,
+            capability_id=GMAIL_EVENT, params=dict(event.params),
+            executor_order=projection['executor_order'], selected_impl=projection['selected_impl'],
+            low_level=projection['low_level'], device_hint=projection['device_hint_template'],
+            timeout_sec=timeout, device_id=self.sn, platform=_device_platform(self.sn, node),
+            **_binding_wire_fields(projection))
+        try:
+            res = await node.send(P.MsgType.EXECUTE, req, timeout=timeout)
+        except Exception:
+            res = None
+        _trace_device_result(req, res, total_ms=int((time.time() - t0) * 1000),
+                             purpose='plan_action', logical_seq=event.seq)
+        if self._task_aborted() or time.time() >= float(event.params['deadline_ts']):
+            return _fail(event, started, t0, 'otp_wait_stopped', executor_used='router_proxy')
+        # Revalidate parent/child and generations before accepting a late result.
+        try:
+            self._binding_projection(parent, opts)
+            self._binding_projection(event, opts)
+        except Exception:
+            return _fail(event, started, t0, 'otp_binding_changed', executor_used='router_proxy')
+        if res is None:
+            return _fail(event, started, t0, 'otp_transport_timeout', executor_used='router_proxy')
+        if str(getattr(res.status, 'value', res.status)) == 'pass':
+            import re
+            code = str((res.data or {}).get('code') or (res.extra or {}).get('code') or '')
+            if not re.fullmatch(r'[0-9]{4,8}', code):
+                return _fail(event, started, t0, 'otp_result_invalid', executor_used='router_proxy')
+            # Only the awaiting local parent receives the code; logs/model results do not.
+            child[2]['code'] = code
+            from mino_nexus.core.secret_redaction import remember
+            remember(code)
+        return _event_result_from(event, res, started, node=node, request=req)
+
     async def _dispatch_host_plugin(
         self,
         event: PlanEvent,
@@ -517,11 +739,23 @@ class RouterProxy:
         t0: float,
         run_id: str,
         step_idx: int,
+        projection: dict | None = None,
     ) -> EventResult:
         """具名插件能力。参数里没有密钥，密钥在执行节点自己的保险库。"""
         node, why = get_registry().resolve(self.sn)
         if node is None:
             return _fail(event, started, t0, why, executor_used="router_proxy")
+        from mino_nexus.core.execution_user import require_user_id
+        uid = require_user_id()
+        if node.owner_user_id != uid:
+            return _fail(event, started, t0, "plugin_node_unavailable", executor_used="router_proxy")
+        if event.capability_id == "plugin.gmail.fetch_otp":
+            from mino_nexus.services.execution_dependencies import plugin_fact
+            dependency = plugin_fact([node], {"kind": "plugin", "class": "mail",
+                "plugin_id": "gmail", "node_id": node.node_id}, uid)
+            if dependency["status"] != "ready":
+                return _fail(event, started, t0, dependency["reason_code"], executor_used="router_proxy",
+                             raw_response={"dependencies": [dependency]})
         params = dict(event.params or {})
         try:
             wait_ms = int(params.get("max_wait_ms") or 30_000)
@@ -534,15 +768,18 @@ class RouterProxy:
             sn=self.sn,
             capability_id=event.capability_id,
             params=params,
-            executor_order=[],
-            low_level={},
-            selected_impl={},
-            device_hint={},
+            executor_order=projection['executor_order'] if projection else [],
+            low_level=projection['low_level'] if projection else {},
+            selected_impl=projection['selected_impl'] if projection else {},
+            device_hint=projection['device_hint_template'] if projection else {},
             timeout_sec=timeout,
             device_id=self.sn,
             platform=_device_platform(self.sn, node),
+            **_binding_wire_fields(projection),
         )
         res = await self._send_with_retry(node, P.MsgType.EXECUTE, req, req.timeout_sec)
+        _trace_device_result(req, res, total_ms=int((time.time() - t0) * 1000),
+                             purpose='plan_action', logical_seq=event.seq)
         if res is None:
             return _fail(
                 event, started, t0,
@@ -562,6 +799,10 @@ class RouterProxy:
         compress_ratio: float | None = None,
         diagnostic_purpose: str = "loop_observation",
     ) -> CapturedScreen:
+        from mino_nexus.loop.observe.session_log import active_writer
+        session_writer = active_writer()
+        if session_writer is not None:
+            session_writer.require_persisted()
         t0 = time.monotonic()
         purpose = _diagnostic_purpose(diagnostic_purpose, "loop_observation")
         if self._task_aborted():
@@ -580,7 +821,7 @@ class RouterProxy:
         if kind == "screenshot":
             from mino_nexus.services.settings import note_channel_capture_ratio
 
-            note_channel_capture_ratio(float(compress_ratio or 1.0), authoritative=plat == "desktop")
+            note_channel_capture_ratio(float(compress_ratio or 1.0), authoritative=plat in {"desktop", "mac", "win"})
         family = set(executors_for_platform(plat))
         device_order = executors_for_device(self.sn, node)
         if prefer is None:
@@ -599,6 +840,13 @@ class RouterProxy:
         )
 
         cap = P.OBSERVE_CAPS.get(kind, kind)
+        projection = None
+        if self._binding_required:
+            try:
+                projection = self._binding_projection(PlanEvent(seq=0, capability_id=cap), {})
+            except Exception as exc:
+                return CapturedScreen(ok=False, source='router_proxy',
+                    error=str(exc) if isinstance(exc, ValueError) else 'binding_store_unavailable')
         req = P.Execute(
             run_id=self.run_id,
             step_idx=_next_read_idx(self.run_id),
@@ -608,11 +856,14 @@ class RouterProxy:
                 "force_fresh": force_fresh,
                 "compress_ratio": compress_ratio,
             },
-            executor_order=list(prefer),
-            device_hint=self._device_hint(node),
+            executor_order=projection['executor_order'] if projection else list(prefer),
+            low_level=projection['low_level'] if projection else {},
+            selected_impl=projection['selected_impl'] if projection else {},
+            device_hint={**(projection['device_hint_template'] if projection else {}), **self._device_hint(node)},
             timeout_sec=timeout_sec,
             device_id=self.sn,
             platform=_device_platform(self.sn, node),
+            **_binding_wire_fields(projection),
         )
         # 截图每轮都要走；observe 单独用更紧的 pad，且不重试（重试会把一步拖到 ~40s+）。
         res = await self._send_once(
@@ -640,7 +891,7 @@ class RouterProxy:
         if kind == "screenshot":
             note_channel_capture_ratio(
                 float((shot.remote_detail or {}).get("compress_ratio") or compress_ratio or 1.0),
-                authoritative=plat == "desktop",
+                authoritative=plat in {"desktop", "mac", "win"},
             )
         return shot
 
@@ -660,14 +911,14 @@ class RouterProxy:
         """
         plat = _device_platform(self.sn, node)
         cap = catalog.get_capability(event.capability_id)
-        if plat == "desktop":
+        if plat in {"desktop", "mac", "win"}:
             from mino_nexus.services.desktop_catalog import CAPABILITY_IDS, capabilities
 
             if event.capability_id in CAPABILITY_IDS:
                 dev = node.devices.get(self.sn)
                 reported = list(getattr(dev, "capabilities", None) or [])
-                os_name = str(getattr(dev, "os", "") or "")
-                cap = next((candidate for candidate in capabilities(reported, os_name)
+                os_name = plat if plat in {"mac", "win"} else str(getattr(dev, "os", "") or "")
+                cap = next((candidate for candidate in capabilities(reported, os_name, platform=plat)
                             if candidate.id == event.capability_id), None)
         if cap is None:
             raise NoRouteError(
@@ -721,14 +972,15 @@ class RouterProxy:
         hint: dict[str, Any] = {"platform": plat}
         if self.target_package:
             hint["target_package"] = self.target_package
-        if plat == "desktop":
+        if plat in {"desktop", "mac", "win"}:
             from mino_nexus.services import run_store
             from mino_nexus.services.device_admission import owns_desktop
             task_id = self.task_id or self.run_id.split("::", 1)[0]
             task = run_store.get(task_id) if task_id else None
             target = (task or {}).get("device_targets", {}).get(self.sn) or {}
             hint["session_generation"] = target.get("session_generation") or (dev.session_generation if dev else "")
-            hint["os"] = dev.os if dev else ""
+            if plat == "desktop":
+                hint["os"] = dev.os if dev else ""
             hint["session_key"] = dev.session_key if dev else ""
             if task and owns_desktop(task_id, node.node_id):
                 hint["desktop_lease"] = task_id
@@ -785,11 +1037,19 @@ def executors_for_platform(platform: str) -> tuple[str, ...]:
         return ("playwright",)
     if plat in ("ios",):
         return ("ios_wda", "remote")
-    if plat == "desktop":
+    if plat in {"desktop", "mac", "win"}:
         return ("desktop",)
     if plat == "android":
         return ("adb", "remote")
     return ()
+
+
+def _binding_wire_fields(projection):
+    if projection is None:
+        return {}
+    return {key: projection[key] for key in ('execution_contract_version', 'binding_id', 'binding_revision',
+        'input_contract_version', 'operation_ref', 'node_connection_generation',
+        'scout_process_generation', 'capability_revision')}
 
 
 def _device_platform(sn: str, node: NodeSession) -> str:
@@ -831,10 +1091,10 @@ def executors_for_device(sn: str, node: NodeSession) -> list[str]:
                 continue
             if _channel_state((dev.channels or {}).get(ch)) in _ONLINE:
                 connected.append(ex)
-    if plat == "desktop":
+    if plat in {"desktop", "mac", "win"}:
         return [ex for ex in ordered if ex in connected] if dev and dev.desktop_state == "ready" else []
     if connected:
-        return [ex for ex in ordered if ex in set(connected)] or list(connected)
+        return [ex for ex in ordered if ex in set(connected)]
     return ordered
 
 
@@ -890,7 +1150,10 @@ def _request_metadata(node, request) -> dict[str, Any]:
     return {"node_id": node.node_id, "scout_version": node.scout_version,
             "sn": request.sn, "platform": request.platform,
             "os": str((request.device_hint or {}).get("os") or ""),
-            "run_id": request.run_id, "step_idx": request.step_idx}
+            "run_id": request.run_id, "step_idx": request.step_idx,
+            **({key: getattr(request, key) for key in ("binding_id", "binding_revision", "operation_ref",
+                "execution_contract_version", "node_connection_generation", "scout_process_generation", "capability_revision")}
+               if request.binding_id else {})}
 
 
 def _action_ref(request: P.Execute) -> dict[str, Any]:

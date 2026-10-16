@@ -423,6 +423,12 @@ def run_vision_plan_turn_if_enabled(
         review = program_fail_review_text(cursor)
     from mino_nexus.loop.vision_observation import apply_vision_observation_slots
 
+    from mino_nexus.action_space.scheme import execution_scheme
+
+    inspect_slots = dict(inspect_slots)
+    if execution_scheme(ctx) == "visual":
+        inspect_slots["hierarchy_text"] = ""
+        inspect_slots["nav_assist"] = ""
     apply_vision_observation_slots(inspect_slots, cursor, writer=writer)
     case_step, phase = step_scope_key(cursor)
     from mino_nexus.catalog.skill_channel import case_menu_ids
@@ -486,6 +492,32 @@ def run_vision_plan_turn_if_enabled(
     return plan
 
 
+def handle_execution_obstacle(cursor: Any, ctx: Any, decision: Any, *, writer: Any = None, shot: Any = None) -> VisionPlanDecision:
+    """执行观察发现挡屏时复用规划恢复合同；报告不派发设备，也不裁定先前动作。"""
+    action = getattr(decision, "action", None)
+    params = getattr(action, "params", None)
+    params = params if isinstance(params, dict) else {}
+    kind = str(params.get("kind") or "").strip().lower()
+    summary = str(params.get("summary") or "").strip()
+    plan = VisionPlanDecision(screen_obstacle={"kind": kind, "summary": summary})
+    if kind not in {"consent", "permission", "overlay", "loading"} or not summary:
+        plan.blocked_error = {"source": "screen", "fail_kind": "screen_obstacle_invalid",
+                              "error": "挡屏报告缺少有效类别或可见证据，未派发设备动作。"}
+        return plan
+    if writer:
+        writer.append("exec/obstacle", {"kind": kind, "summary": summary[:300],
+                      "execution_started": False, "business_milestone_completed": False})
+    from mino_nexus.loop.obstacle_review import review_expected_overlay
+    if review_expected_overlay(cursor, ctx, shot, writer=writer, kind=kind):
+        # The actual expected-result proof consumed the pending action; final case checks remain independent.
+        return VisionPlanDecision()
+    handle_screen_obstacle(cursor, ctx, plan, writer=writer)
+    if not plan.blocked_error:
+        setattr(cursor, "milestone_hold_exec", False)  # 报告轮已经结束，不再额外消耗一个仅规划轮。
+        setattr(cursor, "correction_hint", "当前挡屏已进入独立恢复。只执行当前恢复目标，确认挡屏关闭后返回原业务目标。")
+    return plan
+
+
 def handle_screen_obstacle(cursor: Any, ctx: Any, plan: VisionPlanDecision, *, writer: Any = None) -> bool:
     """挡屏先进入独立恢复，不能把恢复点击算成业务操作，也不能按已完成前置准出。"""
     from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
@@ -494,6 +526,24 @@ def handle_screen_obstacle(cursor: Any, ctx: Any, plan: VisionPlanDecision, *, w
     obstacle = plan.screen_obstacle
     kind = str(obstacle.get("kind") or "").strip().lower()
     state = _sync_scope(cursor, read_state(cursor))
+    if kind == "overlay":
+        from mino_nexus.action_space.scheme import action_scheme
+
+        # 普通 overlay 的模型分类不覆盖当前结构中明确可见的应用协议事实。
+        if action_scheme(ctx) == "dom_preferred" and getattr(ctx, "app_foreground", "") == "yes":
+            nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or [])
+                     if isinstance(n, dict) and n.get("visible", True) and not n.get("cross_origin")]
+            labels = {str(n.get("text") or n.get("content_desc") or "").strip() for n in nodes}
+            choices = {str(n.get("text") or n.get("content_desc") or "").strip() for n in nodes
+                       if n.get("clickable") and n.get("enabled", True)}
+            has_terms = any("隐私" in text or "用户协议" in text or "Privacy" in text or "Terms" in text
+                            for text in labels)
+            if has_terms and "同意" in choices and "不同意" in choices:
+                kind = "consent"
+                plan.screen_obstacle["kind"] = kind
+                if writer:
+                    writer.append("screen/obstacle_kind", {"from": "overlay", "to": kind,
+                                  "reason": "application_consent_current_structure"})
     if kind not in {"consent", "permission", "overlay", "loading"}:
         state.pop("screen_obstacle", None)
         write_state(cursor, state)

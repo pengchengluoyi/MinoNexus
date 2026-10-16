@@ -322,21 +322,23 @@ def package_for_app(
     platform: str = "android",
     *,
     surface: str = "",
+    env_doc: dict | None = None,
 ) -> str:
     from mino_nexus.services import project_store as ps
 
     plat = str(platform or "android").lower()
     pid = str(app.get("project_id") or "")
     try:
-        env_doc = ps.project_env(pid) if pid else {"default_profile": "test", "profiles": {}}
+        if env_doc is None:
+            env_doc = ps.project_env(pid) if pid else {"default_profile": "test", "profiles": {}}
     except KeyError:
         env_doc = {"default_profile": "test", "profiles": {}}
-    cfg = get_automation_config(app)
+    cfg = get_automation_config(app, hydrate_cases=False)
     profile = env_profile or cfg.get("env_profile")
     name = resolve_profile_name(env_doc, profile)
     snap = profile_snapshot(env_doc, name)
     want = "web" if plat in ("web", "browser", "playwright") else ("ios" if plat in ("ios", "iphone", "ipad") else plat)
-    if want not in ("android", "ios", "web", "mac", "macos", "pc", "windows", "linux"):
+    if want not in ("android", "ios", "web", "mac", "macos", "win", "pc", "windows", "linux"):
         return ""
     sid = str(surface or "").strip()
     if sid:

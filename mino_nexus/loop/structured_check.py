@@ -1,4 +1,4 @@
-"""结构化校验。看图只吃 element+rules；DOM 只读当前树，失败不改走看图。"""
+"""结构足够时确定性校验；不可观察项可截图兜底，确定失败优先。"""
 from __future__ import annotations
 
 from typing import Any
@@ -6,7 +6,7 @@ from typing import Any
 from mino_nexus.ai.schemas import AssertResult
 from mino_nexus.loop.hierarchy_slots import node_flag
 
-_STRUCTURED_MODES = frozenset({"copy", "style", "dialog", "input_value", "spatial"})
+_STRUCTURED_MODES = frozenset({"copy", "language_intent", "style", "dialog", "input_value", "spatial"})
 
 
 class CheckUnavailable(ValueError):
@@ -62,66 +62,75 @@ def run_dom_structured_check(
     checkpoints: list[dict[str, Any]],
     *,
     writer: Any = None,
+    provider_id: str = "",
 ) -> AssertResult:
+    from mino_nexus.services.checkpoint_text_policy import text_policy
+    from mino_nexus.loop.text_assert import checkpoint_report, run_dom_text_checks
+
     nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
     rows = hydrate_bound_text(cursor, checkpoints)
-    if not nodes:
-        result = AssertResult(
-            passed=False,
-            confidence=1.0,
-            ai_reasoning="当前是 DOM 执行，层级为空，无法验证。",
-            evidence="dom",
-            error_kind="observation_missing",
-        )
-    else:
-        fails: list[str] = []
-        unavailable: list[str] = []
-        checkpoint_results: list[dict[str, Any]] = []
-        for row in rows:
-            error_kind = ""
-            try:
-                ok, reason = _eval_one(row, nodes)
-            except CheckUnavailable as exc:
-                ok, reason = False, str(exc)
-                error_kind = "dom_check_unavailable"
-                unavailable.append(reason)
-            checkpoint_results.append({
-                "point_id": str(row.get("point_id") or ""),
-                "passed": ok,
-                "evidence": reason if reason else "DOM 目标与规则匹配",
-                "error_kind": error_kind,
-            })
-            if not ok and not error_kind and row.get("required") is not False:
-                fails.append(reason)
-        if unavailable or fails:
-            result = AssertResult(
-                passed=False,
-                confidence=1.0,
-                ai_reasoning="；".join(unavailable or fails)[:500],
-                evidence="dom",
-                checkpoint_results=checkpoint_results,
-                error_kind="dom_check_unavailable" if unavailable else "",
-            )
+    observation = dict(getattr(ctx, "observation_contract", None) or {})
+    incomplete = not observation or bool(observation.get("truncated")) or bool(observation.get("missing"))
+    checkpoint_results: list[dict[str, Any]] = []
+    semantic: list[dict[str, Any]] = []
+    required = {str(row.get("point_id") or ""): row.get("required") is not False for row in rows}
+    for row in rows:
+        rules = row.get("rules") if isinstance(row.get("rules"), dict) else {}
+        if text_policy(row) == "intent" or text_policy(row) and rules.get("expected_language"):
+            semantic.append(row)
+            continue
+        error_kind = ""
+        try:
+            if not nodes:
+                raise CheckUnavailable("当前层级为空，无法验证")
+            if incomplete and (rules.get("exclusive") or (row.get("checkpoint_kind") == "dialog" and rules.get("present") is False)):
+                raise CheckUnavailable("观察范围不完整，无法证明弹窗不存在或唯一")
+            ok, reason = _eval_one(row, nodes)
+            if not ok and incomplete and str(row.get("checkpoint_kind") or "") in {"copy", "dialog"}:
+                raise CheckUnavailable("结构采集存在截断或缺口，未命中目标不能证明不存在")
+        except CheckUnavailable as exc:
+            ok, reason, error_kind = False, str(exc), "dom_check_unavailable"
+        entry = {"point_id": str(row.get("point_id") or ""), "passed": ok,
+                 "evidence": reason or "DOM 目标与规则匹配", "error_kind": error_kind,
+                 "evidence_scope": "unknown" if error_kind else "visible_full"}
+        if text_policy(row):
+            entry["text_match"] = text_policy(row)
+        checkpoint_results.append(entry)
+    definite_fail = any(required.get(row["point_id"]) and not row["passed"] and not row["error_kind"]
+                        for row in checkpoint_results)
+    service_error = ""
+    if semantic and not definite_fail:
+        text_result = run_dom_text_checks(semantic, ctx, provider_id=provider_id)
+        service_error = text_result.error_kind
+        if service_error:
+            checkpoint_results.extend({"point_id": row["point_id"], "passed": False,
+                "evidence": text_result.ai_reasoning, "error_kind": service_error,
+                "evidence_scope": "unknown", "text_match": text_policy(row)} for row in semantic)
         else:
-            result = AssertResult(
-                passed=True,
-                confidence=1.0,
-                ai_reasoning=f"DOM 校验通过（{len(rows)} 条）",
-                evidence="dom",
-                checkpoint_results=checkpoint_results,
-            )
+            checkpoint_results.extend({**row, "error_kind": row.get("error_kind") or ""} for row in text_result.checkpoint_results)
+    elif semantic:
+        checkpoint_results.extend({"point_id": row["point_id"], "passed": False,
+            "evidence": "其他必选项已明确失败，本项未调用模型", "error_kind": "not_evaluated",
+            "evidence_scope": "unknown", "text_match": text_policy(row)} for row in semantic)
+    fails = [row["evidence"] for row in checkpoint_results
+             if required.get(row["point_id"]) and not row["passed"] and not row.get("error_kind")]
+    unavailable = [row["evidence"] for row in checkpoint_results
+                   if required.get(row["point_id"]) and row.get("error_kind")]
+    error_kind = (service_error or "dom_check_unavailable") if unavailable and not fails else ""
+    result = AssertResult(
+        passed=not fails and not unavailable,
+        confidence=0.0 if error_kind else 1.0,
+        ai_reasoning="；".join(fails or unavailable)[:500] if fails or unavailable else f"DOM 校验通过（{len(rows)} 条）",
+        evidence="dom", checkpoint_results=checkpoint_results, error_kind=error_kind,
+    )
     if writer:
-        writer.append(
-            "assert/dom",
-            {
-                "passed": bool(result.passed),
-                "status": "blocked" if result.error_kind else ("pass" if result.passed else "fail"),
-                "error_kind": result.error_kind,
-                "checkpoints": len(rows),
-                "nodes": len(nodes),
-                "summary": str(result.ai_reasoning or "")[:300],
-            },
-        )
+        writer.append("assert/dom", {
+            "passed": bool(result.passed),
+            "status": "blocked" if result.error_kind else "pass" if result.passed else "fail",
+            "error_kind": result.error_kind, "checkpoints": len(rows), "nodes": len(nodes),
+            "summary": str(result.ai_reasoning or "")[:300],
+            "checkpoint_results": [checkpoint_report(row) for row in result.checkpoint_results],
+        })
     return result
 
 
@@ -199,7 +208,7 @@ def _node_enabled(node: dict[str, Any]) -> bool:
         return node_flag(node, "enabled")
     if "aria-disabled" in node or "aria_disabled" in node:
         return not node_flag(node, "aria-disabled" if "aria-disabled" in node else "aria_disabled")
-    return bool(node.get("clickable"))
+    raise CheckUnavailable("当前节点缺少可验证的 enabled/disabled 状态")
 
 
 def _eval_one(row: dict[str, Any], nodes: list[dict[str, Any]]) -> tuple[bool, str]:
@@ -263,6 +272,12 @@ def _eval_dialog(title: str, rules: dict[str, Any], nodes: list[dict[str, Any]])
     exclusive = bool(rules.get("exclusive"))
     dialogs = [n for n in nodes if _role_ok(n, "dialog")]
     named = [n for n in nodes if which and which in _blob(n)] if which else []
+    if rules.get("present") is False:
+        if not which:
+            raise CheckUnavailable(f"{title}无法验证：否定弹窗检查缺少目标")
+        if named:
+            return False, f"{title}未通过：检查时仍发现「{which[:40]}」"
+        return True, "检查时未发现指定弹窗"
     if present and which and not named:
         return False, f"{title}未通过：树上没有「{which[:40]}」"
     if exclusive:
@@ -280,7 +295,9 @@ def _eval_input(title: str, rules: dict[str, Any], nodes: list[dict[str, Any]]) 
     fields = [n for n in nodes if _role_ok(n, "input")]
     if len(fields) != 1:
         raise CheckUnavailable(f"{title}无法验证：输入框命中 {len(fields)} 个")
-    value = str(fields[0].get("text") or "").strip()
+    if fields[0].get("password"):
+        raise CheckUnavailable("密码框值已脱敏，不能从空文本推断输入失败")
+    value = str(fields[0].get("text") or "")
     try:
         limit = int(rules.get("max_length") or 0)
     except (TypeError, ValueError):

@@ -29,7 +29,6 @@ def _strip_impl(raw: Any) -> dict[str, Any]:
         return {}
     row = dict(raw)
     row.pop("cost", None)
-    row.pop("requires_caps", None)
     return row
 
 
@@ -41,6 +40,13 @@ def _load_capability_row(
     kind: str,
     payload: dict[str, Any],
 ) -> None:
+    from mino_nexus.catalog.skill_channel import V5_EXCLUDED_IDS
+    from mino_nexus.services.business_event_contract import RETIRED, tier_for
+    if row.id.startswith("guard.") or row.id in V5_EXCLUDED_IDS or row.id in RETIRED:
+        return
+    payload = dict(payload)
+    payload["implementations"] = [x for x in payload.get("implementations", [])
+        if not isinstance(x, dict) or x.get("executor") not in {"hitl", "ai_persona"}]
     impls = [_strip_impl(x) for x in (payload.get("implementations") or []) if isinstance(x, dict)]
     from mino_nexus.catalog.skill_channel import derive_caller, derive_phases
 
@@ -56,6 +62,7 @@ def _load_capability_row(
     try:
         store[row.id] = Capability(
             id=row.id,
+            tier=tier_for(row.id),
             kind=kind,
             display_name=row.display_name or row.id,
             event_kind=str(payload.get("event_kind") or row.id),
@@ -88,10 +95,16 @@ def _load_recovery_rule_row(
     row,
     payload: dict[str, Any],
 ) -> None:
+    from mino_nexus.services.business_event_contract import references
+    if references(payload):
+        errors.append(LoadError(path=f'catalog_entries/recovery/{row.id}', kind=RECOVERY_KIND,
+                               message='business_event_migration_required：恢复规则包含已迁出事件，请审阅新的逻辑块/launch_app 候选'))
+        return
     try:
         store[row.id] = RecoveryRule(
             id=row.id,
             title=row.display_name or row.id,
+            tier="policy",
             enabled=bool(row.enabled),
             provider=row.provider or "",
             owner=row.owner or "",
@@ -105,7 +118,7 @@ def _load_recovery_rule_row(
             forbid=payload.get("forbid") or {},
             prompt_snippet=str(payload.get("prompt_snippet") or ""),
             max_attempts=int(payload.get("max_attempts") or 1),
-            platforms=list(row.platforms_json or []),
+            platforms=[] if row.id.startswith("guard.") else list(row.platforms_json or []),
             evidence_notes=list(payload.get("evidence_notes") or []),
         )
     except Exception as exc:

@@ -37,7 +37,7 @@ def _executor_for(ctx: Any) -> tuple[str, str]:
     if channel == UiChannel.WEB:
         return "playwright", "web"
     if channel == UiChannel.DESKTOP:
-        return "desktop", "desktop"
+        return "desktop", str(getattr(ctx, "platform", "") or "desktop")
     if channel == UiChannel.IOS:
         return "ios_wda", "ios"
     return "adb", "android"
@@ -95,7 +95,7 @@ def focus_input_block_reason(ctx: Any) -> str:
     """看图方案里这次用例要写字，而节点没声明 current_focus 时，开跑前阻塞。"""
     from mino_nexus.action_space.scheme import action_scheme
 
-    if action_scheme(ctx) == "dom":
+    if action_scheme(ctx) == "dom_preferred":
         return ""
     case = getattr(ctx, "case", None)
     if not isinstance(case, dict):

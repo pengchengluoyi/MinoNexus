@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from mino_nexus.core.http_util import ok
-from mino_nexus.routers.deps import current_session
+from mino_nexus.routers.deps import current_session, project_maintainer
 from mino_nexus.services import case_import as cim
 from mino_nexus.services import project_store as ps
 
@@ -41,6 +41,7 @@ class CaseImportCommitRow(BaseModel):
 
 class CaseImportCommitBody(BaseModel):
     requirement_id: str
+    client_request_id: str = Field(default="", max_length=160)
     preview_token: str = ""
     default_on_conflict: str = "skip"
     default_platform: str = ""
@@ -78,6 +79,7 @@ class CaseUpdateBody(BaseModel):
 
 class V5PublishBody(BaseModel):
     expected_revision: int = Field(ge=1)
+    expected_compile_job_id: str = Field(default="", max_length=160)
     reviewed_expected_strength: bool = False
     retry_policy: dict[str, Any] | None = None
     reversible: bool = False
@@ -96,6 +98,119 @@ class V5ControlProbeBody(BaseModel):
     url: str = Field(min_length=1)
 
 
+class CaseReviewSource(BaseModel):
+    precondition: str = Field(max_length=30000)
+    steps_raw: str = Field(max_length=60000)
+    expected_raw: str = Field(max_length=60000)
+
+
+class CaseReviewBody(BaseModel):
+    expected_revision: int = Field(ge=1)
+    source: CaseReviewSource
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+
+class CompileJobBody(BaseModel):
+    expected_revision: int = Field(ge=1)
+    client_request_id: str = Field(min_length=1, max_length=160)
+
+
+class CompileJobCancelBody(BaseModel):
+    expected_revision: int = Field(ge=1)
+
+
+class CaseReviewItemBody(BaseModel):
+    expected_revision: int = Field(ge=1)
+    expected_job_id: str = ""
+    reason: str = Field(min_length=1, max_length=1000)
+    category: str | None = None
+
+
+class CaseReviewContext(BaseModel):
+    app_id: str = Field(min_length=1)
+    sn: str = Field(min_length=1)
+    env_profile: str = ""
+    env_surface: str = ""
+    execution_mode: str = ""
+    action_scheme: str = "dom_preferred"
+    provider_id: str = ""
+
+
+class CaseReviewRecheckBody(CaseReviewItemBody):
+    context: CaseReviewContext | None = None
+    evidence_session_id: str = ""
+
+
+def _case_error(exc):
+    code = str(exc)
+    return HTTPException(status_code=404 if code.endswith("missing") else 409 if "conflict" in code else 400,
+                         detail={"reason_code": code})
+
+
+@router.get("/{project_id}/cases/{case_id}/version-chain")
+def case_version_chain(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.case_compilation import history
+    try:
+        return ok(history(project_id, case_id))
+    except ValueError as exc:
+        raise _case_error(exc) from exc
+
+
+@router.get("/{project_id}/cases/{case_id}/compile-jobs/{job_id}")
+def case_compile_job(project_id: str, case_id: str, job_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.case_compilation import get_job
+    try:
+        return ok(get_job(project_id, case_id, job_id))
+    except ValueError as exc:
+        raise _case_error(exc) from exc
+
+
+@router.post("/{project_id}/cases/{case_id}/compile-jobs", dependencies=[Depends(project_maintainer)])
+def queue_case_compile(project_id: str, case_id: str, body: CompileJobBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.case_compilation import enqueue
+    try:
+        return ok(enqueue(project_id, case_id, body.expected_revision, body.client_request_id))
+    except ValueError as exc:
+        raise _case_error(exc) from exc
+
+
+@router.post("/{project_id}/cases/{case_id}/compile-jobs/{job_id}/cancel", dependencies=[Depends(project_maintainer)])
+def cancel_case_compile(project_id: str, case_id: str, job_id: str, body: CompileJobCancelBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.case_compilation import cancel
+    try:
+        return ok(cancel(project_id, case_id, job_id, body.expected_revision))
+    except ValueError as exc:
+        raise _case_error(exc) from exc
+
+
+@router.post("/{project_id}/cases/{case_id}/compile-jobs/{job_id}/recover", dependencies=[Depends(project_maintainer)])
+def recover_case_compile(project_id: str, case_id: str, job_id: str, body: CompileJobBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.case_compilation import enqueue
+    try:
+        return ok(enqueue(project_id, case_id, body.expected_revision, body.client_request_id, parent_job_id=job_id))
+    except ValueError as exc:
+        raise _case_error(exc) from exc
+
+
+@router.post("/{project_id}/cases/{case_id}/review-requirements/recheck", dependencies=[Depends(project_maintainer)])
+def recheck_case_review(project_id: str, case_id: str, body: CaseReviewRecheckBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.case_review import recheck
+    try:
+        return ok(recheck(project_id, case_id, body.expected_revision, body.expected_job_id, body.reason,
+            context=body.context.model_dump() if body.context else None, evidence_session_id=body.evidence_session_id))
+    except ValueError as exc:
+        raise _case_error(exc) from exc
+
+
+@router.post("/{project_id}/cases/{case_id}/review-requirements/{item_id}/review", dependencies=[Depends(project_maintainer)])
+def review_case_item(project_id: str, case_id: str, item_id: str, body: CaseReviewItemBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.case_review import review
+    try:
+        return ok(review(project_id, case_id, body.expected_revision, body.expected_job_id, item_id, body.reason, category=body.category))
+    except ValueError as exc:
+        raise _case_error(exc) from exc
+
 class V5BaselineBody(BaseModel):
     expected_revision: int = Field(ge=1)
     control_id: str = Field(min_length=1)
@@ -108,6 +223,94 @@ def _project(project_id: str) -> dict[str, Any]:
     return row
 
 
+@router.get("/{project_id}/cases/{case_id}/event-migration-preview")
+def event_migration_preview(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.case_store import get_case
+    from mino_nexus.services.event_migration import preview
+    from mino_nexus.core.secret_redaction import sanitize
+    case = get_case(project_id, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="用例不存在")
+    return ok(sanitize(preview(case)))
+
+
+class EventPolicyReviewBody(BaseModel):
+    kind: str
+    entry_id: str
+    source_digest: str = Field(min_length=64, max_length=64)
+    request_id: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=1, max_length=1000)
+    action: str
+    replacement: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get("/{project_id}/event-policies/migration-preview")
+def event_policy_preview(project_id: str, sess: dict = Depends(current_session)):
+    from mino_nexus.routers.deps import require_packs_writer
+    from mino_nexus.services.event_policy_review import inventory
+    from mino_nexus.core.secret_redaction import sanitize
+    require_packs_writer(sess)
+    _project(project_id)
+    return ok(sanitize({'items': inventory()}))
+
+
+@router.post("/{project_id}/event-policies/migration-apply")
+def event_policy_apply(project_id: str, body: EventPolicyReviewBody, sess: dict = Depends(current_session)):
+    from mino_nexus.routers.deps import require_packs_writer
+    from mino_nexus.services.event_policy_review import apply
+    from mino_nexus.core.execution_user import require_user_id
+    require_packs_writer(sess)
+    _project(project_id)
+    try:
+        values = body.model_dump()
+        return ok(apply(**values, actor=require_user_id()))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail={"reason_code": "policy_admin_required"}) from exc
+    except ValueError as exc:
+        raise _case_error(exc) from exc
+
+
+class EventMigrationBody(BaseModel):
+    expected_revision: int = Field(ge=1)
+    expected_job_id: str = Field(min_length=1)
+    state_digest: str = Field(min_length=64, max_length=64)
+    candidate_digest: str = Field(min_length=64, max_length=64)
+    request_id: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+@router.post("/{project_id}/cases/{case_id}/event-migration-apply", dependencies=[Depends(project_maintainer)])
+def event_migration_apply(project_id: str, case_id: str, body: EventMigrationBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.event_migration import apply
+    try:
+        return ok(apply(project_id, case_id, **body.model_dump()))
+    except ValueError as exc:
+        raise _case_error(exc) from exc
+
+
+@router.get("/{project_id}/cases/{case_id}/review-requirements")
+def case_review_requirements(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.case_store import get_case
+    from mino_nexus.services.case_review import describe
+    case = get_case(project_id, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="用例不存在")
+    return ok(describe(case))
+
+
+@router.put("/{project_id}/cases/{case_id}/review-requirements", dependencies=[Depends(project_maintainer)])
+def case_review_supplement(project_id: str, case_id: str, body: CaseReviewBody, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.case_review import supplement
+    try:
+        return ok(supplement(project_id, case_id, body.expected_revision, body.source.model_dump(), body.reason))
+    except ValueError as exc:
+        code = str(exc)
+        raise HTTPException(status_code=409 if code == "case_revision_conflict" else 404 if code == "case_missing" else 400, detail=code) from exc
+
+
 @router.get("/{project_id}/controls")
 def v5_controls(project_id: str, _sess: dict = Depends(current_session)):
     _project(project_id)
@@ -115,7 +318,7 @@ def v5_controls(project_id: str, _sess: dict = Depends(current_session)):
     return ok({"items": list_controls(project_id), "identity_conflicts": audit(project_id)})
 
 
-@router.put("/{project_id}/controls/{control_id}")
+@router.put("/{project_id}/controls/{control_id}", dependencies=[Depends(project_maintainer)])
 def v5_configure_control(project_id: str, control_id: str, body: V5ControlBody, _sess: dict = Depends(current_session)):
     _project(project_id)
     from mino_nexus.services.v5_controls import configure
@@ -146,7 +349,49 @@ def v5_case_preview(project_id: str, case_id: str, _sess: dict = Depends(current
     return ok(preview(case))
 
 
-@router.put("/{project_id}/cases/{case_id}/v5/baseline")
+@router.get("/{project_id}/cases/{case_id}/execution-preview")
+@router.get("/{project_id}/cases/{case_id}/v5/execution-preview")
+def v5_execution_preview(project_id: str, case_id: str, sn: str = Query(..., min_length=1),
+                         app_id: str = Query(..., min_length=1), env_profile: str = '', env_surface: str = '',
+                         action_scheme: str = 'dom_preferred', provider_id: str = '', execution_mode: str = 'v5',
+                         _sess: dict = Depends(current_session)):
+    from mino_nexus.services.execution_binding_runtime import binding_target_config
+    try:
+        binding_target_config(project_id, app_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail={"reason_code": str(exc)}) from exc
+    from mino_nexus.services.case_store import get_case
+    from mino_nexus.services.execution_binding_runtime import resolve_live, strict_requirements
+    case = get_case(project_id, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail='用例不存在')
+    if execution_mode not in {'legacy', 'v5'}:
+        raise HTTPException(status_code=400, detail={'reason_code': 'execution_mode_unsupported'})
+    if execution_mode == 'v5' and (not case.get('v5_publication') or case.get('v5_plan_state') != 'published'):
+        raise HTTPException(status_code=409, detail={'reason_code': 'plan_invalid'})
+    try:
+        if execution_mode == 'v5':
+            requirements = strict_requirements(case, app_id)
+        else:
+            from mino_nexus.services.execution_requirements import ordinary_requirements
+            from mino_nexus.services.node_registry import get_registry
+            from mino_nexus.action_space.scheme import normalize_action_scheme
+            snapshot = get_registry().execution_snapshot(sn)
+            if not snapshot:
+                raise ValueError('binding_target_unavailable')
+            requirements = ordinary_requirements(case, app_id, platform=snapshot['device']['platform'],
+                action_scheme=normalize_action_scheme(action_scheme), provider_id=provider_id)
+        result = resolve_live(requirements, {'sn': sn, 'env_profile': env_profile, 'env_surface': env_surface})
+    except (ValueError, KeyError) as exc:
+        return ok({'status': 'needs_input' if str(exc).endswith('need_compile') else 'blocked', 'binding': None,
+            'diagnostics': getattr(exc, 'diagnostics', None) or [{'reason_code': str(exc), 'responsibility': 'configuration',
+                'case_ref': case_id, 'step_ref': '', 'clause_ref': '', 'operation_ref': '', 'missing_fields': [],
+                'recovery_entry': 'workbench.execution_review', 'recheckable': True}],
+            'scope': 'execution_binding_only', 'runnable_now': False})
+    return ok({**result.model_dump(), 'scope': 'execution_binding_only', 'runnable_now': False})
+
+
+@router.put("/{project_id}/cases/{case_id}/v5/baseline", dependencies=[Depends(project_maintainer)])
 def v5_configure_baseline(project_id: str, case_id: str, body: V5BaselineBody, _sess: dict = Depends(current_session)):
     _project(project_id)
     from mino_nexus.services.v5_publication import configure_baseline
@@ -156,30 +401,33 @@ def v5_configure_baseline(project_id: str, case_id: str, body: V5BaselineBody, _
         raise HTTPException(status_code=409 if "conflict" in str(exc) else 400, detail={"reason_code": str(exc)}) from exc
 
 
-@router.post("/{project_id}/cases/{case_id}/v5/compile")
-def v5_compile_draft(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
-    _project(project_id)
-    from mino_nexus.services.case_store import get_case, save_case
-    from mino_nexus.services.case_step_key_compiler import compile_case_step_program_keys
+@router.post("/{project_id}/cases/{case_id}/v5/compile", dependencies=[Depends(project_maintainer)])
+def v5_compile_draft(project_id: str, case_id: str, body: CompileJobBody | None = None, _sess: dict = Depends(current_session)):
+    import uuid
+    from mino_nexus.services.case_store import get_case
+    from mino_nexus.services.case_compilation import enqueue
     from mino_nexus.services.v5_publication import preview
+    _project(project_id)
     case = get_case(project_id, case_id)
     if not case:
         raise HTTPException(status_code=404, detail="用例不存在")
-    compiled = compile_case_step_program_keys(case)
-    meta = dict(case.get("meta") or {})
-    meta.update(v5_draft_step_program_keys=compiled["step_program_keys"], key_compile_warnings=compiled["key_compile_warnings"], compile_provenance=compiled.get("compile_provenance", []))
-    saved = save_case(project_id, {**case, "meta": meta})
-    return ok({"case": saved, "preview": preview(saved)})
+    try:
+        job = enqueue(project_id, case_id, body.expected_revision if body else int(case.get("v5_draft_revision") or 1),
+            body.client_request_id if body else "manual:" + uuid.uuid4().hex)
+        saved = get_case(project_id, case_id)
+        return ok({"case": saved, "job": job, "preview": preview(saved)}, msg="编译任务已排队，请查询任务状态")
+    except ValueError as exc:
+        raise _case_error(exc) from exc
 
 
-@router.post("/{project_id}/cases/{case_id}/v5/publish")
+@router.post("/{project_id}/cases/{case_id}/v5/publish", dependencies=[Depends(project_maintainer)])
 def v5_publish_case(project_id: str, case_id: str, body: V5PublishBody, _sess: dict = Depends(current_session)):
     _project(project_id)
     if not body.reviewed_expected_strength:
         raise HTTPException(status_code=400, detail={"reason_code": "expected_strength_review_required"})
     from mino_nexus.services.v5_publication import publish
     try:
-        return ok(publish(project_id, case_id, body.expected_revision, retry_policy=body.retry_policy, reversible=body.reversible))
+        return ok(publish(project_id, case_id, body.expected_revision, retry_policy=body.retry_policy, reversible=body.reversible, expected_compile_job_id=body.expected_compile_job_id))
     except ValueError as exc:
         raise HTTPException(status_code=409 if "conflict" in str(exc) else 400, detail={"reason_code": str(exc)}) from exc
 
@@ -327,7 +575,7 @@ def import_preview_retry(
     return ok(cim.preview_status(token, project_id) or {})
 
 
-@router.put("/{project_id}/cases/{case_id}")
+@router.put("/{project_id}/cases/{case_id}", dependencies=[Depends(project_maintainer)])
 def update_one_case(
     project_id: str,
     case_id: str,
@@ -344,7 +592,10 @@ def update_one_case(
     patch = body.model_dump(exclude_unset=True)
     merged = {**existing, **patch, "case_id": cid}
     rid = str(patch.get("requirement_id") or existing.get("requirement_id") or "").strip()
-    saved = save_case(project_id, merged, requirement_id=rid)
+    try:
+        saved = save_case(project_id, merged, requirement_id=rid)
+    except ValueError as exc:
+        raise _case_error(exc) from exc
     return ok({"case": saved}, msg="用例已保存")
 
 
@@ -358,52 +609,62 @@ def validate_case_step_keys_body(
 
     _project(project_id)
     case_like = {
+        "project_id": project_id,
+        "app_id": str(body.app_id or "").strip(),
         "precondition": body.precondition,
         "steps_raw": body.steps_raw,
         "expected_raw": body.expected_raw,
         "steps": body.steps,
         "expected": body.expected,
     }
-    return ok(validate_case_step_keys(case_like, app_id=str(body.app_id or "").strip()))
+    try:
+        return ok(validate_case_step_keys(case_like, app_id=str(body.app_id or "").strip()))
+    except ValueError as exc:
+        if str(exc) not in {"compile_provider_unavailable", "compile_prompt_unavailable",
+            "compile_model_call_failed", "compile_model_response_incomplete"}:
+            raise
+        raise HTTPException(status_code=409, detail={"reason_code": str(exc)}) from exc
 
 
-@router.post("/{project_id}/cases/{case_id}/step-keys/compile")
-def compile_case_step_keys(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
-    from mino_nexus.services.case_step_key_compiler import sync_case_step_program_keys
-    from mino_nexus.services.case_store import get_case, save_case
-
+@router.post("/{project_id}/cases/{case_id}/step-keys/compile", dependencies=[Depends(project_maintainer)])
+def compile_case_step_keys(project_id: str, case_id: str, body: CompileJobBody | None = None, _sess: dict = Depends(current_session)):
+    import uuid
+    from mino_nexus.services.case_store import get_case
+    from mino_nexus.services.case_compilation import enqueue
+    from mino_nexus.services.v5_publication import preview
     _project(project_id)
-    cid = str(case_id or "").strip()
-    existing = get_case(project_id, cid)
-    if not existing:
+    case = get_case(project_id, case_id)
+    if not case:
         raise HTTPException(status_code=404, detail="用例不存在")
-    synced = sync_case_step_program_keys(dict(existing))
-    rid = str(existing.get("requirement_id") or "").strip()
-    saved = save_case(project_id, synced, requirement_id=rid)
-    warnings = (saved.get("meta") or {}).get("key_compile_warnings") or []
-    return ok(
-        {"case": saved, "warning_count": len(warnings)},
-        msg="已编译操作/预期 step_program_keys",
-    )
+    try:
+        job = enqueue(project_id, case_id, body.expected_revision if body else int(case.get("v5_draft_revision") or 1),
+            body.client_request_id if body else "manual:" + uuid.uuid4().hex)
+        saved = get_case(project_id, case_id)
+        return ok({"case": saved, "job": job, "preview": preview(saved)}, msg="编译任务已排队，请查询任务状态")
+    except ValueError as exc:
+        raise _case_error(exc) from exc
 
 
-@router.post("/{project_id}/cases/{case_id}/resource-key/compile")
-def compile_case_resource_key(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
-    from mino_nexus.services.case_resource_claim import sync_case_resource_metadata
-    from mino_nexus.services.case_store import get_case, save_case
-
+@router.post("/{project_id}/cases/{case_id}/resource-key/compile", dependencies=[Depends(project_maintainer)])
+def compile_case_resource_key(project_id: str, case_id: str, body: CompileJobBody | None = None, _sess: dict = Depends(current_session)):
+    import uuid
+    from mino_nexus.services.case_store import get_case
+    from mino_nexus.services.case_compilation import enqueue
+    from mino_nexus.services.v5_publication import preview
     _project(project_id)
-    cid = str(case_id or "").strip()
-    existing = get_case(project_id, cid)
-    if not existing:
+    case = get_case(project_id, case_id)
+    if not case:
         raise HTTPException(status_code=404, detail="用例不存在")
-    synced = sync_case_resource_metadata(dict(existing), project_id=project_id, force_recompile=True)
-    rid = str(existing.get("requirement_id") or "").strip()
-    saved = save_case(project_id, synced, requirement_id=rid)
-    return ok({"case": saved}, msg="已从前置编译 resource_key")
+    try:
+        job = enqueue(project_id, case_id, body.expected_revision if body else int(case.get("v5_draft_revision") or 1),
+            body.client_request_id if body else "manual:" + uuid.uuid4().hex)
+        saved = get_case(project_id, case_id)
+        return ok({"case": saved, "job": job, "preview": preview(saved)}, msg="编译任务已排队，请查询任务状态")
+    except ValueError as exc:
+        raise _case_error(exc) from exc
 
 
-@router.delete("/{project_id}/cases/{case_id}")
+@router.delete("/{project_id}/cases/{case_id}", dependencies=[Depends(project_maintainer)])
 def delete_one_case(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
     from mino_nexus.services.case_store import delete_case
 
@@ -413,7 +674,7 @@ def delete_one_case(project_id: str, case_id: str, _sess: dict = Depends(current
     return ok({"deleted": 1, "case_id": case_id}, msg="已删除")
 
 
-@router.post("/{project_id}/cases/delete")
+@router.post("/{project_id}/cases/delete", dependencies=[Depends(project_maintainer)])
 def delete_many_cases(project_id: str, body: CaseDeleteBody, _sess: dict = Depends(current_session)):
     from mino_nexus.services.case_store import delete_cases
 
@@ -425,7 +686,7 @@ def delete_many_cases(project_id: str, body: CaseDeleteBody, _sess: dict = Depen
     return ok({"deleted": removed, "case_ids": ids[:50]}, msg=f"已删除 {removed} 条")
 
 
-@router.post("/{project_id}/cases/import/commit")
+@router.post("/{project_id}/cases/import/commit", dependencies=[Depends(project_maintainer)])
 def import_commit(project_id: str, body: CaseImportCommitBody, _sess: dict = Depends(current_session)):
     _project(project_id)
     try:
@@ -441,7 +702,50 @@ def import_commit(project_id: str, body: CaseImportCommitBody, _sess: dict = Dep
             default_on_conflict=default_action,
             default_platform=str(body.default_platform or "").strip(),
             block_on_step_key_issues=resolve_block_on_step_key_issues(body.block_on_step_key_issues),
+            client_request_id=body.client_request_id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=409 if str(exc) == "import_request_conflict" else 400, detail=str(exc)) from exc
     return ok(data, msg="用例已导入")
+
+
+@router.get("/{project_id}/cases/import/receipts/by-request/{client_request_id}")
+def import_receipt_by_request(project_id: str, client_request_id: str, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.case_import_receipts import get
+    data = get(project_id, client_request_id=client_request_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="未找到本次提交收据")
+    return ok(data)
+
+
+@router.get("/{project_id}/cases/import/receipts/{receipt_id}")
+def import_receipt(project_id: str, receipt_id: str, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.case_import_receipts import get
+    data = get(project_id, receipt_id=receipt_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="未找到本次提交收据")
+    return ok(data)
+
+
+@router.post("/{project_id}/cases/import/receipts/{receipt_id}/resume", dependencies=[Depends(project_maintainer)])
+def resume_import_receipt(project_id: str, receipt_id: str, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    from mino_nexus.services.case_import_receipts import get, resume
+    if get(project_id, receipt_id=receipt_id) is None:
+        raise HTTPException(status_code=404, detail="未找到本次提交收据")
+    return ok(resume(project_id, receipt_id))
+
+
+@router.get("/{project_id}/apps/{app_id}/issues")
+def application_issues(project_id: str, app_id: str,
+                       platform: str = Query(default="", max_length=40),
+                       category: str = Query(default="", max_length=80),
+                       status: str = Query(default="", max_length=80),
+                       page: int = Query(default=1, ge=1),
+                       size: int = Query(default=50, ge=1, le=100),
+                       _sess: dict = Depends(current_session)):
+    from mino_nexus.services.app_issues import list_issues
+    return ok(list_issues(project_id, app_id, platform=platform.lower(),
+                          category=category, status=status, page=page, size=size))

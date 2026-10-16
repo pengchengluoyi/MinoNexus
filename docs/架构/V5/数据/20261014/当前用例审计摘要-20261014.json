@@ -1,0 +1,303 @@
+{
+  "captured_at": "2026-10-14T17:57:37+08:00",
+  "source": "read-only SQLite project_cases + project-scoped linked session_meta + stored compile metadata",
+  "scope": "仅当前库中定义，历史跑批快照不当作当前用例；同 case_id 按 project_id 区分；无重编译、数据库修改、设备操作或模型调用",
+  "limitations": "compiled_candidate 不表示真实可执行或通过；需按新版策略逐项真实验收。占位记录不应被猜测或计为通过。",
+  "counts": {
+    "case_records": 10,
+    "project_count": 4,
+    "platforms": {
+      "unspecified": 2,
+      "web": 3,
+      "android": 5
+    },
+    "stored_coverable_true": 4,
+    "stored_coverable_false_or_unknown": 6,
+    "authored_operation_lines": 24,
+    "authored_expected_lines": 27,
+    "stored_blocked_clauses": 10,
+    "blocked_by_phase": {
+      "do": 5,
+      "check": 5
+    },
+    "audit_step_rows": 53,
+    "strict_v5_publications": 0,
+    "catalog_entries": 93,
+    "flow_blocks": 2
+  },
+  "cases": [
+    {
+      "project_id": "9bd609c0-144a-437d-ba5b-069c83c65ebc",
+      "case_id": "case-sync1",
+      "name": "t",
+      "platform": "",
+      "pk": 76,
+      "operation_lines": 0,
+      "expected_lines": 0,
+      "stored_coverable": false,
+      "stored_blockers": [
+        {
+          "phase": "do",
+          "case_step": 1,
+          "reason": "uncovered",
+          "source_clause": "t",
+          "user_message": "步骤 1 操作「t」无法执行：这几个字没有落进任何事件：t。"
+        }
+      ],
+      "strict_v5_publication_present": false,
+      "risk_notes": [
+        "平台为空，需从绑定环境解析；不得默认猜 Android",
+        "占位/空定义，不能自动编造业务步骤或预期",
+        "严格 V5 入口尚无 publication；此项与 DOM 策略独立",
+        "case_scene 与 resource_key.case_scene 的 session_prep 不一致"
+      ],
+      "latest_linked_session": null
+    },
+    {
+      "project_id": "ad7e96eb-d629-47ae-ac2c-5fdd9d1f60c2",
+      "case_id": "case-sync1",
+      "name": "t",
+      "platform": "",
+      "pk": 77,
+      "operation_lines": 0,
+      "expected_lines": 0,
+      "stored_coverable": false,
+      "stored_blockers": [
+        {
+          "phase": "do",
+          "case_step": 1,
+          "reason": "uncovered",
+          "source_clause": "t",
+          "user_message": "步骤 1 操作「t」无法执行：这几个字没有落进任何事件：t。"
+        }
+      ],
+      "strict_v5_publication_present": false,
+      "risk_notes": [
+        "平台为空，需从绑定环境解析；不得默认猜 Android",
+        "占位/空定义，不能自动编造业务步骤或预期",
+        "严格 V5 入口尚无 publication；此项与 DOM 策略独立",
+        "case_scene 与 resource_key.case_scene 的 session_prep 不一致"
+      ],
+      "latest_linked_session": null
+    },
+    {
+      "project_id": "821854c2-f7d6-4674-85bd-cc3da28b21ee",
+      "case_id": "case-ed53e597",
+      "name": "验证场景选择弹窗所有UI元素展示正确",
+      "platform": "web",
+      "pk": 78,
+      "operation_lines": 1,
+      "expected_lines": 4,
+      "stored_coverable": true,
+      "stored_blockers": [],
+      "strict_v5_publication_present": false,
+      "risk_notes": [
+        "操作与预期行数不同，需要确认一个操作对应多个预期的分组",
+        "严格 V5 入口尚无 publication；此项与 DOM 策略独立",
+        "case_scene 与 resource_key.case_scene 的 session_prep 不一致"
+      ],
+      "latest_linked_session": {
+        "run_id": "cr-d1375d774f0d",
+        "status": "fail",
+        "started_at": "2026-10-14T17:52:21+08:00",
+        "summary": "步骤 2 预期未成立：弹窗标题为「你主要用 Hi3D 来做什么？」，正文提示为「选择感兴趣的场景，为你推荐更合适的内容（可多选）」。预期文案标题为「你主要用 Hi3D 来做什么？」、正文为「选择感兴趣的场景，为你推荐更合适的内容（可多选）」，实际截图中弹窗标题为英文「What do you use Hi3D for?」，正文为英文「Pick your interests for better recommendations. Select all that apply.」，与预期文案不匹配，故校验不通过。"
+      }
+    },
+    {
+      "project_id": "821854c2-f7d6-4674-85bd-cc3da28b21ee",
+      "case_id": "case-e1835aa2",
+      "name": "验证其他选项勾选后输入框规则符合要求",
+      "platform": "web",
+      "pk": 79,
+      "operation_lines": 3,
+      "expected_lines": 3,
+      "stored_coverable": true,
+      "stored_blockers": [],
+      "strict_v5_publication_present": false,
+      "risk_notes": [
+        "严格 V5 入口尚无 publication；此项与 DOM 策略独立"
+      ],
+      "latest_linked_session": {
+        "run_id": "cr-7a7a8e231f4f",
+        "status": "blocked",
+        "started_at": "2026-10-13T10:58:29+08:00",
+        "summary": "模型调用失败：UnsupportedParamsError（HTTP 400）"
+      }
+    },
+    {
+      "project_id": "821854c2-f7d6-4674-85bd-cc3da28b21ee",
+      "case_id": "case-3973849e",
+      "name": "验证已展示过弹窗的用户刷新页面不再重复弹出",
+      "platform": "web",
+      "pk": 80,
+      "operation_lines": 1,
+      "expected_lines": 1,
+      "stored_coverable": true,
+      "stored_blockers": [],
+      "strict_v5_publication_present": false,
+      "risk_notes": [
+        "严格 V5 入口尚无 publication；此项与 DOM 策略独立"
+      ],
+      "latest_linked_session": {
+        "run_id": "cr-7a7a8e231f4f",
+        "status": "blocked",
+        "started_at": "2026-10-13T10:59:22+08:00",
+        "summary": "模型调用失败：UnsupportedParamsError（HTTP 400）"
+      }
+    },
+    {
+      "project_id": "fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc",
+      "case_id": "case-bc8b51cf",
+      "name": "除白名单外：任意页面触发登录，成功后保留原页面与操作上下文",
+      "platform": "android",
+      "pk": 81,
+      "operation_lines": 3,
+      "expected_lines": 3,
+      "stored_coverable": true,
+      "stored_blockers": [],
+      "strict_v5_publication_present": false,
+      "risk_notes": [
+        "严格 V5 入口尚无 publication；此项与 DOM 策略独立",
+        "严格 V5 runner 当前为 Web-only；普通入口与严格入口不得混淆",
+        "case_scene 与 resource_key.case_scene 的 session_prep 不一致"
+      ],
+      "latest_linked_session": {
+        "run_id": "cr-c9f5303a434e",
+        "status": "fail",
+        "started_at": "2026-10-14T17:06:35+08:00",
+        "summary": "步骤 3 预期未成立：返回到帖子详情页(包含点赞、关注即可)即可。预期为返回到包含点赞、关注的帖子详情页，当前截图显示的是「造物相机」的登录页面，未进入帖子详情页，不满足预期要求"
+      }
+    },
+    {
+      "project_id": "fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc",
+      "case_id": "case-0cc1d95f",
+      "name": "点击底部「我的」Tab 时未登录 → 全屏登录页 → 成功后进拍摄流程（见形象与权限）",
+      "platform": "android",
+      "pk": 82,
+      "operation_lines": 4,
+      "expected_lines": 4,
+      "stored_coverable": false,
+      "stored_blockers": [
+        {
+          "phase": "do",
+          "case_step": 2,
+          "reason": "uncovered",
+          "source_clause": "在登录页完成验证码登录",
+          "user_message": "操作步骤 2「在登录页完成验证码登录」未执行：在登录页完成验证码登录"
+        },
+        {
+          "phase": "check",
+          "case_step": 2,
+          "reason": "uncovered",
+          "source_clause": "进入选择你的形象配置页(包含多个头像、完成按钮)",
+          "user_message": "预期步骤 2「进入选择你的形象配置页(包含多个头像、完成按钮)」未执行：(包含多个头像完成按钮)"
+        },
+        {
+          "phase": "check",
+          "case_step": 3,
+          "reason": "uncovered",
+          "source_clause": "进入拍摄页(页面底部有几个圆形按钮) 即可",
+          "user_message": "预期步骤 3「进入拍摄页(页面底部有几个圆形按钮) 即可」未执行：()即可"
+        }
+      ],
+      "strict_v5_publication_present": false,
+      "risk_notes": [
+        "严格 V5 入口尚无 publication；此项与 DOM 策略独立",
+        "严格 V5 runner 当前为 Web-only；普通入口与严格入口不得混淆",
+        "case_scene 与 resource_key.case_scene 的 session_prep 不一致"
+      ],
+      "latest_linked_session": null
+    },
+    {
+      "project_id": "fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc",
+      "case_id": "case-d0536328",
+      "name": "首页「开始造物」→ 先进拍摄页 → 拍摄/选图成功但未登录 → 登录 → 成功后进「生成中页」（不丢失当次任务）",
+      "platform": "android",
+      "pk": 83,
+      "operation_lines": 3,
+      "expected_lines": 3,
+      "stored_coverable": false,
+      "stored_blockers": [
+        {
+          "phase": "check",
+          "case_step": 1,
+          "reason": "uncovered",
+          "source_clause": "进入拍摄页(包含实拍或取景框或页面底部左下角图库、右下角翻转) 即可",
+          "user_message": "预期步骤 1「进入拍摄页(包含实拍或取景框或页面底部左下角图库、右下角翻转) 即可」未执行：即可"
+        }
+      ],
+      "strict_v5_publication_present": false,
+      "risk_notes": [
+        "严格 V5 入口尚无 publication；此项与 DOM 策略独立",
+        "严格 V5 runner 当前为 Web-only；普通入口与严格入口不得混淆",
+        "case_scene 与 resource_key.case_scene 的 session_prep 不一致"
+      ],
+      "latest_linked_session": null
+    },
+    {
+      "project_id": "fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc",
+      "case_id": "case-54c993b3",
+      "name": "个人页「去登录」→ 登录 → 成功后与个人 Tab 全屏一致：先进形象/权限再进拍摄",
+      "platform": "android",
+      "pk": 84,
+      "operation_lines": 5,
+      "expected_lines": 5,
+      "stored_coverable": false,
+      "stored_blockers": [
+        {
+          "phase": "do",
+          "case_step": 2,
+          "reason": "uncovered",
+          "source_clause": "页面中向上滑动点击退出登录,并点击确认",
+          "user_message": "操作步骤 2「页面中向上滑动点击退出登录,并点击确认」未执行：页面中并"
+        },
+        {
+          "phase": "do",
+          "case_step": 3,
+          "reason": "uncovered",
+          "source_clause": "页面向下滑动并点击「去登录」",
+          "user_message": "操作步骤 3「页面向下滑动并点击「去登录」」未执行：并"
+        },
+        {
+          "phase": "check",
+          "case_step": 4,
+          "reason": "uncovered",
+          "source_clause": "进入选择你的形象配置页(包含多个头像、完成按钮即可)",
+          "user_message": "预期步骤 4「进入选择你的形象配置页(包含多个头像、完成按钮即可)」未执行：(包含多个头像完成按钮即可)"
+        }
+      ],
+      "strict_v5_publication_present": false,
+      "risk_notes": [
+        "严格 V5 入口尚无 publication；此项与 DOM 策略独立",
+        "严格 V5 runner 当前为 Web-only；普通入口与严格入口不得混淆"
+      ],
+      "latest_linked_session": null
+    },
+    {
+      "project_id": "fcdc3fc7-f343-4cfa-9c1c-6f310d47c5cc",
+      "case_id": "case-7effbeed",
+      "name": "灵感帖子详情点「做成真的」→ 登录后回详情继续下单，不进拍摄页",
+      "platform": "android",
+      "pk": 85,
+      "operation_lines": 4,
+      "expected_lines": 4,
+      "stored_coverable": false,
+      "stored_blockers": [
+        {
+          "phase": "check",
+          "case_step": 1,
+          "reason": "uncovered",
+          "source_clause": "进入该帖子详情页(包含点赞、关注即可)",
+          "user_message": "预期步骤 1「进入该帖子详情页(包含点赞、关注即可)」未执行：进入该帖子详情页(包含点赞关注即可)"
+        }
+      ],
+      "strict_v5_publication_present": false,
+      "risk_notes": [
+        "严格 V5 入口尚无 publication；此项与 DOM 策略独立",
+        "严格 V5 runner 当前为 Web-only；普通入口与严格入口不得混淆",
+        "case_scene 与 resource_key.case_scene 的 session_prep 不一致"
+      ],
+      "latest_linked_session": null
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "passed": 21,
+  "checks": [
+    "mac valid native identity",
+    "mac rejects wrong SN",
+    "mac rejects wrong hint",
+    "mac rejects duplicate os",
+    "mac rejects wrong session",
+    "mac rejects missing platform",
+    "mac rejects host mismatch",
+    "mac only desktop family",
+    "mac filters foreign drivers",
+    "mac default desktop driver",
+    "native device no ADB serial",
+    "win valid native identity",
+    "win rejects wrong SN",
+    "win rejects wrong hint",
+    "win rejects duplicate os",
+    "win rejects wrong session",
+    "win rejects missing platform",
+    "win rejects host mismatch",
+    "win only desktop family",
+    "win filters foreign drivers",
+    "win default desktop driver"
+  ],
+  "hardware_calls": 0,
+  "scope": "Scout pure identity/adapter/family checks; no hardware or driver execution"
+}

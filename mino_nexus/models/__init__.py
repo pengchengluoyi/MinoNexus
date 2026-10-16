@@ -11,6 +11,8 @@ from mino_nexus.models.atlas import AtlasAlias
 from mino_nexus.models.auth import AuthSession, AuthState, User
 from mino_nexus.models.case import ProjectCase
 from mino_nexus.models.case_import_preview import CaseImportPreview
+from mino_nexus.models.case_import_receipt import CaseImportReceipt
+from mino_nexus.models.case_import_receipt_line import CaseImportReceiptLine
 from mino_nexus.models.catalog import CatalogEntry, CatalogMeta
 from mino_nexus.models.device_reservation import DeviceReservation
 from mino_nexus.models.device import Device
@@ -35,6 +37,7 @@ from mino_nexus.models.node import Node, Studio
 from mino_nexus.models.plugin import PluginPolicy, UserPluginSecret
 from mino_nexus.models.pool_account import PoolAccount, PoolAccountFacet
 from mino_nexus.models.project import App, Project
+from mino_nexus.models.project_member import ProjectMember
 from mino_nexus.models.project_pool_config import ProjectPoolConfig
 from mino_nexus.models.run import AppRegressionRun, MCaseBaseline, MCaseRunTrace
 from mino_nexus.models.session_event import SessionEvent, SessionMeta
@@ -54,7 +57,12 @@ __all__ = [
     "AppIntelProposal",
     "App",
     "ProjectCase",
+    "CaseRevision",
+    "CaseCompileJob",
+    "CaseReviewRecord",
     "CaseImportPreview",
+    "CaseImportReceipt",
+    "CaseImportReceiptLine",
     "AppRegressionRun",
     "AtlasAlias",
     "AuthSession",
@@ -81,6 +89,7 @@ __all__ = [
     "PoolAccountFacet",
     "ProjectPoolConfig",
     "Project",
+    "ProjectMember",
     "SessionEvent",
     "SessionMeta",
     "Settings",
@@ -90,3 +99,7 @@ __all__ = [
     "User",
     "UserPluginSecret",
 ]
+
+from mino_nexus.models.case_revision import CaseRevision
+from mino_nexus.models.case_compile_job import CaseCompileJob
+from mino_nexus.models.case_review_record import CaseReviewRecord

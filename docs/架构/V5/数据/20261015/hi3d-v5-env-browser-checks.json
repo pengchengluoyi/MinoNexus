@@ -1,0 +1,19 @@
+{
+  "passed": 13,
+  "checks": [
+    "actual environment UI saves through API",
+    "saved label persisted",
+    "canonical default platforms round trip",
+    "server has no platform after browser save",
+    "native picker excludes legacy targets",
+    "HTTP rejects Mobile",
+    "HTTP rejects pc",
+    "HTTP rejects ios",
+    "HTTP rejects desktop",
+    "HTTP rejects mc",
+    "client preserves dotted identity and custom fields",
+    "legacy configuration visible and save blocked",
+    "no external resources or runtime/load errors"
+  ],
+  "scope": "actual EnvConfigPanel + environment API handlers/services, isolated SQLite; not full authenticated app"
+}

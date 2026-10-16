@@ -20,15 +20,20 @@ TAG = "CLI"
 def _catalog_cli(argv: list[str]) -> int:
     import json
 
-    ap = argparse.ArgumentParser(prog="mino-nexus catalog", description="能力目录导出")
+    ap = argparse.ArgumentParser(prog="mino-nexus catalog", description="能力目录导出与程序能力注册")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("export", help="把 catalog_entries 打成 JSON 到 stdout")
+    sub.add_parser("register-program", help="按程序声明自动注册及升级系统能力")
     args = ap.parse_args(argv)
 
     from mino_nexus.core.database import SessionLocal, ensure_db
     from mino_nexus.models.catalog import CatalogEntry
 
     ensure_db()
+    if args.cmd == "register-program":
+        from mino_nexus.catalog.skill_channel import register_program_capabilities
+        print(json.dumps(register_program_capabilities(), ensure_ascii=False, indent=2))
+        return 0
     if args.cmd != "export":
         return 1
     db = SessionLocal()

@@ -817,6 +817,27 @@ class StepCursor:
         return True
 
     def enter_check(self) -> None:
+        prior = getattr(self, "visual_prior", None)
+        if self.phase == "do" and isinstance(prior, dict) and prior.get("milestone_id"):
+            from mino_nexus.loop.milestones import read_state
+
+            mid = str(prior["milestone_id"])
+            reviewed = any(
+                isinstance(row, dict) and str(row.get("id") or "") == mid
+                and str(row.get("status") or "") == "pass"
+                for row in read_state(self).get("milestones") or []
+            )
+            if not reviewed:
+                self.correction_hint = "已派发动作尚未通过当前画面回看，必须先完成回看，不能进入校验阶段。"
+                from mino_nexus.loop.observe.session_log import active_writer
+
+                writer = active_writer()
+                if writer is not None:
+                    writer.append("phase/exit_blocked", {
+                        "from": "do", "to": "check", "reason": "pending_action_review",
+                        "milestone_id": mid,
+                    })
+                return
         cur = self.current()
         if not cur:
             self.phase = "done"

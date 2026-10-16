@@ -55,3 +55,18 @@
 发布后重启 Nexus，并让 MCP 客户端重新连接、刷新工具列表。无需升级 Scout 或修改 Nexus/Scout 协议。
 
 验收以真实 Session 为准：按 run_id 找会话，按回合找 dispatch_id，获取完整响应并对比原始 function arguments 与解析输出；验证分页续读、历史不可用标记、助手隐私脱敏以及不存在的 ID 返回错误。运行服务未加载新版本之前，不能将这些检查标为已通过。
+
+
+## 2026-10-15：通过 MCP 更新 Scout
+
+新增 `scout_list`、`scout_update(node_id, reason?)`、`scout_update_status(node_id)`。先列节点取得准确 node_id（不是设备 SN），明确更新目标后调用更新，再查询状态。服务需加载本次代码，客户端刷新 tools/list。
+
+更新复用现有 node.update，使用 Scout 已配置的 manifest（默认最新发布）。不支持 version、降级或自定义 URL；额外参数明确拒绝，不会静默忽略用户指定的版本。通用 stop/restart/command 路由不向 MCP 放开。
+
+节点归属、在线状态、已知活动任务和更新在途均检查；同一 Nexus 进程内并发更新拒绝。沿用账号与稳定 JSON-RPC id 的写收据，重取不重放。Scout 失败返回 MCP isError；超时或异常为结果不确定，先查状态，不能换请求 ID 盲重试。
+
+成功返回 accepted 与 running_version_verified=false，仅代表 Scout 已应答。查询返回 running_version（在线节点上报）、last_reported_version、process_generation、connection_generation、update_job 和 command_inflight；离线 running_version=null。应在重连后核对实际运行版本，不能从“下载完成”或旧版本号判定更新成功。
+
+当前入口不是 V6 D1 的持久更新队列：尚无跨进程/全入口原子 update_hold，活动任务检查后新任务仍可能竞入；应在维护空闲窗口调用。更新不会清除已有未知写隔离。固定版本、回退、排队和自动终态核验需 Scout/Nexus 后续共同实现。
+
+本次用隔离 SQLite 和真实 ASGI/MCP 完成鉴权、工具发现、离线拒绝、重复请求和参数边界检查；未使用 pytest/mock，未修改业务库，未执行真实节点升级。线上下载安装/重连验收另记。

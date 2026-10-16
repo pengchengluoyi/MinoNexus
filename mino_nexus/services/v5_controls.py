@@ -86,20 +86,37 @@ def probe(project_id, control_id, *, expected_revision, sn, url):
     run_id = "control-probe-" + uuid.uuid4().hex
     budget = ExecutionControl(18)
     router = RouterProxy(sn, run_id=run_id, playwright_headless=True, execution_mode="v5", execution_control=budget)
-    session_store.open_meta(session_id=run_id, run_id=run_id, case_id="", app_id="")
+    from mino_nexus.services.execution_binding_runtime import control_probe_requirements, BindingAdmissionError
+    requirements = control_probe_requirements(project_id, control)
+    session_store.open_meta(session_id=run_id, run_id=run_id, case_id="", app_id=requirements['app_id'])
     result, records, stopped = {}, [], False
+    opened_dispatched = False
     with registry_runtime("v5"):
         try:
+            router.bind_execution(requirements, session_id=run_id, probe_url=url,
+                                  deadline=min(budget.deadline, time.monotonic() + 2))
             for cap, params, timeout in [("open_web_v5", {"url": url}, 11),
                     ("read_web_target_facts", {"control": control, "requested_facts": ["count", "visible"]}, 3)]:
-                event = router.dispatch(PlanEvent(seq=0, capability_id=cap, params=params), timeout_sec=timeout)
+                opening = cap == 'open_web_v5'
+                event = router.dispatch(PlanEvent(seq=0, capability_id=cap, params=params), timeout_sec=timeout,
+                    operation_ref='system:open' if opening else 'control:read', binding_phase='prep' if opening else 'check')
+                if opening and event.raw_response.get('action_ref'):
+                    opened_dispatched = True
                 result = {"status": event.status.value, "raw_response": event.raw_response, "summary": event.summary}
                 records.append({"type": "control/probe", "payload": {"capability_id": cap, **result}})
                 if event.status != EventStatus.PASS:
                     break
+        except BindingAdmissionError as exc:
+            result = {'status': 'fail', 'summary': str(exc), 'raw_response': {
+                'execution': {'execution_started': 'no', 'phase': 'binding', 'reason_code': str(exc)}}}
+            records.append({'type': 'control/probe', 'payload': result})
         finally:
-            closed = router.dispatch(PlanEvent(seq=0, capability_id="close_web_v5"), timeout_sec=1)
-            stopped = bool(closed.raw_response.get("executor_stopped"))
+            if opened_dispatched:
+                closed = router.dispatch(PlanEvent(seq=0, capability_id="close_web_v5"), timeout_sec=1,
+                                         operation_ref='system:close', binding_phase='cleanup')
+                stopped = bool(closed.raw_response.get("executor_stopped"))
+            else:
+                stopped = True
             budget.terminate()
     refs = append_batch(run_id, records, {"status": "pass" if result.get("status") == "pass" and stopped else "fail",
         "summary": "控件只读探测，不代表用例通过", "finished_at": session_store._now(),

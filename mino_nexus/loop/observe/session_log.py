@@ -91,6 +91,14 @@ def _sanitize_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+class SessionPersistenceError(RuntimeError):
+    reason_code = "session_store_unavailable"
+
+    def __init__(self, stage: str):
+        self.failure_stage = stage
+        super().__init__(f"会话记录未能持久化，已阻止后续界面写动作：{stage}")
+
+
 def active_writer() -> Optional["SessionWriter"]:
     return _ACTIVE.get()
 
@@ -111,6 +119,9 @@ class SessionWriter:
         self._turn = 0
         self._phase = ""
         self._closed = False
+        self._meta_persisted = False
+        self._last_persisted_seq = 0
+        self._store_failure = ""
         self._lock = _session_lock(self.session_id)
         self._t0 = time.perf_counter()
         self._turn_t0 = self._t0
@@ -119,6 +130,11 @@ class SessionWriter:
         self._guard_blocks = 0
         self._first_blocker: dict[str, Any] | None = None
         self._latest_error: dict[str, Any] | None = None
+
+    def require_persisted(self) -> None:
+        """同一 attempt 的持久化失败保持阻断，不能靠后续写成功自动解锁。"""
+        if self._store_failure or not self._meta_persisted or self._last_persisted_seq < 1:
+            raise SessionPersistenceError(self._store_failure or "session_start_missing")
 
     @property
     def turn(self) -> int:
@@ -190,14 +206,20 @@ class SessionWriter:
             }
         with self._lock:
             try:
-                return session_store.append_event(
+                seq = session_store.append_event(
                     session_id=self.session_id,
                     type=evt_type,
                     payload=body,
                     turn=event_turn,
                     phase=event_phase,
                 )
+                if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
+                    self._store_failure = self._store_failure or f"append:{evt_type}"
+                    return 0
+                self._last_persisted_seq = seq
+                return seq
             except Exception as exc:
+                self._store_failure = self._store_failure or f"append:{evt_type}"
                 SLog.w(TAG, f"append {evt_type} failed session={self.session_id}: {exc!r}")
                 return 0
 
@@ -205,7 +227,12 @@ class SessionWriter:
         with self._lock:
             if self._closed:
                 return
-            meta = get_meta(self.session_id)
+            self.require_persisted()
+            try:
+                meta = get_meta(self.session_id)
+            except Exception as exc:
+                self._store_failure = "close_meta_read"
+                raise SessionPersistenceError(self._store_failure) from exc
             if meta and str(meta.get("finished_at") or "").strip():
                 self._closed = True
                 return
@@ -234,6 +261,17 @@ class SessionWriter:
                     "turns": self._turn,
                 },
             )
+            self.require_persisted()
+            if meta and (meta.get("runtime_context") or {}).get("execution_binding") is not None:
+                try:
+                    session_store.finalize_bound(session_id=self.session_id, body={
+                        "status": status, "summary": summary, "step_count": step_count, "wall_ms": wall_ms,
+                    }, turn=self._turn, phase="done")
+                except Exception as exc:
+                    self._store_failure = "atomic_finalization"
+                    raise SessionPersistenceError(self._store_failure) from exc
+                self._closed = True
+                return
             self.append(
                 "session/end",
                 {
@@ -243,6 +281,7 @@ class SessionWriter:
                     "wall_ms": wall_ms,
                 },
             )
+            self.require_persisted()
             try:
                 session_store.close_meta(
                     session_id=self.session_id,
@@ -250,7 +289,9 @@ class SessionWriter:
                     summary=summary,
                 )
             except Exception as exc:
+                self._store_failure = "close_meta"
                 SLog.w(TAG, f"close_meta failed session={self.session_id}: {exc!r}")
+                raise SessionPersistenceError(self._store_failure) from exc
             self._closed = True
 
 
@@ -304,7 +345,8 @@ def open_session(
         )
     except Exception as exc:
         SLog.w(TAG, f"open_meta failed session={session_id}: {exc!r}")
-        return writer
+        raise SessionPersistenceError("open_meta") from exc
+    writer._meta_persisted = True
     payload: dict[str, Any] = {
         "case_id": case_id,
         "run_id": run_id,
@@ -316,6 +358,7 @@ def open_session(
     if extra:
         payload.update(extra)
     writer.append("session/start", payload)
+    writer.require_persisted()
     return writer
 
 

@@ -760,6 +760,7 @@ def _parse_chat_json(
     meta: dict[str, Any],
     *,
     require_tool_calls: bool = False,
+    allow_partial_json: bool = True,
 ) -> tuple[Optional[dict[str, Any]], str]:
     """从一次成功的 chat 响应里解析 JSON。返回 (parsed|None, content)。
 
@@ -820,7 +821,7 @@ def _parse_chat_json(
         return None, content
 
     parsed = _extract_first_json_object(content)
-    if parsed is None and content:
+    if parsed is None and content and allow_partial_json:
         parsed = _salvage_truncated_json(content)
         if parsed is None:
             parsed = _salvage_mangled_root_array(content)
@@ -975,6 +976,8 @@ def call_chat_text(
             meta["tools_downgraded"] = True
         parsed, content = _parse_chat_json(
             resp_json, meta, require_tool_calls=req_tools,
+            # 逐项断言的 schema 要求完整对象；抢救 passed 前缀会丢失证据并跳过补答。
+            allow_partial_json=response_schema is None,
         )
         from mino_nexus.core.secret_redaction import sanitize
         parsed, content = sanitize(parsed), sanitize(content)
@@ -997,6 +1000,18 @@ def call_chat_text(
         )
         # 留下失败轮次的原文，便于对照 dispatch 日志里「第一次乱码、第二次修好」
         _safe_record_llm(messages=messages, raw_text=content, meta={**meta, "status_hint": "parse_retry"})
+        if response_schema is not None and kind == "parse":
+            # 只用既有解析补答额度和同一 deadline；反馈语法错误，避免低温重复同一坏 JSON。
+            messages = [
+                *messages,
+                {"role": "assistant", "content": str(content or "")[:4000]},
+                {"role": "user", "content": (
+                    "上一响应不是完整合法的 JSON。请依据同一截图、预期和原 point_id 重新核验，"
+                    "返回符合前述 JSON Schema 的完整对象。所有键名用双引号包裹，冒号在键名闭合引号之后；"
+                    "不要返回仅含 passed/confidence 的前缀。保留具体 evidence 与全部 checkpoint_results，"
+                    "不得因为修正格式而推测隐藏信息或把未满足的预期判为通过。"
+                )},
+            ]
         time.sleep(_backoff_delay(round_i + 1))
 
     _safe_record_llm(messages=messages, parsed=parsed, raw_text=content, meta=meta)

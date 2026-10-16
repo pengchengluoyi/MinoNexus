@@ -78,12 +78,33 @@ def milestones_from_do_program(plan: dict[str, Any], *, app_id: str = "", ctx: A
             row["kind"] = "hook"
             row["hook_cap"] = str(step.get("hook_cap") or "tap_element")
         if kind == "nav" and step.get("nav_target"):
-            row["hook_cap"] = "fsm_navigate"
+            row["kind"] = "hook"
+            row["tier"] = "policy"
+            row["exec_caps"] = ["tap_element", "press_key"]
             row["nav_target"] = str(step.get("nav_target") or "")
+            row["title"] = f"{row['title']}；到达项目导航目标 {row['nav_target']}，执行后核验目标页面"
+        from mino_nexus.services.step_requirements import contract
+        row.update(contract(step))
+        if row['requirement'] == 'conditional':
+            row.update(optional=False, kind='hook')
         if step.get("observe"):
             row["observe"] = str(step.get("observe") or "exec")
         if isinstance(step.get("params"), dict) and step.get("params"):
             row["params"] = dict(step["params"])
+        if row.get("hook_cap") == "input_text":
+            # 原子输入也需要明确的聚焦动作，不能只给全局登录块配对。
+            # 目标继承作者输入项，绝不把待写入值作为 selector。
+            params = row.get("params") or {}
+            target = params.get("element") or params.get("target") or {}
+            if not isinstance(target, dict):
+                target = {}
+            focus_params = {"target": {**target, "role": "input"}}
+            if params.get("field"):
+                focus_params["field"] = params["field"]
+            rows.append({"id": sid + "__focus", "title": "聚焦当前输入项的目标输入框",
+                         "kind": "hook", "hook_cap": "tap_element", "status": "pending",
+                         "optional": row["optional"], "source": "do_program",
+                         "key_ref": "operation.tap", "focus_for": sid, "params": focus_params})
         rows.append(row)
     return rows
 

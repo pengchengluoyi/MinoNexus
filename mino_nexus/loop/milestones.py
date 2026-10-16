@@ -164,6 +164,12 @@ def milestones_from_flow_steps(
             "status": "pending",
             "optional": bool(step.get("optional")),
         }
+        if kind == "nav" and step.get("nav_target"):
+            row.update(kind="hook", tier="policy", nav_target=str(step["nav_target"]), exec_caps=["tap_element", "press_key"])
+        from mino_nexus.services.step_requirements import contract
+        row.update(contract(step))
+        if row['requirement'] == 'conditional':
+            row.update(optional=False, kind='hook')
         if step.get("skip_policy"):
             row["skip_policy"] = str(step.get("skip_policy") or "llm")
         if isinstance(step.get("platforms"), list) and step.get("platforms"):
@@ -207,14 +213,16 @@ def should_seed_login_block_milestones(ctx: Any, cursor: Any) -> bool:
         return False
     fact = dict(getattr(ctx, "session_fact", None) or {}) if ctx is not None else {}
     sess = str(fact.get("session") or "").strip().lower()
-    if sess == "logged_in":
+    from mino_nexus.services.login_evidence import can_commit
+    if sess == "logged_in" and can_commit(ctx):
         return False
     return True
 
 
 def _milestone_passed(row: dict[str, Any]) -> bool:
     st = str(row.get("status") or "pending").strip().lower()
-    return st in _TERMINAL
+    from mino_nexus.services.step_requirements import condition_complete
+    return condition_complete(row) if row.get("requirement") == "conditional" else st in _TERMINAL
 
 
 def _prior_incomplete_required(state: dict[str, Any], before_id: str) -> list[str]:
@@ -327,81 +335,6 @@ def _record_otp_field_tap_coords(ctx: Any, params: dict[str, Any] | None) -> Non
 
 def _record_email_field_tap_coords(ctx: Any, params: dict[str, Any] | None) -> None:
     _record_tap_milli(ctx, params, "web_email_tap_milli")
-
-
-def maybe_skip_ui_absent_milestones(
-    cursor: Any,
-    hierarchy_nodes: list[dict[str, Any]] | None,
-    *,
-    writer: Any = None,
-) -> bool:
-    """当前屏无对应控件时跳过 optional 里程碑（不删 catalog 步骤）。"""
-    if not milestone_v1_enabled():
-        return False
-    from mino_nexus.loop.ui_consent import find_consent_control
-
-    nodes = [n for n in (hierarchy_nodes or []) if isinstance(n, dict)]
-    state = _sync_scope(cursor, read_state(cursor))
-    ms = state.get("milestones") if isinstance(state.get("milestones"), list) else []
-    changed = False
-    for row in ms:
-        if not isinstance(row, dict):
-            continue
-        st = str(row.get("status") or "pending").strip().lower()
-        if st in _TERMINAL:
-            continue
-        rid = str(row.get("id") or "")
-        device_cap = str(row.get("device_cap") or "").strip()
-        if rid != "legal_consent" and device_cap != "accept_legal_consent":
-            continue
-        focus_id = ""
-        for item in ms:
-            if isinstance(item, dict) and str(item.get("status") or "") == "in_progress":
-                focus_id = str(item.get("id") or "")
-                break
-        if focus_id and focus_id != rid:
-            continue
-        if find_consent_control(nodes) is not None:
-            continue
-        if not nodes:
-            # 纯视觉没有层级：「找不到控件」不等于「界面没有协议框」（cr-a278a45ce22c 登录按钮因未勾选而不可用）。
-            # accept_legal_consent 靠层级，在这里不可用，改成让看图模型点勾选框本身。
-            if row.get("kind") != "visual_tap":
-                row["kind"] = "visual_tap"
-                row["device_cap"] = "tap_element"
-                row.pop("hook_cap", None)
-                row["title"] = "勾选同意协议（仅当复选框未勾选时点击；已勾选则无需操作）"
-                row["converted_from_hook"] = "accept_legal_consent"
-                if writer:
-                    writer.append(
-                        "milestone/consent_visual",
-                        {"milestone_id": rid, "reason": "no_hierarchy_visual_scheme"},
-                    )
-                changed = True
-                break
-            continue
-        row["status"] = "skipped"
-        row["skip_reason"] = "absent_ui"
-        row["skipped_by"] = "hierarchy"
-        changed = True
-        if writer:
-            writer.append(
-                "milestone/skip_applied",
-                {
-                    "milestone_id": rid,
-                    "reason": "absent_ui",
-                    "source": "hierarchy",
-                },
-            )
-        break
-    if not changed:
-        return False
-    state["milestones"] = ms
-    write_state(cursor, state)
-    from mino_nexus.loop.milestone_orchestrator import advance_in_progress_focus
-
-    advance_in_progress_focus(cursor, writer=writer)
-    return True
 
 
 def milestone_by_id(state: dict[str, Any], milestone_id: str) -> Optional[dict[str, Any]]:
@@ -833,7 +766,7 @@ def note_tool_pass_milestone(
                     row["evidence"] = cap
                 changed = True
                 break
-    if not changed and cap == "accept_legal_consent":
+    if not changed and cap == "operation.check_box":
         for row in ms:
             if not isinstance(row, dict) or _milestone_passed(row):
                 continue
@@ -849,7 +782,7 @@ def note_tool_pass_milestone(
                 continue
             rid = str(row.get("id") or "")
             device_cap = str(row.get("device_cap") or "").strip()
-            if rid == "legal_consent" or device_cap == "accept_legal_consent":
+            if rid == "legal_consent" or device_cap == "operation.check_box":
                 break
             kind = str(row.get("kind") or "").strip().lower()
             from mino_nexus.loop.flow_block_exit import hook_device_row
@@ -862,7 +795,7 @@ def note_tool_pass_milestone(
             if rid == "account_field" and isinstance(p, dict):
                 _record_email_field_tap_coords(ctx, p)
             if rid == "send_code":
-                from mino_nexus.action_space.scheme import action_scheme
+                from mino_nexus.action_space.scheme import execution_scheme as action_scheme
 
                 if action_scheme(ctx) != "visual":
                     intents = getattr(cursor, "step_intents_done", None)
@@ -887,6 +820,16 @@ def note_tool_pass_milestone(
             if isinstance(row, dict) and str(row.get("id") or "") == "otp_fill":
                 if not _milestone_passed(row):
                     row["otp_ready"] = True
+    if ctx is not None and isinstance(row, dict) and row.get("status") == "pass":
+        from mino_nexus.services.login_evidence_policy import confirm_account_fill, note_submit_result
+        attempt = f"{getattr(writer, 'session_id', '')}:{getattr(writer, 'turn', 0)}" if writer else ""
+        observation = str(getattr(ctx, "decision_screenshot_hash", "") or "")
+        if row.get("id") == "account_fill" and cap == "input_text":
+            confirm_account_fill(ctx, p, attempt_ref=attempt, observation_ref=observation)
+        elif row.get("id") == "submit_login" and cap in {"tap_element", "tap_xy"}:
+            from mino_nexus.loop.login_transition import bind_submit_frame
+            bind_submit_frame(cursor, ctx, attempt_ref=attempt, writer=writer)
+            note_submit_result(ctx, passed=True, attempt_ref=attempt, observation_ref=observation)
     state["milestones"] = ms
     state["status"] = "in_progress"
     write_state(cursor, state)
@@ -918,10 +861,9 @@ def note_tool_pass_milestone(
             ):
                 from mino_nexus.services.resource_transition import emit_login_complete
 
-                emit_login_complete(ctx)
-                cursor.login_state_committed = True
+                cursor.login_state_committed = emit_login_complete(ctx)
                 break
-    if cap == "relogin" and ctx is not None:
+    if cap == "confirm_login_state" and ctx is not None:
         _seed_login_when_required_session_unmet(cursor, ctx, writer=writer)
     from mino_nexus.loop.milestone_orchestrator import advance_in_progress_focus
 
@@ -970,7 +912,7 @@ def _case_steps_include_login(case: Any) -> bool:
 
 
 def _seed_login_when_required_session_unmet(cursor: Any, ctx: Any, *, writer: Any = None) -> None:
-    """要求已登录、当前未登录，且操作步骤里没有登录时，把登录块接在前置后面。"""
+    """前置要求已登录时独立准备登录，不被稍后的操作阶段登录覆盖。"""
     from mino_nexus.runtime.session_gate import required_session
 
     scene = getattr(ctx, "case_scene", None)
@@ -979,7 +921,7 @@ def _seed_login_when_required_session_unmet(cursor: Any, ctx: Any, *, writer: An
     session = str(getattr(ctx, "device_session", "") or "").strip().lower()
     if session in ("", "logged_in"):
         return
-    if _case_steps_include_login(getattr(ctx, "case", None)):
+    if str(getattr(cursor, "phase", "") or "") != "prep" and _case_steps_include_login(getattr(ctx, "case", None)):
         return
     state = read_state(cursor)
     app_id = str(getattr(ctx, "app_id", "") or "")
@@ -1253,6 +1195,9 @@ def apply_assert_checkpoint_results(cursor: Any, result: Any, *, writer: Any = N
         milestone["evidence"] = str(row["evidence"]).strip()[:400]
         milestone["evidence_scope"] = str(row.get("evidence_scope") or "visible_full")
         milestone["hidden_content_verified"] = row.get("hidden_content_verified") is True
+        if row.get("text_match"):
+            from mino_nexus.loop.text_assert import checkpoint_report
+            milestone["text_verification"] = checkpoint_report(row)
     state["milestones"] = ms
     write_state(cursor, state)
     _log_milestones_snapshot(writer, state, source="check_assert")
@@ -1363,6 +1308,10 @@ def evaluate_milestones(
         if not isinstance(row, dict):
             continue
         st = str(row.get("status") or "pending").strip().lower()
+        from mino_nexus.services.step_requirements import condition_complete
+        if row.get('requirement') == 'conditional' and not condition_complete(row):
+            pending_required.append(str(row.get('title') or row.get('id')))
+            continue
         opt = bool(row.get("optional"))
         title = str(row.get("title") or row.get("id") or "")
         if st == "failed" and not (opt and row.get("kind") == "checkpoint"):

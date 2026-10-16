@@ -16,7 +16,7 @@ def begin_case_session_scope(ctx: Any, *, case_id: str, scene: dict[str, Any] | 
     setattr(ctx, "case_session_scope_id", cid)
     mark_session_dirty(ctx, reason=f"case_start:{cid or '?'}")
     ctx.session_fact = {
-        "session": "guest",
+        "session": "unknown",
         "identity": "",
         "seen": "",
         "source": "case_start",

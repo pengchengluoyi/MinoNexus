@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 from mino_nexus.services import auth_store
 from mino_nexus.core.http_util import bearer
@@ -24,6 +24,35 @@ def current_session(authorization: str = Header(default="")) -> dict[str, Any]:
         return auth_store.require_session(bearer(authorization))
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+def require_project_write(project_id: str, sess: dict[str, Any]) -> dict[str, Any]:
+    from mino_nexus.services.project_members import require_maintainer
+    try:
+        require_maintainer(project_id, sess)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail={"reason_code": "project_maintainer_required",
+                                                     "message": "需要该项目维护者或管理员才能修改"}) from exc
+    return sess
+
+
+def project_maintainer(project_id: str, sess: dict[str, Any] = Depends(current_session)) -> dict[str, Any]:
+    from mino_nexus.services import project_store as ps
+    if not ps.find_project(project_id):
+        app = ps.find_app(project_id)
+        project_id = str((app or {}).get("project_id") or project_id)
+    return require_project_write(project_id, sess)
+
+
+def app_maintainer(app_id: str, sess: dict[str, Any] = Depends(current_session)) -> dict[str, Any]:
+    from mino_nexus.services import project_store as ps
+    app = ps.find_app(app_id)
+    project_id = str((app or {}).get("project_id") or "") or (app_id if ps.find_project(app_id) else "")
+    if not project_id:
+        return sess
+    return require_project_write(project_id, sess)
 
 
 def require_packs_writer(sess: dict[str, Any]) -> dict[str, Any]:

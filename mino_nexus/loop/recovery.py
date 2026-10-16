@@ -85,14 +85,46 @@ class RecoveryOutcome:
     evidence: str = ""
     execution_metadata: dict[str, Any] = field(default_factory=dict)
     executor_used: str = ""
+    stop_run: bool = False
+
+    @property
+    def raw_response(self) -> dict[str, Any]:
+        return self.execution_metadata
 
     def summary(self) -> str:
+        if self.stop_run:
+            return "恢复动作已停止，原写动作未结算；设备与账号资源仍隔离"
         if self.mode == "advise":
             if self.advice:
                 return f"{self.rule_id}: {self.advice}"
             return f"{self.rule_id}: 给出处置建议"
         state = "已恢复" if self.recovered else "未恢复"
         return f"{self.rule_id}: 执行 {len(self.actions)} 个动作，{state}"
+
+
+def _write_stop(ctx) -> RecoveryOutcome | None:
+    if getattr(ctx, "recovery_write_stopped", False):
+        return RecoveryOutcome(mode="execute", stop_run=True, error="run_write_stopped",
+            execution_metadata={"execution_control": {"stop_run": True,
+                "resource_isolated": True, "reason_code": "run_write_stopped"}})
+    return None
+
+
+def _note_write_stop(ctx, out: RecoveryOutcome, result) -> bool:
+    from mino_nexus.loop.observe.execution_diagnostics import execution_result_metadata
+    raw = result.raw_response if isinstance(getattr(result, "raw_response", None), dict) else {}
+    control = raw.get("execution_control") if isinstance(raw.get("execution_control"), dict) else {}
+    if raw.get("resource_isolated") is True or control.get("stop_run") is True or control.get("resource_isolated") is True:
+        out.stop_run = True
+        out.recovered = False
+        out.error = str(control.get("reason_code") or "run_write_stopped")
+        out.execution_metadata = execution_result_metadata(result)
+        out.execution_metadata.setdefault("execution_control", {}).update(stop_run=True, resource_isolated=True)
+        setattr(ctx, "recovery_write_stopped", True)
+        _trace_recovery(ctx, "recovery/stopped", {"rule_id": out.rule_id,
+            "reason_code": out.error, **out.execution_metadata})
+        return True
+    return False
 
 
 def _yes_no(cond: Optional[bool]) -> str:
@@ -206,7 +238,7 @@ def _fill_foreground_from_get_app(
     if getattr(result.status, "value", result.status) != "pass":
         ev.error = result.error or result.summary
         return
-    if str(getattr(ctx, "platform", "")) == "desktop":
+    if str(getattr(ctx, "platform", "")) in {"desktop", "mac", "win"}:
         ev.raw = raw
         matched = raw.get("target_active")
         foreground = str(raw.get("foreground_package") or "").strip()
@@ -279,7 +311,7 @@ def _collect_evidence_uncached(ctx, router, *, target_package: str = "") -> Evid
             return ev
     except Exception:
         pass
-    if str(getattr(ctx, "platform", "")) == "desktop":
+    if str(getattr(ctx, "platform", "")) in {"desktop", "mac", "win"}:
         ev = Evidence()
         _fill_foreground_from_get_app(ev, router, ctx, target_package=pkg)
         return ev
@@ -497,6 +529,9 @@ def apply_rule(
     target_package: str = "",
     agent_turn: int = 0,
 ) -> RecoveryOutcome:
+    stopped = _write_stop(ctx)
+    if stopped is not None:
+        return stopped
     rule = match.rule
     out = RecoveryOutcome(rule_id=rule.id, mode=rule.mode)
     if rule.mode == "advise":
@@ -589,6 +624,8 @@ def apply_rule(
                 "summary": res.summary,
             })
             out.applied = True
+            if _note_write_stop(ctx, out, res):
+                return out
             if res.status not in (EventStatus.PASS, EventStatus.SKIPPED):
                 out.error = res.error or f"{action.capability} 执行失败"
 
@@ -641,6 +678,9 @@ def recover_if_needed(
     exclude_rule_ids: frozenset[str] | None = None,
 ) -> Optional[RecoveryOutcome]:
     """取证 → 可选合并截图信号 → 匹配 → 执行第一条命中规则。"""
+    stopped = _write_stop(ctx)
+    if stopped is not None:
+        return stopped
     try:
         from mino_nexus.runtime.run_context import is_web_slot
 
@@ -684,6 +724,9 @@ def ensure_target_app_foreground(
     shot: Any = None,
 ) -> Optional[RecoveryOutcome]:
     """Case 开环：前台不是被测 App 时 launch 目标包/网址（不处理锁屏/黑屏 advise）。"""
+    stopped = _write_stop(ctx)
+    if stopped is not None:
+        return stopped
     from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
 
     if ui_channel_from_ctx(ctx) == UiChannel.DESKTOP:
@@ -739,6 +782,8 @@ def ensure_target_app_foreground(
     out = RecoveryOutcome(rule_id="bring_target_app_foreground", mode="execute",
                           executor_used=res.executor_used, execution_metadata=execution_result_metadata(res))
     out.applied = True
+    if _note_write_stop(ctx, out, res):
+        return out
     out.recovered = ok
     out.attempts = 1
     out.actions = [

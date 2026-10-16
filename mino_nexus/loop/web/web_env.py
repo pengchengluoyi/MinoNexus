@@ -254,9 +254,15 @@ def release_devices_for_run(
     *,
     sns: Optional[list[str]] = None,
     platforms_by_sn: Optional[dict[str, str]] = None,
+    allow_unbound_cleanup: bool = True,
 ) -> None:
     """任务结束/取消：Web 关页 + 各平台通知 Scout cancel_run。"""
-    release_web_for_run(run_id, sns=sns, platforms_by_sn=platforms_by_sn)
+    from mino_nexus.services.run_write_safety import protected
+    if protected(run_id):
+        SLog.w(TAG, f"run={run_id} 存在未知写，保留隔离；不能用任务终态证明资源已释放")
+        return
+    if allow_unbound_cleanup:
+        release_web_for_run(run_id, sns=sns, platforms_by_sn=platforms_by_sn)
     seen: set[str] = set()
     for sn in sns or []:
         sn = str(sn or "").strip()
@@ -264,7 +270,7 @@ def release_devices_for_run(
             continue
         seen.add(sn)
         plat = (platforms_by_sn or {}).get(sn, "")
-        if is_web_slot(sn, plat):
+        if allow_unbound_cleanup and is_web_slot(sn, plat):
             continue
         try:
             RouterProxy(sn, run_id=run_id).notify_scout_cancel_run(run_id)

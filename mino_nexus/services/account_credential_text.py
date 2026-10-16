@@ -65,6 +65,25 @@ def normalize_input_text_for_lease(
             out["_credential_unresolved"] = "otp_missing"
         return out
     kind = login_kind_from_ctx(ctx) if ctx is not None else "phone"
+    if active.get("id") == "account_fill":
+        # account_fill 的凭证语义由已租账号和环境决定，不依赖模型填写 field/text。
+        email = lease_email_address(acc)
+        phone = lease_phone_digits(acc)
+        if kind == "email" and email:
+            field, value = "email", email
+        elif phone:
+            field, value = "phone", phone
+        elif email:
+            field, value = "email", email
+        else:
+            out["text"] = ""
+            out["_credential_unresolved"] = "account_credential_missing"
+            return out
+        out["field"] = field
+        out["login_field"] = field
+        out["text"] = value
+        out.pop("_credential_unresolved", None)
+        return out
     field = str(out.get("field") or "text").strip().lower()
     email = lease_email_address(acc)
     _cred_fields = frozenset({"sms_code", "验证码", "otp", "password"})

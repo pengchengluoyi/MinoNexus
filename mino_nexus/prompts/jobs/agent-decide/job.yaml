@@ -1,5 +1,5 @@
 id: agent-decide
-version: 24
+version: 27
 label: agent-decide
 summary: ''
 engine: vision_decide
@@ -66,7 +66,7 @@ call:
 image:
   slot: image_base64
   position: after_text
-  required: true
+  required: false
 system:
 - id: main
   file: system/10-main.md
@@ -121,7 +121,7 @@ user:
   max_chars: 1200
 - id: hierarchy
   slot: hierarchy_text
-  heading: ==== 本页可点元素（仅辅助定位，不是登录/业务结论）====
+  heading: ==== 当前视口结构观察（节点、状态与结果；缺失不代表不存在）====
   skip_if_empty: true
   max_chars: 4000
 - id: footer

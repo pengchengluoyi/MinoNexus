@@ -6,7 +6,7 @@
 
 ## 1. 三层抽象
 
-Desktop 基础 UI 工具是设备运行时适配：根据当前已认证 Scout 的设备清单，为该 PC 的模型菜单和 EXECUTE 路由生成点击、输入、按键、启动应用、读取前台应用。只提供 Scout 已实现且本设备已上报的工具；macOS/Windows 的按键参数分别匹配当前系统。此过程不写 catalog_entries，不要求管理员配置，也不跨设备继承能力。已有同名目录行的停用、废弃和 UI 覆盖限制仍保留。截图继续走 observe 协议，捕获引用与会话有效性由 Scout 校验。业务能力仍经 Console 管理。
+Desktop 基础 UI 工具是设备运行时适配：根据当前已认证 Scout 的设备清单，为该 PC 的模型菜单和 EXECUTE 路由生成点击、输入、按键、启动应用、读取前台应用。只提供 Scout 已实现且本设备已上报的工具；macOS/Windows 的按键参数分别匹配当前系统。此过程不写 catalog_entries，不要求管理员配置，也不跨设备继承能力。已有同名目录行的停用、废弃和 UI 覆盖限制仍保留。截图继续走 observe 协议，捕获引用与会话有效性由 Scout 校验。业务能力由 Workbench 管理；程序直接派发的系统能力在 Nexus 启动时注册和升级。
 
 ```
 abstract_cap                抽象能力全集（system_shell / ui_native_input / ...）
@@ -157,3 +157,20 @@ Agent 在 prep/do 菜单里也可主动调 `recover_<规则id>`（prep 阶段已
 | `request_sms_code` | 登录步且块已展开（与 macro 隐藏一致） |
 
 通用 `tap_element` / `input_text` 仍由 LLM 决策。块定义、HTTP、`steps_json` v2、check `mino.checkpoints.v1` 见 [FLOW_BLOCKS.md](FLOW_BLOCKS.md)。
+
+
+## 程序能力注册（2026-10-14 用户新要求）
+
+confirm_login_state、open_url、open_app 等程序能力通过 skill_channel._ensure_program_rows 的正常启动链路注册及更新，平台与 caller/phases/version 同步写入现库，不再要求用户点击 Workbench 目录升级。confirm_login_state 的旧显式 [web] 会升级为 [android,ios,web,desktop]，channel_contract_version=2。业务能力仍由 Workbench 管理；程序能力注册只处理代码声明的系统行，不覆盖业务能力。
+
+`mino-nexus catalog register-program` 调用相同注册器，用于核对或修复系统能力登记。无新增注册/升级前端、没有 /packs/channel-upgrade 手工流程。既有 enabled/lifecycle 保留，真实停用不被程序静默开启。
+
+## ExecutionBinding v1 普通入口接入（2026-10-15）
+
+普通固定用例与严格 Web 共用 `resolve_execution_binding`。编译器将已有步骤/块展开为 `binding_steps`，保留原步骤、子句引用及 `binding_source_revision`；预检和 attempt 不调用模型、不递归规划，原文或块版本变化必须重新编译。所有依赖仍为有界扁平 all/any，每组最多 32 个引用。
+
+`execution_requirements` 是版本化的旧装配适配器：固定声明本地编排的潜在子动作、框架观察/清理与已冻结修订的 recovery。目录 `enabled/lifecycle/ui_coverable` 与 caller/phases 继续有效；本地实现保留在 Nexus，子动作仍经 RouterProxy。输入按 contract_version × target_mode × write_mode 精确投影，必需输入至少有一个可用组合。可选分支不可用只返回 `blocking:false` 诊断，并从菜单和派发集合剔除，不冒充已执行。
+
+实现的 `requires_caps` 随目录读写保留，用于对照 Scout 抽象 manifest（例如 ui_native_input / ui_input_text），不能用“执行器存在”代替能力判断。新合同每个候选均携带完整 params/result/low_level/device_hint 装配，写动作固定单一路由。菜单与派发重新核对已提交绑定和当前注册代际，不自行重新选择实现。
+
+模型配置、账号可用性、资源争用/隔离及块修订进入预检。attempt 已准入后不因自己的资源状态转换重复否定初始前置，但隔离、代际、目录/策略和目标仍实时复核。动态 plugin 流程不属于 v1；Gmail 插件取码与 HITL 取码不能被当作固定本地 get_otp 支持，预检返回 `otp_source_requires_bound_contract`。固定环境 OTP 可用；未实现的 persona_subtask/human_input_text 不广告为可执行。探索入口没有固定编译计划，仍是旧合同，不伪造绑定。

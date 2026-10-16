@@ -189,3 +189,67 @@ def pick_permission_dismiss_text(
         if pref in found:
             return pref
     return found[0]
+
+
+def try_recover_pending_system_permission(
+    router: Any, ctx: Any, cursor: Any, *, turn_seq: int, writer: Any = None,
+) -> Optional[dict[str, Any]]:
+    """业务动作待回看时先处理明确的 Android 系统权限，不裁定原业务动作。"""
+    from mino_nexus.action_space.scheme import action_scheme
+    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+
+    prior = getattr(cursor, "visual_prior", None)
+    if (not isinstance(prior, dict) or not prior or action_scheme(ctx) != "dom_preferred"
+            or ui_channel_from_ctx(ctx) != UiChannel.ANDROID):
+        return None
+    nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or [])
+             if isinstance(n, dict) and n.get("visible", True) and n.get("enabled", True)
+             and not n.get("cross_origin")]
+    owners = ("com.android.permissioncontroller", "com.google.android.permissioncontroller")
+    controller_nodes = [n for n in nodes if any(
+        str(n.get("resource_id") or "").startswith(owner + ":id/") for owner in owners)]
+    if not controller_nodes or not permission_choice_dialog_present(nodes):
+        return None
+    titles = [str(n.get("text") or n.get("content_desc") or "") for n in controller_nodes
+              if str(n.get("resource_id") or "").endswith(":id/alertTitle")]
+    if len(titles) != 1 or not titles[0].strip():
+        return None
+    from mino_nexus.loop.recovery import collect_evidence, invalidate_evidence_cache
+
+    evidence = collect_evidence(ctx, router, target_package=str(getattr(ctx, "target_package", "") or ""))
+    if evidence.target_alive != "yes" or evidence.foreground_pkg not in owners:
+        return None
+    # 同一权限提示仅派发一次；不因状态不明重放点击，也不无限循环处理新权限。
+    attempts = getattr(cursor, "system_permission_recovery_attempts", None)
+    if not isinstance(attempts, dict):
+        attempts = {}
+    key = titles[0]
+    if key in attempts or len(attempts) >= 4:
+        return {"ok": False, "status": "blocked", "capability_id": "tap_element",
+                "summary": "系统权限点击后仍未消失，或权限恢复次数已达上限；原业务动作尚未确认。"}
+    attempts[key] = True
+    cursor.system_permission_recovery_attempts = attempts
+    from mino_nexus.loop.system_dialog_recovery import try_proactive_system_permission
+
+    previous_mode = getattr(ctx, "observation_mode", "visual")
+    previous_proxy_mode = getattr(router, "observation_mode", "visual")
+    ctx.observation_mode = "dom"
+    router.observation_mode = "dom"
+    try:
+        result = try_proactive_system_permission(ctx=ctx, router=router,
+                    target_package=str(getattr(ctx, "target_package", "") or ""), turn_seq=turn_seq)
+    finally:
+        ctx.observation_mode = previous_mode
+        router.observation_mode = previous_proxy_mode
+        invalidate_evidence_cache(ctx)
+    result = result or {"ok": False, "summary": "当前系统权限控件未能定位"}
+    result["status"] = "defer" if result.get("ok") else "blocked"
+    result["capability_id"] = "tap_element"
+    if writer:
+        writer.append("recovery/system_permission", {
+            "status": result["status"], "source": "current_system_structure",
+            "parent_step_id": str(prior.get("milestone_id") or ""),
+            "attempt_ref": str(prior.get("attempt_ref") or ""),
+            "business_result_confirmed": False, "fresh_observation_required": True,
+        })
+    return result

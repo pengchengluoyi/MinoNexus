@@ -1,6 +1,8 @@
 """CaseRunner：启动、取消、重跑任务。会话轨迹的读接口在 rObserve。"""
 from __future__ import annotations
 
+from mino_nexus.action_space.scheme import normalize_action_scheme
+
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -80,7 +82,7 @@ class RunRequest(BaseModel):
     playwright_headless: bool = True
     env_profile: str = ""
     env_surface: str = ""
-    action_scheme: str = "visual"
+    action_scheme: str = "dom_preferred"
 
 
 class PromoteBaselineRequest(BaseModel):
@@ -114,7 +116,7 @@ class TaskAccountTemplateStateBody(BaseModel):
 
 
 @router.get("/devices")
-def list_devices(only_online: bool = Query(False), compatible_only: bool = False, app_id: str = "", env_surface: str = "", env_profile: str = "", action_scheme: str = "visual", playwright_headless: bool = True, _sess: dict = Depends(current_session)):
+def list_devices(only_online: bool = Query(False), compatible_only: bool = False, app_id: str = "", env_surface: str = "", env_profile: str = "", action_scheme: str = "dom_preferred", playwright_headless: bool = True, _sess: dict = Depends(current_session)):
     from mino_nexus.services.device_targets import evaluate
     app = None
     if app_id:
@@ -187,7 +189,7 @@ def run_cases(body: RunRequest, sess: dict = Depends(current_session)):
             playwright_headless=bool(body.playwright_headless),
             env_profile=str(body.env_profile or "").strip(),
             env_surface=str(body.env_surface or "").strip(),
-            action_scheme=str(body.action_scheme or "visual").strip().lower(),
+            action_scheme=normalize_action_scheme(body.action_scheme),
             plugin_user_id=_plugin_user(sess),
             execution_mode=str(body.execution_mode or "legacy"),
         )
@@ -506,3 +508,12 @@ def promote_baseline(body: PromoteBaselineRequest, _sess: dict = Depends(current
     if doc is None:
         raise HTTPException(status_code=400, detail="找不到这条 run，无法提升为基线")
     return ok({"ok": True, "run_id": body.run_id, "blessed_by": body.blessed_by, "note": "基线库尚未搬迁，已记下请求"})
+
+
+@router.post("/tasks/{task_id}/write-safety/recheck")
+async def recheck_write_safety(task_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.run_write_safety import recover_stopped
+    try:
+        return ok(await recover_stopped(task_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404 if str(exc) == "task_not_found" else 409, detail=str(exc)) from exc

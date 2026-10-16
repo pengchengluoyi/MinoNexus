@@ -1,0 +1,42 @@
+id: inspect-login-consent-scope
+version: 1
+label: 登录协议范围观察
+summary: 只读核对完整可见登录范围是否存在需操作的协议控件
+engine: observe
+role: test-engineer
+output_schema: login_consent_scope
+enabled: true
+sort_order: 13
+flags: []
+slots:
+- name: target
+  kind: text
+  required: true
+- name: response_schema
+  kind: text
+  required: true
+- name: image_base64
+  kind: image
+  required: true
+- name: image_mime
+  kind: text
+  required: false
+call:
+  temperature: 0.0
+  max_tokens: 450
+  timeout_sec: 45
+  json_mode: true
+image:
+  slot: image_base64
+  position: after_text
+  required: true
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: target
+  slot: target
+  heading: 显式观察目标（bounds_1000 为相对整张截图的千分比矩形）：
+- id: contract
+  slot: response_schema
+  heading: 输出 JSON Schema（所有字段必填）：

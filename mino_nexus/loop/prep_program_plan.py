@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import math
+import time
 from typing import Any
 
 from mino_nexus.loop.llm_step_context import step_scope_key
@@ -36,9 +38,6 @@ def resolve_prep_claim(case: dict[str, Any] | None, ctx: Any) -> dict[str, Any]:
 
 
 def _launch_hook_cap(ctx: Any, claim: dict[str, Any]) -> str:
-    plat = str(claim.get("platform") or getattr(ctx, "platform", "") or "").strip().lower()
-    if ui_channel_from_ctx(ctx) == UiChannel.WEB or plat in ("web", "playwright"):
-        return "open_url"
     return "launch_app"
 
 
@@ -277,7 +276,7 @@ def build_prep_program_plan(
                 "prep_flow_id": "device_session",
                 "title": device_label or "确认应用登录态",
                 "kind": "hook",
-                "hook_cap": "relogin",
+                "hook_cap": "confirm_login_state",
                 "optional": False,
                 "required_session": device_want,
             }
@@ -380,16 +379,6 @@ def sync_prep_internal_milestones(cursor: Any, ctx: Any) -> bool:
             row["evidence"] = "clear_app_cache"
             cache_passed = True
             changed = True
-        elif (
-            mid == "prep_device_session"
-            and cache_passed
-            and str(row.get("hook_cap") or "") == "relogin"
-            and str(row.get("required_session") or "").strip().lower() in ("guest", "logged_out")
-        ):
-            # 刚 pm clear，前置就是未登录：不必再看图确认登录态。要已登录时仍走 relogin。
-            row["status"] = "pass"
-            row["evidence"] = "pm clear"
-            changed = True
         elif mid == "prep_launch_app" and launch_ok:
             hook = str(row.get("hook_cap") or "").strip()
             if hook in ("launch_app", "open_url", "open_app"):
@@ -490,6 +479,146 @@ def prep_program_plan_json(cursor: Any, case: dict[str, Any] | None, ctx: Any) -
         )
         setattr(cursor, "prep_program_plan", plan)
     return json.dumps(plan, ensure_ascii=False, indent=2, default=str)
+
+
+def schedule_prep_reauthentication(cursor: Any, ctx: Any, pending: dict[str, Any], *, writer: Any = None) -> bool:
+    """Bounded, app-configured logout navigation; the original identity hook stays pending."""
+    from mino_nexus.services.login_evidence import EVIDENCE_MAX_AGE_SEC, scope
+    from mino_nexus.services.login_evidence_policy import policy_for_context, submitted_account_enabled, submission_current
+
+    if (step_scope_key(cursor)[1] != "prep" or pending.get("source") != "prep_program"
+            or pending.get("hook_cap") != "confirm_login_state" or pending.get("required_session") != "logged_in"
+            or not submitted_account_enabled(ctx) or submission_current(ctx)):
+        return False
+    policy = policy_for_context(ctx)
+    hint = policy["logout_navigation_hint"]
+    current_scope = scope(ctx)
+    account = getattr(ctx, "picked_account", None) or {}
+    evidence = getattr(ctx, "login_evidence", None) or {}
+    at = evidence.get("observed_at_monotonic")
+    age = time.monotonic() - at if type(at) in (int, float) else float("inf")
+    deadline = getattr(ctx, "case_deadline_ts", 0) or 0
+    if (not hint or not current_scope["account_id"] or str(account.get("id") or "") != current_scope["account_id"]
+            or evidence.get("scope") != current_scope or not evidence.get("observation_ref")
+            or not math.isfinite(age) or not 0 <= age <= EVIDENCE_MAX_AGE_SEC
+            or evidence.get("identity") in {"mismatch", "match"} or (deadline and time.time() >= deadline)):
+        return False
+    guard_scope = {**current_scope, "app_id": str(getattr(ctx, "app_id", "") or ""),
+                   "env_profile": str(getattr(ctx, "env_profile", "") or ""),
+                   "env_surface": str(getattr(ctx, "env_surface", "") or "")}
+    guard = getattr(cursor, "prep_reauthentication_guard", None)
+    if guard is None:
+        if evidence.get("authentication") != "logged_in" or evidence.get("identity") != "unknown":
+            return False
+        guard = {"context_id": id(ctx), "scope": guard_scope, "hint": hint, "steps": 0}
+    if (guard.get("context_id") != id(ctx) or guard.get("scope") != guard_scope or guard.get("hint") != hint
+            or guard.get("completed") or guard.get("steps", 0) >= 6):
+        return False
+    state = read_state(cursor)
+    rows = [dict(row) for row in state.get("milestones") or [] if isinstance(row, dict)]
+    mid = str(pending.get("id") or "")
+    index = next((i for i, row in enumerate(rows) if row.get("id") == mid
+                  and row.get("status") in {"pending", "in_progress"}), None)
+    if index is None or any(str(row.get("id") or "").startswith("prep_reauth_nav_")
+                            and row.get("status") not in {"pass", "skipped"} for row in rows):
+        return False
+    number = guard["steps"] + 1
+    nav_id = f"prep_reauth_nav_{number}"
+    rows[index]["status"] = "pending"
+    rows.insert(index, {"id": nav_id, "kind": "visual_action", "status": "in_progress", "optional": False,
+                        "source": "prep_program", "prep_flow_id": "reauthentication",
+                        "title": "按应用配置执行一步退出登录导航", "navigation_target": hint,
+                        "exec_caps": ["tap_element", "swipe_direction", "press_key"],
+                        "expected_result": "比较操作前后两图，页面切换、滚动位置变化、退出确认弹窗出现或退出确认弹窗消失，任一项可见变化即可；仅核验本步导航变化，随后由程序独立核验登录态"})
+    state.update(milestones=rows, status="in_progress", exit_allowed=False,
+                 reauthentication={"mode": "logout_then_login", "navigation_hint": hint,
+                                   "step": number, "max_steps": 6, "milestone_id": nav_id})
+    cursor.prep_reauthentication_guard = {**guard, "steps": number}
+    write_state(cursor, state)
+    if writer is not None:
+        writer.append("prep/reauthentication", {"milestone_id": nav_id, "verification_milestone_id": mid,
+                      "step": number, "max_steps": 6, "status": "pending", "account_binding_verified": False})
+    return True
+
+
+def finish_prep_reauthentication(cursor: Any) -> None:
+    guard = getattr(cursor, "prep_reauthentication_guard", None)
+    if isinstance(guard, dict):
+        cursor.prep_reauthentication_guard = {**guard, "completed": True}
+        state = read_state(cursor)
+        state.pop("reauthentication", None)
+        write_state(cursor, state)
+
+
+def schedule_prep_session_navigation(cursor: Any, ctx: Any, pending: dict[str, Any], *, writer: Any = None) -> bool:
+    """Keep the original prep check pending while observing its configured location."""
+    import math
+    import time
+    from mino_nexus.services.login_evidence import EVIDENCE_MAX_AGE_SEC, scope
+    from mino_nexus.services.login_evidence_policy import policy_for_context, submitted_account_enabled
+
+    if (step_scope_key(cursor)[1] != "prep" or pending.get("source") != "prep_program"
+            or pending.get("hook_cap") != "confirm_login_state" or not submitted_account_enabled(ctx)):
+        return False
+    policy = policy_for_context(ctx)
+    hint = policy["authenticated_content_hint"] or policy["logout_navigation_hint"]
+    after_reauthentication = bool(getattr(cursor, "prep_reauthentication_guard", None))
+    if after_reauthentication:
+        hint = policy["logout_navigation_hint"] or hint
+    evidence = getattr(ctx, "login_evidence", None) or {}
+    at = evidence.get("observed_at_monotonic")
+    age = time.monotonic() - at if type(at) in (int, float) else float("inf")
+    current_scope = {**scope(ctx), "app_id": str(getattr(ctx, "app_id", "") or ""),
+                     "env_profile": str(getattr(ctx, "env_profile", "") or ""),
+                     "env_surface": str(getattr(ctx, "env_surface", "") or "")}
+    if (not hint or evidence.get("authentication") != "unknown" or evidence.get("identity") == "mismatch"
+            or evidence.get("scope") != scope(ctx) or not evidence.get("observation_ref")
+            or not math.isfinite(age) or not 0 <= age <= EVIDENCE_MAX_AGE_SEC
+            or (getattr(ctx, "case_deadline_ts", 0) or 0) and time.time() >= ctx.case_deadline_ts):
+        return False
+    targets = [policy["authenticated_content_hint"], policy["logout_navigation_hint"]]
+    guard = getattr(cursor, "prep_session_navigation_guard", None) or {
+        "context_id": id(ctx), "scope": current_scope, "hint": hint, "policy_targets": targets, "steps": 0}
+    if (guard.get("context_id") != id(ctx) or guard.get("scope") != current_scope
+            or guard.get("policy_targets") != targets or guard.get("steps", 0) >= 5):
+        return False
+    state = read_state(cursor)
+    rows = [dict(row) for row in state.get("milestones") or [] if isinstance(row, dict)]
+    index = next((i for i, row in enumerate(rows) if row.get("id") == pending.get("id")
+                  and row.get("status") in {"pending", "in_progress"}), None)
+    if index is None or any(str(row.get("id") or "").startswith("login_evidence_nav_prep_")
+                            and row.get("status") not in {"pass", "skipped"} for row in rows):
+        return False
+    number = guard["steps"] + 1
+    nav_id = f"login_evidence_nav_prep_{number}"
+    rows[index]["status"] = "pending"
+    rows.insert(index, {"id": nav_id, "kind": "visual_action", "status": "in_progress", "optional": False,
+        "source": "login_evidence_observation", "navigation_target": hint,
+        "after_reauthentication_navigation": after_reauthentication,
+        "previous_navigation_actions": [row.get("navigation_action", "") for row in rows
+            if str(row.get("id") or "").startswith("prep_reauth_nav_") and row.get("status") == "pass"],
+        "title": "按应用配置只读导航一步到可观察当前登录态的位置，禁止退出或换号",
+        "exec_caps": ["tap_element", "swipe_direction", "press_key"],
+        "expected_result": "本次只读导航引起可见页面或滚动位置变化；随后由原前置检查核验登录态"})
+    state.update(milestones=rows, status="in_progress", exit_allowed=False)
+    cursor.prep_session_navigation_guard = {**guard, "hint": hint, "steps": number}
+    write_state(cursor, state)
+    if writer is not None:
+        writer.append("prep/session_observe", {"milestone_id": pending.get("id"),
+            "observation_milestone_id": nav_id, "attempt": number, "limit": 5,
+            "session": "unknown", "status": "pending", "login_verified": False})
+    return True
+
+
+def active_reauthentication_navigation(cursor: Any) -> bool:
+    if cursor is None or step_scope_key(cursor)[1] != "prep":
+        return False
+    state = read_state(cursor)
+    marker = state.get("reauthentication") or {}
+    return marker.get("mode") == "logout_then_login" and any(
+        isinstance(row, dict) and row.get("status") == "in_progress" and row.get("source") == "prep_program"
+        and row.get("prep_flow_id") == "reauthentication" and row.get("id") == marker.get("milestone_id")
+        for row in state.get("milestones") or [])
 
 
 def resource_claim_json_for_plan(case: dict[str, Any] | None, ctx: Any) -> str:

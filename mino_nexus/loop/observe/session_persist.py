@@ -6,24 +6,25 @@ from typing import Any
 
 from mino_nexus.loop.session_ensure import parse_session_value
 
+
 _LOGIN_EXPECT_RE = re.compile(r"登录成功|已登录|logged.?in|用户名称|昵称", re.I)
 
 
-def stamp_session_observation(ctx: Any, row: dict[str, Any] | None) -> None:
+def stamp_session_observation(ctx: Any, row: dict[str, Any] | None, *, form_left: bool | None = None) -> dict[str, Any] | None:
     """inspect-session 成功后写入 ctx.session_fact / task_session。"""
     if not isinstance(row, dict) or not row.get("ok"):
         return
+    from mino_nexus.services.login_evidence import record, normalize_observation, can_commit
+    prior = getattr(ctx, "login_evidence", None) or {}
+    if (prior.get("verification_method") == "login_page_transition" and can_commit(ctx)
+            and normalize_observation(row).get("session") == "unknown"):
+        return {**row, "session": "logged_in", "reason": "本用例登录提交已切换页面，当前观察未提供相反证据"}
+    row, evidence = record(ctx, row, form_left=form_left)
     from mino_nexus.services.session_match import normalize_device_session
 
     session = normalize_device_session(row.get("session") or "")
-    if bool(getattr(ctx, "prep_clear_done", False)) and session == "logged_in":
-        prev = dict(getattr(ctx, "session_fact", None) or {})
-        if (
-            str(prev.get("source") or "") == "clear_app_cache"
-            and str(prev.get("session") or "").lower() in ("logged_out", "guest")
-        ):
-            # 清缓存后 UI 仍像已登录：前置以 clear 结论为准，勿被 inspect 覆写回 logged_in
-            return
+    if session == "logged_in" and not evidence["login_state_verified"]:
+        session = "unknown"
     identity = str(row.get("identity") or "").strip()
     seen = str(row.get("seen") or "").strip()
     fact = {
@@ -33,20 +34,28 @@ def stamp_session_observation(ctx: Any, row: dict[str, Any] | None) -> None:
         "next": str(row.get("next") or "").strip(),
         "reason": str(row.get("reason") or "").strip(),
         "source": "inspect_session",
+        "login_state_verified": evidence["login_state_verified"],
+        "account_binding_source": evidence["account_binding_source"],
+        "business_context": "unverified",
     }
     ctx.session_fact = dict(fact)
     ctx.task_session = dict(fact)
-    if session == "logged_in":
-        ctx.session_dirty = False
+    ctx.session_dirty = session not in {"logged_in", "logged_out", "guest"}
     from mino_nexus.services.resource_transition import emit_inspect_session
 
     emit_inspect_session(ctx, row)
+    return {**row, "session": session}
 
 
 def mark_session_dirty(ctx: Any, *, reason: str = "") -> None:
     ctx.session_dirty = True
+    ctx.login_evidence = {}
+    if reason != "login_form_visible":
+        from mino_nexus.services.login_evidence_policy import clear_submission
+        clear_submission(ctx)
     if reason:
         prev = dict(getattr(ctx, "session_fact", None) or {})
+        prev["session"] = "unknown"
         prev["stale_reason"] = str(reason)[:200]
         ctx.session_fact = prev
 
@@ -88,10 +97,8 @@ def effective_session_block(ctx: Any, slot_block: str = "") -> str:
     """单条 session 结论：优先当轮 inspect-session 槽，不与 run_context 叠句。"""
     block = _strip_stacked_session_block(str(slot_block or "").strip())
     fact = dict(getattr(ctx, "session_fact", None) or {})
-    fact_sess = str(fact.get("session") or "").strip().lower()
-    if bool(getattr(ctx, "prep_clear_done", False)) and fact_sess in ("logged_out", "guest"):
-        if parse_session_value(block) == "logged_in":
-            block = ""
+    if bool(getattr(ctx, "session_dirty", False)):
+        return "session=unknown source=run_context reason=登录态已失效，须当前观察确认"
 
     if block and not block.startswith("（"):
         return block
@@ -144,7 +151,10 @@ def assert_session_context(ctx: Any, *, instruction: str = "", expected: str = "
         phone = str(picked.get("phone") or "").strip()
         if phone:
             tail = phone[-4:] if len(phone) >= 4 else phone
-            extra += f" 本任务租号尾号 {tail}，判「登录成功」时须与屏上账号一致。"
+            if (getattr(ctx, "session_fact", None) or {}).get("account_binding_source") == "submitted_account":
+                extra += " 应用配置采用本次实际提交账号绑定；UI 身份不可观察，不能要求不存在的身份展示页，也不能声称页面身份已核验。"
+            else:
+                extra += f" 本任务租号尾号 {tail}，判「登录成功」时须与屏上账号一致。"
     if session == "logged_out" and re.search(r"已登录|登录成功|logged.?in", blob, re.I):
         extra += (
             " 当前 session=logged_out 表示未登录（含登录页/登录弹层），"

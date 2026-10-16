@@ -47,7 +47,9 @@ def _attempt(task_id, case, doc, number, retry_of):
         playwright_headless=True, execution_mode="v5", execution_control=budget)
     evidence, action_refs = [], {}
     generation, verification, reason, stopped = "", "unverified", "", False
-    context = {"execution_mode": "v5", "plan_source": "text", "frozen_revision": frozen.get("frozen_revision"),
+    opened_dispatched = False
+    context = {"env_profile": str(doc.get("env_profile") or ""), "env_surface": str(doc.get("env_surface") or ""), "action_scheme": "dom_preferred",
+        "provider_id": str(doc.get("provider_id") or ""), "execution_mode": "v5", "plan_source": "text", "frozen_revision": frozen.get("frozen_revision"),
         "publication": frozen, "controls": frozen.get("controls", {}), "predicate_contract": "web.atomic.v1",
         "verifier_build": "web-atomic-1", "project_id": pid, "sn": sn, "node_id": str((doc.get("device_targets", {}).get(sn) or {}).get("node_id") or ""),
         "attempt": number, "retry_of": retry_of, "timeout_profile": PROFILE,
@@ -63,10 +65,19 @@ def _attempt(task_id, case, doc, number, retry_of):
         except Exception as exc:
             raise ValueError("store_error") from exc
 
-    def dispatch(cap, params=None, *, seconds=3, reserve=0, seq=0):
+    def dispatch(cap, params=None, *, seconds=3, reserve=0, seq=0, operation_ref=''):
+        nonlocal opened_dispatched
+        if not operation_ref:
+            operation_ref = {'probe': 'system:probe', 'open_web_v5': 'system:open',
+                'screenshot': 'system:screenshot', 'close_web_v5': 'system:close'}.get(cap, '')
+        operation = next((row for row in (router.execution_binding or {}).get('operations', [])
+                          if row['operation_ref'] == operation_ref), {})
         event = PlanEvent(seq=seq, capability_id=cap, params=params or {}, expected_executor="playwright")
-        result = router.dispatch(event, timeout_sec=seconds, reserve_sec=reserve)
+        result = router.dispatch(event, timeout_sec=seconds, reserve_sec=reserve,
+                                 operation_ref=operation_ref, binding_phase=operation.get('phase', ''))
         raw = result.raw_response
+        if cap == 'open_web_v5' and raw.get('action_ref'):
+            opened_dispatched = True
         record = {"type": "device/action" if cap in {"open_web_v5", "tap_target", "input_target"} else "device/observation",
                   "payload": {"capability_id": cap, "status": result.status.value, "logical_seq": seq,
                               "request": event.params, "raw_response": raw}}
@@ -97,12 +108,20 @@ def _attempt(task_id, case, doc, number, retry_of):
             current = get_control(pid, cid)
             if not current or current.get("revision") != control["revision"] or current.get("publish_state") != "published":
                 raise ValueError("control_version_changed")
+        from mino_nexus.services.execution_binding_runtime import strict_requirements
+        requirements = strict_requirements(case, str(doc.get('app_id') or ''))
+        router.bind_execution(requirements, session_id=attempt_id,
+            env_profile=str(doc.get('env_profile') or ''), env_surface=str(doc.get('env_surface') or ''),
+            deadline=min(budget.deadline, time.monotonic() + 2))
         probe = dispatch("probe", seconds=3)
         if probe.status != EventStatus.PASS or probe.raw_response.get("contracts") != CONTRACTS:
             raise ValueError("capability_unavailable")
         context["runnable_now"] = {"ready": False, "reason_code": "baseline_pending"}
         commit([], {"runtime_context": context})
         checks = frozen["check_program_plan"]["checkpoints"]
+        from mino_nexus.services.check_observation_policy import validate_frozen, source_ready
+        for check in checks:
+            validate_frozen(check)
         remaining_checks = sum(c["wait_policy"]["timeout_ms"] / 1000 for c in checks if c["required"])
         url = str(doc.get("package") or "")
         opened = dispatch("open_web_v5", {"url": url}, seconds=11, reserve=remaining_checks + 9)
@@ -113,7 +132,7 @@ def _attempt(task_id, case, doc, number, retry_of):
             raise ValueError("observation_missing")
         baseline = frozen["baseline"]
         baseline_receipt = dispatch("read_web_target_facts", {"control": controls[baseline["control_id"]],
-            "requested_facts": ["visible"]}, seconds=3)
+            "requested_facts": ["visible"]}, seconds=3, operation_ref='system:baseline')
         baseline_origin = baseline_receipt.raw_response.get("observation") or {}
         baseline_facts = baseline_receipt.raw_response.get("target_facts") or {}
         baseline_fresh = (baseline_origin.get("run_id") == attempt_id and baseline_origin.get("session_generation") == generation
@@ -129,13 +148,15 @@ def _attempt(task_id, case, doc, number, retry_of):
         for index, action in enumerate(frozen["actions"], 1):
             control = controls[action["control_id"]]
             if action["capability_id"] == "input_target":
-                classification = dispatch("read_web_target_facts", {"control": control, "requested_facts": []}, seconds=1)
+                classification = dispatch("read_web_target_facts", {"control": control, "requested_facts": []},
+                    seconds=1, operation_ref='classify:' + action['operation_id'])
                 if classification.raw_response.get("target_facts", {}).get("sensitive") and not control.get("sensitive"):
                     raise ValueError("sensitive_classification_missing")
             payload = _input_payload(action["payload"], pid, attempt_id, sn, deadline=budget.deadline)
             params = {"control": control, "payload": payload}
             register_inputs(params)
-            receipt = dispatch(action["capability_id"], params, seconds=6, reserve=remaining_checks + 6, seq=index)
+            receipt = dispatch(action["capability_id"], params, seconds=6, reserve=remaining_checks + 6,
+                               seq=index, operation_ref='action:' + action['operation_id'])
             if receipt.status != EventStatus.PASS:
                 raise ValueError(budget.reason_code or "effect_unknown")
             action_ref = receipt.raw_response.get("action_ref")
@@ -151,13 +172,16 @@ def _attempt(task_id, case, doc, number, retry_of):
                     if left <= 0:
                         break
                     observation = dispatch("read_web_target_facts", {"control": controls[check["control_id"]],
-                        "requested_facts": requested_facts(check["expected"]), "after_action": action_ref}, seconds=left)
+                        "requested_facts": requested_facts(check["expected"]), "after_action": action_ref,
+                        "observation_contract": check["wait_policy"].get("observation_contract", "")},
+                        seconds=left, operation_ref='check:' + check['point_id'])
                     raw = observation.raw_response
                     facts, origin = raw.get("target_facts") or {}, raw.get("observation") or {}
                     fresh = (origin.get("run_id") == attempt_id and origin.get("session_generation") == generation
                         and type(origin.get("after_step_idx")) is int and origin["after_step_idx"] >= action_ref["step_idx"]
                         and facts.get("control_id") == check["control_id"]
-                        and facts.get("control_revision") == controls[check["control_id"]]["revision"])
+                        and facts.get("control_revision") == controls[check["control_id"]]["revision"]
+                        and source_ready(check, facts))
                     invalid_source = invalid_source or bool(origin and facts and not fresh)
                     evaluated = evaluate(check["expected"], facts if fresh and observation.status == EventStatus.PASS else {})
                     point_evidence.append({"read": read + 1, "event_ref": raw.get("event_ref"), "observation": origin,
@@ -197,8 +221,12 @@ def _attempt(task_id, case, doc, number, retry_of):
     finally:
         # Stop evidence is required before releasing a leased account or retrying.
         try:
-            close = router.dispatch(PlanEvent(seq=0, capability_id="close_web_v5"), timeout_sec=1)
-            stopped = bool(close.raw_response.get("executor_stopped"))
+            if not opened_dispatched:
+                stopped = True  # No lane or UI action was requested before this admission failure.
+            else:
+                close = router.dispatch(PlanEvent(seq=0, capability_id="close_web_v5"), timeout_sec=1,
+                                        operation_ref='system:close', binding_phase='cleanup')
+                stopped = bool(close.raw_response.get("executor_stopped"))
             if not stopped and verification == "verified_pass":
                 verification, reason = "unverified", "lane_quarantined"
         except Exception:

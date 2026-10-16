@@ -41,6 +41,12 @@ def open_meta(
             db.add(row)
             db.commit()
             db.refresh(row)
+        if row.owner_user_id != require_user_id():
+            raise PermissionError("session_owner_mismatch")
+        if row.run_id != run_id or row.case_id != case_id or row.app_id != app_id:
+            raise ValueError("session_identity_reused")
+        if row.finished_at or row.finalization_id:
+            raise ValueError("session_already_finalized")
         return row
     finally:
         db.close()
@@ -85,6 +91,9 @@ def force_close(
         "forced": True,
     }
     try:
+        if (meta.get("runtime_context") or {}).get("execution_binding") is not None:
+            finalize_bound(session_id=sid, body=body, turn=0, phase="done")
+            return True
         append_event(
             session_id=sid,
             type="session/end",
@@ -112,6 +121,12 @@ def close_meta(
         meta = db.query(SessionMeta).filter(SessionMeta.session_id == session_id).first()
         if meta is None:
             return
+        if meta.owner_user_id != require_user_id():
+            raise PermissionError("session_owner_mismatch")
+        if meta.finalization_id:
+            raise ValueError("session_already_finalized")
+        if (meta.runtime_context or {}).get("execution_binding") is not None:
+            raise ValueError("bound_session_requires_atomic_finalization")
         meta.status = str(status or "unknown")
         meta.summary = str(summary or "")[:2000]
         meta.finished_at = _now()
@@ -138,6 +153,7 @@ def _meta_dict(row: SessionMeta) -> dict[str, Any]:
         "runtime_context": dict(row.runtime_context or {}),
         "verdict": dict(row.verdict or {}),
         "finalization_id": row.finalization_id or "",
+        "binding_record": binding_record(row.runtime_context),
     }
 
 
@@ -268,3 +284,46 @@ def read_events(
         ]
     finally:
         db.close()
+
+
+def binding_record(context):
+    """Historical view only: never reconstruct a binding from today's registry."""
+    value = (context or {}).get("execution_binding")
+    if value is None:
+        return {"status": "legacy", "message": "旧合同记录，未记录统一绑定"}
+    if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value["schema_version"] != 1:
+        return {"status": "unsupported", "message": "不支持该绑定详情版本"}
+    from mino_nexus.services.execution_binding import validate_binding
+    try:
+        validate_binding(value)
+    except ValueError:
+        return {"status": "invalid", "message": "绑定记录校验失败，保留原始记录"}
+    return {"status": "supported", "schema_version": 1, "binding_id": value["binding_id"]}
+
+
+def finalize_bound(*, session_id, body, turn=0, phase="done"):
+    """Ordinary outcomes retain their guarantee level; only commit is atomic."""
+    from mino_nexus.services.execution_binding_store import finalization_digest
+    from mino_nexus.services.run_write_safety import protected
+    meta = get_meta(session_id)
+    if not meta or not (meta.get("runtime_context") or {}).get("execution_binding"):
+        raise ValueError("binding_not_committed")
+    body = dict(body)
+    if protected(meta["run_id"]):
+        body.update(status="blocked", summary="写动作结果未确认，资源仍隔离", reason_code="write_outcome_unknown")
+    records = [{"type": "session/end", "payload": body, "turn": turn, "phase": phase}]
+    patch = {"status": str(body.get("status") or "unknown"), "summary": str(body.get("summary") or "")[:2000],
+             "verdict": {"verification_status": "unverified", "outcome": str(body.get("status") or "unknown"),
+                         "reason_code": body.get("reason_code") or "ordinary_execution_result",
+                         "evidence_scope": (meta.get("verdict") or {}).get("evidence_scope") or {"session_id": session_id, "through_seq": meta["event_count"]},
+                         "binding_id": meta["runtime_context"]["execution_binding"]["binding_id"]}}
+    # Stable content identity; identical retries succeed, changed outcomes conflict.
+    patch["finalization_id"] = "ordinary-" + finalization_digest(records, patch)
+    try:
+        return append_batch(session_id, records, patch, eligible=True)
+    except ValueError as exc:
+        if str(exc) != "task_cancelled" or body.get("status") in {"cancelled", "cancel"}:
+            raise
+        return finalize_bound(session_id=session_id,
+            body={**body, "status": "cancelled", "reason_code": "task_cancelled", "summary": "任务已取消"},
+            turn=turn, phase=phase)

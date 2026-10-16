@@ -1,0 +1,14 @@
+{
+  "passed": 8,
+  "checks": [
+    "mac desktop label",
+    "win desktop label",
+    "Android label preserved",
+    "blocked native slot remains visible",
+    "readiness reason visible",
+    "blocked slot disabled",
+    "selection preserves canonical SN",
+    "no external resources or runtime/load errors"
+  ],
+  "scope": "actual DeviceSelect + native labels with isolated fixtures; no device execution"
+}
