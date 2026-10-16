@@ -61,6 +61,8 @@ async def lifespan(app: FastAPI):
     from mino_nexus.core.mdns import configure_proxy_bypass, register_beacon, unregister_beacon
 
     ensure_db()
+    from mino_nexus.core.build_info import initialize_instance_id
+    initialize_instance_id()
     from mino_nexus.services.auth_store import ensure_seed_users
     from mino_nexus.services.run_store import reconcile_stale_running_runs
 
