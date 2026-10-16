@@ -36,7 +36,7 @@ def main():
         row["url"] = args.prefix.rstrip("/") + "/" + row["filename"]
     manifest = {"manifest_schema_version":1, "component":first["component"], "version":first["version"],
                 "build_id":first["build_id"], "source_commit":first["source_commit"],
-                "compatibility":{'runtime': {'bundled': True, 'python': '3.12'}, 'protocol': {'node': 2, 'mcp': '2025-03-26'}, 'api': {'admission': 'explicit-tested-build-pair', 'tested_build_pairs': []}, 'schema': {'migration': 'ensure_db-and-bootstrap', 'rollback_compatibility': 'unverified'}, 'automatic_rollback': False, 'installation': 'baseline-v1', 'health': 'health_contract_v1'}, "items":rows}
+                "compatibility":{'runtime': {'bundled': True, 'python': '3.12'}, 'protocol': {'node': 2, 'mcp': '2025-03-26'}, 'api': {'admission': 'explicit-tested-build-pair', 'tested_build_pairs': []}, 'schema': {'migration': 'ensure_db-and-bootstrap', 'rollback_compatibility': 'unverified'}, 'automatic_rollback': False, 'installation': 'nexus-maintenance-v1', 'health': 'health_contract_v1'}, "items":rows}
     (args.dist / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
 if __name__ == "__main__":

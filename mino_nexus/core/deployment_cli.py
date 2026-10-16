@@ -212,7 +212,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="mino-nexus maintenance")
     sub = ap.add_subparsers(dest="command", required=True)
     p = sub.add_parser("migrate"); p.add_argument("--data-dir", required=True); p.add_argument("--root", type=Path)
-    for name in ("install", "stage", "fetch", "check-update", "request", "status", "cancel", "helper", "serve", "run-server", "provision-probe", "register", "probe", "recover"):
+    for name in ("install", "stage", "fetch", "check-update", "bind-workbench", "request", "status", "cancel", "helper", "serve", "run-server", "provision-probe", "register", "probe", "recover"):
         p = sub.add_parser(name); p.add_argument("--root", type=Path, required=True)
         if name in {"install", "stage"}:
             p.add_argument("--manifest", type=Path, required=True); p.add_argument("--package", type=Path, required=True)
@@ -225,6 +225,8 @@ def main(argv=None):
             p.add_argument("--tag", default="", required=name == "fetch")
         if name == "fetch":
             p.add_argument("--build", required=True)
+        if name == "bind-workbench":
+            p.add_argument("--workbench-root", type=Path, required=True)
         if name == "request":
             p.add_argument("--build", required=True); p.add_argument("--wait-seconds", type=int, default=1800)
             p.add_argument("--rollback", action="store_true")
@@ -246,6 +248,14 @@ def main(argv=None):
             elif args.command == "stage":
                 with d.lock():
                     result = {"release": str(stage_release(d, read_json(args.manifest), args.package))}
+            elif args.command == "bind-workbench":
+                path = args.workbench_root.expanduser().resolve(strict=True)
+                config = read_json(path / "config/installation.json")
+                if config.get("component") != "workbench" or not config.get("installation_id"):
+                    raise ValueError("Workbench installation does not support managed updates")
+                with d.lock():
+                    atomic_json(d.config_path, {**d.config, "workbench_install_root": str(path)})
+                result = {"workbench_bound": True, "installation_id": config["installation_id"]}
             elif args.command == "check-update":
                 from mino_nexus.core.github_release import check
                 result = check(d.config["release_repository"], "nexus", read_json(d.release(d.current_build()) / "release.json"), args.tag)

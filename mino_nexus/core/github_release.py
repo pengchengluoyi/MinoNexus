@@ -8,6 +8,8 @@ from pathlib import Path
 import platform
 import re
 import sys
+import ssl
+import certifi
 import tempfile
 import urllib.error
 import urllib.request
@@ -28,10 +30,16 @@ def repository(value):
     return value
 
 
+def open_release(request, timeout):
+    context = ssl.create_default_context()
+    context.load_verify_locations(cafile=certifi.where())
+    return urllib.request.urlopen(request, timeout=timeout, context=context)
+
+
 def read_remote(url, limit):
     request = urllib.request.Request(url, headers={"User-Agent": "Mino-release-updater/1", "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with open_release(request, timeout=30) as response:
             if urlsplit(response.url).scheme != "https":
                 raise ValueError("Release redirect must use HTTPS")
             data = response.read(limit + 1)
@@ -137,7 +145,7 @@ def prepare(root: Path, repo, component, tag, build):
     temporary = Path(tempfile.mkdtemp(prefix=".download-", dir=parent))
     package = temporary / "hi3d-package.zip"
     request = urllib.request.Request(item["url"], headers={"User-Agent": "Mino-release-updater/1"})
-    with urllib.request.urlopen(request, timeout=60) as response, package.open("xb") as out:
+    with open_release(request, timeout=60) as response, package.open("xb") as out:
         if urlsplit(response.url).scheme != "https":
             raise ValueError("Package redirect must use HTTPS")
         total = 0

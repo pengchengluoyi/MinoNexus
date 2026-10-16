@@ -22,7 +22,8 @@ from mino_nexus.core.release_package import fetch_fixed, stage_release
 def release_env(d: Deployment, build: str) -> dict:
     cfg = d.config
     release = d.release(build)
-    return {**os.environ, "MINO_NEXUS_DATA_DIR": cfg["data_dir"],
+    return {**os.environ, "MINO_WORKBENCH_INSTALL_ROOT": cfg.get("workbench_install_root", ""),
+            "MINO_NEXUS_MDNS": "0", "MINO_NEXUS_DATA_DIR": cfg["data_dir"],
             "MINO_NEXUS_INSTALL_ROOT": str(d.root), "PYINSTALLER_RESET_ENVIRONMENT": "1",
             "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"}
 

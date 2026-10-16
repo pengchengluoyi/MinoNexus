@@ -15,6 +15,7 @@ dependencies = [
   "uvicorn>=0.38",
   "sqlalchemy>=2.0",
   "pydantic>=2.12",
+  "certifi>=2024.2.2",    # bundled trust store for native GitHub updater
   "httpx>=0.28",          # 打 LLM endpoint
   "litellm==1.105.0",     # 统一 SDK（不安装 proxy extras）；能力/成本使用随版本固定的注册表
   "requests>=2.32",       # llm_client / Figma 同步

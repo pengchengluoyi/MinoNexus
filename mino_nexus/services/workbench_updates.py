@@ -30,6 +30,11 @@ class WorkbenchInstallation:
     def __init__(self, installation_id: str | None = None):
         configured = os.environ.get("MINO_WORKBENCH_INSTALL_ROOT", "")
         if not configured:
+            from mino_nexus.core.deployment import Deployment, deployment_root
+            nexus_root = deployment_root()
+            if nexus_root is not None:
+                configured = Deployment(nexus_root).config.get("workbench_install_root", "")
+        if not configured:
             raise WorkbenchUpdateError("尚未登记本机 Workbench 安装根；跨主机更新暂不支持")
         if sys.platform != "darwin":
             raise WorkbenchUpdateError("Workbench MCP 更新目前仅支持 macOS 同机安装")
@@ -124,6 +129,10 @@ class WorkbenchInstallation:
                     result["last_confirmed"] = receipt(self.operation(operation_id))
                 except FileNotFoundError:
                     pass
+            if command == "github-fetch":
+                result.update(release_tag=arguments[arguments.index("--tag") + 1],
+                              build_id=arguments[arguments.index("--build") + 1],
+                              recovery="下载可能仍在进行；稍后用相同 tag/build 再次 prepare，复用已校验文件")
             return result
         if process.returncode:
             # Scheduling may fail AFTER the durable request was accepted.
