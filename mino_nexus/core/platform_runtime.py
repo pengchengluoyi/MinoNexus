@@ -92,7 +92,7 @@ def switch_release(root, build):
 def spawn(command, root, env=None):
     root = Path(root)
     (root/'logs').mkdir(exist_ok=True)
-    options = {'creationflags':subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS} if os.name == 'nt' else {'start_new_session':True}
+    options = {'creationflags':subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {'start_new_session':True}
     with (root/'logs/process.log').open('ab') as log:
         return subprocess.Popen(list(map(str, command)), cwd=root, env=env,
             stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True, **options)
@@ -132,7 +132,10 @@ def run_service(root, command, env=None):
     root = Path(root)
     with file_lock(root/'updates/service-runtime.lock', blocking=False):
         environment = dict(os.environ if env is None else env, MINO_SERVICE_STOP_FILE=str(root/'updates/stop-request'))
-        return subprocess.run(list(map(str, command)), env=environment, cwd=root).returncode
+        # A detached parent alone does not prevent a console-subsystem child
+        # from allocating a new window on Windows. Apply this at both layers.
+        options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+        return subprocess.run(list(map(str, command)), env=environment, cwd=root, **options).returncode
 
 
 def watch_stop(callback):
