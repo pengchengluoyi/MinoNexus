@@ -7,6 +7,7 @@ import 数据库。这里拆开 —— `dispatch_log` 只是要个落盘位置�
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 
@@ -14,6 +15,8 @@ def get_app_data_dir() -> Path:
     env = os.environ.get("MINO_NEXUS_DATA_DIR")
     if env:
         p = Path(env).expanduser().resolve()
+    elif not getattr(sys, "frozen", False):
+        p = Path.home() / ".mino-dev" / "nexus"
     elif os.name == "nt":
         p = Path(os.environ.get("APPDATA", Path.home())) / "MinoNexus"
     else:

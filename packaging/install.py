@@ -119,11 +119,11 @@ def install(component,root,prepared,nexus_url):
     root.parent.mkdir(parents=True,exist_ok=True);root=root.parent.resolve()/root.name
     helper=extract_helper(folder,package)
     if component=='nexus':
-        run([helper,'d2','install','--root',root,'--data-dir',root/'data','--host','127.0.0.1','--port',port,'--manifest',folder/'manifest.json','--package',package])
+        run([helper,'d2','install','--root',root,'--data-dir',root/'data','--host','0.0.0.0','--port',port,'--manifest',folder/'manifest.json','--package',package])
         helper=exe(root/'launcher/mino-maintain')
         run([helper,'d2','provision-probe','--root',root]);run([helper,'d2','register','--root',root]);run([helper,'d2','probe','--root',root])
     else:
-        run([helper,'install','--root',root,'--host','127.0.0.1','--port',port,'--nexus-url',nexus_url,'--label','local.mino.workbench','--package',package,'--sha256',item['sha256']])
+        run([helper,'install','--root',root,'--host','0.0.0.0','--port',port,'--nexus-url',nexus_url,'--label','local.mino.workbench','--package',package,'--sha256',item['sha256']])
         helper=exe(root/'launcher/mino-maintain')
         run([helper,'register','--root',root,'--service-file',root/'config/service.plist']);run([helper,'start','--root',root])
     opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))

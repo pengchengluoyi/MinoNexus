@@ -49,12 +49,13 @@ def bind_port() -> int:
 
 def http_origin(port: int | None = None) -> str:
     p = DEFAULT_PORT if port is None else int(port)
-    return f"http://{LAN_HOST}:{p}"
+    host = "localhost" if bind_host() in {"127.0.0.1", "localhost", "::1"} else LAN_HOST
+    return f"http://{host}:{p}"
 
 
 def node_ws_url(port: int | None = None) -> str:
     p = DEFAULT_PORT if port is None else int(port)
-    return f"ws://{LAN_HOST}:{p}/node"
+    return http_origin(p).replace("http://", "ws://") + "/node"
 
 
 def public_urls(port: int | None = None) -> dict[str, str]:
@@ -63,7 +64,7 @@ def public_urls(port: int | None = None) -> dict[str, str]:
         "lan_host": LAN_HOST,
         "http_url": http_origin(p),
         "node_ws_url": node_ws_url(p),
-        "ui_ws_url": f"ws://{LAN_HOST}:{p}/ws",
+        "ui_ws_url": http_origin(p).replace("http://", "ws://") + "/ws",
     }
 
 

@@ -107,3 +107,5 @@ Electron UI ──HTTP :50104──► MinoNexus ──WS /node──◄ MinoSco
 | Scout | 主动连接测试 Nexus 的 50101 | 主动连接正式 Nexus 的 50104 |
 
 Scout 不分配独立业务监听端口。测试与正式使用独立的数据目录、凭据和节点身份。已安装实例的配置不会因更新默认值而自动迁移。
+
+开发与正式部署隔离及启动方式见 [环境说明](docs/ENVIRONMENTS.md)。

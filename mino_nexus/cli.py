@@ -338,28 +338,35 @@ def main(argv: list[str] | None = None) -> int:
         return _nav_cli(argv[1:])
 
     ap = argparse.ArgumentParser(prog="mino-nexus", description="MinoNexus 服务端")
-    ap.add_argument("--host", default="0.0.0.0", help="监听地址；局域网要 0.0.0.0 才能解析 mino.local")
+    ap.add_argument("--host", default=None, help="监听地址；局域网要 0.0.0.0 才能解析 mino.local")
     ap.add_argument("--port", type=int, default=None, help="监听端口（正式默认 50104）")
     ap.add_argument("--data-dir", help="Set data root before loading the application")
-    ap.set_defaults(dev=False)
+    ap.set_defaults(dev=not getattr(sys, "frozen", False))
     if not getattr(sys, "frozen", False):
         ap.add_argument("--dev", action="store_true", help="Source/PyCharm development on port 50101; requires an isolated data root")
     ap.add_argument("--no-mdns", action="store_true", help="Disable mDNS advertisement")
     args = ap.parse_args(argv)
+    if args.host is None:
+        args.host = "127.0.0.1" if args.dev else "0.0.0.0"
+    if args.dev and args.host not in {"127.0.0.1", "localhost", "::1"}:
+        ap.error("source development must listen on localhost")
     if args.port is None:
         args.port = 50101 if args.dev else 50104
+    if args.dev and args.port != 50101:
+        ap.error("source development uses port 50101")
 
     import os
     raw_dir = args.data_dir or os.environ.get("MINO_NEXUS_DATA_DIR", "")
     if args.dev and not raw_dir.strip():
-        ap.error("--dev requires --data-dir or MINO_NEXUS_DATA_DIR")
+        raw_dir = str(Path.home() / ".mino-dev" / "nexus")
     if args.data_dir is not None and not args.data_dir.strip():
         ap.error("--data-dir must not be empty")
     if raw_dir:
         target = Path(raw_dir).expanduser().resolve()
         default = (Path(os.environ.get("APPDATA", Path.home())) / "MinoNexus"
                    if os.name == "nt" else Path.home() / ".mino-nexus").resolve()
-        if args.dev and (target == default or default in target.parents or target in default.parents):
+        production_roots = [default, (Path.home() / "Mino" / "nexus").resolve()]
+        if args.dev and any(target == root or root in target.parents or target in root.parents for root in production_roots):
             ap.error("development data root must not overlap the default production root")
         os.environ["MINO_NEXUS_DATA_DIR"] = str(target)
     if args.dev or args.no_mdns:

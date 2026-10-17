@@ -148,7 +148,10 @@ def run_server(d: Deployment):
         handler.setFormatter(LogFormatter())
         logger.addHandler(handler)
         from mino_nexus.cli import main as server_main
-        return server_main(["--host", cfg["host"], "--port", str(cfg["port"])])
+        host = cfg["host"]
+        if getattr(sys, "frozen", False) and host in {"127.0.0.1", "localhost"} and cfg["port"] == 50104:
+            host = "0.0.0.0"  # Upgrade old standard installations to LAN access.
+        return server_main(["--host", host, "--port", str(cfg["port"])])
 
 
 def kick(d: Deployment):
