@@ -1,8 +1,12 @@
 ## 安装正式版本
 
+**[打开下载与安装页面 →](https://pengchengluoyi.github.io/MinoNexus/)**
+
+选择系统与组件，下载安装器，或一键复制下载链接和安装命令。
+
 GitHub 下载和安装仅提供正式版本，没有测试环境选项。安装菜单只选择 Nexus、Workbench 或两者；包由 GitHub Actions 原生编译并发布到 Releases，用户电脑不编译源码。
 
-支持 Linux x64、Windows x64、macOS Apple Silicon 与 Intel。以下入口随新版四平台 Release 发布后可用：
+支持 Linux x64、Windows x64、macOS Apple Silicon 与 Intel。以下入口可直接安装最新正式版本：
 
 ```bash
 curl -fsSL https://github.com/pengchengluoyi/MinoNexus/releases/latest/download/install.sh | bash
