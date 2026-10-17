@@ -50,7 +50,7 @@ def stage_release(d: Deployment, manifest: dict, package: Path) -> Path:
         raise ValueError("Package size/SHA256 mismatch")
     dest = d.release(build)
     if dest.exists():
-        saved = read_json(dest / "hi3d-release.json")
+        saved = read_json(dest / "mino-release.json")
         if saved.get("package_sha256") != item["sha256"]:
             raise ValueError("Immutable build already exists with different bytes")
         return dest
@@ -90,7 +90,7 @@ def stage_release(d: Deployment, manifest: dict, package: Path) -> Path:
         raise ValueError("Package build metadata mismatch")
     if (metadata.get("os"), metadata.get("arch")) != host_platform():
         raise ValueError("Package platform mismatch")
-    atomic_json(temp / "hi3d-release.json", {**manifest, "package_sha256": item["sha256"]})
+    atomic_json(temp / "mino-release.json", {**manifest, "package_sha256": item["sha256"]})
     # Not replace: an existing immutable build must never be overwritten.
     os.rename(temp, dest)
     return dest

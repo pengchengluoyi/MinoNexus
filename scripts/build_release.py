@@ -41,7 +41,7 @@ def build(args):
     if component == "nexus":
         shutil.copytree(ROOT / "mino_nexus", source / "mino_nexus", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         (source / "mino_nexus/BUILD.json").write_text(json.dumps(identity))
-        entry = work / "hi3d-entry.py"
+        entry = work / "mino-entry.py"
         entry.write_text("from mino_nexus.cli import main\nraise SystemExit(main())\n")
         extra = ["--paths", str(source), "--collect-submodules", "mino_nexus",
                  "--add-data", str(source / "mino_nexus") + os.pathsep + "mino_nexus",
@@ -70,7 +70,7 @@ def build(args):
         command([str(executable), "migrate", "--data-dir", str(work / "package-probe-data")], env=env)
     else:
         command([str(executable), "--identity"], env=env)
-    archive = out / ("hi3d-Mino" + component.capitalize() + "-" + build_id + "-" + osn + "-" + arch + ".zip")
+    archive = out / ("Mino" + component.capitalize() + "-" + build_id + "-" + osn + "-" + arch + ".zip")
     with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED) as z:
         z.writestr("release.json", json.dumps(identity))
         for folder, prefix in ((executable.parent, "app"), (work / "dist/mino-maintain", "launcher")):

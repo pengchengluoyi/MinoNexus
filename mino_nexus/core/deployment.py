@@ -45,8 +45,14 @@ def atomic_json(path: Path, value: dict) -> None:
             os.unlink(tmp)
 
 
+
+def legacy_path(path):
+    """Keep pre-branding installation records usable without rewriting user data."""
+    old = path.with_name(path.name.replace("mino-", "hi3d-", 1))
+    return old if not path.exists() and old.exists() else path
+
 def read_json(path: Path) -> dict:
-    value = json.loads(path.read_text())
+    value = json.loads(legacy_path(path).read_text())
     if not isinstance(value, dict):
         raise ValueError(f"Expected object: {path.name}")
     return value
@@ -67,8 +73,8 @@ def identity() -> dict:
 class Deployment:
     def __init__(self, root: Path):
         self.root = root.expanduser().resolve()
-        self.config_path = self.root / "config/hi3d-deployment.json"
-        self.state_path = self.root / "updates/hi3d-state.json"
+        self.config_path = legacy_path(self.root / "config/mino-deployment.json")
+        self.state_path = legacy_path(self.root / "updates/mino-state.json")
 
     @property
     def config(self) -> dict:
@@ -94,7 +100,7 @@ class Deployment:
     def save(self, row: dict, **fields) -> dict:
         row = {**row, **fields, "updated_at": time.time()}
         atomic_json(self.state_path, row)
-        atomic_json(self.root / "updates" / ("hi3d-" + identifier(row["operation_id"]) + ".json"), row)
+        atomic_json(self.root / "updates" / ("mino-" + identifier(row["operation_id"]) + ".json"), row)
         return row
 
     def operation(self, operation_id: str) -> dict:
@@ -102,7 +108,7 @@ class Deployment:
         current = self.state()
         if current.get("operation_id") == operation_id:
             return current
-        return read_json(self.root / "updates" / ("hi3d-" + identifier(operation_id) + ".json"))
+        return read_json(self.root / "updates" / ("mino-" + identifier(operation_id) + ".json"))
 
     def release(self, build: str) -> Path:
         p = self.root / "releases" / identifier(build)

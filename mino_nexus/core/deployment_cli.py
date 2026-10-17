@@ -1,5 +1,6 @@
 """Local installation/maintenance entry point; no ORM imports before explicit data root."""
 from __future__ import annotations
+from mino_nexus.core.deployment import legacy_path
 import argparse
 import json
 import os
@@ -67,8 +68,8 @@ def install(root: Path, manifest_path: Path, package: Path, data: str, port: int
         raise ValueError("Previous installation attempt exists; preserve and inspect it")
     shutil.copytree(release / "launcher", launcher)
     label = "local.mino.nexus." + uuid.uuid4().hex[:12]
-    service = d.root / "config/hi3d-nexus.plist"
-    helper = d.root / "config/hi3d-update-helper.plist"
+    service = d.root / "config/mino-nexus.plist"
+    helper = d.root / "config/mino-update-helper.plist"
     cfg = {"version": 1, "environment": environment, "instance_id": "", "data_dir": str(data_path),
         "host": host, "port": port, "probe_url": f"http://127.0.0.1:{port}",
         "release_repository": repo, "service_manager": "launchd", "service_label": label,
@@ -89,7 +90,7 @@ def install(root: Path, manifest_path: Path, package: Path, data: str, port: int
 def provision(d: Deployment):
     """Use the current native application to provision; never the helper's ORM."""
     from mino_nexus.core.update_engine import release_command, release_env
-    target = d.root / "config/hi3d-probe.token"
+    target = legacy_path(d.root / "config/mino-probe.token")
     if target.exists():
         raise ValueError("Probe already provisioned; refuse to overwrite")
     build = d.current_build()
@@ -135,7 +136,7 @@ def run_server(d: Deployment):
         import logging
         from logging.handlers import RotatingFileHandler
         logdir = d.root / "logs"; logdir.mkdir(exist_ok=True)
-        handler = RotatingFileHandler(logdir / "hi3d-nexus.log", maxBytes=5*1024*1024, backupCount=5)
+        handler = RotatingFileHandler(logdir / "mino-nexus.log", maxBytes=5*1024*1024, backupCount=5)
         from mino_nexus.core.log import logger, LogFormatter
         handler.setFormatter(LogFormatter())
         logger.addHandler(handler)
@@ -150,7 +151,7 @@ def kick(d: Deployment):
 
 
 def register(d: Deployment):
-    if not (d.root / "config/hi3d-probe.token").is_file():
+    if not (legacy_path(d.root / "config/mino-probe.token")).is_file():
         raise ValueError("Provision probe before registering services")
     for key, label in (("helper_plist", "helper_label"), ("service_plist", "service_label")):
         target = f"gui/{os.getuid()}/{d.config[label]}"

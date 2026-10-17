@@ -1,3 +1,17 @@
+## 一键安装（macOS Apple Silicon）
+
+安装包由本仓库 GitHub Actions 编译，在 [Releases](https://github.com/pengchengluoyi/MinoNexus/releases) 下载；不是用户本机编译。首次安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pengchengluoyi/MinoNexus/main/packaging/bootstrap.sh | bash -s -- --environment test
+```
+
+正式环境将 `test` 改为 `production`。默认目录为 `~/Mino/<环境>/nexus`，需要系统 `curl`、`unzip` 和 `python3`，不需要 GitHub CLI 或克隆源码。已有目录或端口占用时停止，不覆盖数据、不自动换端口。使用 `--version 0.1.37` 固定版本，`--download-only` 只下载校验，`--package-dir /绝对路径` 使用包含 manifest.json 与 ZIP 的离线下载目录。
+
+测试地址为 `http://127.0.0.1:50101`，正式地址为 `http://127.0.0.1:50104`。Workbench 默认连接本机同环境 Nexus，可用 `--nexus-url` 指定另一台电脑的 Nexus。本机安装默认只监听回环地址。
+
+仅已发布且带新格式 manifest.json 的 Release 可一键安装；CI 构建成功但尚未发布时，脚本会报发布物缺失，不能当成安装成功。
+
 # MinoNexus
 
 **服务端。** 与大模型交互、持有能力目录与数据、驱动执行循环、向 UI 供数。

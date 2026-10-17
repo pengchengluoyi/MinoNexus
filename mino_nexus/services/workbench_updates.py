@@ -57,7 +57,8 @@ class WorkbenchInstallation:
             raise WorkbenchUpdateError("Workbench 独立维护入口不可执行")
 
     def file(self, relative: str) -> Path:
-        path = self.root / relative
+        from mino_nexus.core.deployment import legacy_path
+        path = legacy_path(self.root / relative)
         if path.resolve(strict=True) != path or not path.is_file() or path.stat().st_nlink != 1:
             raise WorkbenchUpdateError("Workbench 文件必须位于登记目录内且不是链接")
         return path
@@ -81,7 +82,7 @@ class WorkbenchInstallation:
                 "scope": "local-installation", "live_health_verified": False}
 
     def operation(self, operation_id: str) -> dict:
-        row = self.read(f"updates/hi3d-{identifier(operation_id)}.json")
+        row = self.read(f"updates/mino-{identifier(operation_id)}.json")
         if row.get("operation") != operation_id:
             raise WorkbenchUpdateError("持久操作身份不一致")
         return row
@@ -100,10 +101,10 @@ class WorkbenchInstallation:
 
     def prepared(self, build_id: str, package: bool = False) -> tuple[Path, Path | None]:
         base = f"updates/prepared/{identifier(build_id)}"
-        manifest = self.file(f"{base}/hi3d-manifest.json")
-        if self.read(f"{base}/hi3d-manifest.json").get("build_id") != build_id:
+        manifest = self.file(f"{base}/mino-manifest.json")
+        if self.read(f"{base}/mino-manifest.json").get("build_id") != build_id:
             raise WorkbenchUpdateError("暂存清单与指定 build_id 不匹配")
-        return manifest, self.file(f"{base}/hi3d-package.zip") if package else None
+        return manifest, self.file(f"{base}/mino-package.zip") if package else None
 
     def _invoke(self, command: str, arguments: list[str], operation_id: str = "", expected_build: str = "") -> dict:
         def receipt(row):

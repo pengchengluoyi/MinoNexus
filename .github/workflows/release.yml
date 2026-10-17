@@ -18,18 +18,26 @@ jobs:
       - name: Validate source version
         if: startsWith(github.ref, 'refs/tags/')
         run: python -c "import os; assert os.environ['GITHUB_REF_NAME'] == 'v' + __import__('pathlib').Path('mino_nexus/VERSION').read_text().strip()"
+      - name: Validate repository installer
+        run: |
+          bash -n packaging/bootstrap.sh
+          bash packaging/bootstrap.sh --help
       - run: python scripts/build_release.py --output dist
       - name: Create install manifest for the exact build
         run: |
           VERSION=$(python -c "from pathlib import Path; import json; print(Path('mino_nexus/VERSION').read_text().strip() if Path('mino_nexus').is_dir() else json.loads(Path('package.json').read_text())['version'])")
           python scripts/write_manifest.py --dist dist --prefix "https://github.com/${{ github.repository }}/releases/download/v$VERSION"
+      - name: Validate installer against the actual native package
+        run: bash packaging/bootstrap.sh --environment test --package-dir "$PWD/dist" --download-only
+      - run: cp packaging/bootstrap.sh dist/bootstrap.sh
       - uses: actions/upload-artifact@v5
         with:
           name: native-package
           path: |
-            dist/hi3d-*.zip
+            dist/Mino*.zip
             dist/item-*.json
             dist/manifest.json
+            dist/bootstrap.sh
           if-no-files-found: error
   publish:
     if: startsWith(github.ref, 'refs/tags/')
@@ -53,7 +61,8 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           files: |
-            dist/hi3d-*.zip
+            dist/Mino*.zip
             dist/manifest.json
+            dist/bootstrap.sh
           fail_on_unmatched_files: true
           generate_release_notes: true

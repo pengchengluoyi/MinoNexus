@@ -4,6 +4,7 @@ A crash in an effectful phase stops in needs_operator unless the persisted facts
 prove a safe continuation. No process kill escalation or post-start DB rollback.
 """
 from __future__ import annotations
+from mino_nexus.core.deployment import legacy_path
 import json
 import os
 import re
@@ -103,7 +104,7 @@ def compatibility(d: Deployment, old: str, new: str) -> dict:
         raise ValueError("Compatibility record needs actual rehearsal evidence")
     # Bind approval to exact immutable package bytes, not mutable build names.
     for build, key in ((old, "from_sha256"), (new, "to_sha256")):
-        if record.get(key) != read_json(d.release(build) / "hi3d-release.json")["package_sha256"]:
+        if record.get(key) != read_json(d.release(build) / "mino-release.json")["package_sha256"]:
             raise ValueError("Compatibility evidence package mismatch")
     return record
 
@@ -115,8 +116,8 @@ def request(d: Deployment, operation_id: str, build: str, *, wait_seconds=1800, 
     if not 1 <= wait_seconds <= 1800:
         raise ValueError("wait_seconds must be 1..1800")
     with d.lock():
-        history = d.root / "updates" / ("hi3d-" + operation_id + ".json")
-        if history.exists():
+        history = d.root / "updates" / ("mino-" + operation_id + ".json")
+        if legacy_path(history).exists():
             old = read_json(history)
             if (old["target_build"], old["rollback"], old["wait_seconds"]) != (build, rollback, wait_seconds):
                 raise ValueError("operation_id already belongs to different parameters")
@@ -162,7 +163,7 @@ def backup(d: Deployment, row: dict) -> Path:
         result = db.execute("PRAGMA quick_check").fetchall()
         if result != [("ok",)]:
             raise ValueError("Backup SQLite integrity check failed")
-    atomic_json(target / "hi3d-backup.json", {"operation_id": row["operation_id"], "complete": True,
+    atomic_json(target / "mino-backup.json", {"operation_id": row["operation_id"], "complete": True,
                                                "source": str(source), "created_at": time.time()})
     return target
 
@@ -171,7 +172,7 @@ def restore_prestart(d: Deployment, row: dict) -> None:
     if row["writes_reopened"]:
         raise RuntimeError("Data restore forbidden after normal startup")
     source = Path(row["backup"])
-    if not read_json(source / "hi3d-backup.json").get("complete"):
+    if not read_json(source / "mino-backup.json").get("complete"):
         raise RuntimeError("No complete backup")
     data = Path(d.config["data_dir"])
     retained = data.with_name(data.name + ".failed-" + row["operation_id"])
@@ -185,7 +186,7 @@ def restore_prestart(d: Deployment, row: dict) -> None:
 
 def health_probe(d: Deployment, build: str) -> None:
     cfg = d.config
-    token = (d.root / "config/hi3d-probe.token").read_text().strip()
+    token = (legacy_path(d.root / "config/mino-probe.token")).read_text().strip()
     base = cfg["probe_url"].rstrip("/")
     # Never send a deployment token to redirects or proxy-discovered targets.
     class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -282,7 +283,7 @@ def execute(d: Deployment) -> dict:
             snapshot = backup(d, row)
             row = d.save(row, backup=str(snapshot), phase="migrating")
             build = row["target_build"]
-            log_path = d.root / "updates" / ("hi3d-" + row["operation_id"] + "-migration.log")
+            log_path = d.root / "updates" / ("mino-" + row["operation_id"] + "-migration.log")
             exited.__exit__(None, None, None); exited = None
             with log_path.open("ab") as log:
                 result = subprocess.run(release_command(d, build, "maintenance", "migrate", "--data-dir", d.config["data_dir"], "--root", str(d.root)),
