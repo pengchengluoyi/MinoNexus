@@ -8,7 +8,7 @@ MinoNexus 是 [MiniOrangeServer](../MiniOrangeServer) 拆分出的「大脑」�
 
 | 是 | 不是 |
 |---|---|
-| UI 唯一对话对象（HTTP `:10104` + WS 推送） | **不碰设备** —— 没有 adb / WDA / Playwright / ClawNode 连接 |
+| UI 唯一对话对象（HTTP `:50104` + WS 推送） | **不碰设备** —— 没有 adb / WDA / Playwright / ClawNode 连接 |
 | 与大模型交互的唯一一侧：决策、定位、断言 | 不做设备驱动 —— 那是 Scout 的事 |
 | 能力目录（`catalog_entries`）唯一真源 | 不实现能力 —— 只声明"能做什么、用什么实现" |
 | 执行循环（observe → decide → dispatch）的持有者 | 不含图像算法 —— CLIP / OCR / 组件检测在拆分中已废弃 |
@@ -20,12 +20,12 @@ MinoNexus 是 [MiniOrangeServer](../MiniOrangeServer) 拆分出的「大脑」�
 
 ```bash
 uv sync                  # 或 pip install -e .
-mino-nexus               # :10104，并注册 mino.local
+mino-nexus               # :50104，并注册 mino.local
 ```
 
 文档库上传 PDF 依赖 `pypdf`（已写在 `pyproject.toml`）。若报「PDF 解析需要 pypdf」，在当前 Python 环境重新执行 `pip install -e .` 后重启 Nexus。
 
-Console / Studio / Scout 打 `http://mino.local:10104`（Nexus 启动后 mDNS 注册）。首次启动写入本地账号 `admin` / `Mino@local`（可用 `MINO_BOOTSTRAP_PASSWORD` 覆盖）。契约见 [docs/HTTP.md](docs/基础框架/HTTP.md)。
+Console / Studio / Scout 打 `http://mino.local:50104`（Nexus 启动后 mDNS 注册）。首次启动写入本地账号 `admin` / `Mino@local`（可用 `MINO_BOOTSTRAP_PASSWORD` 覆盖）。契约见 [docs/HTTP.md](docs/基础框架/HTTP.md)。
 
 Scout 安装包不在本仓：`GET /releases/scout/latest` 只在设置了 `MINO_SCOUT_MANIFEST_URL` 时代理 GitHub 的 `manifest.json`，数据目录里不要放 zip。凭证仍走 `POST /runtime/nodes/install-token`。
 
@@ -35,13 +35,13 @@ Nexus 必须能在**没有任何 Scout 节点**的情况下正常启动 —— U
 
 ```bash
 mino-nexus                                                    # 终端 1
-mino-scout --nexus ws://mino.local:10104/node --token <tok>     # 终端 2
+mino-scout --nexus ws://mino.local:50104/node --token <tok>     # 终端 2
 ```
 
 ## 架构一句话
 
 ```
-Electron UI ──HTTP :10104──► MinoNexus ──WS /node──◄ MinoScout ──► 设备
+Electron UI ──HTTP :50104──► MinoNexus ──WS /node──◄ MinoScout ──► 设备
                              循环 / LLM /             (Scout 主动连)
                              能力目录 / DB
 ```
@@ -69,3 +69,13 @@ Electron UI ──HTTP :10104──► MinoNexus ──WS /node──◄ MinoSco
 ## 守门
 
 硬约束见 [CLAUDE.md](CLAUDE.md) §1：不碰设备、不含图像算法、不 import Scout、协议 fixture 两仓一致。
+
+## 测试与正式环境
+
+| 组件 | 测试 | 正式 |
+|---|---|---|
+| Nexus | 50101 | 50104 |
+| Workbench | 60101 | 60104 |
+| Scout | 主动连接测试 Nexus 的 50101 | 主动连接正式 Nexus 的 50104 |
+
+Scout 不分配独立业务监听端口。测试与正式使用独立的数据目录、凭据和节点身份。已安装实例的配置不会因更新默认值而自动迁移。

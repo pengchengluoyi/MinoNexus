@@ -19,7 +19,7 @@ def normalize_base(value: str) -> str:
         address = ipaddress.ip_address(parsed.hostname or '')
         port = parsed.port
     except ValueError as exc:
-        raise ValueError('请填写 Workbench 的内网 IP 地址，例如 http://192.168.1.20:5273') from exc
+        raise ValueError('请填写 Workbench 的内网 IP 地址，例如 http://192.168.1.20:60104') from exc
     if parsed.scheme not in ('http', 'https') or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError('报告地址须为 HTTP/HTTPS 的 Workbench 入口，不能包含账号、查询参数或片段')
     if address.is_loopback or address.is_unspecified or address.is_multicast or address.is_link_local or not address.is_private:
@@ -42,7 +42,7 @@ def _lan_base() -> str:
         candidates.extend(socket.gethostbyname_ex(socket.gethostname())[2])
     except OSError:
         pass
-    port = os.environ.get('MINO_WORKBENCH_PORT', '5273')
+    port = os.environ.get('MINO_WORKBENCH_PORT', '60104')
     for address in dict.fromkeys(candidates):
         try:
             return normalize_base(f'http://{address}:{port}')

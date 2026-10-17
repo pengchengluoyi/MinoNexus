@@ -45,7 +45,7 @@ def _plist(path: Path, doc: dict):
         plistlib.dump(doc, f)
 
 
-def install(root: Path, manifest_path: Path, package: Path, data: str, port: int, host: str, repo: str) -> dict:
+def install(root: Path, manifest_path: Path, package: Path, data: str, port: int, host: str, repo: str, environment: str = "production") -> dict:
     if sys.platform != "darwin":
         raise ValueError("Initial installation currently supports macOS only")
     d = Deployment(root)
@@ -69,7 +69,7 @@ def install(root: Path, manifest_path: Path, package: Path, data: str, port: int
     label = "local.mino.nexus." + uuid.uuid4().hex[:12]
     service = d.root / "config/hi3d-nexus.plist"
     helper = d.root / "config/hi3d-update-helper.plist"
-    cfg = {"version": 1, "instance_id": "", "data_dir": str(data_path),
+    cfg = {"version": 1, "environment": environment, "instance_id": "", "data_dir": str(data_path),
         "host": host, "port": port, "probe_url": f"http://127.0.0.1:{port}",
         "release_repository": repo, "service_manager": "launchd", "service_label": label,
         "helper_label": label + ".updater", "service_plist": str(service), "helper_plist": str(helper)}
@@ -217,7 +217,8 @@ def main(argv=None):
         if name in {"install", "stage"}:
             p.add_argument("--manifest", type=Path, required=True); p.add_argument("--package", type=Path, required=True)
         if name == "install":
-            p.add_argument("--data-dir", required=True); p.add_argument("--port", type=int, default=10104)
+            p.add_argument("--data-dir", required=True); p.add_argument("--port", type=int)
+            p.add_argument("--environment", choices=["test", "production"], default="production")
             p.add_argument("--host", default="0.0.0.0"); p.add_argument("--repository", default="pengchengluoyi/MinoNexus")
         if name in {"request", "status", "cancel"}:
             p.add_argument("--operation-id", required=name != "status", default="")
@@ -244,7 +245,7 @@ def main(argv=None):
             d = Deployment(args.root)
             from mino_nexus.core import update_engine as engine
             if args.command == "install":
-                result = install(args.root, args.manifest, args.package, args.data_dir, args.port, args.host, args.repository)
+                result = install(args.root, args.manifest, args.package, args.data_dir, args.port if args.port is not None else (50101 if args.environment == "test" else 50104), args.host, args.repository, args.environment)
             elif args.command == "stage":
                 with d.lock():
                     result = {"release": str(stage_release(d, read_json(args.manifest), args.package))}

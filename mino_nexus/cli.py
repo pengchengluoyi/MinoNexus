@@ -1,7 +1,7 @@
 """mino-nexus 命令行。
 
-    mino-nexus                      监听 :10104，并注册 mino.local
-    mino-nexus --port 10104 --host 0.0.0.0
+    mino-nexus                      监听 :50104，并注册 mino.local
+    mino-nexus --port 50104 --host 0.0.0.0
 
 **无 Scout 也必须能起**（ARCHITECTURE.md §6）—— 设备相关接口会明确报"无可用执行节点"，
 而不是整个后端起不来。
@@ -339,11 +339,13 @@ def main(argv: list[str] | None = None) -> int:
 
     ap = argparse.ArgumentParser(prog="mino-nexus", description="MinoNexus 服务端")
     ap.add_argument("--host", default="0.0.0.0", help="监听地址；局域网要 0.0.0.0 才能解析 mino.local")
-    ap.add_argument("--port", type=int, default=10104, help="UI 仍打这个端口，与上游一致")
+    ap.add_argument("--port", type=int, default=None, help="测试 50101，正式 50104")
     ap.add_argument("--data-dir", help="Set data root before loading the application")
     ap.add_argument("--dev", action="store_true", help="Require an isolated explicit data root")
     ap.add_argument("--no-mdns", action="store_true", help="Disable mDNS advertisement")
     args = ap.parse_args(argv)
+    if args.port is None:
+        args.port = 50101 if args.dev else 50104
 
     import os
     raw_dir = args.data_dir or os.environ.get("MINO_NEXUS_DATA_DIR", "")

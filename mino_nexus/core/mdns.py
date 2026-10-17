@@ -1,7 +1,7 @@
 """内网域名：Nexus 启动后用 mDNS 注册 `mino.local`。
 
-没有公网域名时，Console / Studio / Scout 都连 `http://mino.local:10104`
-（Scout 的 WS 是 `ws://mino.local:10104/node`）。客户端不填、不发现 IP。
+没有公网域名时，Workbench / Scout 都连 `http://mino.local:50104`
+（Scout 的 WS 是 `ws://mino.local:50104/node`）。客户端不填、不发现 IP。
 
 A 记录仍要带本机地址（mDNS 协议如此），但 HTTP / WS 对外只报主机名。
 测试里设 `MINO_NEXUS_MDNS=0` 跳过广播。
@@ -19,7 +19,7 @@ TAG = "MDNS"
 
 LAN_HOST = "mino.local"
 SERVICE_TYPE = "_mino-nexus._tcp.local."
-DEFAULT_PORT = 10104
+DEFAULT_PORT = 50104
 
 _bind_host = "0.0.0.0"
 _bind_port = DEFAULT_PORT

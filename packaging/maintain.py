@@ -158,7 +158,7 @@ def main():
     p.add_argument("--data-dir", type=Path)
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, required=True)
-    p.add_argument("--nexus-url", default="http://mino.local:10104")
+    p.add_argument("--nexus-url", default="http://mino.local:50104")
     p.add_argument("--label")
     p.add_argument("--mdns", action="store_true")
     for name in ("register", "start", "stop", "status", "run"):

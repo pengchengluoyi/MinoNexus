@@ -27,7 +27,7 @@ def sys_server_info():
 
 @router.get("/sys/runtime")
 def sys_runtime(request: Request):
-    port = request.url.port or 10104
+    port = request.url.port or 50104
     host = request.url.hostname or LAN_HOST
     urls = public_urls(port)
     nodes = get_registry().nodes()
