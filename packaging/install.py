@@ -113,12 +113,17 @@ def extract_helper(folder,package):
             path.chmod((row.external_attr>>16)&0o777 or 0o644)
     return exe(target/'launcher/mino-maintain')
 
-def install(component,root,prepared,nexus_url):
+def install(component,root,prepared,nexus_url,commands=None):
     folder,package,item=prepared
     port=50104 if component=='nexus' else 60104
     root.parent.mkdir(parents=True,exist_ok=True);root=root.parent.resolve()/root.name
     helper=extract_helper(folder,package)
     if root.exists():
+        if component=='workbench' and commands is not None:
+            entry=command_entry.command_file(commands,component)
+            if entry.exists() and not (root/'config/command.json').exists():
+                command_entry.check_upgrade(commands,component,root)
+                command_entry.remember(root,entry,entry.read_text(encoding='utf-8'))
         prefix=['d2'] if component=='nexus' else []
         run([helper,*prefix,'installer-upgrade','--root',root,'--manifest',folder/'manifest.json','--package',package])
         print(f'Upgraded {component}: {root}',flush=True)
@@ -197,7 +202,7 @@ def main():
         return 0
     nexus_url=args.nexus_url or 'http://127.0.0.1:50104'
     for c in components:
-        install(c,roots[c],packages[c],nexus_url)
+        install(c,roots[c],packages[c],nexus_url,commands)
         entry=command_entry.command_file(commands,c)
         if not entry.exists(): entry=command_entry.register(commands,c,roots[c].resolve())
         actions = 'start|stop|status|open' if c == 'workbench' else 'start|stop|status'
