@@ -50,7 +50,7 @@ jobs:
           python - <<'PYCODE'
           import os, pathlib, subprocess
           installer = next(p for p in pathlib.Path('dist').glob('MinoInstaller-*') if p.is_file())
-          subprocess.run([str(installer.resolve()), '--components', 'nexus', '--package-dir', str(pathlib.Path('dist').resolve()), '--root', str(pathlib.Path(os.environ['RUNNER_TEMP'])/'mino-install'/'nexus')], check=True)
+          subprocess.run([str(installer.resolve()), '--components', 'nexus', '--package-dir', str(pathlib.Path('dist').resolve()), '--root', str(pathlib.Path(os.environ['RUNNER_TEMP'])/'mino-install'/'nexus'), '--command-dir', str(pathlib.Path(os.environ['RUNNER_TEMP'])/'mino-commands'), '--no-path'], check=True)
           PYCODE
       - name: Verify packaged Workbench WebSocket entry
         run: |
@@ -74,9 +74,12 @@ jobs:
           import json, os, pathlib, subprocess, time, urllib.request
           root = pathlib.Path(os.environ['RUNNER_TEMP'])/'mino-install'/'nexus'
           helper = root/'launcher'/('mino-maintain.exe' if os.name == 'nt' else 'mino-maintain')
-          command = [str(helper)] + ['d2']
+          entry = pathlib.Path(os.environ['RUNNER_TEMP'])/'mino-commands'/('mino-nexus'+('.cmd' if os.name=='nt' else ''))
+          command = ['cmd', '/c', str(entry)] if os.name=='nt' else [str(entry)]
           for action in ('stop','start'):
-              subprocess.run(command + [action, '--root', str(root)], check=True)
+              subprocess.run(command + [action], check=True)
+              status = json.loads(subprocess.check_output(command + ['status'], text=True))
+              assert status['running'] == (action == 'start'), status
           opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
           for attempt in range(60):
               try:
@@ -86,7 +89,7 @@ jobs:
               except OSError:
                   if attempt == 59: raise
                   time.sleep(1)
-          subprocess.run(command + ['stop', '--root', str(root)], check=True)
+          subprocess.run(command + ['stop'], check=True)
           PYCODE
       - uses: actions/upload-artifact@v5
         with:

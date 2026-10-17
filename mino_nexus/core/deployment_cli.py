@@ -4,6 +4,7 @@ from mino_nexus.core.deployment import legacy_path
 from mino_nexus.core import platform_runtime
 import argparse
 import json
+import re
 import os
 from pathlib import Path
 import plistlib
@@ -269,7 +270,7 @@ def main(argv=None):
                 if d.config["service_manager"] == "user-process": result = {"running": platform_runtime.running(d.root)}
                 else:
                     probe = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/" + d.config['service_label']], capture_output=True)
-                    result = {"registered": probe.returncode == 0}
+                    result = {"registered": probe.returncode == 0, "running": probe.returncode == 0 and bool(re.search(rb"^\s*pid = \d+", probe.stdout, re.MULTILINE))}
             elif args.command == "stage":
                 with d.lock():
                     result = {"release": str(stage_release(d, read_json(args.manifest), args.package))}

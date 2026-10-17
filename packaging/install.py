@@ -16,6 +16,7 @@ import time
 import urllib.request
 import zipfile
 import certifi
+import command_entry
 
 REPOS = {'nexus':'pengchengluoyi/MinoNexus', 'workbench':'pengchengluoyi/MinoWorkbench'}
 PLATFORMS = {('darwin','arm64'), ('darwin','x64'), ('linux','x64'), ('win32','x64')}
@@ -152,6 +153,8 @@ def main():
     ap.add_argument('--nexus-url')
     ap.add_argument('--package-dir',type=Path,help='Offline manifest/ZIP directory; both uses nexus/ and workbench/ subdirectories')
     ap.add_argument('--download-only',action='store_true')
+    ap.add_argument('--command-dir',type=Path,help='Directory for installed service commands')
+    ap.add_argument('--no-path',action='store_true',help='Register commands without changing user PATH settings')
     args=ap.parse_args()
     osn=sys.platform;arch={'arm64':'arm64','aarch64':'arm64','amd64':'x64','x86_64':'x64'}.get(platform.machine().lower(),'unsupported')
     if (osn,arch) not in PLATFORMS:ap.error(f'Unsupported platform: {osn}-{arch}')
@@ -167,6 +170,8 @@ def main():
             with socket.socket() as listener:
                 try:listener.bind(('127.0.0.1',port))
                 except OSError:ap.error(f'Port {port} is occupied; existing service will not be stopped or moved')
+    commands=(args.command_dir or command_entry.command_dir()).expanduser().absolute()
+    if not args.download_only: command_entry.check(commands,components)
     # Prepare ALL requested packages before changing an installation.
     packages={}
     for c in components:
@@ -177,7 +182,11 @@ def main():
         for c,(folder,_,_) in packages.items():print(f'{c} download: {folder}')
         return 0
     nexus_url=args.nexus_url or 'http://127.0.0.1:50104'
-    for c in components:install(c,roots[c],packages[c],nexus_url)
+    for c in components:
+        install(c,roots[c],packages[c],nexus_url)
+        entry=command_entry.register(commands,c,roots[c].resolve())
+        print(f'Service command: {entry} [start|stop|status]')
+    if not args.no_path: command_entry.add_path(commands)
     print('Production installation complete.')
     return 0
 
