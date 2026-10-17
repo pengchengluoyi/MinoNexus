@@ -48,4 +48,4 @@ GitHub Actions 在 main 上构建并上传 native-package 产物和 manifest；�
 
 ## 固定环境端口
 
-Nexus 测试 50101、正式 50104；Workbench 测试 60101、正式 60104。测试安装使用 `--environment test`，正式默认 `production`；Nexus 源码 `--dev` 默认 50101。Vite 开发服务器使用 60101 并禁止端口占用时自动换号。Scout 主动连接对应 Nexus，不分配独立业务监听端口。既有配置不自动重写，迁移须检查现有进程与数据根。
+Nexus 测试 50101、正式 50104；Workbench 测试 60101、正式 60104。GitHub Release、安装脚本与安装菜单仅提供正式环境，不提供环境切换。测试环境只从源码／PyCharm 启动；Nexus 源码 `--dev` 默认 50101。Vite 开发服务器使用 60101 并禁止端口占用时自动换号。Scout 主动连接对应 Nexus，不分配独立业务监听端口。既有配置不自动重写，迁移须检查现有进程与数据根。

@@ -68,6 +68,26 @@ jobs:
                   raise AssertionError('Unauthenticated WebSocket must be rejected')
           asyncio.run(verify())
           PYCODE
+      - name: Verify native stop and restart
+        run: |
+          python - <<'PYCODE'
+          import json, os, pathlib, subprocess, time, urllib.request
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])/'mino-install'/'nexus'
+          helper = root/'launcher'/('mino-maintain.exe' if os.name == 'nt' else 'mino-maintain')
+          command = [str(helper)] + ['d2']
+          for action in ('stop','start'):
+              subprocess.run(command + [action, '--root', str(root)], check=True)
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          for attempt in range(60):
+              try:
+                  with opener.open('http://127.0.0.1:50104/sys/server_info', timeout=2) as response: result = json.load(response)
+                  assert result.get('data',result)['build_id'] == json.loads(pathlib.Path('dist/manifest.json').read_text())['build_id']
+                  break
+              except OSError:
+                  if attempt == 59: raise
+                  time.sleep(1)
+          subprocess.run(command + ['stop', '--root', str(root)], check=True)
+          PYCODE
       - uses: actions/upload-artifact@v5
         with:
           name: native-package-${{ matrix.platform }}
