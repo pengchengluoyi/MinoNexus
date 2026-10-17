@@ -339,9 +339,11 @@ def main(argv: list[str] | None = None) -> int:
 
     ap = argparse.ArgumentParser(prog="mino-nexus", description="MinoNexus 服务端")
     ap.add_argument("--host", default="0.0.0.0", help="监听地址；局域网要 0.0.0.0 才能解析 mino.local")
-    ap.add_argument("--port", type=int, default=None, help="测试 50101，正式 50104")
+    ap.add_argument("--port", type=int, default=None, help="监听端口（正式默认 50104）")
     ap.add_argument("--data-dir", help="Set data root before loading the application")
-    ap.add_argument("--dev", action="store_true", help="Require an isolated explicit data root")
+    ap.set_defaults(dev=False)
+    if not getattr(sys, "frozen", False):
+        ap.add_argument("--dev", action="store_true", help="Source/PyCharm development on port 50101; requires an isolated data root")
     ap.add_argument("--no-mdns", action="store_true", help="Disable mDNS advertisement")
     args = ap.parse_args(argv)
     if args.port is None:
