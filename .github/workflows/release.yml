@@ -58,9 +58,13 @@ jobs:
           import asyncio
           from websockets.asyncio.client import connect
           from websockets.exceptions import ConnectionClosedError
+          import socket
+          with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+              probe.connect(('8.8.8.8', 80))
+              lan = probe.getsockname()[0]
           async def verify():
               try:
-                  async with connect('ws://127.0.0.1:50104/ws', origin='http://127.0.0.1:60104') as ws:
+                  async with connect(f'ws://{lan}:50104/ws', origin=f'http://{lan}:60104', proxy=None) as ws:
                       await ws.recv()
               except ConnectionClosedError as exc:
                   assert exc.rcvd.code == 1008 and exc.rcvd.reason == '请先登录', str(exc)
