@@ -83,6 +83,30 @@ jobs:
           request = urllib.request.Request('http://127.0.0.1:50104/auth/login', data=json.dumps({'email':before['email'],'password':before['password']}).encode(), headers={'Content-Type':'application/json','X-Mino-Client':'workbench'})
           with opener.open(request) as response: assert json.load(response)['ok']
           PYCODE
+      - name: Verify Windows shared locks and concurrent native health
+        if: runner.os == 'Windows'
+        run: |
+          python - <<'PYCODE'
+          import concurrent.futures, os, pathlib, subprocess, sys, urllib.request
+          from mino_nexus.core.platform_runtime import file_lock
+          from mino_nexus.core.deployment import Deployment
+          from mino_nexus.core.update_engine import health_probe
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])/'mino-install/nexus'
+          path = pathlib.Path(os.environ['RUNNER_TEMP'])/'native-shared-lock'
+          shared = "from pathlib import Path; from mino_nexus.core.platform_runtime import file_lock; import sys\nwith file_lock(Path(sys.argv[1]), shared=True, blocking=False): print('shared acquired')"
+          exclusive = "from pathlib import Path; from mino_nexus.core.platform_runtime import file_lock; import sys\ntry:\n with file_lock(Path(sys.argv[1]), blocking=False): pass\nexcept BlockingIOError: sys.exit(0)\nsys.exit(1)"
+          with file_lock(path, shared=True):
+              subprocess.run([sys.executable,'-c',shared,str(path)],check=True,timeout=15)
+              subprocess.run([sys.executable,'-c',exclusive,str(path)],check=True,timeout=15)
+          with file_lock(path, blocking=False): pass
+          deployment = Deployment(root)
+          # Native HTTP middleware must share this lease with other writers.
+          with deployment.lock('writers', shared=True):
+              with concurrent.futures.ThreadPoolExecutor(max_workers=8) as workers:
+                  futures = [workers.submit(health_probe,deployment,deployment.current_build()) for _ in range(8)]
+                  for future in futures: future.result(timeout=30)
+          print('Native Windows shared/exclusive exclusion and concurrent HTTP/MCP probes passed')
+          PYCODE
       - name: Verify packaged Workbench WebSocket entry
         run: |
           python - <<'PYCODE'

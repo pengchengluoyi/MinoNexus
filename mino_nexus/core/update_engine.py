@@ -209,8 +209,13 @@ def health_probe(d: Deployment, build: str) -> None:
         if body is not None:
             headers["Authorization"] = "Bearer " + token
         req = urllib.request.Request(base + path, data=json.dumps(body).encode() if body is not None else None, headers=headers)
-        with opener.open(req, timeout=5) as response:
-            return json.load(response)
+        stage = path + (":" + body["method"] if body else "")
+        try:
+            with opener.open(req, timeout=5) as response:
+                return json.load(response)
+        except (OSError, ValueError) as exc:
+            # Do not include request headers or credentials in diagnostics.
+            raise RuntimeError(f"Health probe failed at {stage}: {type(exc).__name__}; see logs/process.log") from exc
     if get("/health").get("ok") is not True:
         raise RuntimeError("Health endpoint failed")
     info = get("/sys/server_info").get("data", {})

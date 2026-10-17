@@ -38,7 +38,7 @@ def upgrade(root, manifest, package):
         old = read_json(d.release(before) / 'release.json')
         target_doc = read_json(manifest)
         target = target_doc['build_id']
-        if old['version'] not in {'0.1.43', '0.1.44', '0.1.45'}:
+        if old['version'] not in {'0.1.43', '0.1.44', '0.1.45', '0.1.46'}:
             raise ValueError('Installer upgrade supports Nexus 0.1.43 and later verified baselines only')
         if tuple(map(int, target_doc['version'].split('.'))) < tuple(map(int, old['version'].split('.'))):
             raise ValueError('Installer cannot downgrade an existing database')

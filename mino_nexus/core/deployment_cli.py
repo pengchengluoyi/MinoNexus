@@ -277,6 +277,13 @@ def main(argv=None):
                 else:
                     probe = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/" + d.config['service_label']], capture_output=True)
                     result = {"registered": probe.returncode == 0, "running": probe.returncode == 0 and bool(re.search(rb"^\s*pid = \d+", probe.stdout, re.MULTILINE))}
+                result["health_verified"] = False
+                if result["running"]:
+                    try:
+                        engine.health_probe(d, d.current_build())
+                        result["health_verified"] = True
+                    except Exception as exc:
+                        result["health_error"] = str(exc)
             elif args.command == "stage":
                 with d.lock():
                     result = {"release": str(stage_release(d, read_json(args.manifest), args.package))}
