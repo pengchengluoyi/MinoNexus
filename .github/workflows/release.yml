@@ -29,6 +29,22 @@ jobs:
           python scripts/write_manifest.py --dist dist --prefix "https://github.com/${{ github.repository }}/releases/download/v$VERSION"
       - name: Validate installer against the actual native package
         run: bash packaging/bootstrap.sh --environment test --package-dir "$PWD/dist" --root "$RUNNER_TEMP/mino-install/nexus"
+      - name: Verify packaged Workbench WebSocket entry
+        run: |
+          python - <<'PYCODE'
+          import asyncio
+          from websockets.asyncio.client import connect
+          from websockets.exceptions import ConnectionClosedError
+          async def verify():
+              try:
+                  async with connect('ws://127.0.0.1:50101/ws', origin='http://127.0.0.1:60101') as ws:
+                      await ws.recv()
+              except ConnectionClosedError as exc:
+                  assert exc.rcvd.code == 1008 and exc.rcvd.reason == '请先登录', str(exc)
+              else:
+                  raise AssertionError('Unauthenticated WebSocket must be rejected')
+          asyncio.run(verify())
+          PYCODE
       - run: cp packaging/bootstrap.sh dist/bootstrap.sh
       - uses: actions/upload-artifact@v5
         with:

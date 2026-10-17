@@ -118,7 +118,7 @@ def get_channel_gmail_alias(
 
 
 def gmail_plus_address(base_inbox: str, tag: str) -> str:
-    """插件收件箱本体 + 数字别名，如 qahi3d@gmail.com + 10003 → qahi3d+10003@gmail.com。"""
+    """插件收件箱本体 + 数字别名，如 qamino@gmail.com + 10003 → qamino+10003@gmail.com。"""
     base = str(base_inbox or "").strip().lower()
     tag_s = str(tag or "").strip()
     if not base or not tag_s or "@" not in base:
