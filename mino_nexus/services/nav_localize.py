@@ -98,12 +98,20 @@ def localize(
         conf = _weighted(signals, w)
         if required_miss:
             conf *= _REQUIRED_MISS_FACTOR
+        reviewed = state.get("reviewed_features") or {}
+        if reviewed:
+            def matches(term):
+                return match_any(nodes, [{"text_eq": term}, {"content_desc_contains": term}]) is not None
+            if not nodes or not any(matches(t) for t in reviewed.get("positive", [])) or any(matches(t) for t in reviewed.get("negative", [])):
+                conf = 0.0
+                required_miss = True
         candidates.append(
             {
                 "state_id": sid,
                 "confidence": round(conf, 4),
                 "signals": {k: round(v, 3) for k, v in signals.items()},
                 "required_miss": required_miss,
+                "knowledge_review_id": reviewed.get("review_id", ""),
             }
         )
 

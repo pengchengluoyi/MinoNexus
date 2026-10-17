@@ -104,9 +104,8 @@ def _upsert_row(db, project_id: str, row: dict[str, Any]) -> None:
     existing.note = str(row.get("note") or "")[:200]
     existing.locked = 1 if row.get("locked") else 0
     lease = row.get("lease") if isinstance(row.get("lease"), dict) else {}
-    from mino_nexus.services.run_write_safety import protected
     previous_lease = existing.lease if isinstance(existing.lease, dict) else {}
-    existing.lease = previous_lease if protected(str(previous_lease.get("run_id") or ""), db=db) else lease
+    existing.lease = previous_lease if previous_lease.get("run_id") else lease
     existing.updated_at = now
     facets = row.get("facets") if isinstance(row.get("facets"), dict) else {}
     _write_facets(db, project_id, aid, facets)
@@ -135,6 +134,8 @@ def merge_env_test_accounts(project_id: str, env_doc: dict | None) -> int:
     if not rows:
         return 0
     with session_scope() as db:
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
         for row in rows:
             _upsert_row(db, pid, row)
     return len(rows)
@@ -164,10 +165,11 @@ def replace_all(project_id: str, rows: list[dict[str, Any]]) -> None:
     if not pid:
         return
     with session_scope() as db:
-        from mino_nexus.services.run_write_safety import protected
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
         held = db.query(PoolAccount).filter(PoolAccount.project_id == pid).all()
-        if any(protected(str((row.lease or {}).get("run_id") or ""), db=db) for row in held):
-            raise ValueError("resource_isolated: 存在停止未确认的账号，暂不能整表替换号池")
+        if any((row.lease or {}).get("run_id") for row in held):
+            raise ValueError("resource_busy: 存在未释放的账号租约，暂不能整表替换号池")
         db.query(PoolAccountFacet).filter(PoolAccountFacet.project_id == pid).delete(
             synchronize_session=False
         )
@@ -181,6 +183,8 @@ def upsert_one(project_id: str, row: dict[str, Any]) -> dict[str, Any] | None:
     if not pid:
         return None
     with session_scope() as db:
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
         _upsert_row(db, pid, row)
         db.flush()
         aid = str(row.get("account_id") or row.get("id") or "").strip()
@@ -201,10 +205,11 @@ def delete_one(project_id: str, account_id: str) -> bool:
     if not pid or not aid:
         return False
     with session_scope() as db:
-        from mino_nexus.services.run_write_safety import protected
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
         held = db.query(PoolAccount).filter(PoolAccount.project_id == pid, PoolAccount.id == aid).one_or_none()
-        if held is not None and protected(str((held.lease or {}).get("run_id") or ""), db=db):
-            raise ValueError("resource_isolated: 该账号仍在隔离，不能移除租约事实")
+        if held is not None and (held.lease or {}).get("run_id"):
+            raise ValueError("resource_busy: 该账号租约尚未释放，不能删除账号")
         db.query(PoolAccountFacet).filter(
             PoolAccountFacet.project_id == pid,
             PoolAccountFacet.account_id == aid,
@@ -217,7 +222,8 @@ def delete_one(project_id: str, account_id: str) -> bool:
         return n > 0
 
 
-def set_account_lease(project_id: str, account_id: str, lease: dict[str, Any] | None) -> bool:
+def set_account_lease(project_id: str, account_id: str, lease: dict[str, Any] | None,
+                      *, expected_lease: dict[str, Any] | None = None) -> bool:
     """只更新 lease 列，避免 replace_all 整表重写。"""
     pid = str(project_id or "").strip()
     aid = str(account_id or "").strip()
@@ -225,6 +231,8 @@ def set_account_lease(project_id: str, account_id: str, lease: dict[str, Any] | 
         return False
     payload = lease if isinstance(lease, dict) else {}
     with session_scope() as db:
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
         row = (
             db.query(PoolAccount)
             .filter(PoolAccount.project_id == pid, PoolAccount.id == aid)
@@ -234,6 +242,8 @@ def set_account_lease(project_id: str, account_id: str, lease: dict[str, Any] | 
             return False
         from mino_nexus.services.run_write_safety import protected
         old_lease = row.lease if isinstance(row.lease, dict) else {}
+        if expected_lease is not None and old_lease != expected_lease:
+            return False
         if protected(str(old_lease.get("run_id") or ""), db=db):
             return False
         row.lease = payload
@@ -245,6 +255,8 @@ def try_claim_account_lease(
     project_id: str,
     account_id: str,
     lease: dict[str, Any],
+    *, requirements: dict[str, Any] | None = None,
+    field_defs: dict[str, dict[str, Any]] | None = None,
 ) -> bool:
     """原子占号：仅当未被其它 run/设备占用（或同 run+同 sn 续租）时写入。"""
     from mino_nexus.services.resource_pool import lease_blocks_other_holder
@@ -266,6 +278,19 @@ def try_claim_account_lease(
         )
         if row is None:
             return False
+        if row.locked:
+            return False
+        facets = _facets_for_account(db, pid, aid)
+        if facets.get("health") in {"dirty", "quarantine", "bad"}:
+            return False
+        if requirements is not None:
+            from mino_nexus.services.resource_pool import account_facet_values_for_match, match_requirements
+            env = str(requirements.get("env") or "")
+            if env and row.env != env:
+                return False
+            values = account_facet_values_for_match(_account_to_dict(row, facets))
+            if not match_requirements(values, requirements, field_defs=field_defs)[0]:
+                return False
         existing = row.lease if isinstance(row.lease, dict) else {}
         from mino_nexus.services.run_write_safety import protected
         if protected(str(existing.get("run_id") or ""), db=db):

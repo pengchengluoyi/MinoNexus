@@ -205,6 +205,9 @@ def create_app() -> FastAPI:
     app.include_router(rPacks.router)
     app.include_router(rProject.router)
     app.include_router(rProjectCases.router)
+    from mino_nexus.routers import rApplicationUnderstanding
+    app.include_router(rApplicationUnderstanding.router)
+    app.include_router(rApplicationUnderstanding.resource_router)
     app.include_router(rAppAutomation.router)
     app.include_router(rNavFsm.router)
     app.include_router(rFlowBlocks.router)

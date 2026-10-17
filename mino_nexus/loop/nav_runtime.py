@@ -131,6 +131,10 @@ class NavRuntime:
                 level(TAG, f"NavFSM 不可用 app_id={app_id}: {reason}")
             elif fsm and nav_src:
                 SLog.d(TAG, f"NavFSM app_id={app_id} source={nav_src}")
+        if fsm:
+            from mino_nexus.services.application_understanding import apply_reviewed
+            fsm = apply_reviewed(fsm, platform=str(getattr(ctx, "platform", "") or ""),
+                                 build=str(getattr(ctx, "app_version", "") or ""))
         inst = cls(
             app_id=app_id,
             project_id=project_id,

@@ -4,7 +4,6 @@ from __future__ import annotations
 from typing import Any
 
 from mino_nexus.core.log import SLog
-from mino_nexus.services.account_lease import persist_account_facets
 from mino_nexus.services.resource_pool import (
     account_facet_values_for_match,
     apply_facet_updates,
@@ -37,11 +36,15 @@ def commit_case_facet_effects(
     status: str,
     outcome: dict[str, Any] | None = None,
 ) -> None:
-    """每条用例结束（pass/fail/超时）分析轨迹并写回号池 facet。"""
+    """每条用例结束（pass/fail/超时）分析轨迹并记录待确认的 facet 候选。"""
     lease = getattr(ctx, "resource_lease", None) or {}
     pid = str(lease.get("project_id") or "").strip()
     aid = str(lease.get("account_id") or "").strip()
     if not pid or not aid:
+        return
+    from mino_nexus.services.account_lease import current_lease_is_active
+    if not current_lease_is_active(ctx):
+        SLog.w(TAG, "facet commit skipped: account lease no longer belongs to this execution")
         return
     picked = getattr(ctx, "picked_account", None) or {}
     current = account_facet_values_for_match(picked if isinstance(picked, dict) else {})
@@ -63,7 +66,7 @@ def commit_case_facet_effects(
         author_hints=author_hints,
     )
     source = "ai_case_end"
-    if not effects and author_hints:
+    if not effects and author_hints and str(status).lower() in {"pass", "done"}:
         effects = {str(k): str(v).strip().lower() for k, v in author_hints.items() if str(v).strip()}
         source = "manual"
     if not effects and not llm_ok:
@@ -103,19 +106,11 @@ def commit_case_facet_effects(
     stored = facets_for_storage({**current, **updated}, merged_pool_field_defs(env_doc))
     if stored == facets_for_storage(current, merged_pool_field_defs(env_doc)):
         return
-    from mino_nexus.services.account_facet_sync import log_context_from_run_ctx
-
-    persist_account_facets(
-        pid,
-        aid,
-        stored,
-        log_ctx=log_context_from_run_ctx(ctx, source=source),
-    )
-    updated = stored
-    if isinstance(picked, dict):
-        picked["facets"] = updated
-        ctx.picked_account = picked
-    lease_out = dict(lease)
-    lease_out["facets"] = updated
-    ctx.resource_lease = lease_out
-    SLog.i(TAG, f"facet persisted account={aid[:8]} keys={list(stored.keys())}")
+    # Inferences and author hints are candidates, never allocation facts.
+    from mino_nexus.services.account_fact_review import capture
+    try:
+        candidate = capture(ctx, stored, source=source, expected_before=current)
+        if candidate:
+            SLog.i(TAG, f"facet candidate recorded account={aid[:8]}")
+    except ValueError as exc:
+        SLog.w(TAG, f"facet candidate skipped: {exc}")

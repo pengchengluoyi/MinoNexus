@@ -59,18 +59,11 @@ def acquire_device_lease(
     from mino_nexus.core.database import session_scope
 
     with session_scope() as db:
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
         from mino_nexus.runtime.run_context import is_web_slot
 
         web_slot = is_web_slot(s, platform)
-        rows = (
-            db.query(DeviceResourceLease)
-            .filter(DeviceResourceLease.sn == s, DeviceResourceLease.package_id == p)
-            .all()
-        )
-        for row in list(rows):
-            if _expired(str(row.expires_at or "")) and not protected(str(row.run_id or ""), db=db):
-                db.delete(row)
-        db.flush()
         rows = (
             db.query(DeviceResourceLease)
             .filter(DeviceResourceLease.sn == s, DeviceResourceLease.package_id == p)
@@ -86,12 +79,6 @@ def acquire_device_lease(
                 db.commit()
                 return True, ""
             if web_slot:
-                continue
-            if _expired(str(row.expires_at or "")) and not protected(str(row.run_id or ""), db=db):
-                continue
-            if not _holder_run_still_live(holder):
-                db.delete(row)
-                db.flush()
                 continue
             return False, (
                 f"设备 {s} 包 {p} 已被进行中的任务 {holder[:12]} 占用；"
@@ -139,17 +126,8 @@ def release_device_lease(sn: str, package_id: str, run_id: str) -> int:
 
 
 def purge_expired_device_leases() -> int:
-    from mino_nexus.core.database import session_scope
-
-    with session_scope() as db:
-        rows = db.query(DeviceResourceLease).all()
-        n = 0
-        for row in rows:
-            if _expired(str(row.expires_at or "")) and not protected(str(row.run_id or ""), db=db):
-                db.delete(row)
-                n += 1
-        db.commit()
-        return n
+    """Expiry alone cannot release remote work. Finalization/recovery owns release."""
+    return 0
 
 
 def release_device_leases_for_run(run_id: str) -> int:
@@ -185,8 +163,6 @@ def get_active_lease(sn: str, package_id: str) -> dict[str, Any] | None:
             .all()
         )
         for row in rows:
-            if _expired(str(row.expires_at or "")) and not protected(str(row.run_id or ""), db=db):
-                continue
             return {
                 "sn": row.sn,
                 "package_id": row.package_id,

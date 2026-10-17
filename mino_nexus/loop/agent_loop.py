@@ -698,7 +698,7 @@ def run_case(
         from mino_nexus.services.run_write_safety import protected
 
         storage_failed = storage_failed or bool(writer._store_failure)
-        isolated = protected(run_id)
+        isolated = protected(run_id, sn=sn)
         if isolated:
             outcome.update(status="blocked", summary="写动作结果未核验，设备与账号资源仍隔离", resource_isolated=True)
         if execution_admitted and not project_scope_error and not storage_failed and not isolated:
@@ -712,7 +712,7 @@ def run_case(
                     case=case,
                     next_case=next_case,
                 )
-        isolated = protected(run_id)
+        isolated = protected(run_id, sn=sn)
         if isolated:
             outcome.update(status="blocked", summary="写动作结果未核验，设备与账号资源仍隔离", resource_isolated=True,
                            reason_code="write_outcome_unknown")

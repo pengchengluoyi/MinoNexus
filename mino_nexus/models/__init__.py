@@ -1,3 +1,4 @@
+from mino_nexus.models.account_fact_candidate import AccountFactCandidate
 from mino_nexus.models.development import DevelopmentBinding, DevelopmentOperation
 from mino_nexus.models.app_intel import AppIntelLink, AppIntelProposal
 from mino_nexus.models.assistant import (

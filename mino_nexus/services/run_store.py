@@ -177,6 +177,10 @@ def _upsert_run(doc: dict[str, Any]) -> None:
         from mino_nexus.services.run_write_safety import merge
         previous = db.get(AppRegressionRun, str(doc.get("run_id") or ""))
         guards = merge(previous.payload if previous else None, doc)
+        if previous is not None and previous.status not in _TASK_LIVE:
+            frozen = copy.deepcopy(previous.payload)
+            doc.clear()
+            doc.update(frozen)
         if guards:
             doc["write_safety"] = guards
         admit_in_transaction(db, doc)
@@ -308,6 +312,7 @@ def seed_case(run_id: str, raw: dict[str, Any], index: int, *, sn: str = "", cov
     )
     return {
         "case_id": cid,
+        "execution_unit_id": "unit-" + uuid.uuid5(uuid.NAMESPACE_URL, f"{run_id}:{cid}:{sn}:{index}").hex,
         "name": str(raw.get("name") or raw.get("title") or "").strip() or cid,
         "sn": sn,
         "status": "pending",
@@ -510,6 +515,8 @@ def list_runs(
         if rid:
             by_id[rid] = row
     for live in live_docs:
+        if current_user_id() and live.get("owner_user_id") != current_user_id():
+            continue
         if want_app and str(live.get("app_id") or "") != want_app:
             continue
         if want_status and str(live.get("status") or "") != want_status:
@@ -743,28 +750,44 @@ def cancel_run(run_id: str, *, reason: str = "已取消") -> dict[str, Any]:
 def reconcile_stale_running_runs(*, reason: str = "Nexus 重启，任务中断") -> list[str]:
     """启动时清扫僵尸 running（线程已死、仅 DB 残留）。"""
     done: list[str] = []
-    for row in list_runs(limit=80, status="running"):
-        rid = str(row.get("run_id") or "").strip()
-        if not rid:
-            continue
-        try:
-            finish(rid, status="failed", error=reason)
-            done.append(rid)
-        except KeyError:
-            pass
+    # Drain the first page repeatedly: changing statuses makes OFFSET skip rows.
+    for state in ("running", "queued"):
+        while True:
+            rows = _fetch_payloads(limit=80, status=state)
+            if not rows:
+                break
+            for row in rows:
+                rid = str(row["run_id"])
+                for case in row.get("cases") or []:
+                    prior = str(case.get("status") or "pending")
+                    if prior in {"pending", "running"}:
+                        case.update(status="blocked", reason_code="nexus_restarted",
+                                    execution_started="no" if prior == "pending" else "unknown",
+                                    summary=reason)
+                row["interruption"] = {"reason_code": "nexus_restarted", "at": _now(),
+                                       "automatic_replay": False}
+                put(row)
+                finish(rid, status="failed", error=reason)
+                done.append(rid)
     return done
 
 
-def patch_case(run_id: str, case_id: str, **fields: Any) -> dict[str, Any]:
-    """多设备并行跑批时可能并发 patch 不同 case，须在锁内读-改-写。"""
+def patch_case(run_id: str, case_id: str, *, target_sn: str | None = None,
+               execution_unit_id: str = "", **fields: Any) -> dict[str, Any]:
+    """Select the exact execution unit; never update the first duplicate case."""
     with _LOCK:
         doc = get(run_id)
         if not doc:
             raise KeyError(run_id)
-        for case in doc.get("cases") or []:
-            if str(case.get("case_id")) == str(case_id):
-                case.update({k: v for k, v in fields.items() if v is not None})
-                break
+        if not task_is_live(doc):
+            return doc
+        matches = [case for case in doc.get("cases") or []
+                   if str(case.get("case_id")) == str(case_id)
+                   and (target_sn is None or str(case.get("sn") or "") == target_sn)
+                   and (not execution_unit_id or case.get("execution_unit_id") == execution_unit_id)]
+        if len(matches) != 1:
+            raise ValueError("execution_unit_ambiguous" if matches else "execution_unit_not_found")
+        matches[0].update({k: v for k, v in fields.items() if v is not None})
         return put(doc)
 
 

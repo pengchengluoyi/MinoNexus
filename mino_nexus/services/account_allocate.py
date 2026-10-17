@@ -11,7 +11,7 @@ from mino_nexus.services.account_pool_templates import (
     project_enabled_templates,
     template_facet_extensions,
 )
-from mino_nexus.services.account_lease import _mark_leased, _purge_expired_leases, apply_lease_to_ctx
+from mino_nexus.services.account_lease import _mark_leased, apply_lease_to_ctx
 from mino_nexus.services.project_env import list_test_accounts, pick_test_accounts
 from mino_nexus.services.resource_pool import empty_requirements
 
@@ -60,30 +60,32 @@ def allocate_by_template(
     rows = list_test_accounts(env_doc, project_id=project_id)
     req = _requirements_for_template(tpl, env=env_profile, extra_requirements=requirements)
 
+    run_id = str(run_id or getattr(ctx, "run_id", "") or "").strip()
+    if ctx is None or not run_id:
+        return None, "缺少执行上下文或 run_id，不能分配凭证"
+    holder_sn = str(getattr(ctx, "sn", "") or "")
     ranked = pick_test_accounts(
         rows,
         env=env_profile,
         env_doc=env_doc,
         requirements=req,
         run_id=run_id,
+        holder_sn=holder_sn,
     )
     if not ranked:
         return None, f"没有符合模板「{tpl.get('label')}」的可用账号"
 
-    row = ranked[0]
-    facets = merge_account_facets(row.get("facets"), ext)
-    row = {**row, "facets": facets}
-
-    if ctx is not None:
-        run_id = str(run_id or getattr(ctx, "run_id", "") or "").strip()
-        aid = str(row.get("id") or row.get("account_id") or "")
-        if aid and run_id:
-            _purge_expired_leases(project_id)
-            try:
-                _mark_leased(project_id, aid, run_id)
-            except Exception:
-                pass
-        apply_lease_to_ctx(ctx, row, project_id=project_id)
+    row = None
+    for candidate in ranked:
+        aid = str(candidate.get("id") or candidate.get("account_id") or "")
+        if aid and _mark_leased(project_id, aid, run_id,
+                               case_id=str(getattr(ctx, "case_id", "") or ""),
+                               sn=holder_sn, env=env_profile, requirements=req):
+            row = {**candidate, "facets": merge_account_facets(candidate.get("facets"), ext)}
+            break
+    if row is None:
+        return None, "匹配账号已被占用或状态发生变化，未分配凭证"
+    apply_lease_to_ctx(ctx, row, project_id=project_id)
 
     grant = credentials_grant(row, tpl)
     grant["template_label"] = str(tpl.get("label") or "")

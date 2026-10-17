@@ -109,11 +109,12 @@ def _run_case_list(
     for case_seq, case in enumerate(cases):
         if not _task_still_running(run_id):
             break
-        if protected(run_id):
+        if protected(run_id, sn=str(case.get("sn") or doc.get("sn") or "")):
             for untouched in cases[case_seq:]:
                 if str(untouched.get("status") or "pending") not in ("pending", "running"):
                     continue
-                run_store.patch_case(run_id, str(untouched.get("case_id") or ""), status="blocked",
+                run_store.patch_case(run_id, str(untouched.get("case_id") or ""),
+                    target_sn=str(untouched.get("sn") or ""), status="blocked",
                     summary="前序动作停止未确认，本条未执行；设备与账号资源仍隔离",
                     reason_code="resource_isolated", execution_started="no", resource_isolated=True)
             break
@@ -129,7 +130,7 @@ def _run_case_list(
             surface=str(doc.get("env_surface") or ""),
             action_scheme=str(doc.get("action_scheme") or "dom_preferred"), package=package,
         )
-        run_store.patch_case(run_id, cid, status="running")
+        run_store.patch_case(run_id, cid, target_sn=sn, status="running")
         emit_testing_task({
             "event": "case_running",
             "run_id": run_id,
@@ -179,7 +180,7 @@ def _run_case_list(
                 sn=sn,
                 provider_id=str(doc.get("provider_id") or ""),
             )
-            run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
+            run_store.patch_case(run_id, cid, target_sn=sn, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
             emit_testing_task({
                 "event": "case_finished",
                 "run_id": run_id,
@@ -206,7 +207,7 @@ def _run_case_list(
                 sn=sn,
                 provider_id=str(doc.get("provider_id") or ""),
             )
-            run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
+            run_store.patch_case(run_id, cid, target_sn=sn, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
             emit_testing_task({
                 "event": "case_finished",
                 "run_id": run_id,
@@ -249,7 +250,7 @@ def _run_case_list(
                     sn=sn,
                     provider_id=str(doc.get("provider_id") or ""),
                 )
-                run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
+                run_store.patch_case(run_id, cid, target_sn=sn, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
                 emit_testing_task({
                     "event": "case_finished",
                     "run_id": run_id,
@@ -282,7 +283,7 @@ def _run_case_list(
                     sn=sn,
                     provider_id=str(doc.get("provider_id") or ""),
                 )
-                run_store.patch_case(run_id, cid, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
+                run_store.patch_case(run_id, cid, target_sn=sn, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
                 emit_testing_task({
                     "event": "case_finished",
                     "run_id": run_id,
@@ -302,7 +303,7 @@ def _run_case_list(
                     pass
 
                 lc = _LeaseCtx()
-                lc.app_id = app_id
+                lc.app_id, lc.run_id, lc.case_id, lc.sn = app_id, run_id, cid, sn
                 row, _ = restore_lease_for_run(lc, run_id)
                 if isinstance(row, dict):
                     lease_snap = {
@@ -322,7 +323,7 @@ def _run_case_list(
                 preflight_gaps=gaps,
                 account_lease=lease_snap,
             )
-            run_store.patch_case(run_id, cid, resource_card=resource_card)
+            run_store.patch_case(run_id, cid, target_sn=sn, resource_card=resource_card)
             emit_testing_task({
                 "event": "case_resource",
                 "run_id": run_id,
@@ -350,7 +351,7 @@ def _run_case_list(
             doc = run_store.get(run_id) or doc
             env_brief = str(doc.get("env_brief") or env_brief)
             run_store.patch_case(
-                run_id, cid,
+                run_id, cid, target_sn=sn,
                 status=result.get("status") or "fail",
                 summary=result.get("summary") or "",
                 error=result.get("summary") or "",

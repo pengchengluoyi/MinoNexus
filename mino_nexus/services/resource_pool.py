@@ -20,8 +20,8 @@ HEALTH = frozenset({"available", "dirty", "quarantine", "bad"})
 DEFAULT_FACETS: dict[str, str] = {
     "lifecycle": "unknown",
     "session": "unknown",
-    "profile_data": "none",
-    "address": "none",
+    "profile_data": "unknown",
+    "address": "unknown",
     "health": "available",
 }
 
@@ -232,7 +232,7 @@ def lease_display(lease: dict[str, Any] | None) -> dict[str, str]:
     if not rid:
         return {"status": "free", "label": "空闲", "run_id": ""}
     if lease_expired(row):
-        return {"status": "expired", "label": "租约已过期（待回收）", "run_id": rid}
+        return {"status": "expired", "label": "租约已过期（待核对，仍占用）", "run_id": rid}
     exp = str(row.get("expires_at") or "").strip()
     return {
         "status": "leased",
@@ -408,26 +408,6 @@ def _facet_values_equivalent(
     return False
 
 
-def _want_is_absence_state(defn: dict[str, Any] | None, want: str) -> bool:
-    """需求值为「未设置/未登录/否」等空态时，库内 unknown 也算满足。"""
-    val = str(want or "").strip().lower()
-    if not val or val == "unknown":
-        return True
-    if val in ("no", "none", "logged_out", "guest", "unregistered", "unconfigured", "not_configured", "not_logged_in"):
-        return True
-    if not defn:
-        return False
-    for o in defn.get("options") or []:
-        if not isinstance(o, dict):
-            continue
-        if str(o.get("value") or "").strip().lower() != val:
-            continue
-        lab = str(o.get("label") or "").strip()
-        if re.search(r"未|无|否", lab):
-            return True
-    return False
-
-
 def _eval_clause(
     facets: dict[str, str],
     clause: dict[str, Any],
@@ -438,40 +418,13 @@ def _eval_clause(
     op = str(clause.get("op") or "eq").strip().lower()
     want = str(clause.get("value") or "").strip().lower()
     got = str(facets.get(facet) or "unknown").strip().lower()
-    if facet == "session" and got in ("", "unknown"):
-        got = "guest"
-    defn = _facet_field_def(field_defs, facet)
-    from mino_nexus.services.account_requirement_compile import PROFILE_SHAPE_FACETS
-
-    if facet == "lifecycle" and op in ("eq", "in"):
-        opts = {x.strip() for x in want.split(",") if x.strip()}
-        wants_unreg = want == "unregistered" or "unregistered" in opts
-        if wants_unreg:
-            reg_flow = str(facets.get("register_flow") or "unknown").strip().lower()
-            if reg_flow == "registered":
-                return False
-
-    if facet in PROFILE_SHAPE_FACETS and op == "eq":
-        # 形象 facet 不对称：要「已配置」必须库内 yes；要「未配置」允许未标注，但排除 yes
-        if want == "yes":
-            if got == "unknown":
-                return False
-        elif want == "no":
-            if got == "yes":
-                return False
-            if got in ("no", "unknown"):
-                return True
-    # 号池未标注时：未注册/未登录类需求仍可选号，避免整池 unknown 导致永远租不到
+    # Missing facts never satisfy negative/absence requirements implicitly.
+    # Explicit eq unknown / in ...,unknown is still supported.
     if got == "unknown":
-        opts_unknown = {x.strip() for x in want.split(",") if x.strip()}
-        if op == "in" and "unknown" in opts_unknown:
-            return True
-        if facet == "lifecycle" and op == "eq" and want == "unregistered":
-            return True
-        if facet == "session" and op == "in" and "unknown" in opts_unknown:
-            return True
-        if op == "eq" and _want_is_absence_state(defn, want):
-            return True
+        return (op == "eq" and want == "unknown") or (
+            op == "in" and "unknown" in {x.strip() for x in want.split(",")})
+    if facet == "lifecycle" and want == "unregistered" and facets.get("register_flow") == "registered":
+        return False
     if op == "eq":
         if got == want:
             return True
@@ -592,16 +545,14 @@ def pick_accounts_by_requirements(
         if not ok:
             continue
 
-        if row.get("locked"):
-            score -= 8
-            reasons.append("占用中")
+        if row.get("locked") or facets.get("health") in {"dirty", "quarantine", "bad"}:
+            continue
         lease = row.get("lease") if isinstance(row.get("lease"), dict) else {}
         other_run = str(lease.get("run_id") or "").strip()
         rid = str(run_id or "").strip()
         sn_key = str(holder_sn or "").strip()
         if lease_blocks_other_holder(lease, run_id=rid, sn=sn_key):
-            score -= 100
-            reasons.append("租用中")
+            continue
         elif other_run and other_run == rid:
             score += 50
             reasons.append("本 run 已租")
@@ -880,10 +831,12 @@ def new_lease_record(
     case_id: str = "",
     sn: str = "",
 ) -> dict[str, str]:
+    import uuid
     rid = str(run_id or "").strip()
     now = datetime.now()
     exp = now + timedelta(seconds=max(60, int(ttl_sec)))
     rec = {
+        "lease_id": uuid.uuid4().hex,
         "run_id": rid[:80],
         "leased_at": now.isoformat(timespec="seconds"),
         "expires_at": exp.isoformat(timespec="seconds"),
@@ -907,8 +860,8 @@ def lease_blocks_other_holder(
     row = lease if isinstance(lease, dict) else {}
     if not str(row.get("run_id") or "").strip():
         return False
-    if lease_expired(row):
-        return False
+    # TTL is a liveness signal, not proof that the holder stopped.
+    # Explicit release/reconciliation must clear the stored lease.
     rid = str(run_id or "").strip()
     other = str(row.get("run_id") or "").strip()
     if other != rid:

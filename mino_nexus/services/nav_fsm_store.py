@@ -139,7 +139,7 @@ def _state_public(row: NavFsmState) -> dict[str, Any]:
         out["role"] = role
     meta = getattr(row, "meta", None)
     if isinstance(meta, dict) and meta:
-        out["meta"] = dict(meta)
+        out["meta"] = {k: v for k, v in meta.items() if k not in {"knowledge_reviews", "knowledge_revision"}}
     return out
 
 
@@ -185,6 +185,8 @@ def read_raw(app_id: str, *, version: str = DEFAULT_VERSION) -> Optional[dict[st
     ensure_db()
     db = SessionLocal()
     try:
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
         fsm = (
             db.query(NavFsm)
             .filter(NavFsm.app_id == aid, NavFsm.version == (version or DEFAULT_VERSION))
@@ -215,6 +217,8 @@ def load_with_reason(
     ensure_db()
     db = SessionLocal()
     try:
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
         fsm = (
             db.query(NavFsm)
             .filter(NavFsm.app_id == aid, NavFsm.version == (version or DEFAULT_VERSION))
@@ -352,6 +356,8 @@ def save(
     ensure_db()
     db = SessionLocal()
     try:
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
         fsm = (
             db.query(NavFsm)
             .filter(NavFsm.app_id == aid, NavFsm.version == version)
@@ -367,6 +373,12 @@ def save(
         fsm.updated_by = str(updated_by or doc.get("updated_by") or "")
         fsm.updated_at = int(time.time())
 
+        from mino_nexus.services.application_understanding import REVIEW_KEYS
+        preserved = {r.state_id: {k: v for k, v in (r.meta or {}).items() if k in REVIEW_KEYS}
+                     for r in db.query(NavFsmState).filter_by(fsm_id=fsm.id)}
+        incoming = {str(st.get("id") or st.get("state_id") or "") for st in doc.get("states") or []}
+        if any(m.get("knowledge_reviews") and sid not in incoming for sid, m in preserved.items()):
+            raise NavFsmInvalid("reviewed_page_history_cannot_be_deleted")
         db.query(NavFsmState).filter(NavFsmState.fsm_id == fsm.id).delete()
         db.query(NavFsmEdge).filter(NavFsmEdge.fsm_id == fsm.id).delete()
         for st in doc.get("states") or []:
@@ -377,7 +389,8 @@ def save(
                     kind=str(st.get("kind") or "page"),
                     identify=dict(st.get("identify") or {}),
                     guards=dict(st.get("guards") or {}),
-                    meta=dict(st.get("meta") or {}),
+                    meta={**{k: v for k, v in (st.get("meta") or {}).items() if k not in REVIEW_KEYS},
+                          **preserved.get(str(st.get("id") or st.get("state_id") or ""), {})},
                     wiki_ref=str(st.get("wiki_ref") or ""),
                     entry=1 if st.get("entry") else 0,
                     role=str(st.get("role") or ""),
@@ -415,6 +428,8 @@ def delete(app_id: str, *, version: str = DEFAULT_VERSION) -> bool:
     ensure_db()
     db = SessionLocal()
     try:
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
         fsm = (
             db.query(NavFsm)
             .filter(NavFsm.app_id == str(app_id or "").strip(), NavFsm.version == version)
@@ -422,6 +437,8 @@ def delete(app_id: str, *, version: str = DEFAULT_VERSION) -> bool:
         )
         if fsm is None:
             return False
+        if any((r.meta or {}).get("knowledge_reviews") for r in db.query(NavFsmState).filter_by(fsm_id=fsm.id)):
+            raise NavFsmInvalid("reviewed_page_history_cannot_be_deleted")
         db.query(NavFsmState).filter(NavFsmState.fsm_id == fsm.id).delete()
         db.query(NavFsmEdge).filter(NavFsmEdge.fsm_id == fsm.id).delete()
         db.delete(fsm)

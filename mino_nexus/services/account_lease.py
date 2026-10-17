@@ -213,15 +213,8 @@ def _lease_unavailable_hint(
 
 
 def _purge_expired_leases(project_id: str) -> None:
-    from mino_nexus.services.pool_account_store import set_account_lease
-
-    doc = ps.project_env(project_id)
-    for row in list_test_accounts(doc, project_id=project_id):
-        lease = row.get("lease") if isinstance(row.get("lease"), dict) else {}
-        if not str(lease.get("run_id") or "").strip():
-            continue
-        if lease_expired(lease):
-            set_account_lease(project_id, str(row.get("id") or ""), {})
+    """TTL expiry never proves stopped effects. Run finalization/recovery releases leases."""
+    return
 
 
 def _pick_row(
@@ -290,6 +283,7 @@ def _mark_leased(
     case_id: str = "",
     sn: str = "",
     env: str = "",
+    requirements: dict[str, Any] | None = None,
 ) -> bool:
     from mino_nexus.services.pool_account_store import try_claim_account_lease
 
@@ -307,7 +301,10 @@ def _mark_leased(
         case_id=cid,
         sn=str(sn or "")[:64],
     )
-    ok = try_claim_account_lease(project_id, account_id, rec)
+    from mino_nexus.services.account_pool_templates import merged_pool_field_defs
+    defs = {str(d["key"]): d for d in merged_pool_field_defs(doc) if d.get("key")}
+    ok = try_claim_account_lease(project_id, account_id, rec,
+                                 requirements=requirements, field_defs=defs)
     if not ok:
         SLog.w(
             TAG,
@@ -361,6 +358,8 @@ def _clear_leased(project_id: str, account_id: str, run_id: str) -> None:
     rid = str(run_id or "").strip()
     aid = str(account_id or "").strip()
     ident = _ident_fn(row) if row else aid[:12]
+    if not set_account_lease(project_id, account_id, {}, expected_lease=lease):
+        return
     append_allocation_log(
         project_id=project_id,
         action="lease_release",
@@ -372,7 +371,6 @@ def _clear_leased(project_id: str, account_id: str, run_id: str) -> None:
         account_ident=ident,
         detail={"reason": "clear_leased"},
     )
-    set_account_lease(project_id, account_id, {})
 
 
 def renew_run_lease(ctx: Any) -> bool:
@@ -385,11 +383,10 @@ def renew_run_lease(ctx: Any) -> bool:
     if not pid or not aid or not rid:
         return False
     try:
-        _mark_leased(pid, aid, rid, case_id=str(getattr(ctx, "case_id", "") or "")[:64], sn=str(getattr(ctx, "sn", "") or ""), env=str(getattr(ctx, "env_profile", "") or ""))
+        return _mark_leased(pid, aid, rid, case_id=str(getattr(ctx, "case_id", "") or "")[:64], sn=str(getattr(ctx, "sn", "") or ""), env=str(getattr(ctx, "env_profile", "") or ""))
     except Exception as exc:
         SLog.w(TAG, f"renew lease failed: {exc!r}")
         return False
-    return True
 
 
 def apply_lease_to_ctx(ctx: Any, row: dict[str, Any], *, project_id: str) -> None:
@@ -539,7 +536,10 @@ def restore_lease_for_run(ctx: Any, run_id: str) -> tuple[dict[str, Any] | None,
         if want_sn and lease_sn and lease_sn != want_sn:
             continue
         apply_lease_to_ctx(ctx, row, project_id=project_id)
-        renew_run_lease(ctx)
+        if not renew_run_lease(ctx):
+            ctx.resource_lease = {}
+            ctx.picked_account = {}
+            return None, "账号租约续租失败，未恢复凭证"
         return row, ""
     return None, "本 run 无活跃租约"
 
@@ -611,9 +611,6 @@ def lease_for_context(
 
     ident_hints = extract_account_ident_hints(prompt)
 
-    obs_for_row: dict[str, str] | None = None
-    if isinstance(observed_by_account, dict) and observed_by_account:
-        obs_for_row = next(iter(observed_by_account.values()), None)
 
     from mino_nexus.services.gmail_alias_lease import (
         ensure_ctx_env_surface,
@@ -668,7 +665,7 @@ def lease_for_context(
             release_ctx_lease(ctx)
             restored = None
         else:
-            obs = observed_by_account.get(aid) if isinstance(observed_by_account, dict) and aid else obs_for_row
+            obs = observed_by_account.get(aid) if isinstance(observed_by_account, dict) and aid else None
             if row_satisfies_requirements(restored, requirements, env_doc, observed=obs):
                 if ident_hints and not account_row_matches_hints(restored, ident_hints):
                     SLog.i(
@@ -706,6 +703,7 @@ def lease_for_context(
                 case_id=str(getattr(ctx, "case_id", "") or "")[:64],
                 sn=holder_sn,
                 env=env_profile,
+                requirements=requirements,
             ):
                 apply_lease_to_ctx(ctx, alias_row, project_id=project_id)
                 SLog.i(TAG, f"leased gmail alias (fresh) {account_ident(alias_row)} run={run_id[:12]}")
@@ -727,6 +725,7 @@ def lease_for_context(
                 case_id=str(getattr(ctx, "case_id", "") or "")[:64],
                 sn=holder_sn,
                 env=env_profile,
+                requirements=requirements,
             ):
                 apply_lease_to_ctx(ctx, phone_row, project_id=project_id)
                 SLog.i(TAG, f"leased phone seq (fresh) {account_ident(phone_row)} run={run_id[:12]}")
@@ -766,6 +765,7 @@ def lease_for_context(
                     case_id=str(getattr(ctx, "case_id", "") or "")[:64],
                     sn=holder_sn,
                     env=env_profile,
+                    requirements=requirements,
                 )
                 if claimed:
                     row = candidate
@@ -802,6 +802,7 @@ def lease_for_context(
                 case_id=str(getattr(ctx, "case_id", "") or "")[:64],
                 sn=holder_sn,
                 env=env_profile,
+                requirements=requirements,
             ):
                 apply_lease_to_ctx(ctx, alias_row, project_id=project_id)
                 SLog.i(

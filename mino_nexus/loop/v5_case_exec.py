@@ -273,7 +273,7 @@ def run_case_list(task_id, cases, doc):
         if run_store.task_cancelled(task_id):
             break
         cid = case["case_id"]
-        run_store.patch_case(task_id, cid, status="running")
+        run_store.patch_case(task_id, cid, target_sn=str(case.get("sn") or ""), status="running")
         result = run_case(task_id, case, doc)
-        run_store.patch_case(task_id, cid, **result)
+        run_store.patch_case(task_id, cid, target_sn=str(case.get("sn") or ""), **result)
         emit_testing_task({"event": "case_finished", "run_id": task_id, "task_id": task_id, "case_id": cid, **result})
