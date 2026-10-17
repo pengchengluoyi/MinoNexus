@@ -739,8 +739,9 @@ class NodeRegistry:
 
             from mino_nexus.services.assistant_gateway import handle_inbound
 
+            from mino_nexus.core.maintenance_gate import tracked
             threading.Thread(
-                target=handle_inbound,
+                target=tracked(handle_inbound),
                 args=(inbound,),
                 name="im-inbound",
                 daemon=True,

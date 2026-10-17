@@ -34,7 +34,6 @@ from mino_nexus.routers import (
     rFlowBlocks,
     rMcp,
     rMe,
-    rMcp,
     rNavFsm,
     rObserve,
     rPacks,
@@ -123,10 +122,19 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(0.2 if worked else 2)
 
     compile_task = asyncio.create_task(_case_compile_loop())
+    from mino_nexus.services.development import worker as development_worker
+    development_task = asyncio.create_task(development_worker())
+    from mino_nexus.services.scout_updates import worker as scout_update_worker
+    scout_update_task = asyncio.create_task(scout_update_worker())
     yield
+    scout_update_task.cancel()
+    await asyncio.gather(scout_update_task, return_exceptions=True)
+    development_task.cancel()
+    await asyncio.gather(development_task, return_exceptions=True)
     compile_task.cancel()
     doc_sync_task.cancel()
     delivery_task.cancel()
+    await asyncio.gather(compile_task, doc_sync_task, delivery_task, return_exceptions=True)
     await unregister_beacon(handle)
 
 
@@ -164,17 +172,29 @@ def create_app() -> FastAPI:
 
     app.add_middleware(ExecutionUserMiddleware)
     app.add_middleware(ClientGateMiddleware)
+    from mino_nexus.core.hi3d_browser_origins import browser_origins
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=browser_origins(),
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
+    from mino_nexus.core.maintenance_gate import MaintenanceMiddleware
+    app.add_middleware(MaintenanceMiddleware)
+    from mino_nexus.routers import rNexusUpdate
+    app.include_router(rNexusUpdate.router)
+    from mino_nexus.routers import rWorkbenchUpdate
+    app.include_router(rWorkbenchUpdate.router)
     app.include_router(rSys.router)
     app.include_router(rAuth.router)
     app.include_router(rMe.router)
+    from mino_nexus.routers import rDevelopment
+    app.include_router(rDevelopment.router)
+    from mino_nexus.routers import rDevelopmentEvidence
+    app.include_router(rDevelopmentEvidence.router)
     app.include_router(rRuntime.router)
     app.include_router(rReleases.router)
     app.include_router(rDevice.router)
@@ -191,7 +211,6 @@ def create_app() -> FastAPI:
     app.include_router(rAppIntel.router)
     app.include_router(rTask.router)
     app.include_router(rAssistant.router)
-    app.include_router(rMcp.router)
     app.include_router(rMcp.router)
     from mino_nexus.services.assistant_tools import bind_app
 

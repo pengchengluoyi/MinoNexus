@@ -1,0 +1,19 @@
+id: scout.update_cancel
+version: 1
+title: 取消 Scout 更新等待
+description: 只取消指定 operation_id 尚未派发的空闲等待。不能强行终止安装或释放结果未知的维护门禁。
+route: POST /runtime/nodes/{node_id}/updates/{operation_id}/cancel
+risk: write
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    node_id: {type: string, minLength: 1, pattern: '^[a-z0-9]+$'}
+    operation_id: {type: string, pattern: '^[A-Za-z0-9_-]{8,100}$'}
+  required: [node_id, operation_id]
+param_resolvers: {}
+result_pick: [data]
+card: answer
+surfaces: [mcp]
+enabled: true
+async: false

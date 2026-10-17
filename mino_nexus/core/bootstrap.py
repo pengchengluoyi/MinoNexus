@@ -88,11 +88,9 @@ def bootstrap() -> None:
         sp = upgrade_capability_empty_params()
         if sp:
             SLog.i(TAG, f"capability empty params upgraded {sp}")
-        from mino_nexus.catalog.guard_recovery_seed import seed_guard_recovery_rows
-
-        gr = seed_guard_recovery_rows()
-        if gr:
-            SLog.i(TAG, f"guard recovery base rows seeded {gr}")
+        # guard.* entries now require explicit recovery policy contracts.
+        # Do not recreate obsolete base rows on a fresh database. Runtime
+        # guard advice retains its defaults and existing stored overrides.
         from mino_nexus.loop.login_state_probe import ensure_read_web_auth_capability
 
         if ensure_read_web_auth_capability():
@@ -102,6 +100,8 @@ def bootstrap() -> None:
         if upgrade_skill_channel_layout():
             SLog.i(TAG, "skill catalog split into generic/check and base")
         db.commit()
+        from mino_nexus.catalog.development_seed import sync_development_capability
+        sync_development_capability()
     except Exception:
         db.rollback()
         raise

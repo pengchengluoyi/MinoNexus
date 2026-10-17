@@ -1,0 +1,40 @@
+{
+  "id": "workbench.update_check",
+  "version": 1,
+  "title": "检查 Workbench 固定版本",
+  "description": "检查本机已暂存的指定 build 清单及平台。不是下载代理，检查不代表包摘要与业务兼容已通过。",
+  "route": "GET /sys/workbench/updates/check",
+  "risk": "read",
+  "params_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "installation_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 101,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      },
+      "build_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 101,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+      }
+    },
+    "required": [
+      "installation_id",
+      "build_id"
+    ]
+  },
+  "param_resolvers": {},
+  "result_pick": [
+    "data"
+  ],
+  "card": "answer",
+  "surfaces": [
+    "mcp"
+  ],
+  "enabled": true,
+  "async": false
+}

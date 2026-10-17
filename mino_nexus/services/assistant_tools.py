@@ -400,9 +400,9 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
     method = method.upper()
     props = (spec.get("params_schema") or {}).get("properties") or {}
     args = dict(args or {})
-    if spec.get("id") in {"scout.list", "scout.update", "scout.update_status"}:
+    if spec.get("id") in {"scout.list", "scout.update", "scout.update_status", "scout.update_cancel"}:
         if set(args) - set(props):
-            return ToolOutcome(ok=False, status=400, summary="Scout 工具含不支持的参数；更新只支持节点配置的发布源，不支持指定版本或下载地址。", tool_id=str(spec["id"]))
+            return ToolOutcome(ok=False, status=400, summary="Scout 工具含不支持的参数；更新须指定固定 release_tag/build_id，仅使用节点配置的发布源，不接受任意下载地址。", tool_id=str(spec["id"]))
         node_id = args.get("node_id")
         if node_id is not None and (not isinstance(node_id, str) or not re.fullmatch(r"[a-z0-9]+", node_id)):
             return ToolOutcome(ok=False, status=400, summary="请使用 scout_list 返回的准确 node_id，不是设备 SN 或路径。", tool_id=str(spec["id"]))
@@ -601,9 +601,13 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         if not any(k in receipt_data for k in ("task_id", "run_id", "id")) and isinstance(payload, dict) and isinstance(payload.get("data"), dict):
             receipt_data = payload["data"]
         identifiers = {k: receipt_data[k] for k in ("task_id", "run_id", "id", "status") if isinstance(receipt_data.get(k), (str, int))}
+        if spec.get("id") in {"workbench.update", "workbench.update_cancel", "workbench.update_recover"}:
+            identifiers.update({k: receipt_data[k] for k in (
+                "installation_id", "operation_id", "build_id", "state", "observation", "helper_started", "recovery"
+            ) if isinstance(receipt_data.get(k), (str, bool))})
         if spec.get("id") == "scout.update":
             identifiers.update({k: receipt_data[k] for k in (
-                "node_id", "command", "previous_version", "running_version_verified", "next_tool"
+                "node_id", "operation_id", "state", "command", "previous_version", "running_version_verified", "next_tool"
             ) if isinstance(receipt_data.get(k), (str, bool))})
         if isinstance(picked, str) and re.fullmatch(r"[\w.:-]{1,160}", picked):
             identifiers = {"task_id": picked}

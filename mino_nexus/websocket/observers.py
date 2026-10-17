@@ -125,6 +125,10 @@ def handle_action(action: str, payload: dict[str, Any], sess: dict[str, Any]) ->
 def register_routes(app: Any) -> None:
     @app.websocket("/ws")
     async def ui_endpoint(websocket: WebSocket, token: str = Query(default="")) -> None:
+        from mino_nexus.core.hi3d_browser_origins import browser_origin_allowed
+        if not browser_origin_allowed(websocket.headers.get("origin")):
+            await websocket.close(code=1008, reason="工作台来源未获允许")
+            return
         await websocket.accept()
         sess = auth_store.session_of(token)
         if not sess or not sess.get("user_id"):

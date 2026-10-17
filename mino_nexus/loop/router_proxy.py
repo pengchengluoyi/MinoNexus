@@ -639,7 +639,7 @@ class RouterProxy:
             timeout_sec=max(.001, available - min(1, available / 4)), device_id=self.sn, platform="web",
             **_binding_wire_fields(projection))
         try:
-            res = await node.send(P.MsgType.EXECUTE, req, timeout=available)
+            res = await self._send_once(node, P.MsgType.EXECUTE, req, available, pad_sec=0)
         except Exception:
             res = None
         # A read can be retried once, only inside its original deadline/window.
@@ -648,7 +648,7 @@ class RouterProxy:
             if left > .05:
                 req = P.Execute(**{**req.__dict__, "step_idx": _next_read_idx(run_id), "timeout_sec": max(.001, left - .05)})
                 try:
-                    res = await node.send(P.MsgType.EXECUTE, req, timeout=left)
+                    res = await self._send_once(node, P.MsgType.EXECUTE, req, left, pad_sec=0)
                 except Exception:
                     res = None
         if res is None:
@@ -705,7 +705,7 @@ class RouterProxy:
             timeout_sec=timeout, device_id=self.sn, platform=_device_platform(self.sn, node),
             **_binding_wire_fields(projection))
         try:
-            res = await node.send(P.MsgType.EXECUTE, req, timeout=timeout)
+            res = await self._send_once(node, P.MsgType.EXECUTE, req, timeout, pad_sec=0)
         except Exception:
             res = None
         _trace_device_result(req, res, total_ms=int((time.time() - t0) * 1000),
@@ -1010,6 +1010,14 @@ class RouterProxy:
         *,
         pad_sec: Optional[float] = None,
     ) -> Optional[P.Result]:
+        from mino_nexus.services import run_store
+        task_id = self.task_id or str(getattr(payload, "run_id", "") or self.run_id).split("::", 1)[0]
+        task = run_store.get(task_id) if task_id else None
+        if task:
+            target = (task.get("device_targets") or {}).get(self.sn) or {}
+            allowed = task.get("allowed_node_ids")
+            if (target.get("node_id") and target["node_id"] != node.node_id) or (allowed is not None and node.node_id not in allowed):
+                raise NoRouteError("device_owner_drift: 设备已不属于准入时固定节点")
         deadline = timeout_sec + (self.timeout_pad_sec if pad_sec is None else pad_sec)
         assert node.send is not None
         return await node.send(mtype, payload, timeout=deadline)

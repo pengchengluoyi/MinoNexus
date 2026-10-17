@@ -528,7 +528,8 @@ def sync_wechat_listener() -> Dict[str, Any]:
 
     stop_wechat_listener()
     _stop.clear()
-    thread = threading.Thread(target=_poll_loop, name="wechat-ilink", daemon=True)
+    from mino_nexus.core.maintenance_gate import tracked
+    thread = threading.Thread(target=tracked(_poll_loop), name="wechat-ilink", daemon=True)
     with _lock:
         _thread = thread
         _state.update(

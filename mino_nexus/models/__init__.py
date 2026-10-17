@@ -1,3 +1,4 @@
+from mino_nexus.models.development import DevelopmentBinding, DevelopmentOperation
 from mino_nexus.models.app_intel import AppIntelLink, AppIntelProposal
 from mino_nexus.models.assistant import (
     AssistantMcpToken,
@@ -103,3 +104,5 @@ __all__ = [
 from mino_nexus.models.case_revision import CaseRevision
 from mino_nexus.models.case_compile_job import CaseCompileJob
 from mino_nexus.models.case_review_record import CaseReviewRecord
+
+from mino_nexus.models.scout_update import ScoutUpdate

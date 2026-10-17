@@ -1,0 +1,18 @@
+id: nexus.update_cancel
+version: 1
+title: 取消等待中的 Nexus 更新
+description: 只取消指定 operation_id 的等待，释放它自己的门禁。已开始安装、重启或需要人工维护时拒绝取消；不会杀进程。
+route: POST /sys/updates/{operation_id}/cancel
+risk: write
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    operation_id: {type: string, minLength: 1, maxLength: 120}
+  required: [operation_id]
+param_resolvers: {}
+result_pick: [data]
+card: answer
+surfaces: [mcp]
+enabled: true
+async: false

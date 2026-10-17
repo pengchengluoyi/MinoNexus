@@ -15,6 +15,7 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse, Response
 
 from mino_nexus.core.http_util import bearer
+from mino_nexus.core.maintenance_gate import tracked
 from mino_nexus.services import assistant_store as store
 from mino_nexus.services.assistant_tools import all_tools, run_tool, tool_by_function_name
 
@@ -63,6 +64,13 @@ def _call(uid: str, name: str, args: dict[str, Any]) -> dict[str, Any]:
                    "ms": out.elapsed_ms, "args_brief": json.dumps(args, ensure_ascii=False)[:180]}],
         "elapsed_ms": int((time.time() - started) * 1000),
     })
+    if spec["id"] == "session.screenshot" and out.ok:
+        data = out.data.get("data", out.data) if isinstance(out.data, dict) else {}
+        if isinstance(data, dict) and data.get("image_base64"):
+            metadata = {key: value for key, value in data.items() if key != "image_base64"}
+            return {"isError": False, "content": [
+                {"type": "text", "text": json.dumps(metadata, ensure_ascii=False)},
+                {"type": "image", "data": data["image_base64"], "mimeType": data["mimeType"]}]}
     return {
         "isError": not out.ok,
         "content": [{"type": "text", "text": json.dumps(body, ensure_ascii=False, default=str)}],
@@ -89,12 +97,21 @@ def _handle(uid: str, msg: dict[str, Any]) -> dict[str, Any] | None:
     if method == "tools/list":
         return {"jsonrpc": "2.0", "id": rid, "result": {"tools": _tools_payload()}}
     if method == "tools/call":
+        from mino_nexus.core.deployment import Deployment, deployment_root
+        root = deployment_root()
+        held = Deployment(root).held() if root else {}
+        allowed = {"nexus_update_status", "nexus_update_cancel"}
+        if held and held["state"] not in {"requested", "waiting_idle"} and (msg.get("params") or {}).get("name") not in allowed:
+            return _rpc_error(rid, -32000, "Nexus 正在更新；请查询原 operation_id")
         params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
         return {"jsonrpc": "2.0", "id": rid, "result": _call(uid, str(params.get("name") or ""), params.get("arguments") or {})}
     return _rpc_error(rid, -32601, f"不支持的方法 {method}")
 
 
+@tracked(maintenance=True)
 def _handle_owned(uid: str, msg: dict, token_scope: str):
+    # asyncio.to_thread outlives a cancelled/disconnected HTTP request. Track the
+    # actual worker; _handle still limits maintenance access to status/cancel.
     from mino_nexus.core.execution_user import execution_user
     from mino_nexus.ai import dispatch_log
     with execution_user(uid):
@@ -115,7 +132,8 @@ async def mcp_post(request: Request, authorization: str = Header(default="")):
     requested_version = request.headers.get("mcp-protocol-version")
     if requested_version and requested_version != PROTOCOL:
         return JSONResponse({"detail": f"仅支持 MCP {PROTOCOL}"}, status_code=400)
-    uid = store.resolve_mcp_token(bearer(authorization))
+    probe = store.resolve_probe_token(bearer(authorization))
+    uid = "system:probe" if probe else store.resolve_mcp_token(bearer(authorization))
     if not uid:
         return JSONResponse({"detail": "MCP token 无效或已吊销"}, status_code=401)
     try:
@@ -127,6 +145,12 @@ async def mcp_post(request: Request, authorization: str = Header(default="")):
     for msg in items:
         if not isinstance(msg, dict):
             out.append(_rpc_error(None, -32600, "无效请求"))
+            continue
+        if probe:
+            if msg.get("method") not in {"initialize", "ping", "tools/list"}:
+                out.append(_rpc_error(msg.get("id"), -32601, "probe token 仅允许 initialize/ping/tools/list"))
+            else:
+                out.append(await asyncio.to_thread(_handle, uid, msg))
             continue
         scope = hashlib.sha256(bearer(authorization).encode()).hexdigest()
         res = await asyncio.to_thread(_handle_owned, uid, msg, scope)

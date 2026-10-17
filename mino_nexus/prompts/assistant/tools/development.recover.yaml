@@ -1,0 +1,32 @@
+{
+  "id": "development.recover",
+  "version": 1,
+  "title": "读取节点原回执并恢复开发操作状态",
+  "description": "只读取原操作的节点持久回执，不重复启动、构建或安装；未知结果无回执则仍保持未知。",
+  "route": "POST /project/app/{app_id}/development/operations/{operation_id}/recover",
+  "risk": "read",
+  "async": false,
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "app_id": {
+        "type": "string"
+      },
+      "operation_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "app_id",
+      "operation_id"
+    ]
+  },
+  "param_resolvers": {},
+  "result_pick": [
+    "data"
+  ],
+  "surfaces": [
+    "mcp"
+  ],
+  "enabled": true
+}

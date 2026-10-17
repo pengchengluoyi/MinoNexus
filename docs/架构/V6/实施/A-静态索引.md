@@ -1,0 +1,298 @@
+# A 阶段静态索引
+
+只解析源码，不 import 应用、不连接业务库。
+
+## 路径/数据库直接导入与 ensure_db 调用
+
+- `mino_nexus/ai/dispatch_log.py:18`：from mino_nexus.core.paths import APP_DATA_DIR
+- `mino_nexus/ai/dispatch_log.py:303`：from mino_nexus.core.database import session_scope
+- `mino_nexus/ai/dispatch_log.py:507`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/ai/dispatch_log.py:547`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/ai/dispatch_log.py:510`：ensure_db()
+- `mino_nexus/ai/dispatch_log.py:553`：ensure_db()
+- `mino_nexus/app.py:25`：from mino_nexus.core.paths import data_dir
+- `mino_nexus/app.py:60`：from mino_nexus.core.database import ensure_db
+- `mino_nexus/app.py:63`：ensure_db()
+- `mino_nexus/catalog/flow_block_seed.py:106`：from mino_nexus.core.database import SessionLocal
+- `mino_nexus/catalog/guard_recovery_seed.py:125`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/guard_recovery_seed.py:104`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/loader.py:150`：from mino_nexus.core.database import ensure_db
+- `mino_nexus/catalog/loader.py:157`：from mino_nexus.core.database import SessionLocal
+- `mino_nexus/catalog/loader.py:152`：ensure_db()
+- `mino_nexus/catalog/recovery_seed.py:188`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/recovery_seed.py:308`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/recovery_seed.py:338`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/recovery_seed.py:381`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/recovery_seed.py:462`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/recovery_seed.py:511`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/recovery_seed.py:579`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/recovery_seed.py:626`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/recovery_seed.py:689`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/recovery_seed.py:728`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/recovery_seed.py:762`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/resource_transition_seed.py:60`：from mino_nexus.core.database import SessionLocal
+- `mino_nexus/catalog/skill_channel.py:382`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/skill_channel.py:573`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/writer.py:34`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/writer.py:76`：from mino_nexus.core.database import session_scope
+- `mino_nexus/catalog/writer.py:146`：from mino_nexus.core.database import session_scope
+- `mino_nexus/cli.py:29`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/cli.py:100`：from mino_nexus.core.database import ensure_db
+- `mino_nexus/cli.py:203`：from mino_nexus.core.database import ensure_db
+- `mino_nexus/cli.py:32`：ensure_db()
+- `mino_nexus/cli.py:102`：ensure_db()
+- `mino_nexus/cli.py:207`：ensure_db()
+- `mino_nexus/core/bootstrap.py:12`：from mino_nexus.core.database import SessionLocal
+- `mino_nexus/core/database.py:11`：from mino_nexus.core.paths import data_dir
+- `mino_nexus/core/database.py:47`：ensure_db()
+- `mino_nexus/core/database.py:57`：ensure_db()
+- `mino_nexus/core/migration.py:8`：from mino_nexus.core.database import engine
+- `mino_nexus/core/migration.py:49`：from mino_nexus.core.paths import data_dir
+- `mino_nexus/loop/binding_cache.py:10`：from mino_nexus.core.paths import data_dir
+- `mino_nexus/loop/observe/screen_store.py:10`：from mino_nexus.core.paths import data_dir
+- `mino_nexus/models/app_intel.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/assistant.py:9`：from mino_nexus.core.database import Base
+- `mino_nexus/models/assistant_conversation.py:3`：from mino_nexus.core.database import Base
+- `mino_nexus/models/assistant_delivery.py:2`：from mino_nexus.core.database import Base
+- `mino_nexus/models/atlas.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/auth.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/case.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/case_import_preview.py:3`：from mino_nexus.core.database import Base
+- `mino_nexus/models/catalog.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/device.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/device_app_session.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/device_reservation.py:3`：from mino_nexus.core.database import Base
+- `mino_nexus/models/dispatch.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/doc_library.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/knowledge.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/model_usage.py:2`：from mino_nexus.core.database import Base
+- `mino_nexus/models/nav.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/nav_flow_block_catalog.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/nav_fsm.py:13`：from mino_nexus.core.database import Base
+- `mino_nexus/models/node.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/plugin.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/pool_account.py:7`：from mino_nexus.core.database import Base
+- `mino_nexus/models/project.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/project_pool_config.py:7`：from mino_nexus.core.database import Base
+- `mino_nexus/models/prompt_evidence.py:2`：from mino_nexus.core.database import Base
+- `mino_nexus/models/resource_ops.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/run.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/session_event.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/settings.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/task.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/token.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/models/ui_control.py:5`：from mino_nexus.core.database import Base
+- `mino_nexus/routers/rCaseRunner.py:337`：from mino_nexus.core.database import session_scope
+- `mino_nexus/routers/rPacks.py:160`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/routers/rPacks.py:163`：ensure_db()
+- `mino_nexus/routers/rSettings.py:844`：from mino_nexus.core.database import SessionLocal
+- `mino_nexus/routers/rSettings.py:885`：from mino_nexus.core.database import SessionLocal
+- `mino_nexus/services/account_facet_sync.py:245`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/app_intel.py:737`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/app_intel.py:778`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/app_intel.py:822`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/app_intel.py:861`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/app_intel.py:898`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/app_intel.py:625`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/app_intel.py:743`：ensure_db()
+- `mino_nexus/services/app_intel.py:787`：ensure_db()
+- `mino_nexus/services/app_intel.py:828`：ensure_db()
+- `mino_nexus/services/app_intel.py:871`：ensure_db()
+- `mino_nexus/services/app_intel.py:905`：ensure_db()
+- `mino_nexus/services/app_intel.py:628`：ensure_db()
+- `mino_nexus/services/assistant_conversation.py:9`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/assistant_media.py:6`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/assistant_notify.py:178`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/assistant_notify.py:197`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/assistant_notify.py:280`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/assistant_receipts.py:6`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/assistant_reports.py:9`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/assistant_runtime.py:141`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/assistant_runtime.py:84`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/assistant_scope.py:6`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/assistant_store.py:14`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/atlas_aliases.py:14`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/atlas_aliases.py:32`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/atlas_aliases.py:17`：ensure_db()
+- `mino_nexus/services/auth_store.py:71`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/auth_store.py:97`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/auth_store.py:233`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/auth_store.py:449`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/auth_store.py:74`：ensure_db()
+- `mino_nexus/services/case_import_preview_store.py:8`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/case_store.py:56`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/case_store.py:67`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/case_store.py:98`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/case_store.py:108`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/case_store.py:127`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/case_store.py:156`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/case_store.py:178`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/case_store.py:259`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/case_store.py:307`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/case_store.py:353`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/case_store.py:410`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/case_store.py:114`：ensure_db()
+- `mino_nexus/services/case_store.py:133`：ensure_db()
+- `mino_nexus/services/case_store.py:161`：ensure_db()
+- `mino_nexus/services/case_store.py:185`：ensure_db()
+- `mino_nexus/services/control_registry.py:115`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/control_registry.py:203`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/control_registry.py:243`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/device_admission.py:36`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/device_admission.py:128`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/device_app_session_store.py:7`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/device_resource_lease.py:59`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/device_resource_lease.py:123`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/device_resource_lease.py:142`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/device_resource_lease.py:159`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/device_resource_lease.py:178`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/device_secrets.py:8`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/device_secrets.py:28`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/device_secrets.py:14`：ensure_db()
+- `mino_nexus/services/device_store.py:34`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/device_store.py:75`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/device_store.py:37`：ensure_db()
+- `mino_nexus/services/doc_store.py:16`：from mino_nexus.core.database import engine, session_scope
+- `mino_nexus/services/doc_store.py:17`：from mino_nexus.core.paths import data_dir
+- `mino_nexus/services/flow_block_key_ref_backfill.py:9`：from mino_nexus.core.database import SessionLocal
+- `mino_nexus/services/knowledge_store.py:120`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/knowledge_store.py:150`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/knowledge_store.py:175`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/knowledge_store.py:194`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/knowledge_store.py:285`：from mino_nexus.core.paths import data_dir
+- `mino_nexus/services/knowledge_store.py:122`：ensure_db()
+- `mino_nexus/services/llm_diagnostics.py:15`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/llm_diagnostics.py:18`：ensure_db()
+- `mino_nexus/services/model_usage.py:11`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/model_usage.py:35`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/model_usage.py:79`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/nav_calibration_store.py:22`：from mino_nexus.core.paths import nav_calibration_dir
+- `mino_nexus/services/nav_candidates_store.py:10`：from mino_nexus.core.paths import nav_candidates_dir
+- `mino_nexus/services/nav_capture_store.py:15`：from mino_nexus.core.paths import nav_capture_dir
+- `mino_nexus/services/nav_flow_block_catalog.py:25`：from mino_nexus.core.database import SessionLocal
+- `mino_nexus/services/nav_flow_block_catalog.py:89`：from mino_nexus.core.database import SessionLocal
+- `mino_nexus/services/nav_flow_block_catalog.py:192`：from mino_nexus.core.database import SessionLocal
+- `mino_nexus/services/nav_fsm_store.py:183`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/nav_fsm_store.py:213`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/nav_fsm_store.py:300`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/nav_fsm_store.py:350`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/nav_fsm_store.py:413`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/nav_fsm_store.py:185`：ensure_db()
+- `mino_nexus/services/nav_fsm_store.py:215`：ensure_db()
+- `mino_nexus/services/nav_fsm_store.py:302`：ensure_db()
+- `mino_nexus/services/nav_fsm_store.py:352`：ensure_db()
+- `mino_nexus/services/nav_fsm_store.py:415`：ensure_db()
+- `mino_nexus/services/node_claim.py:6`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/node_store.py:20`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/node_store.py:54`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/node_store.py:94`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/node_store.py:122`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/node_store.py:141`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/node_store.py:23`：ensure_db()
+- `mino_nexus/services/node_store.py:125`：ensure_db()
+- `mino_nexus/services/plugins_store.py:295`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/plugins_store.py:316`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/plugins_store.py:298`：ensure_db()
+- `mino_nexus/services/pool_account_store.py:8`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/project_pool_config_store.py:7`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/project_store.py:107`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/project_store.py:159`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/project_store.py:110`：ensure_db()
+- `mino_nexus/services/prompt_evidence.py:10`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/resource_allocation_log.py:8`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/resource_transition_engine.py:34`：from mino_nexus.core.database import SessionLocal
+- `mino_nexus/services/resource_transition_engine.py:101`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/run_store.py:85`：from mino_nexus.core.database import engine, ensure_db
+- `mino_nexus/services/run_store.py:138`：from mino_nexus.core.database import engine, ensure_db
+- `mino_nexus/services/run_store.py:159`：from mino_nexus.core.database import engine, ensure_db
+- `mino_nexus/services/run_store.py:170`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/run_store.py:189`：from mino_nexus.core.database import engine, ensure_db
+- `mino_nexus/services/run_store.py:526`：from mino_nexus.core.database import engine, ensure_db
+- `mino_nexus/services/run_store.py:560`：from mino_nexus.core.database import engine, ensure_db
+- `mino_nexus/services/run_store.py:87`：ensure_db()
+- `mino_nexus/services/run_store.py:140`：ensure_db()
+- `mino_nexus/services/run_store.py:161`：ensure_db()
+- `mino_nexus/services/run_store.py:191`：ensure_db()
+- `mino_nexus/services/run_store.py:528`：ensure_db()
+- `mino_nexus/services/run_store.py:562`：ensure_db()
+- `mino_nexus/services/run_write_safety.py:41`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/runtime_tokens.py:25`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/runtime_tokens.py:42`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/runtime_tokens.py:65`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/runtime_tokens.py:77`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/runtime_tokens.py:90`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/runtime_tokens.py:157`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/session_atomic.py:19`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/session_atomic.py:32`：ensure_db()
+- `mino_nexus/services/session_store.py:23`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/session_store.py:107`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/session_store.py:153`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/session_store.py:188`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/session_store.py:243`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/session_store.py:25`：ensure_db()
+- `mino_nexus/services/session_store.py:109`：ensure_db()
+- `mino_nexus/services/session_store.py:155`：ensure_db()
+- `mino_nexus/services/session_store.py:193`：ensure_db()
+- `mino_nexus/services/session_store.py:248`：ensure_db()
+- `mino_nexus/services/settings_store.py:62`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/settings_store.py:87`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/settings_store.py:202`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/settings_store.py:212`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/settings_store.py:65`：ensure_db()
+- `mino_nexus/services/studio_nav.py:42`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/studio_nav.py:57`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/studio_nav.py:45`：ensure_db()
+- `mino_nexus/services/task_store.py:25`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/task_store.py:43`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/services/task_store.py:46`：ensure_db()
+- `mino_nexus/services/v5_controls.py:13`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/v5_controls.py:22`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/v5_controls.py:32`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/v5_metrics.py:9`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/v5_publication.py:178`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/v5_publication.py:227`：from mino_nexus.core.database import session_scope
+- `mino_nexus/services/wechat_ilink.py:19`：from mino_nexus.core.paths import APP_DATA_DIR
+
+## bootstrap 调用清单
+
+- `11`：`load_all`
+- `14`：`SessionLocal`
+- `18`：`migrate_legacy`
+- `23`：`seed_recovery_rules`
+- `28`：`seed_resource_transition_rules`
+- `33`：`upgrade_recovery_rules`
+- `38`：`upgrade_system_permission_recovery_rules`
+- `43`：`upgrade_system_media_picker_recovery_rules`
+- `48`：`upgrade_account_capabilities`
+- `53`：`upgrade_get_otp_capability`
+- `58`：`upgrade_consent_ime_capabilities`
+- `63`：`seed_global_flow_blocks`
+- `68`：`backfill_flow_block_key_refs`
+- `73`：`upgrade_check_run_env_capability`
+- `78`：`upgrade_fsm_navigate_capability`
+- `83`：`upgrade_package_param_capabilities`
+- `88`：`upgrade_capability_empty_params`
+- `93`：`seed_guard_recovery_rows`
+- `98`：`ensure_read_web_auth_capability`
+- `102`：`upgrade_skill_channel_layout`
+- `104`：`db.commit`
+- `109`：`db.close`
+- `20`：`SLog.i`
+- `25`：`SLog.i`
+- `30`：`SLog.i`
+- `35`：`SLog.i`
+- `40`：`SLog.i`
+- `45`：`SLog.i`
+- `50`：`SLog.i`
+- `55`：`SLog.i`
+- `60`：`SLog.i`
+- `65`：`SLog.i`
+- `70`：`SLog.i`
+- `75`：`SLog.i`
+- `80`：`SLog.i`
+- `85`：`SLog.i`
+- `90`：`SLog.i`
+- `95`：`SLog.i`
+- `99`：`SLog.i`
+- `103`：`SLog.i`
+- `106`：`db.rollback`
