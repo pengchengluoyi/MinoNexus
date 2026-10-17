@@ -28,7 +28,7 @@ jobs:
           VERSION=$(python -c "from pathlib import Path; import json; print(Path('mino_nexus/VERSION').read_text().strip() if Path('mino_nexus').is_dir() else json.loads(Path('package.json').read_text())['version'])")
           python scripts/write_manifest.py --dist dist --prefix "https://github.com/${{ github.repository }}/releases/download/v$VERSION"
       - name: Validate installer against the actual native package
-        run: bash packaging/bootstrap.sh --environment test --package-dir "$PWD/dist" --download-only
+        run: bash packaging/bootstrap.sh --environment test --package-dir "$PWD/dist" --root "$RUNNER_TEMP/mino-install/nexus"
       - run: cp packaging/bootstrap.sh dist/bootstrap.sh
       - uses: actions/upload-artifact@v5
         with:
