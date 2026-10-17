@@ -45,12 +45,43 @@ jobs:
         run: |
           VERSION=$(python -c "from pathlib import Path; import json; print(Path('mino_nexus/VERSION').read_text().strip() if Path('mino_nexus').is_dir() else json.loads(Path('package.json').read_text())['version'])")
           python scripts/write_manifest.py --dist dist --prefix "https://github.com/${{ github.repository }}/releases/download/v$VERSION"
+      - name: Install released upgrade baseline and create persistent user data
+        run: |
+          python packaging/install.py --components nexus --nexus-version 0.1.43 --root "$RUNNER_TEMP/mino-install/nexus" --command-dir "$RUNNER_TEMP/mino-commands" --no-path --no-open
+          python - <<'PYCODE'
+          import json, os, pathlib, urllib.request, uuid
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])/'mino-install/nexus'
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          email = 'upgrade-'+uuid.uuid4().hex+'@example.com'
+          password = uuid.uuid4().hex
+          request = urllib.request.Request('http://127.0.0.1:50104/auth/register', data=json.dumps({'email':email,'password':password,'name':'Upgrade acceptance'}).encode(), headers={'Content-Type':'application/json','X-Mino-Client':'workbench'})
+          with opener.open(request) as response: assert json.load(response)['ok']
+          (root/'data/upgrade-preservation.txt').write_text('retained user file')
+          evidence = {'email':email,'password':password,'config':json.loads((root/'config/mino-deployment.json').read_text())}
+          (pathlib.Path(os.environ['RUNNER_TEMP'])/'upgrade-before.json').write_text(json.dumps(evidence))
+          PYCODE
       - name: Validate installer against the actual native package
         run: |
           python - <<'PYCODE'
           import os, pathlib, subprocess
           installer = next(p for p in pathlib.Path('dist').glob('MinoInstaller-*') if p.is_file())
           subprocess.run([str(installer.resolve()), '--components', 'nexus', '--package-dir', str(pathlib.Path('dist').resolve()), '--root', str(pathlib.Path(os.environ['RUNNER_TEMP'])/'mino-install'/'nexus'), '--command-dir', str(pathlib.Path(os.environ['RUNNER_TEMP'])/'mino-commands'), '--no-path'], check=True)
+          PYCODE
+      - name: Verify upgraded identity, user login and retained backups
+        run: |
+          python - <<'PYCODE'
+          import json, os, pathlib, urllib.request
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])/'mino-install/nexus'
+          before = json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])/'upgrade-before.json').read_text())
+          assert json.loads((root/'config/mino-deployment.json').read_text()) == before['config']
+          assert (root/'data/upgrade-preservation.txt').read_text() == 'retained user file'
+          state = json.loads((root/'updates/mino-state.json').read_text())
+          assert state['state'] == 'succeeded' and state['previous_build'].startswith('0.1.43-')
+          assert pathlib.Path(state['backup']).joinpath('mino.db').is_file()
+          assert pathlib.Path(state['launcher_backup']).is_dir()
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          request = urllib.request.Request('http://127.0.0.1:50104/auth/login', data=json.dumps({'email':before['email'],'password':before['password']}).encode(), headers={'Content-Type':'application/json','X-Mino-Client':'workbench'})
+          with opener.open(request) as response: assert json.load(response)['ok']
           PYCODE
       - name: Verify packaged Workbench WebSocket entry
         run: |

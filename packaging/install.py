@@ -118,6 +118,11 @@ def install(component,root,prepared,nexus_url):
     port=50104 if component=='nexus' else 60104
     root.parent.mkdir(parents=True,exist_ok=True);root=root.parent.resolve()/root.name
     helper=extract_helper(folder,package)
+    if root.exists():
+        prefix=['d2'] if component=='nexus' else []
+        run([helper,*prefix,'installer-upgrade','--root',root,'--manifest',folder/'manifest.json','--package',package])
+        print(f'Upgraded {component}: {root}',flush=True)
+        return
     if component=='nexus':
         run([helper,'d2','install','--root',root,'--data-dir',root/'data','--host','0.0.0.0','--port',port,'--manifest',folder/'manifest.json','--package',package])
         helper=exe(root/'launcher/mino-maintain')
@@ -153,6 +158,7 @@ def main():
     ap.add_argument('--nexus-url')
     ap.add_argument('--package-dir',type=Path,help='Offline manifest/ZIP directory; both uses nexus/ and workbench/ subdirectories')
     ap.add_argument('--download-only',action='store_true')
+    ap.add_argument('--no-open',action='store_true',help='Do not open Workbench in the default browser after installation')
     ap.add_argument('--command-dir',type=Path,help='Directory for installed service commands')
     ap.add_argument('--no-path',action='store_true',help='Register commands without changing user PATH settings')
     args=ap.parse_args()
@@ -165,13 +171,21 @@ def main():
     roots={c:(args.root.expanduser().absolute() if args.root else base/c) for c in components}
     for c,root in roots.items():
         if not args.download_only:
-            if root.exists() or root.is_symlink():ap.error(f'Existing installation preserved: {root}; use maintenance commands, do not reinstall')
+            if root.is_symlink() or root.resolve()!=root:ap.error(f'Installation path must not traverse links: {root}')
+            if root.exists():
+                config=root/('config/mino-deployment.json' if c=='nexus' else 'config/installation.json')
+                if not config.is_file():ap.error(f'Unrecognized installation preserved: {root}')
+                print(f'Existing {c} detected: upgrade in place with retained backups: {root}',flush=True)
+                continue
             port=50104 if c=='nexus' else 60104
             with socket.socket() as listener:
                 try:listener.bind(('127.0.0.1',port))
                 except OSError:ap.error(f'Port {port} is occupied; existing service will not be stopped or moved')
     commands=(args.command_dir or command_entry.command_dir()).expanduser().absolute()
-    if not args.download_only: command_entry.check(commands,components)
+    if not args.download_only:
+        for c in components:
+            if roots[c].exists(): command_entry.check_upgrade(commands,c,roots[c])
+            else: command_entry.check(commands,[c])
     # Prepare ALL requested packages before changing an installation.
     packages={}
     for c in components:
@@ -184,10 +198,23 @@ def main():
     nexus_url=args.nexus_url or 'http://127.0.0.1:50104'
     for c in components:
         install(c,roots[c],packages[c],nexus_url)
-        entry=command_entry.register(commands,c,roots[c].resolve())
-        print(f'Service command: {entry} [start|stop|status]')
+        entry=command_entry.command_file(commands,c)
+        if not entry.exists(): entry=command_entry.register(commands,c,roots[c].resolve())
+        actions = 'start|stop|status|open' if c == 'workbench' else 'start|stop|status'
+        print(f'Service command: {entry} [{actions}]')
     if not args.no_path: command_entry.add_path(commands)
-    print('Production installation complete.')
+    print('Production installation complete.', flush=True)
+    if 'workbench' in components:
+        url = 'http://127.0.0.1:60104'
+        print(f'Workbench: {url}', flush=True)
+        if not args.no_open:
+            try:
+                import webbrowser
+                opened = webbrowser.open(url, new=2)
+            except Exception:
+                opened = False
+            if not opened:
+                print('无法启动默认浏览器；安装已完成，请手动打开上面的地址。')
     return 0
 
 if __name__=='__main__':

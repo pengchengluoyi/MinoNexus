@@ -232,9 +232,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="mino-nexus maintenance")
     sub = ap.add_subparsers(dest="command", required=True)
     p = sub.add_parser("migrate"); p.add_argument("--data-dir", required=True); p.add_argument("--root", type=Path)
-    for name in ("install", "stage", "fetch", "check-update", "bind-workbench", "request", "status", "cancel", "helper", "serve", "run-server", "provision-probe", "register", "probe", "recover", "start", "stop", "service-status"):
+    for name in ("installer-upgrade", "install", "stage", "fetch", "check-update", "bind-workbench", "request", "status", "cancel", "helper", "serve", "run-server", "provision-probe", "register", "probe", "recover", "start", "stop", "service-status"):
         p = sub.add_parser(name); p.add_argument("--root", type=Path, required=True)
-        if name in {"install", "stage"}:
+        if name in {"install", "stage", "installer-upgrade"}:
             p.add_argument("--manifest", type=Path, required=True); p.add_argument("--package", type=Path, required=True)
         if name == "install":
             p.add_argument("--data-dir", required=True); p.add_argument("--port", type=int)
@@ -263,7 +263,10 @@ def main(argv=None):
         else:
             d = Deployment(args.root)
             from mino_nexus.core import update_engine as engine
-            if args.command == "install":
+            if args.command == "installer-upgrade":
+                from mino_nexus.core.installer_upgrade import upgrade
+                result = upgrade(args.root, args.manifest, args.package)
+            elif args.command == "install":
                 result = install(args.root, args.manifest, args.package, args.data_dir, args.port if args.port is not None else 50104, args.host, args.repository)
             elif args.command in {"start", "stop"}:
                 engine.control_service(d, args.command)
