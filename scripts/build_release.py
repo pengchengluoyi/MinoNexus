@@ -55,7 +55,7 @@ def build(args):
         (web / "BUILD.json").write_text(json.dumps(identity))
         entry = ROOT / "packaging/workbench_server.py"
         extra = ["--add-data", str(web) + os.pathsep + "web"]
-    base = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--console",
+    base = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--console", "--python-option", "X utf8",
             "--distpath", str(work / "dist"), "--workpath", str(work / "freeze"),
             "--specpath", str(work)]
     command([*base, "--name", "mino-" + component, *extra, str(entry)], cwd=source, env=env)
@@ -72,7 +72,7 @@ def build(args):
         command([str(executable), "--identity"], env=env)
     installer_name = "MinoInstaller-" + osn + "-" + arch
     installer = out / (installer_name + (".exe" if osn == "win32" else ""))
-    command([sys.executable, "-m", "PyInstaller", "--noconfirm", "--console", "--onefile",
+    command([sys.executable, "-m", "PyInstaller", "--noconfirm", "--console", "--python-option", "X utf8", "--onefile",
              "--name", installer_name, "--distpath", str(out), "--workpath", str(work / "installer-freeze"),
              "--specpath", str(work), str(ROOT / "packaging/install.py")], cwd=source, env=env)
     command([str(installer), "--help"], env=env)
