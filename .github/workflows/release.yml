@@ -76,7 +76,7 @@ jobs:
           helper = root/'launcher'/('mino-maintain.exe' if os.name == 'nt' else 'mino-maintain')
           entry = pathlib.Path(os.environ['RUNNER_TEMP'])/'mino-commands'/('mino-nexus'+('.cmd' if os.name=='nt' else ''))
           command = ['cmd', '/c', str(entry)] if os.name=='nt' else [str(entry)]
-          for action in ('stop','start'):
+          for action in ('stop','stop','start','start'):
               subprocess.run(command + [action], check=True)
               status = json.loads(subprocess.check_output(command + ['status'], text=True))
               assert status['running'] == (action == 'start'), status

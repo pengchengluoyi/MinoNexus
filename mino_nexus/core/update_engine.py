@@ -72,7 +72,13 @@ def control_service(d: Deployment, action: str) -> None:
             time.sleep(0.5)
         cmd = ["launchctl", "bootout", target]
     else:
-        cmd = ["launchctl", "bootstrap", domain, cfg["service_plist"]]
+        probe = subprocess.run(["launchctl", "print", target], capture_output=True, timeout=10)
+        if probe.returncode == 0:
+            cmd = ["launchctl", "kickstart", target]  # no -k: an active service is not restarted
+        elif b"Could not find service" in probe.stderr:
+            cmd = ["launchctl", "bootstrap", domain, cfg["service_plist"]]
+        else:
+            raise RuntimeError("Cannot inspect application service before start")
     result = subprocess.run(cmd, capture_output=True, timeout=40)
     if result.returncode:
         raise RuntimeError(f"launchctl {action} failed ({result.returncode})")
