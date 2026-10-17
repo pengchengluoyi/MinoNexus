@@ -5,6 +5,7 @@ prove a safe continuation. No process kill escalation or post-start DB rollback.
 """
 from __future__ import annotations
 from mino_nexus.core.deployment import legacy_path
+from mino_nexus.core import platform_runtime as platform_runtime
 import json
 import os
 import re
@@ -30,11 +31,15 @@ def release_env(d: Deployment, build: str) -> dict:
 
 
 def release_command(d: Deployment, build: str, *args) -> list[str]:
-    return [str(d.release(build) / "app/mino-nexus"), *args]
+    return [str(platform_runtime.executable(d.release(build) / "app/mino-nexus")), *args]
 
 
 def control_service(d: Deployment, action: str) -> None:
     cfg = d.config
+    if cfg["service_manager"] == "user-process":
+        if action == "stop": platform_runtime.stop(d.root)
+        else: platform_runtime.start(d.root, [platform_runtime.executable(d.root / "launcher/mino-maintain"), "d2", "serve", "--root", d.root])
+        return
     if cfg["service_manager"] != "launchd":
         raise RuntimeError("Only macOS launchd is enabled; other service managers need validation")
     domain = f"gui/{os.getuid()}"

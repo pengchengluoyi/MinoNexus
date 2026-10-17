@@ -14,6 +14,8 @@ import zipfile
 
 from mino_nexus.core.deployment import Deployment, atomic_json, file_digest, identifier, read_json
 
+from mino_nexus.core.platform_runtime import executable
+
 MAX_BYTES = 4 * 1024**3
 
 
@@ -80,7 +82,7 @@ def stage_release(d: Deployment, manifest: dict, package: Path) -> Path:
                 with z.open(info) as src, target.open("xb") as out:
                     shutil.copyfileobj(src, out)
                 target.chmod(0o755 if mode & 0o111 else 0o644)
-    for name in ("app/mino-nexus", "launcher/mino-maintain", "release.json"):
+    for name in (str(executable("app/mino-nexus")), str(executable("launcher/mino-maintain")), "release.json"):
         if not (temp / name).is_file():
             raise ValueError(f"Incomplete release: {name}")
     metadata = read_json(temp / "release.json")

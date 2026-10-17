@@ -1,6 +1,7 @@
 """Local installation/maintenance entry point; no ORM imports before explicit data root."""
 from __future__ import annotations
 from mino_nexus.core.deployment import legacy_path
+from mino_nexus.core import platform_runtime
 import argparse
 import json
 import os
@@ -46,11 +47,11 @@ def _plist(path: Path, doc: dict):
         plistlib.dump(doc, f)
 
 
-def install(root: Path, manifest_path: Path, package: Path, data: str, port: int, host: str, repo: str, environment: str = "production") -> dict:
-    if sys.platform != "darwin":
-        raise ValueError("Initial installation currently supports macOS only")
+def install(root: Path, manifest_path: Path, package: Path, data: str, port: int, host: str, repo: str) -> dict:
+    if sys.platform not in {"darwin", "linux", "win32"}:
+        raise ValueError("Unsupported installation platform")
     d = Deployment(root)
-    if d.config_path.exists() or (d.root / "current").exists() or (d.root / "config/installation.json").exists():
+    if d.config_path.exists() or (d.root / "current").exists() or (d.root / "current.json").exists() or (d.root / "config/installation.json").exists():
         raise ValueError("Deployment already exists; use staged update")
     data_path = _explicit_data(data)
     # A managed data root must be stable and outside releases/updates/runtime.
@@ -70,12 +71,15 @@ def install(root: Path, manifest_path: Path, package: Path, data: str, port: int
     label = "local.mino.nexus." + uuid.uuid4().hex[:12]
     service = d.root / "config/mino-nexus.plist"
     helper = d.root / "config/mino-update-helper.plist"
-    cfg = {"version": 1, "environment": environment, "instance_id": "", "data_dir": str(data_path),
+    cfg = {"version": 1, "environment": "production", "instance_id": "", "data_dir": str(data_path),
         "host": host, "port": port, "probe_url": f"http://127.0.0.1:{port}",
-        "release_repository": repo, "service_manager": "launchd", "service_label": label,
+        "release_repository": repo, "service_manager": "launchd" if sys.platform == "darwin" else "user-process", "service_label": label,
         "helper_label": label + ".updater", "service_plist": str(service), "helper_plist": str(helper)}
     atomic_json(d.config_path, cfg)
     d.switch(build)
+    if sys.platform != "darwin":
+        return {"installed": True, "registered": False, "build_id": build, "instance_id": "",
+                "next": "Provision probe, then register and start the user process"}
     common = {"WorkingDirectory": str(launcher), "KeepAlive": False, "RunAtLoad": False}
     command = [str(launcher / "mino-maintain"), "d2"]
     _plist(service, {**common, "Label": label, "RunAtLoad": True,
@@ -121,6 +125,8 @@ def serve(d: Deployment):
     from mino_nexus.core.update_engine import release_command, release_env
     env = release_env(d, build)
     command = release_command(d, build, "maintenance", "run-server", "--root", str(d.root))
+    if cfg["service_manager"] == "user-process":
+        return platform_runtime.run_service(d.root, command, env)
     os.execve(command[0], command, env)
 
 
@@ -145,6 +151,9 @@ def run_server(d: Deployment):
 
 
 def kick(d: Deployment):
+    if d.config["service_manager"] == "user-process":
+        platform_runtime.spawn([platform_runtime.executable(d.root / "launcher/mino-maintain"), "d2", "helper", "--root", d.root], d.root)
+        return
     result = subprocess.run(["launchctl", "kickstart", f"gui/{os.getuid()}/{d.config['helper_label']}"], capture_output=True)
     if result.returncode:
         raise RuntimeError("Update is persisted but helper kickstart failed; query/resume the same operation locally")
@@ -153,6 +162,12 @@ def kick(d: Deployment):
 def register(d: Deployment):
     if not (legacy_path(d.root / "config/mino-probe.token")).is_file():
         raise ValueError("Provision probe before registering services")
+    if d.config["service_manager"] == "user-process":
+        from mino_nexus.core.update_engine import control_service, await_health
+        control_service(d, "start")
+        await_health(d, d.current_build())
+        atomic_json(d.config_path, {**d.config, "registered": True})
+        return {"registered": True, "health_verified": True, "service_manager": "user-process"}
     for key, label in (("helper_plist", "helper_label"), ("service_plist", "service_label")):
         target = f"gui/{os.getuid()}/{d.config[label]}"
         existing = subprocess.run(["launchctl", "print", target], capture_output=True)
@@ -213,13 +228,12 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="mino-nexus maintenance")
     sub = ap.add_subparsers(dest="command", required=True)
     p = sub.add_parser("migrate"); p.add_argument("--data-dir", required=True); p.add_argument("--root", type=Path)
-    for name in ("install", "stage", "fetch", "check-update", "bind-workbench", "request", "status", "cancel", "helper", "serve", "run-server", "provision-probe", "register", "probe", "recover"):
+    for name in ("install", "stage", "fetch", "check-update", "bind-workbench", "request", "status", "cancel", "helper", "serve", "run-server", "provision-probe", "register", "probe", "recover", "start", "stop", "service-status"):
         p = sub.add_parser(name); p.add_argument("--root", type=Path, required=True)
         if name in {"install", "stage"}:
             p.add_argument("--manifest", type=Path, required=True); p.add_argument("--package", type=Path, required=True)
         if name == "install":
             p.add_argument("--data-dir", required=True); p.add_argument("--port", type=int)
-            p.add_argument("--environment", choices=["test", "production"], default="production")
             p.add_argument("--host", default="0.0.0.0"); p.add_argument("--repository", default="pengchengluoyi/MinoNexus")
         if name in {"request", "status", "cancel"}:
             p.add_argument("--operation-id", required=name != "status", default="")
@@ -246,7 +260,16 @@ def main(argv=None):
             d = Deployment(args.root)
             from mino_nexus.core import update_engine as engine
             if args.command == "install":
-                result = install(args.root, args.manifest, args.package, args.data_dir, args.port if args.port is not None else (50101 if args.environment == "test" else 50104), args.host, args.repository, args.environment)
+                result = install(args.root, args.manifest, args.package, args.data_dir, args.port if args.port is not None else 50104, args.host, args.repository)
+            elif args.command in {"start", "stop"}:
+                engine.control_service(d, args.command)
+                if args.command == "start": engine.await_health(d, d.current_build())
+                result = {"service": args.command}
+            elif args.command == "service-status":
+                if d.config["service_manager"] == "user-process": result = {"running": platform_runtime.running(d.root)}
+                else:
+                    probe = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/" + d.config['service_label']], capture_output=True)
+                    result = {"registered": probe.returncode == 0}
             elif args.command == "stage":
                 with d.lock():
                     result = {"release": str(stage_release(d, read_json(args.manifest), args.package))}

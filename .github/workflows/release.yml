@@ -1,4 +1,4 @@
-name: Release native baseline
+name: Release native production
 on:
   workflow_dispatch:
   push:
@@ -8,7 +8,25 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            platform: linux-x64
+          - runner: windows-latest
+            platform: win32-x64
+          - runner: macos-latest
+            platform: darwin-arm64
+          - runner: macos-15-intel
+            platform: darwin-x64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -21,14 +39,19 @@ jobs:
       - name: Validate repository installer
         run: |
           bash -n packaging/bootstrap.sh
-          bash packaging/bootstrap.sh --help
+          bash -n packaging/install.sh
       - run: python scripts/build_release.py --output dist
       - name: Create install manifest for the exact build
         run: |
           VERSION=$(python -c "from pathlib import Path; import json; print(Path('mino_nexus/VERSION').read_text().strip() if Path('mino_nexus').is_dir() else json.loads(Path('package.json').read_text())['version'])")
           python scripts/write_manifest.py --dist dist --prefix "https://github.com/${{ github.repository }}/releases/download/v$VERSION"
       - name: Validate installer against the actual native package
-        run: bash packaging/bootstrap.sh --environment test --package-dir "$PWD/dist" --root "$RUNNER_TEMP/mino-install/nexus"
+        run: |
+          python - <<'PYCODE'
+          import os, pathlib, subprocess
+          installer = next(p for p in pathlib.Path('dist').glob('MinoInstaller-*') if p.is_file())
+          subprocess.run([str(installer.resolve()), '--components', 'nexus', '--package-dir', str(pathlib.Path('dist').resolve()), '--root', str(pathlib.Path(os.environ['RUNNER_TEMP'])/'mino-install'/'nexus')], check=True)
+          PYCODE
       - name: Verify packaged Workbench WebSocket entry
         run: |
           python - <<'PYCODE'
@@ -37,7 +60,7 @@ jobs:
           from websockets.exceptions import ConnectionClosedError
           async def verify():
               try:
-                  async with connect('ws://127.0.0.1:50101/ws', origin='http://127.0.0.1:60101') as ws:
+                  async with connect('ws://127.0.0.1:50104/ws', origin='http://127.0.0.1:60104') as ws:
                       await ws.recv()
               except ConnectionClosedError as exc:
                   assert exc.rcvd.code == 1008 and exc.rcvd.reason == '请先登录', str(exc)
@@ -45,15 +68,14 @@ jobs:
                   raise AssertionError('Unauthenticated WebSocket must be rejected')
           asyncio.run(verify())
           PYCODE
-      - run: cp packaging/bootstrap.sh dist/bootstrap.sh
       - uses: actions/upload-artifact@v5
         with:
-          name: native-package
+          name: native-package-${{ matrix.platform }}
           path: |
             dist/Mino*.zip
             dist/item-*.json
-            dist/manifest.json
-            dist/bootstrap.sh
+            dist/MinoInstaller-*
+            dist/installer-*.sha256
           if-no-files-found: error
   publish:
     if: startsWith(github.ref, 'refs/tags/')
@@ -68,17 +90,37 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v6
         with:
-          name: native-package
+          pattern: native-package-*
+          merge-multiple: true
           path: dist
       - name: Validate packages and create manifest
         env:
           RELEASE_PREFIX: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}
         run: python scripts/write_manifest.py --dist dist --prefix "$RELEASE_PREFIX"
+      - name: Require every native platform and assemble installer checksums
+        run: |
+          python - <<'PYCODE'
+          import json, pathlib, shutil
+          root = pathlib.Path('dist')
+          expected = {('linux','x64'), ('win32','x64'), ('darwin','arm64'), ('darwin','x64')}
+          items = json.loads((root/'manifest.json').read_text())['items']
+          assert {(x['os'],x['arch']) for x in items} == expected
+          hashes = sorted(root.glob('installer-*.sha256'))
+          assert len(hashes) == 4
+          (root/'INSTALLER-SHA256SUMS.txt').write_text(''.join(p.read_text() for p in hashes))
+          for name in ('install.sh','install.ps1','bootstrap.sh','bootstrap.ps1'):
+              shutil.copyfile(pathlib.Path('packaging')/name, root/name)
+          PYCODE
       - uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/Mino*.zip
             dist/manifest.json
             dist/bootstrap.sh
+            dist/bootstrap.ps1
+            dist/install.sh
+            dist/install.ps1
+            dist/MinoInstaller-*
+            dist/INSTALLER-SHA256SUMS.txt
           fail_on_unmatched_files: true
           generate_release_notes: true

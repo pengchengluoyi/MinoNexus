@@ -51,7 +51,7 @@ def build(args):
         env["PYTHONPATH"] = str(source) + os.pathsep + env.get("PYTHONPATH", "")
     else:
         web = work / "web"
-        command(["npm", "run", "build", "--", "--base", "./", "--outDir", str(web)], cwd=ROOT, env=env)
+        command([*(["cmd", "/c", "npm"] if os.name == "nt" else ["npm"]), "run", "build", "--", "--base", "./", "--outDir", str(web)], cwd=ROOT, env=env)
         (web / "BUILD.json").write_text(json.dumps(identity))
         entry = ROOT / "packaging/workbench_server.py"
         extra = ["--add-data", str(web) + os.pathsep + "web"]
@@ -63,13 +63,20 @@ def build(args):
                       if component == "nexus" else [])
     command([*base, "--name", "mino-maintain", *helper_options, str(ROOT / "packaging/maintain.py")], cwd=source, env=env)
     if component == "nexus":
-        command([str(work / "dist/mino-maintain/mino-maintain"), "d2", "--help"], env=env)
+        command([str(work / "dist/mino-maintain" / ("mino-maintain.exe" if osn == "win32" else "mino-maintain")), "d2", "--help"], env=env)
     executable = work / "dist" / ("mino-" + component) / ("mino-" + component + (".exe" if osn == "win32" else ""))
     command([str(executable), "--help"], env=env)
     if component == "nexus":
         command([str(executable), "migrate", "--data-dir", str(work / "package-probe-data")], env=env)
     else:
         command([str(executable), "--identity"], env=env)
+    installer_name = "MinoInstaller-" + osn + "-" + arch
+    installer = out / (installer_name + (".exe" if osn == "win32" else ""))
+    command([sys.executable, "-m", "PyInstaller", "--noconfirm", "--console", "--onefile",
+             "--name", installer_name, "--distpath", str(out), "--workpath", str(work / "installer-freeze"),
+             "--specpath", str(work), str(ROOT / "packaging/install.py")], cwd=source, env=env)
+    command([str(installer), "--help"], env=env)
+    (out / ("installer-" + osn + "-" + arch + ".sha256")).write_text(hashlib.sha256(installer.read_bytes()).hexdigest() + "  " + installer.name + "\n")
     archive = out / ("Mino" + component.capitalize() + "-" + build_id + "-" + osn + "-" + arch + ".zip")
     with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED) as z:
         z.writestr("release.json", json.dumps(identity))

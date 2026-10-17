@@ -16,6 +16,8 @@ import tempfile
 import time
 import uuid
 
+from mino_nexus.core.platform_runtime import file_lock, sync_directory, current_release, switch_release
+
 TERMINAL = {"succeeded", "rolled_back", "failed", "cancelled", "expired"}
 SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}\Z")
 
@@ -35,11 +37,7 @@ def atomic_json(path: Path, value: dict) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
-        dfd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        sync_directory(path.parent)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -82,17 +80,9 @@ class Deployment:
 
     @contextmanager
     def lock(self, name="control", *, shared=False, blocking=True):
-        import fcntl
-        folder = self.root / "updates"
-        folder.mkdir(parents=True, exist_ok=True)
-        path = folder / (identifier(name) + ".lock")
-        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-        try:
-            fcntl.flock(fd, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) |
-                        (0 if blocking else fcntl.LOCK_NB))
+        path = self.root / "updates" / (identifier(name) + ".lock")
+        with file_lock(path, shared=shared, blocking=blocking):
             yield
-        finally:
-            os.close(fd)
 
     def state(self) -> dict:
         return read_json(self.state_path) if self.state_path.exists() else {}
@@ -117,23 +107,11 @@ class Deployment:
         return p
 
     def current_build(self) -> str:
-        p = self.root / "current"
-        if not p.is_symlink():
-            raise ValueError("No registered current release")
-        resolved = p.resolve(strict=True)
-        if resolved.parent != (self.root / "releases").resolve():
-            raise ValueError("Current points outside releases")
-        return identifier(resolved.name)
+        return identifier(current_release(self.root).name)
 
     def switch(self, build: str) -> None:
-        if not self.release(build).is_dir():
-            raise ValueError("Release missing")
-        tmp = self.root / (".current-" + uuid.uuid4().hex)
-        tmp.symlink_to(Path("releases") / build)
-        try:
-            os.replace(tmp, self.root / "current")
-        finally:
-            tmp.unlink(missing_ok=True)
+        identifier(build)
+        switch_release(self.root, build)
 
     def held(self) -> dict:
         row = self.state()

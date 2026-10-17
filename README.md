@@ -1,16 +1,24 @@
-## 一键安装（macOS Apple Silicon）
+## 安装正式版本
 
-安装包由本仓库 GitHub Actions 编译，在 [Releases](https://github.com/pengchengluoyi/MinoNexus/releases) 下载；不是用户本机编译。首次安装：
+GitHub 下载和安装仅提供正式版本，没有测试环境选项。安装菜单只选择 Nexus、Workbench 或两者；包由 GitHub Actions 原生编译并发布到 Releases，用户电脑不编译源码。
+
+支持 Linux x64、Windows x64、macOS Apple Silicon 与 Intel。以下入口随新版四平台 Release 发布后可用：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/pengchengluoyi/MinoNexus/main/packaging/bootstrap.sh | bash -s -- --environment test
+curl -fsSL https://github.com/pengchengluoyi/MinoNexus/releases/latest/download/install.sh | bash
 ```
 
-正式环境将 `test` 改为 `production`。默认目录为 `~/Mino/<环境>/nexus`，需要系统 `curl`、`unzip` 和 `python3`，不需要 GitHub CLI 或克隆源码。已有目录或端口占用时停止，不覆盖数据、不自动换端口。使用 `--version 0.1.38` 固定版本，`--download-only` 只下载校验，`--package-dir /绝对路径` 使用包含 manifest.json 与 ZIP 的离线下载目录。
+Windows 在 [Releases](https://github.com/pengchengluoyi/MinoNexus/releases/latest) 下载 `MinoInstaller-win32-x64.exe` 运行，或在 PowerShell 执行：
 
-测试地址为 `http://127.0.0.1:50101`，正式地址为 `http://127.0.0.1:50104`。Workbench 默认连接本机同环境 Nexus，可用 `--nexus-url` 指定另一台电脑的 Nexus。本机安装默认只监听回环地址。
+```powershell
+irm https://github.com/pengchengluoyi/MinoNexus/releases/latest/download/install.ps1 | iex
+```
 
-仅已发布且带新格式 manifest.json 的 Release 可一键安装；CI 构建成功但尚未发布时，脚本会报发布物缺失，不能当成安装成功。
+默认安装目录是 `~/Mino/nexus`、`~/Mino/workbench`。Nexus 地址为 `http://127.0.0.1:50104`，Workbench 地址为 `http://127.0.0.1:60104`。Workbench 默认连接本机 Nexus，可用 `--nexus-url` 指定远程地址。无需安装 Python 或 GitHub CLI。安装器验证下载大小和 SHA256；已有目录或端口占用时停止并保留数据。
+
+`bootstrap.sh` / `bootstrap.ps1` 默认只安装本仓库组件；`install.sh` / `install.ps1` 提供组件选择。原生安装器还支持 `--components nexus|workbench|both`、`--download-only` 和 `--package-dir` 离线安装。Linux/Windows 当前以用户后台进程运行，不注册开机自启；可使用安装目录内 `launcher/mino-maintain`（Windows 加 `.exe`）管理启动和停止，Nexus 命令前加 `d2`。
+
+测试环境只从源码／PyCharm 启动，Nexus 使用 `--dev`（50101），Workbench 使用 `npm run dev`（60101）。Scout 不监听独立业务端口，只连接对应 Nexus。
 
 # MinoNexus
 

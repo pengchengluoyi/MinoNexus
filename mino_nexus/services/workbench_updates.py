@@ -36,7 +36,7 @@ class WorkbenchInstallation:
                 configured = Deployment(nexus_root).config.get("workbench_install_root", "")
         if not configured:
             raise WorkbenchUpdateError("尚未登记本机 Workbench 安装根；跨主机更新暂不支持")
-        if sys.platform != "darwin":
+        if sys.platform not in {"darwin", "linux", "win32"}:
             raise WorkbenchUpdateError("Workbench MCP 更新目前仅支持 macOS 同机安装")
         path = Path(configured).expanduser()
         if not path.is_absolute() or path.resolve(strict=True) != path:
@@ -52,7 +52,7 @@ class WorkbenchInstallation:
         self.installation_id = identifier(self.conf["installation_id"])
         if installation_id is not None and identifier(installation_id) != self.installation_id:
             raise WorkbenchUpdateError("Workbench installation_id 不匹配，拒绝操作其他安装")
-        self.executable = self.file("launcher/mino-maintain")
+        self.executable = self.file("launcher/mino-maintain.exe" if sys.platform == "win32" else "launcher/mino-maintain")
         if not os.access(self.executable, os.X_OK):
             raise WorkbenchUpdateError("Workbench 独立维护入口不可执行")
 
@@ -70,7 +70,8 @@ class WorkbenchInstallation:
         return value
 
     def info(self) -> dict:
-        release = (self.root / "current").resolve(strict=True)
+        from mino_nexus.core.platform_runtime import current_release
+        release = current_release(self.root)
         if release.parent != self.root / "releases":
             raise WorkbenchUpdateError("Workbench current 指向登记版本以外的位置")
         build = identifier(release.name)

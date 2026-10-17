@@ -386,7 +386,10 @@ def main(argv: list[str] | None = None) -> int:
 
     SLog.i(TAG, f"MinoNexus 对外 {http_origin(args.port)}")
     SLog.i(TAG, f"  UI  → HTTP + WS /ws    Scout → {node_ws_url(args.port)}")
-    uvicorn.run("mino_nexus.app:app", host=args.host, port=args.port, log_level="warning")
+    from mino_nexus.core.platform_runtime import watch_stop
+    server = uvicorn.Server(uvicorn.Config("mino_nexus.app:app", host=args.host, port=args.port, log_level="warning"))
+    watch_stop(lambda: setattr(server, "should_exit", True))
+    server.run()
     return 0
 
 
