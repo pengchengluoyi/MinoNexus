@@ -156,3 +156,6 @@ Scout 密钥命名空间包含已确认 owner；本地 IM channel 以服务 orig
 
 
 N4 预演/静默窗口按持久 write_safety 动作账本核对停止状态：完整 settled 回执，或 recovered 且包含同 action_ref/SN 的 write_stop.v1、审核者与有效进程/执行 lane 停止证明，才能忽略历史 cases 中保留的隔离摘要。缺失/空账本沿用旧数据保守检查，畸形账本、独立顶层隔离、未知写及证明不完整仍阻断；不修改历史 verdict 或解除实际租约。apps.platforms 继续按现有逗号字符串存储合同盘点，不误报必须改成 JSON 数组；嵌套 platforms 仍须数组。
+
+
+V6 D1：`scout_updates` 保存节点更新操作、唯一活动 slot、参数、等待截止和最后执行端回执。门禁与新任务资源准入共用 SQLite 写事务；执行端操作账本是安装状态权威。

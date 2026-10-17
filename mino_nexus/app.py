@@ -124,7 +124,15 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(0.2 if worked else 2)
 
     compile_task = asyncio.create_task(_case_compile_loop())
+    from mino_nexus.services.development import worker as development_worker
+    development_task = asyncio.create_task(development_worker())
+    from mino_nexus.services.scout_updates import worker as scout_update_worker
+    scout_update_task = asyncio.create_task(scout_update_worker())
     yield
+    scout_update_task.cancel()
+    await asyncio.gather(scout_update_task, return_exceptions=True)
+    development_task.cancel()
+    await asyncio.gather(development_task, return_exceptions=True)
     compile_task.cancel()
     doc_sync_task.cancel()
     delivery_task.cancel()
@@ -166,6 +174,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(ExecutionUserMiddleware)
     app.add_middleware(ClientGateMiddleware)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -182,6 +191,10 @@ def create_app() -> FastAPI:
     app.include_router(rSys.router)
     app.include_router(rAuth.router)
     app.include_router(rMe.router)
+    from mino_nexus.routers import rDevelopment
+    app.include_router(rDevelopment.router)
+    from mino_nexus.routers import rDevelopmentEvidence
+    app.include_router(rDevelopmentEvidence.router)
     app.include_router(rRuntime.router)
     app.include_router(rReleases.router)
     app.include_router(rDevice.router)

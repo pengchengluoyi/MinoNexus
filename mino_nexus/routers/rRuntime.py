@@ -35,8 +35,13 @@ class NodeCommandBody(BaseModel):
 
 
 class ScoutUpdateBody(BaseModel):
-    # Never silently accept a version/URL that old Scouts cannot honor.
     model_config = ConfigDict(extra="forbid")
+    operation_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,100}$")
+    build_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
+    release_tag: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
+    action: str = Field(default="update", pattern=r"^(update|rollback)$")
+    rollback_of: str = Field(default="", max_length=100)
+    wait_seconds: int = Field(default=1800, ge=1, le=1800)
     reason: str = Field(default="mcp", max_length=500)
 
 
@@ -440,6 +445,8 @@ async def command_node(
 ):
     _node_row_for_session(node_id, studio_id=studio_id, sess=sess)
     cmd = str(body.command or "").strip().lower()
+    if cmd == "update":
+        raise HTTPException(409, "请使用固定版本更新接口，并提供 operation_id 和 build_id")
     if cmd == "start":
         raise HTTPException(status_code=400, detail="离线专机无法远程启动")
     if cmd not in _REMOTE_COMMANDS:
@@ -497,68 +504,29 @@ async def command_node(
 
 
 @router.get("/nodes/{node_id}/update-status")
-def scout_update_status(node_id: str, sess: dict = Depends(current_session)):
-    snapshot = _node_row_for_session(node_id, studio_id="", sess=sess)
+def scout_update_status(node_id: str, operation_id: str = "", sess: dict = Depends(current_session)):
+    _node_row_for_session(node_id, studio_id="", sess=sess)
+    from mino_nexus.services.scout_updates import get
     live = get_registry().get_node(node_id)
-    if live is None and stored_node(node_id) is None:
-        raise HTTPException(status_code=404, detail="没有这个节点")
-    online = bool(live and live.alive)
-    with _SCOUT_UPDATE_LOCK:
-        command_inflight = node_id in _SCOUT_UPDATES
-    return ok({
-        "node_id": node_id,
-        "online": online,
-        "running_version": live.scout_version if online else None,
-        "last_reported_version": live.scout_version if live else snapshot.get("scout_version", ""),
-        "process_generation": live.scout_process_generation if online else None,
-        "connection_generation": live.node_connection_generation if online else None,
-        "last_seen": live.last_seen if live else snapshot.get("last_seen"),
-        "update_job": dict(live.update_job or {}) if live else {},
-        "verification": "node_reported" if online else "unverified_offline",
-        "command_inflight": command_inflight,
-    })
+    return ok({"node_id": node_id, "online": bool(live and live.alive),
+        "running_version": live.scout_version if live and live.alive else None,
+        "operation": get(node_id, operation_id)})
 
 
 @router.post("/nodes/{node_id}/update")
-async def update_scout(
-    node_id: str,
-    body: ScoutUpdateBody,
-    sess: dict = Depends(current_session),
-):
-    """Update-only MCP route; do not expose the arbitrary command endpoint."""
-    live = _require_live_node(node_id, sess, "")
-    workload = workload_for_node_id(node_id) or {}
-    if (live.draining or live.busy or live.active_runs or live.device_workload
-            or any(row.get("busy") for row in workload.get("devices", []))):
-        raise HTTPException(status_code=409, detail="节点仍有活动任务，请待任务结束后更新")
-    if (live.update_job or {}).get("active"):
-        raise HTTPException(status_code=409, detail="节点正在更新，请查询 scout_update_status，勿重复提交")
-    previous_version = live.scout_version
-    with _SCOUT_UPDATE_LOCK:
-        if node_id in _SCOUT_UPDATES:
-            raise HTTPException(status_code=409, detail="节点更新请求正在处理，请查询 scout_update_status")
-        _SCOUT_UPDATES.add(node_id)
-    try:
-        response = await command_node(
-            node_id, NodeCommandBody(command="update", reason=body.reason), studio_id="", sess=sess,
-        )
-    finally:
-        with _SCOUT_UPDATE_LOCK:
-            _SCOUT_UPDATES.discard(node_id)
-    result = response["data"]
-    if str(result.get("status") or "").lower() not in {"pass", "passed", "ok", "success"}:
-        # A remote failure may follow a partially completed install. Keep the
-        # existing MCP receipt uncertain rather than automatically retrying.
-        raise HTTPException(status_code=502, detail={
-            "message": result.get("error") or result.get("summary") or "Scout 更新未成功",
-            "node_id": node_id, "status": result.get("status"),
-        })
-    return ok({
-        **result,
-        "status": "accepted",
-        "scout_status": result.get("status"),
-        "previous_version": previous_version,
-        "running_version_verified": False,
-        "version_policy": "configured_manifest",
-        "next_tool": "scout_update_status",
-    }, msg="Scout 已应答更新请求；请查询更新状态和重连后的运行版本，尚未确认新版本生效")
+async def update_scout(node_id: str, body: ScoutUpdateBody, sess: dict = Depends(current_session)):
+    _node_row_for_session(node_id, studio_id="", sess=sess)
+    from mino_nexus.services.scout_updates import request
+    if body.build_id.lower() == "latest" or body.release_tag.lower() == "latest":
+        raise HTTPException(422, "必须指定固定 release tag/build_id")
+    if (body.action == "rollback") != bool(body.rollback_of):
+        raise HTTPException(422, "rollback 动作必须指定原成功 operation_id")
+    params = body.model_dump(exclude={"operation_id"})
+    return ok(request(node_id, str(sess["user_id"]), body.operation_id, params))
+
+
+@router.post("/nodes/{node_id}/updates/{operation_id}/cancel")
+def cancel_scout_update(node_id: str, operation_id: str, sess: dict = Depends(current_session)):
+    _node_row_for_session(node_id, studio_id="", sess=sess)
+    from mino_nexus.services.scout_updates import cancel
+    return ok(cancel(node_id, operation_id))

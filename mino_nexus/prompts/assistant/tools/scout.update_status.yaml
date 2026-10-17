@@ -1,25 +1,19 @@
 id: scout.update_status
-version: 1
-title: 查询 Scout 更新状态
-description: 查询节点更新进度、最近上报版本与当前在线进程上报版本。离线 running_version=null，不能当更新成功；升级后核对重连及运行版本。此查询不触发更新，也不自动宣称目标版本已安装。
+version: 2
+title: 查询 Scout 更新操作
+description: 查询原 operation_id 的最后确认状态、持久门禁和运行版本核验。离线或断线不等于失败，不自动重发安装。
 route: GET /runtime/nodes/{node_id}/update-status
 risk: read
 params_schema:
   type: object
   additionalProperties: false
   properties:
-    node_id:
-      type: string
-      minLength: 1
-      pattern: ^[a-z0-9]+$
-      description: scout_list 返回的准确 node_id
-  required:
-  - node_id
+    node_id: {type: string, minLength: 1, pattern: '^[a-z0-9]+$'}
+    operation_id: {type: string, pattern: '^[A-Za-z0-9_-]{8,100}$'}
+  required: [node_id]
 param_resolvers: {}
-result_pick:
-- data
+result_pick: [data]
 card: answer
-surfaces:
-- mcp
+surfaces: [mcp]
 enabled: true
 async: false

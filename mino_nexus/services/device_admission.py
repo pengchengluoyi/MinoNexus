@@ -73,6 +73,15 @@ def admit_in_transaction(db, doc: dict) -> None:
     previous = db.get(AppRegressionRun, rid)
     if previous is not None:
         return
+    from mino_nexus.services.scout_updates import check_admission
+    targets = [_recorded_target(db, doc, sn) for sn in doc.get("sns") or [doc.get("sn")] if sn]
+    check_admission(db, [t["node_id"] for t in targets], task_id=rid)
+    from mino_nexus.models.development import DevelopmentOperation
+    preparing = db.query(DevelopmentOperation).filter(
+        DevelopmentOperation.slot.in_([t["node_id"] for t in targets])).first()
+    if preparing:
+        raise ResourceBusy(next((t["sn"] for t in targets if t["node_id"] == preparing.node_id), ""), preparing.operation_id)
+    doc["allowed_node_ids"] = sorted({t["node_id"] for t in targets})
     # Existing runs made before this upgrade also participate in admission.
     live = db.query(AppRegressionRun).filter(AppRegressionRun.status.in_(("running", "queued"))).all()
     from mino_nexus.services.run_write_safety import unresolved

@@ -90,8 +90,6 @@ def pick_item(manifest: dict, os_name: str, arch_name: str) -> dict | None:
     if isinstance(items, list):
         matched = [r for r in items if isinstance(r, dict) and r.get("url")]
         hit = next((r for r in matched if _norm_os(r.get("os")) == want_os and _norm_arch(r.get("arch")) == want_arch), None)
-        if hit is None:
-            hit = next((r for r in matched if _norm_os(r.get("os")) == want_os), None)
         return _row(hit, version, want_os) if hit else None
 
     if manifest.get("url"):
@@ -185,12 +183,16 @@ def scout_meta(
     packaging = False
     version = ""
     detail = ""
+    build_id = ""
+    release_tag = ""
     try:
         manifest = _fetch_manifest(manifest_url)
         version = str(manifest.get("version") or "").strip().lstrip("vV")
         row = pick_item(manifest, os_name, arch_name)
         if row and row.get("url"):
             manifest_ready = True
+            build_id = str(manifest.get("build_id") or "")
+            release_tag = "v" + str(manifest.get("version") or "").lstrip("vV")
             version = str(row.get("version") or version or "").strip().lstrip("vV")
         else:
             packaging = True
@@ -210,6 +212,8 @@ def scout_meta(
             "version": version,
             "packaging": bool(packaging),
             "manifest_ready": manifest_ready,
+            "build_id": build_id,
+            "release_tag": release_tag,
             "detail": detail,
             "manifest_url": manifest_url,
         }

@@ -100,6 +100,8 @@ def bootstrap() -> None:
         if upgrade_skill_channel_layout():
             SLog.i(TAG, "skill catalog split into generic/check and base")
         db.commit()
+        from mino_nexus.catalog.development_seed import sync_development_capability
+        sync_development_capability()
     except Exception:
         db.rollback()
         raise

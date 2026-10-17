@@ -54,7 +54,7 @@ SELECT type, turn, payload FROM session_events
 | `hierarchy` | Scout `dom_hierarchy.dump_dom_nodes`；Nexus 空节点时 guard 依赖 `launch_confirmed` |
 | NavFSM / 底栏 Tab | 许多 App 图仅为安卓包名配置；Web 渠道可能 **无 FSM 边**，需开环 `tap_element` |
 
-## 4. 环境与账号（Hi3D 等）
+## 4. 环境与账号（Mino 等）
 
 - `env_surface` × `env_profile` → `login.kind=email` / `otp.mode=gmail`（见 `OTP_GMAIL.md`）。
 - history 应有 `【登录凭证·环境】`；无则 Nexus 未重启或旧版本。

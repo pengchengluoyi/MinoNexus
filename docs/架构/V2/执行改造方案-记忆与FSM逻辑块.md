@@ -382,7 +382,7 @@ for seq in 1..N:
 | 期 | 内容 | 验收 |
 |----|------|------|
 | **P0** | §1.1–1.5、1.7–1.8；`context/trace` + Console 排查 Tab | 同用例 session 可见全量上下文；prompt token 降 ≥30% |
-| **P1** | §1.6、§2.2 评估器；agent-decide 输出 milestones | Hi3D 邮箱登录步不再死循环 Continue |
+| **P1** | §1.6、§2.2 评估器；agent-decide 输出 milestones | Mino 邮箱登录步不再死循环 Continue |
 | **P2** | §2.1 渠道门；§2.8 扩展包页 | Web 无 launch_app 误触发 |
 | **P3** | §2.4 Console 编排 + runner v2；§2.3 登录块 | 块可配七步邮箱流 |
 | **P4** | §2.5–2.7、§2.6 fuse 编排；删旧 login 链 | registry 登录 guard 减少 |
@@ -394,7 +394,7 @@ for seq in 1..N:
 
 - **模型自主性下降**：用里程碑 + 工具菜单收敛换精准度；optional skip 保留必要弹性。
 - **首轮生成 milestones 质量**：可增加「仅 Turn1 本步」小模型或规则模板（登录块展开则不依赖 LLM 排序）。
-- **不要**在 Nexus 硬编码 Hi3D 文案（遵守 no-app-keywords）；块编排进 DB。
+- **不要**在 Nexus 硬编码 Mino 文案（遵守 no-app-keywords）；块编排进 DB。
 - **测试**：按仓库铁律不以 pytest 验收；以 `session_events` + 本方案 trace 为准。
 
 ---

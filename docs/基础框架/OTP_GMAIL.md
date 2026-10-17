@@ -46,7 +46,7 @@ project_env
 
 ```json
 "gmail_inbox": {
-  "address": "qahi3d@gmail.com"
+  "address": "qamino@gmail.com"
 }
 ```
 
@@ -69,11 +69,11 @@ project_env
 
 ### 3.3 按 App 覆盖 `channel_secrets`（必选能力）
 
-**channel.id** 与环境配置里「被测应用」一致（如 `web-hi3d`、`android.main`），与 `package_for_app(..., surface=env_surface)` 同一套 id。
+**channel.id** 与环境配置里「被测应用」一致（如 `web-mino`、`android.main`），与 `package_for_app(..., surface=env_surface)` 同一套 id。
 
 ```json
 "channel_secrets": {
-  "web-hi3d": {
+  "web-mino": {
     "test": {
       "otp": { "mode": "fixed", "fixed": "123456" },
       "login": { "mode": "pool", "kind": "phone" }
@@ -149,7 +149,7 @@ effective_secrets =
 
 | mode | 行为 |
 |------|------|
-| `fixed` | 仅环境/账号 fixed（与今天 Hi3D 短信固定码一致，邮箱登录也可在测试环境用固定码） |
+| `fixed` | 仅环境/账号 fixed（与今天 Mino 短信固定码一致，邮箱登录也可在测试环境用固定码） |
 | `gmail` | 发码后 IMAP 轮询项目收件箱取码 |
 | `hitl` | 不自动取码，`signal_ask_human` |
 | `auto` | 按优先级链（无 adapter） |
@@ -161,7 +161,7 @@ effective_secrets =
 3. 若当前环境 `otp.mode` 为 `gmail` 或 auto 且已配 `gmail_inbox.address` + 用户插件密钥 → **Gmail 收信**
 4. `hitl`
 
-**App × 环境**决定链路：例如 `web-hi3d` + test → fixed；`web-saas` + pre → gmail。解析的是 **effective_secrets**（§3.4），不是「整个项目只有一个 mode」。
+**App × 环境**决定链路：例如 `web-mino` + test → fixed；`web-saas` + pre → gmail。解析的是 **effective_secrets**（§3.4），不是「整个项目只有一个 mode」。
 
 ### 4.3 登录号 `login`
 
@@ -253,13 +253,13 @@ Nexus `_resolve_otp` 从未完整实现 adapter；移除后行为与现状一致
 
 | App (`env_surface`) | 环境 | otp | login.kind | 说明 |
 |---------------------|------|-----|------------|------|
-| `web-hi3d` | test | fixed `123456` | phone | 短信登录，与今天 Hi3D 一致 |
-| `web-hi3d` | pre | fixed `123456` | phone | 预发仍测码 |
+| `web-mino` | test | fixed `123456` | phone | 短信登录，与今天 Mino 一致 |
+| `web-mino` | pre | fixed `123456` | phone | 预发仍测码 |
 | `web-saas` | test | fixed `888888` | email | 邮箱登录 + 测试固定码 |
 | `web-saas` | pre | gmail | email | 预发真实邮件，IMAP + 发件人 `noreply@saas.com` |
 
-项目收件箱：`qahi3d@gmail.com`。  
-SaaS 账号：`qahi3d+saas001@gmail.com` … — `get_otp` 按 To + 该 App 的 gmail 过滤条件取码。
+项目收件箱：`qamino@gmail.com`。
+SaaS 账号：`qamino+saas001@gmail.com` … — `get_otp` 按 To + 该 App 的 gmail 过滤条件取码。
 
 执行用户 Alice 在插件中配置应用专用密码；Bob 未配置则其触发的 `gmail` 跑批会失败并提示配置插件。
 
@@ -271,8 +271,8 @@ SaaS 账号：`qahi3d+saas001@gmail.com` … — `get_otp` 按 To + 该 App 的 
 
 | 配置位置 | 填什么 | 示例 |
 |----------|--------|------|
-| **项目 `gmail_inbox.address`** | 用来 **登录 IMAP** 的那个真实 Gmail（收件箱本体） | `qahi3d@gmail.com` |
-| **号池每条账号 `email`** | 被测 App **登录框里要输入的邮箱**（可带 `+` 别名） | `qahi3d+acc001@gmail.com` |
+| **项目 `gmail_inbox.address`** | 用来 **登录 IMAP** 的那个真实 Gmail（收件箱本体） | `qamino@gmail.com` |
+| **号池每条账号 `email`** | 被测 App **登录框里要输入的邮箱**（可带 `+` 别名） | `qamino+acc001@gmail.com` |
 
 规则（Gmail 官方行为）：
 
@@ -287,7 +287,7 @@ SaaS 账号：`qahi3d+saas001@gmail.com` … — `get_otp` 按 To + 该 App 的 
 1. 准备一个 **项目专用 Gmail**（建议团队共用的 QA 邮箱，开启两步验证）。
 2. 在 Google 账号里生成 **应用专用密码**（给 IMAP 用，不进项目 JSON）。
 3. 在 **环境配置**（实现后：项目根 `gmail_inbox.address` 或各环境展示同一字段）填写：  
-   `qahi3d@gmail.com`（**不要**写 `+acc001`）。
+   `qamino@gmail.com`（**不要**写 `+acc001`）。
 4. 每位跑批同学在 Studio **插件 → Gmail 收信** 填自己的应用专用密码（读的是上面这个收件箱）。
 
 各 **环境** 只区分「怎么取码」，不区分收件箱（除非你以后扩展「环境覆盖收件箱」）：
@@ -303,9 +303,9 @@ Studio **资源 → 账号管理 → 批量导入**（粘贴或 CSV），表头�
 
 ```csv
 邮箱,展示名,登录态,环境,备注
-qahi3d+web001@gmail.com,Web用例001,logged_out,test,别名001
-qahi3d+web002@gmail.com,Web用例002,guest,test,别名002
-qahi3d+pre001@gmail.com,预发001,logged_out,pre,预发收信
+qamino+web001@gmail.com,Web用例001,logged_out,test,别名001
+qamino+web002@gmail.com,Web用例002,guest,test,别名002
+qamino+pre001@gmail.com,预发001,logged_out,pre,预发收信
 ```
 
 说明：
@@ -315,13 +315,13 @@ qahi3d+pre001@gmail.com,预发001,logged_out,pre,预发收信
 - **环境列**与号池筛选一致；同一别名不要重复导入两行（除非你们刻意 merge 策略）。
 - 若某环境仍用 **固定码**，可在该账号行填 **验证码/otp** 列，或只靠环境 `otp.fixed`（实现后按 §4 优先级）。
 
-单条新建：编辑账号表单里同样有 **邮箱** 字段，手动填 `qahi3d+xxx@gmail.com` 即可。
+单条新建：编辑账号表单里同样有 **邮箱** 字段，手动填 `qamino+xxx@gmail.com` 即可。
 
 ### 11.4 跑批时怎么用
 
-1. 用例前置 / 租号条件需要账号 → `lease_account` 选中一条，例如 `email=qahi3d+web001@gmail.com`。
+1. 用例前置 / 租号条件需要账号 → `lease_account` 选中一条，例如 `email=qamino+web001@gmail.com`。
 2. Agent 在登录框 **input_text 填该 email**（不是填 `gmail_inbox.address`）。
-3. 点发送验证码 → `get_otp` 用 **项目收件箱 IMAP** 收信，并在邮件里找 **发给 `qahi3d+web001@gmail.com`** 的那封。
+3. 点发送验证码 → `get_otp` 用 **项目收件箱 IMAP** 收信，并在邮件里找 **发给 `qamino+web001@gmail.com`** 的那封。
 
 ### 11.5 常见误区
 

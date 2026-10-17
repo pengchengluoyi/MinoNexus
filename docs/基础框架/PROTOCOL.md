@@ -701,3 +701,93 @@ hierarchy observation v1 可选增加 viewport_wh（CSS 像素）及 login_scope
 Gmail 在原请求/收件地址/发码窗口/截止时间内允许最多两次只读重连，未恢复就失败；不重新发码、不重放父子绑定请求。瞬时 DNS、连接超时/断连/拒绝/网络不可达可恢复；认证、协议、TLS/证书及未知错误立即失败。错误码区分以上类别及读取超时。otp_diagnostics 仅携带 connection_attempts/reconnects/error_code/phase，不含原始异常、账号或验证码。取消及截止时间继续约束所有读取及退避。
 
 补充：login_scope 支持含凭据输入的最外层有界自定义容器（不依赖 form/ARIA）；scope_kind、incomplete_reasons 仅为结构诊断。多个范围、滚动/越界/遮挡/不透明内容仍拒绝。SVG defs/clipPath/mask/pattern/symbol 非绘制定义不计可见范围；非滚动装饰的内在溢出不等于表单裁切，实际绘制边界及可滚动内容仍核对。自定义范围必须经截图独立确认完整登录界面及无协议控件，不能只按 DOM 零计数跳过。
+
+
+## V6 B：开发准备 v1
+
+保持现有 wire 版本与 EXECUTE/RESULT 结构。新增程序系统能力 `node.ide_prepare`，
+REGISTER/HEARTBEAT runtime_capabilities 声明 id、executor=ide、contract_version=1。
+旧 Scout 无该声明时 Nexus 返回 unsupported，禁止按版本号猜支持。
+请求 run_id 为空、step_idx 为辅助负编号，不冒充用例 run；executor_order=[ide]，
+selected_impl 显式携带 runs_on=scout 和 params/result_contract.version=1。
+params 必含稳定 operation_id、action；动作 check/execute/restart/build/probe 接收已授权的 binding：
+connection_id/revision、project_path、source_dir、配置名、测试目标及执行许可。
+save_connection/list_connections 仅通过有项目维护及节点归属权限的 HTTP 入口，连接存 Scout JSON。
+RESULT.extra.development 返回 state、reason、检查结果或 receipt（source/output/truncated/timedOut/exitCode）。
+IDE HTTP 无回执记 unknown，不自动重发；有 timedOut=true 的回执继续就绪探测；非零 exitCode 失败。
+Scout 持久最小幂等回执，重复 operation_id 参数不符拒绝；Nexus SQLite 持久完整业务记录。
+node.ide_prepare 不进入 UI 动作 fallback。执行与重启互斥于节点设备操作，同机 IDE 跨 Scout 文件锁。
+macOS/Linux 停止须核对端口、cwd、用户、PyCharm 父链及 PID/create_time，仅 SIGTERM。
+MCP 终端仅接受程序生成的固定停止动作，不接受用户命令。首期 HTTP 流使用现有 httpx，
+无新增第三方依赖；SSE、认证环境变量引用与 Windows 协作关闭范围见后续增补。
+
+V6 B APK 增补：action=install 只接受绑定中的 apk_path/android_serial/apk_package/apk_version_code。
+Nexus 创建和派发时复核设备属于同一活 Scout；Scout 要求源目录内的本地 APK，固定副本后以
+Android SDK aapt2 验证包名/versionCode。安装使用 -r -t，不降级、不卸载、不清数据；成功后
+回读设备包版本。构建由独立 build 操作显式触发，未改代码无需重复构建。没有设备/SDK不宣称完成。
+
+V6 B 日志增补：action=logs 只读取绑定中的 service_log_path，真实路径必须位于 source_dir 内。
+仅返回文件末尾最多 32768 字节，receipt.source=configured_service_log，包含 output、
+truncated、byte_offset；输出经过秘密脱敏。不提供任意路径读取或持续日志订阅。
+
+
+
+## V6 D1：固定 Scout 更新合同 v1
+
+不变更 wire 版本或 EXECUTE/RESULT dataclass。runtime_capabilities 新增
+node.update / executor=core / contract_version=1 / platform_scope=all / platforms=[]。
+缺声明的节点明确 unsupported，不能转旧的 latest 更新命令。
+
+EXECUTE 使用空 run_id、step_idx=-1、sn=""、executor_order=[core]、low_level={}，
+selected_impl 明确 runs_on=scout 及 params/result_contract.version=1。
+params.action=update|rollback|status；update/rollback 带 operation_id、release_tag、build_id，
+rollback 另带 rollback_of。tag 定位已配置 GitHub 仓库发布，build_id 核对包身份；二者不混用。
+不接受远程任意 URL。RESULT.extra.update 返回同一 operation_id 和执行端持久状态。
+
+Nexus scout_updates 表持久保存 operation/参数/等待截止/门禁和最后确认回执。
+等待时不设置 draining；新批次在资源准入同一 BEGIN IMMEDIATE 中检查门禁。
+不支持排队的入口返回409 blocked_by_update、operation_id 与请求 task_id；没有创建任务。
+已准入批次继续，RouterProxy 每次发送核对冻结 device_targets/allowed_node_ids。
+准备操作同门禁，已运行和未确认 IDE 操作阻止安装；未派发排队项不算活动项。
+默认等待1800秒；取消/过期只释放本操作，派发后不按等待期限强杀。
+派发记录先落库；重启及重注册后查询原操作，结果未知不重复安装。
+
+Scout 在同一锁内核对设备/IDE 活动及隔离 lane，再封闭本地新操作。
+独立助手使用保留 runtime/app，等待原 PID+create_time 退出，持有运行锁后安装。
+固定 schema1 清单的 component/build/source_commit、平台、包大小、sha256、层指纹及
+app requires_runtime/requires_browser 必须通过；只接受声明已验证 rollback_build_ids 的组合。
+暂存树替换后保留 previous-bin，配置/凭据不参与替换。未知或中断保留 needs_operator。
+运行确认使用进程启动时捕获的 BUILD，通过已连接 Scout 的 status 回执完成；磁盘版本不算成功。
+新版启动失败先协作停止，确认退出后回退保留旧层；失败不得强杀或删除维护记录。
+CLI update-recover <operation_id> 仅恢复原旧层，不重下或重放安装；助手锁防并发恢复。
+update-status <operation_id> 只读，不能自行宣布在线核验通过。
+
+源码交付不代表各平台安装验收通过。真实 clean release、兼容性演练及目标平台运行证据另记。
+
+
+## V6 B：结果恢复与连接扩展（2026-10-17）
+
+保持现有 wire 与开发准备 contract_version=1。Scout features 增加 receipt；Nexus 先检查声明。
+action=receipt 携带新 operation_id、target_operation_id 与原参数的 SHA256 target_digest；
+只读取节点持久回执，不重放原 EXECUTE。持久回执包含实际 stage/stages，最终落盘前 fsync。
+POST development/operations/{id}/recover 与 MCP development.recover 复核账号、应用与节点归属；
+可恢复已确认的最终结果并释放节点占用，保留 previous_state/时间/source；无回执仍保持未知。
+节点断线和 Nexus 重启不重发已派发操作；过期排队项失败、在途项转 unknown。新业务任务的
+资源准入与开发占用在同一 SQLite 事务检查；其他节点及只读操作不被慢 IDE 调用串行阻塞。
+
+connection.transport 显式选择 streamable-http 或 sse，不自动回退、重连或重发。
+SSE 服务提供的 POST 端点必须同源，事件与 HTTP 响应均有上限/截止时间。
+headers 仍仅接受非秘密 x-idea-project；认证使用 header_env 对象：
+{"Authorization":"MINO_IDE_AUTHORIZATION"} 或 {"X-API-Key":"MINO_IDE_API_KEY"}。
+值只能是 MINO_IDE_ 开头的本机环境变量名称。Scout 本机解析、缺失则拒绝；密钥值不经过
+Workbench/Nexus，也不写连接 JSON 或回执。Authorization 环境变量包含完整 header 值。
+旧的明文 token/header 导入仍明确拒绝。返回连接摘要仅包含 authentication 和 auth_env_names。
+
+Windows 提供跨进程互斥与经过 PID/创建时间/用户/cwd/IDE 父链核验后的 WM_CLOSE；
+只适用于具备可协作关闭窗口的目标。无窗口控制台服务需 PyCharm Rerun；不调用
+TerminateProcess、taskkill 或强制结束。macOS/Linux 沿用 SIGTERM。
+
+日志是 source_dir 内已登记文件的单次末尾快照，最多 32 KiB，秘密脱敏、标记截断。
+Workbench 可显式开启 3 秒刷新，最多 10 分钟，隐藏页面暂停，错误或配置变更停止。
+并非服务器日志流或无限续读。构建版本、服务可访问和用例通过独立展示。
+安装超时/连接中断保留 unknown，不误报确定失败后重复安装。

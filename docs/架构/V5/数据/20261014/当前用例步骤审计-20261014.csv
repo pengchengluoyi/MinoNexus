@@ -3,7 +3,7 @@
 ad7e96eb-d629-47ae-ac2c-5fdd9d1f60c2,case-sync1,t,,do,1,t,stored_blocked_placeholder,0,uncovered,无有效业务定义；未运行,,
 821854c2-f7d6-4674-85bd-cc3da28b21ee,case-ed53e597,验证场景选择弹窗所有UI元素展示正确,web,do,1,"1. 点击右上角登录,输入手机号或邮箱验证码, 完成登录",compiled_candidate,1,,只读静态审计，未证明运行成功,cr-d1375d774f0d,fail
 821854c2-f7d6-4674-85bd-cc3da28b21ee,case-ed53e597,验证场景选择弹窗所有UI元素展示正确,web,check,1,1. 弹窗正常居中展示,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-d1375d774f0d,fail
-821854c2-f7d6-4674-85bd-cc3da28b21ee,case-ed53e597,验证场景选择弹窗所有UI元素展示正确,web,check,2,2. 弹窗标题为「你主要用 Hi3D 来做什么？」，正文提示为「选择感兴趣的场景，为你推荐更合适的内容（可多选）」,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-d1375d774f0d,fail
+821854c2-f7d6-4674-85bd-cc3da28b21ee,case-ed53e597,验证场景选择弹窗所有UI元素展示正确,web,check,2,2. 弹窗标题为「你主要用 Mino 来做什么？」，正文提示为「选择感兴趣的场景，为你推荐更合适的内容（可多选）」,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-d1375d774f0d,fail
 821854c2-f7d6-4674-85bd-cc3da28b21ee,case-ed53e597,验证场景选择弹窗所有UI元素展示正确,web,check,3,3. 9个场景选项（3D打印、游戏、动画/影视、VR/AR/XR、工业设计、时尚设计、室内设计、建筑、其他）全部正常展示,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-d1375d774f0d,fail
 821854c2-f7d6-4674-85bd-cc3da28b21ee,case-ed53e597,验证场景选择弹窗所有UI元素展示正确,web,check,4,4. 确认按钮默认置灰不可点击，跳过按钮为弱化样式展示,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-d1375d774f0d,fail
 821854c2-f7d6-4674-85bd-cc3da28b21ee,case-e1835aa2,验证其他选项勾选后输入框规则符合要求,web,do,1,1. 勾选「其他」场景选项,compiled_candidate,1,,只读静态审计，未证明运行成功,cr-7a7a8e231f4f,blocked

@@ -1,0 +1,28 @@
+{
+  "id": "development.get",
+  "version": 1,
+  "title": "读取应用开发环境",
+  "description": "读取应用开发环境。仅通过正式 Nexus 调用已授权 Scout；不等同用例运行。",
+  "route": "GET /project/app/{app_id}/development",
+  "risk": "read",
+  "async": false,
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "app_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "app_id"
+    ]
+  },
+  "param_resolvers": {},
+  "result_pick": [
+    "data"
+  ],
+  "surfaces": [
+    "mcp"
+  ],
+  "enabled": true
+}

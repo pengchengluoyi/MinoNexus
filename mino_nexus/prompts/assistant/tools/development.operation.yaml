@@ -1,0 +1,32 @@
+{
+  "id": "development.operation",
+  "version": 1,
+  "title": "读取开发准备结果和 IDE 输出",
+  "description": "读取开发准备结果和 IDE 输出。仅通过正式 Nexus 调用已授权 Scout；不等同用例运行。",
+  "route": "GET /project/app/{app_id}/development/operations/{operation_id}",
+  "risk": "read",
+  "async": false,
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "app_id": {
+        "type": "string"
+      },
+      "operation_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "app_id",
+      "operation_id"
+    ]
+  },
+  "param_resolvers": {},
+  "result_pick": [
+    "data"
+  ],
+  "surfaces": [
+    "mcp"
+  ],
+  "enabled": true
+}

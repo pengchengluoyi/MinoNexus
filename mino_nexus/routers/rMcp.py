@@ -64,6 +64,13 @@ def _call(uid: str, name: str, args: dict[str, Any]) -> dict[str, Any]:
                    "ms": out.elapsed_ms, "args_brief": json.dumps(args, ensure_ascii=False)[:180]}],
         "elapsed_ms": int((time.time() - started) * 1000),
     })
+    if spec["id"] == "session.screenshot" and out.ok:
+        data = out.data.get("data", out.data) if isinstance(out.data, dict) else {}
+        if isinstance(data, dict) and data.get("image_base64"):
+            metadata = {key: value for key, value in data.items() if key != "image_base64"}
+            return {"isError": False, "content": [
+                {"type": "text", "text": json.dumps(metadata, ensure_ascii=False)},
+                {"type": "image", "data": data["image_base64"], "mimeType": data["mimeType"]}]}
     return {
         "isError": not out.ok,
         "content": [{"type": "text", "text": json.dumps(body, ensure_ascii=False, default=str)}],

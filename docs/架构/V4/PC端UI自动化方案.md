@@ -236,7 +236,7 @@ Scout 0.1.83 当时修正为直接消费 Cua 的窗口激活确认，不再以�
 
 ### 9.7 macOS / Windows 启动仅确认进程与窗口绑定（2026-10-12）
 
-`cr-7026b30502ff::case-ed53e597::desktop:e22615fbbb917111:console` 于 20:47:50–20:47:54 执行，共 10 条事件。唯一的 tool/call 是首图前 launch_app；Scout 0.1.83 已得到目标应用 com.hi3d.desktop.beta 的 pid=87848 和 window_id=379209，随后 Cua bring_to_front 返回 route=skylight_process_exact、effect=partial、error.code=bring_to_front_exact_window_unverified，项目因没有激活确认而 blocked。没有 observe/screen 或点击事件，不能归因为窗口截图失败，也不能仅凭此记录断言 Cua 验证实现有缺陷。
+`cr-7026b30502ff::case-ed53e597::desktop:e22615fbbb917111:console` 于 20:47:50–20:47:54 执行，共 10 条事件。唯一的 tool/call 是首图前 launch_app；Scout 0.1.83 已得到目标应用 com.mino.desktop.beta 的 pid=87848 和 window_id=379209，随后 Cua bring_to_front 返回 route=skylight_process_exact、effect=partial、error.code=bring_to_front_exact_window_unverified，项目因没有激活确认而 blocked。没有 observe/screen 或点击事件，不能归因为窗口截图失败，也不能仅凭此记录断言 Cua 验证实现有缺陷。
 
 该门槛混淆了启动准备与持续前台激活。Cua 窗口截图通过 pid/window_id 寻址；foreground 输入由 Cua 在具体动作中处理所需激活和恢复。后台输入并非所有应用都可用，尤其 Windows 的遮挡窗口、Chromium 或自绘控件可能需要 foreground 投递。因此本次仅取消启动阶段的持续前台要求，不把全部输入切成 background。
 

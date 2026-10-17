@@ -100,7 +100,7 @@
         "run_id": "cr-d1375d774f0d",
         "status": "fail",
         "started_at": "2026-10-14T17:52:21+08:00",
-        "summary": "步骤 2 预期未成立：弹窗标题为「你主要用 Hi3D 来做什么？」，正文提示为「选择感兴趣的场景，为你推荐更合适的内容（可多选）」。预期文案标题为「你主要用 Hi3D 来做什么？」、正文为「选择感兴趣的场景，为你推荐更合适的内容（可多选）」，实际截图中弹窗标题为英文「What do you use Hi3D for?」，正文为英文「Pick your interests for better recommendations. Select all that apply.」，与预期文案不匹配，故校验不通过。"
+        "summary": "步骤 2 预期未成立：弹窗标题为「你主要用 Mino 来做什么？」，正文提示为「选择感兴趣的场景，为你推荐更合适的内容（可多选）」。预期文案标题为「你主要用 Mino 来做什么？」、正文为「选择感兴趣的场景，为你推荐更合适的内容（可多选）」，实际截图中弹窗标题为英文「What do you use Mino for?」，正文为英文「Pick your interests for better recommendations. Select all that apply.」，与预期文案不匹配，故校验不通过。"
       }
     },
     {

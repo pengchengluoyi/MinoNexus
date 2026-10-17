@@ -1,0 +1,17 @@
+id: session.screenshot
+version: 1
+title: 读取会话截图
+description: 读取本人会话指定事件已有的截图。先用 session_events 找到 observe/screen 事件 seq；不重新操作设备，不读取任意文件。
+route: GET /case-runner/sessions/{session_id}/screenshot
+risk: read
+async: false
+params_schema:
+  type: object
+  properties:
+    session_id: {type: string}
+    seq: {type: integer, minimum: 0}
+  required: [session_id, seq]
+param_resolvers: {}
+result_pick: [data]
+surfaces: [mcp]
+enabled: true

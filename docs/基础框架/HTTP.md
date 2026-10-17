@@ -407,3 +407,32 @@ Workbench 的“预检所选用例”按当前完整选择逐条调用；选择�
 登录校验配置另支持 `authenticated_content_hint`（最多1200字，默认空串），用于描述应用维护者确认的登录后专属页面特征。该说明仅进入配置范围 `env_profiles` / `env_surfaces` 匹配的新任务；实际当前截图必须命中完整特征，配置存在本身不等于登录成功。它与账号来源独立，不能替代实际账号填写、提交回执或可见身份核验。Web 首次引导遮挡身份时，可显式配置 submitted_account，而不是修改代码或伪造 UI identity=match。说明通过 Workbench「登录专属页面说明」或 MCP policy 字段维护。
 
 多语言 intent 检查要求完整含义一致：泛化欢迎/入门标题不能替代具体问题，单个示例尝试不能替代兴趣收集与多选推荐；主题接近不能当成等义。agent-vision-assert/assert-vision v9、agent-text-assert v4；inspect-session v6。实际不符保留 fail，不把不同语言本身当成失败原因。
+
+## V6 Nexus 安装维护（D2 首轮实现）
+
+仅已登记且完成健康验证的独立安装 Nexus 接受更新。所有维护接口要求管理员；普通用户 403，源码部署 409。
+
+| 方法 | 路径 | 合同 |
+| --- | --- | --- |
+| GET | `/sys/updates/status?operation_id=...` | 原操作持久状态；省略 ID 查看本部署当前操作 |
+| POST | `/sys/updates/request` | `{operation_id,build_id,wait_seconds?,rollback?}`；稳定 ID 幂等，参数冲突拒绝；目标已暂存且具有确切版本兼容记录 |
+| POST | `/sys/updates/{operation_id}/cancel` | 仅取消该操作尚未开始的等待；不强停安装 |
+
+`/sys/server_info` 返回 instance_id、build_id、health_contract_version=1、deployment_managed。专用 probe token 仅可向 `/mcp` 调 initialize/ping/tools/list，不能调 tools/call 或普通 API。更新 hold 下新执行返回 blocked_by_update 与 operation_id；安装阶段保留健康和更新查询入口。详细部署步骤及未验收边界见 [D2 开发记录](../架构/V6/实施/mino-D2-开发记录-20261017.md)。
+
+## Workbench 本机安装升级（D3）
+
+`/sys/workbench/installation`、`/sys/workbench/updates/{check,status}` 为 GET；`/sys/workbench/updates/{request,cancel,recover}` 为 POST。均要求管理员；除安装身份查询外必须携带 installation_id，写操作绑定稳定 operation_id。只调用部署环境显式登记的同机原生助手，不接收命令/路径/URL 或 dirty 包绕过。完整参数、暂存目录及验收范围见 [Workbench MCP 更新入口](../架构/V6/实施/mino-D3-Workbench-MCP更新入口-20261017.md)。
+
+
+### D2 本地人工恢复模式（2026-10-17）
+
+`mino-maintain d2 recover --root <安装根> --mode <模式>` 只处理当前 needs_operator 操作，不提供远程强制解除门禁。
+
+- `prestart-backup`：尚未重开写入，且有完整备份；确认进程退出后恢复备份，失败数据另存保留。
+- `code-only`：曾开始正常启动；仅回退兼容旧代码，保留当前数据。
+- `restart-previous`：仅 stopping/backing_up、writes_reopened=false、current 仍指向 previous_build；确认退出后重启旧版，保留原数据/部分备份。已进入迁移及后续阶段拒绝此模式。
+
+显式恢复在启动前持久写入 state=restarting、phase=operator_recovery。恢复进程中断后，本地 helper 只探测原 previous_build 并完成同一 operation；无法核实则保留 needs_operator，不重放迁移或自动倒库。
+
+Scout 已派发更新与待人工处理状态纳入 Nexus 忙闲检查；维护等待期间不新派发排队 Scout 更新，原操作查询/对账继续。MCP 线程按实际执行生命周期持有写者锁，连接/协程取消不等于写者已退出。
