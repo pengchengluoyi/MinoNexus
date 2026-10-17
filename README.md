@@ -9,20 +9,20 @@ GitHub 下载和安装仅提供正式版本，没有测试环境选项。安装�
 支持 Linux x64、Windows x64、macOS Apple Silicon 与 Intel。以下入口可直接安装最新正式版本：
 
 ```bash
-curl -fsSL https://github.com/pengchengluoyi/MinoNexus/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/pengchengluoyi/MinoWorkbench/releases/latest/download/install.sh | bash
 ```
 
-Windows 在 [Releases](https://github.com/pengchengluoyi/MinoNexus/releases/latest) 下载 `MinoInstaller-win32-x64.exe` 运行，或在 PowerShell 执行：
+Windows 在 [统一安装器 Releases](https://github.com/pengchengluoyi/MinoWorkbench/releases/latest) 下载 `MinoInstaller-win32-x64.exe` 运行，或在 PowerShell 执行：
 
 ```powershell
-irm https://github.com/pengchengluoyi/MinoNexus/releases/latest/download/install.ps1 | iex
+irm https://github.com/pengchengluoyi/MinoWorkbench/releases/latest/download/install.ps1 | iex
 ```
 
-默认安装目录是 `~/Mino/nexus`、`~/Mino/workbench`。Nexus 地址为 `http://127.0.0.1:50104`，Workbench 地址为 `http://127.0.0.1:60104`。Workbench 默认连接本机 Nexus，可用 `--nexus-url` 指定远程地址。无需安装 Python 或 GitHub CLI。安装器验证下载大小和 SHA256；已有目录或端口占用时停止并保留数据。
+默认安装目录是 `~/Mino/nexus`、`~/Mino/workbench`。Nexus 地址为 `http://127.0.0.1:50104`，Workbench 地址为 `http://127.0.0.1:60104`。Workbench 安装完成后默认打开浏览器；以后可运行 `mino-workbench open`，安装时添加 `--no-open` 可关闭自动打开。Workbench 默认连接本机 Nexus，可用 `--nexus-url` 指定远程地址。无需安装 Python 或 GitHub CLI。安装器验证下载大小和 SHA256；已有目录或端口占用时停止并保留数据。
 
 `bootstrap.sh` / `bootstrap.ps1` 默认只安装本仓库组件；`install.sh` / `install.ps1` 提供组件选择。原生安装器还支持 `--components nexus|workbench|both`、`--download-only` 和 `--package-dir` 离线安装。Linux/Windows 当前以用户后台进程运行，不注册开机自启；可使用安装目录内 `launcher/mino-maintain`（Windows 加 `.exe`）管理启动和停止，Nexus 命令前加 `d2`。
 
-正式安装后打开新终端，可运行 `mino-nexus start|stop|status`、`mino-workbench start|stop|status`；不带参数时启动服务。命令注册到用户目录，不依赖全局 Python。已激活的开发虚拟环境仍使用自己的源码入口。
+正式安装后打开新终端，可运行 `mino-nexus start|stop|status`、`mino-workbench start|stop|status|open`；不带参数时启动服务。命令注册到用户目录，不依赖全局 Python。已激活的开发虚拟环境仍使用自己的源码入口。
 
 测试环境只从源码／PyCharm 启动，Nexus 使用 `--dev`（50101），Workbench 使用 `npm run dev`（60101）。Scout 不监听独立业务端口，只连接对应 Nexus。
 
