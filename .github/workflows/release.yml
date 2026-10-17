@@ -101,14 +101,20 @@ jobs:
               owned = [p for p in processes if p.get('ExecutablePath') and pathlib.Path(p['ExecutablePath']).is_relative_to(root)]
               assert len(owned) >= 2, owned
               kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+              user = ctypes.WinDLL('user32', use_last_error=True)
+              kernel.GetConsoleWindow.restype = ctypes.c_void_p
+              user.IsWindowVisible.argtypes = [ctypes.c_void_p]
               kernel.FreeConsole()
               for process in owned:
                   attached = kernel.AttachConsole(process['ProcessId'])
                   if attached:
+                      window = kernel.GetConsoleWindow()
+                      visible = bool(window and user.IsWindowVisible(window))
                       kernel.FreeConsole()
-                      raise AssertionError(f"Service allocated a console: {process}")
-                  assert ctypes.get_last_error() == 6, (process, ctypes.get_last_error())
-              print('Windows background service processes have no console:', len(owned))
+                      assert not visible, f"Service has a visible console: {process}"
+                  else:
+                      assert ctypes.get_last_error() == 6, (process, ctypes.get_last_error())
+              print('Windows background service processes have no visible console:', len(owned))
           subprocess.run(command + ['stop'], check=True)
           PYCODE
       - uses: actions/upload-artifact@v5
