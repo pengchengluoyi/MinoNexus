@@ -809,7 +809,7 @@ def lease_expired(lease: dict[str, Any], *, now: Optional[datetime] = None) -> b
     if not isinstance(lease, dict):
         return True
     from mino_nexus.services.run_write_safety import protected
-    if protected(str(lease.get("run_id") or "")):
+    if protected(str(lease.get("run_id") or ""), sn=str(lease.get("sn") or "")):
         return False
     exp = str(lease.get("expires_at") or "").strip()
     if not exp:

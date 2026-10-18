@@ -57,6 +57,8 @@ def _attempt(task_id, case, doc, number, retry_of):
         "provider_id": str(doc.get("provider_id") or ""), "execution_mode": "v5", "plan_source": "text", "frozen_revision": frozen.get("frozen_revision"),
         "publication": frozen, "controls": frozen.get("controls", {}), "predicate_contract": "web.atomic.v1",
         "verifier_build": "web-atomic-1", "project_id": pid, "sn": sn, "node_id": str((doc.get("device_targets", {}).get(sn) or {}).get("node_id") or ""),
+        "execution_unit_id": str(case.get("execution_unit_id") or ""),
+        "frozen_identity": copy.deepcopy(case.get("frozen_identity") or {}),
         "attempt": number, "retry_of": retry_of, "timeout_profile": PROFILE,
         "wall_budget_sec": budget.deadline - budget.started, "runnable_now": {"ready": False, "reason_code": "preflight_pending"}}
     session_store.open_meta(session_id=attempt_id, run_id=task_id, case_id=case["case_id"], app_id=doc.get("app_id", ""))

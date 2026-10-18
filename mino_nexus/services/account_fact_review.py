@@ -17,6 +17,18 @@ def view(row):
         'run_id', 'case_id', 'env', 'source', 'evidence_context', 'before', 'proposed', 'status', 'created_at', 'decision')}
 
 
+def _require_session_device(db, session, sn):
+    # Never infer device identity by parsing a session ID. Legacy sessions record
+    # it in session/start; bound sessions may additionally persist runtime scope.
+    starts = db.query(SessionEvent).filter_by(session_id=session.session_id, type='session/start').all()
+    devices = [str((event.payload or {}).get('sn') or '') for event in starts]
+    runtime_sn = str((session.runtime_context or {}).get('sn') or '')
+    if runtime_sn:
+        devices.append(runtime_sn)
+    if not sn or not devices or any(device != sn for device in devices):
+        raise ValueError('fact_device_scope_mismatch')
+
+
 def capture(ctx, proposed, *, source, expected_before):
     lease = ctx.resource_lease
     pid, aid = lease['project_id'], lease['account_id']
@@ -31,11 +43,12 @@ def capture(ctx, proposed, *, source, expected_before):
         if any(str(held.get(k) or '') != str(getattr(ctx, k, '') or '') for k in ('run_id', 'case_id', 'sn')) or not held.get('run_id'):
             raise ValueError('account_lease_changed')
         from mino_nexus.services.run_write_safety import protected
-        if protected(str(held['run_id']), db=db):
+        if protected(str(held['run_id']), db=db, sn=str(held.get('sn') or '')):
             raise ValueError('resource_isolated')
         session = db.get(SessionMeta, sid)
         if session is None or session.owner_user_id != actor or session.run_id != ctx.run_id or session.case_id != ctx.case_id or not session.finished_at:
             raise ValueError('finished_execution_evidence_required')
+        _require_session_device(db, session, str(held.get('sn') or ''))
         from mino_nexus.models.project import App
         app = db.get(App, session.app_id)
         if app is None or app.project_id != pid or (getattr(ctx, 'app_id', '') and ctx.app_id != session.app_id):
@@ -108,6 +121,12 @@ def decide(project_id, candidate_id, body):
             session = db.get(SessionMeta, row.session_id)
             if session is None or session.owner_user_id != actor or not session.finished_at or session.app_id != row.evidence_context.get('app_id'):
                 raise ValueError('fact_evidence_missing')
+            if session.run_id != row.run_id or session.case_id != row.case_id:
+                raise ValueError('fact_evidence_identity_changed')
+            _require_session_device(db, session, str(row.evidence_context.get('sn') or ''))
+            from mino_nexus.services.run_write_safety import protected
+            if protected(row.run_id, db=db, sn=str(row.evidence_context.get('sn') or '')):
+                raise ValueError('resource_isolated')
             event = db.query(SessionEvent).filter_by(session_id=row.session_id, seq=body.evidence_seq).one_or_none() if body.evidence_seq is not None else None
             if event is None or event.type not in {'observe/screen', 'observe/hierarchy', 'tool/result', 'inspection/done'}:
                 raise ValueError('fact_evidence_event_required')

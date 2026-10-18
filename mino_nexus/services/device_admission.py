@@ -60,15 +60,40 @@ def busy_for(row: dict, *, headless=True) -> str:
         return next(iter(owners), "") if len(owners) >= (4 if group.startswith("web:") else 1) else ""
 
 
+def _reservation_in_group(key: str, group: str) -> bool:
+    return key == group or (group.startswith("web:") and
+        (key.startswith(group + ":lane:") or key.startswith(group + ":v5-queue:")))
+
+
 def admit_in_transaction(db, doc: dict) -> None:
     """Caller holds BEGIN IMMEDIATE and persists the run in the same transaction."""
     from mino_nexus.models.run import AppRegressionRun
     rid = str(doc["run_id"])
     if doc.get("status") not in ("running", "queued"):
         from mino_nexus.services.run_write_safety import unresolved
-        if unresolved(doc):
-            return  # Task terminal != worker stopped. Keep its lane/desktop reservation.
-        db.query(DeviceReservation).filter_by(run_id=rid).delete()
+        pending = unresolved(doc)
+        from mino_nexus.models.execution_resource import ExecutionResource
+        import time
+        pending += [{"sn": row.sn} for row in db.query(ExecutionResource).filter_by(run_id=rid).all()
+                    if row.state == "isolated" or (row.state == "held" and row.expires_at <= time.time())]
+        if not pending:
+            db.query(DeviceReservation).filter_by(run_id=rid).delete()
+            return
+        protected_groups = set()
+        for action in pending:
+            sn = str(action.get("sn") or "")
+            if not sn:
+                return  # Unknown device identity must retain all reservations.
+            target = _recorded_target(db, doc, sn)
+            if not target.get("platform") or not target.get("node_id"):
+                return
+            try:
+                protected_groups.add(resource_group(target, headless=doc.get("playwright_headless", True)))
+            except ValueError:
+                return
+        for reservation in db.query(DeviceReservation).filter_by(run_id=rid).all():
+            if not any(_reservation_in_group(reservation.resource_key, group) for group in protected_groups):
+                db.delete(reservation)
         return
     previous = db.get(AppRegressionRun, rid)
     if previous is not None:
@@ -85,11 +110,15 @@ def admit_in_transaction(db, doc: dict) -> None:
     # Existing runs made before this upgrade also participate in admission.
     live = db.query(AppRegressionRun).filter(AppRegressionRun.status.in_(("running", "queued"))).all()
     from mino_nexus.services.run_write_safety import unresolved
-    reserved = {row.run_id for row in db.query(DeviceReservation).all()}
+    reservations = db.query(DeviceReservation).all()
+    reserved = {row.run_id for row in reservations}
+    def participates(run, group):
+        return run.status in {"running", "queued"} or any(
+            row.run_id == run.run_id and _reservation_in_group(row.resource_key, group)
+            for row in reservations)
     known = {row.run_id for row in live}
     if reserved - known:
-        live += [row for row in db.query(AppRegressionRun).filter(AppRegressionRun.run_id.in_(reserved - known))
-                 if unresolved(row.payload)]
+        live += db.query(AppRegressionRun).filter(AppRegressionRun.run_id.in_(reserved - known)).all()
     acquired = set()
     for sn in doc.get("sns") or [doc.get("sn")]:
         if not sn:
@@ -103,7 +132,8 @@ def admit_in_transaction(db, doc: dict) -> None:
             from mino_nexus.services.node_registry import get_registry
             node, _ = get_registry().resolve(sn)
             capacity = next((w for w in (node.device_workload if node else []) if w.sn == sn and w.lanes_total is not None), None)
-            same_group = [run for run in live if sn in ((run.payload or {}).get("sns") or [(run.payload or {}).get("sn")])]
+            same_group = [run for run in live if participates(run, group)
+                          and sn in ((run.payload or {}).get("sns") or [(run.payload or {}).get("sn")])]
             if any((run.payload or {}).get("execution_mode", "legacy") != doc.get("execution_mode", "legacy") for run in same_group):
                 raise ResourceBusy(sn, same_group[0].run_id)
             if doc.get("execution_mode") == "v5":
@@ -116,6 +146,8 @@ def admit_in_transaction(db, doc: dict) -> None:
         legacy_count = 0
         legacy_id = ""
         for run in live:
+            if not participates(run, group):
+                continue
             payload = run.payload if isinstance(run.payload, dict) else {}
             for other_sn in payload.get("sns") or [payload.get("sn")]:
                 old_row = _recorded_target(db, payload, other_sn)

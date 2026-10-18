@@ -245,7 +245,7 @@ def set_account_lease(project_id: str, account_id: str, lease: dict[str, Any] | 
         old_lease = row.lease if isinstance(row.lease, dict) else {}
         if expected_lease is not None and old_lease != expected_lease:
             return False
-        if protected(str(old_lease.get("run_id") or ""), db=db):
+        if protected(str(old_lease.get("run_id") or ""), db=db, sn=str(old_lease.get("sn") or "")):
             return False
         row.lease = payload
         row.updated_at = _now()
@@ -294,7 +294,7 @@ def try_claim_account_lease(
                 return False
         existing = row.lease if isinstance(row.lease, dict) else {}
         from mino_nexus.services.run_write_safety import protected
-        if protected(str(existing.get("run_id") or ""), db=db):
+        if protected(str(existing.get("run_id") or ""), db=db, sn=str(existing.get("sn") or "")):
             return False
         if lease_blocks_other_holder(existing, run_id=rid, sn=sn):
             return False
@@ -313,14 +313,18 @@ def clear_leases_for_run(project_id: str, run_id: str) -> int:
     if not pid or not rid:
         return 0
     n = 0
+    audit_rows = []
     with session_scope() as db:
         from mino_nexus.services.run_write_safety import protected
-        if protected(rid, db=db):
-            return 0
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
         rows = db.query(PoolAccount).filter(PoolAccount.project_id == pid).all()
         for row in rows:
             lease = row.lease if isinstance(row.lease, dict) else {}
             if str(lease.get("run_id") or "").strip() != rid:
+                continue
+            # Unknown device identity retains the conservative whole-run guard.
+            if protected(rid, db=db, sn=str(lease.get("sn") or "")):
                 continue
             try:
                 from mino_nexus.services.resource_allocation_log import append_allocation_log
@@ -334,7 +338,7 @@ def clear_leases_for_run(project_id: str, run_id: str) -> int:
                     "display_name": row.display_name,
                 }
                 ident = _ident_fn(stub)
-                append_allocation_log(
+                audit_rows.append(dict(
                     project_id=pid,
                     action="lease_release",
                     message=f"跑批结束释放 {ident}",
@@ -344,12 +348,17 @@ def clear_leases_for_run(project_id: str, run_id: str) -> int:
                     account_id=str(row.id or ""),
                     account_ident=ident,
                     detail={"reason": "run_end"},
-                )
+                ))
             except Exception:
                 pass
             row.lease = {}
             row.updated_at = _now()
             n += 1
+    for audit in audit_rows:
+        try:
+            append_allocation_log(**audit)
+        except Exception:
+            pass
     return n
 
 

@@ -346,8 +346,8 @@ def _run_case_list(
             )
         finally:
             if device_held:
-                release_bundle(run_id, sn)
-                release_device_lease(sn, str(package or ""), run_id)
+                release_bundle(run_id, sn, attempt_id=resource_attempt["attempt_id"])
+                release_device_lease(sn, str(package or ""), run_id, attempt_id=resource_attempt["attempt_id"])
 
 
 @owned_job()

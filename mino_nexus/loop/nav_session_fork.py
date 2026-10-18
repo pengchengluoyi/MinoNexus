@@ -155,7 +155,10 @@ def login_flow_interrupt_allowed_for_step(
     expected: str,
     required_session: str = "any",
 ) -> bool:
-    """仅进入登录页的分叉步：不跑 fb.global.login 宏（下一步才发码）。"""
+    """登录页本身是本步预期时，交给回看/核验，不擅自开始认证。"""
+    if (expected_indicates_login_destination(expected)
+            and not instruction_allows_login_flow(instruction, login_module_case=False)):
+        return False
     return detect_guest_tab_login_fork(
         instruction=instruction,
         expected=expected,

@@ -71,7 +71,7 @@ def acquire_device_lease(
         )
         for row in rows:
             holder = str(row.run_id or "").strip()
-            if protected(holder, db=db):
+            if protected(holder, db=db, sn=s):
                 return False, f"设备存在未确认停止的写动作，任务 {holder} 的资源仍隔离"
             if holder == rid:
                 row.expires_at = _expiry(ttl_sec)
@@ -100,7 +100,7 @@ def acquire_device_lease(
     return True, ""
 
 
-def release_device_lease(sn: str, package_id: str, run_id: str) -> int:
+def release_device_lease(sn: str, package_id: str, run_id: str, *, attempt_id: str = "") -> int:
     """释放单条 sn×package 租约（同 run 多机时勿整 run 删除）。"""
     s = str(sn or "").strip()
     p = str(package_id or "").strip()
@@ -110,8 +110,15 @@ def release_device_lease(sn: str, package_id: str, run_id: str) -> int:
     from mino_nexus.core.database import session_scope
 
     with session_scope() as db:
-        if protected(rid, db=db):
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
+        if protected(rid, db=db, sn=s):
             return 0
+        if attempt_id:
+            from mino_nexus.models.execution_resource import ExecutionResource
+            current = db.query(ExecutionResource).filter_by(run_id=rid, sn=s).filter(ExecutionResource.state != "released").all()
+            if any(resource.attempt_id != attempt_id for resource in current):
+                return 0
         n = (
             db.query(DeviceResourceLease)
             .filter(
@@ -137,15 +144,17 @@ def release_device_leases_for_run(run_id: str) -> int:
     from mino_nexus.core.database import session_scope
 
     with session_scope() as db:
-        if protected(rid, db=db):
-            return 0
-        n = (
-            db.query(DeviceResourceLease)
-            .filter(DeviceResourceLease.run_id == rid)
-            .delete(synchronize_session=False)
-        )
+        from sqlalchemy import text
+        db.execute(text("BEGIN IMMEDIATE"))
+        rows = db.query(DeviceResourceLease).filter(DeviceResourceLease.run_id == rid).all()
+        released = 0
+        for row in rows:
+            if protected(rid, db=db, sn=str(row.sn or "")):
+                continue
+            db.delete(row)
+            released += 1
         db.commit()
-        return int(n or 0)
+        return released
 
 
 def get_active_lease(sn: str, package_id: str) -> dict[str, Any] | None:

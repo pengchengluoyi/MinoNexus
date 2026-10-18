@@ -10,6 +10,8 @@ class WriteAdmissionError(RuntimeError):
         messages = {
             "task_not_running": "任务已不在执行中，未派发新的写动作",
             "run_write_stopped": "当前设备存在未结算或已隔离的写动作，未派发新的写动作；保留原动作与资源状态",
+            "resource_lease_lost": "当前执行的资源租约已失效，未派发新的写动作",
+            "resource_lease_expired": "当前设备的资源租约已过期或隔离，未派发新的写动作",
         }
         super().__init__(messages.get(reason_code, "当前任务不可派发新的写动作；保留原动作与资源状态"))
 
@@ -17,7 +19,8 @@ class WriteAdmissionError(RuntimeError):
 def unresolved(doc: dict | None, sn: str = "") -> list[dict]:
     values = (doc or {}).get("write_safety") or {}
     return [v for v in values.values() if isinstance(v, dict)
-            and v.get("state") in {"pending", "isolated"} and (not sn or v.get("sn") == sn)]
+            and v.get("state") in {"pending", "isolated"}
+            and (not sn or not v.get("sn") or v.get("sn") == sn)]
 
 
 def merge(old: dict | None, new: dict | None) -> dict:
@@ -37,7 +40,15 @@ def protected(run_id: str, *, db=None, sn: str = "") -> bool:
     try:
         if db is not None:
             row = db.get(AppRegressionRun, run_id)
-            return bool(row and unresolved(row.payload, sn))
+            if row and unresolved(row.payload, sn):
+                return True
+            from mino_nexus.models.execution_resource import ExecutionResource
+            import time
+            resources = db.query(ExecutionResource).filter_by(run_id=run_id)
+            if sn:
+                resources = resources.filter((ExecutionResource.sn == sn) | (ExecutionResource.sn == ""))
+            return any(resource.state == "isolated" or (resource.state == "held" and resource.expires_at <= time.time())
+                       for resource in resources.all())
         from mino_nexus.core.database import session_scope
         with session_scope() as session:
             return protected(run_id, db=session, sn=sn)
@@ -62,7 +73,10 @@ def begin(task_id: str, request, *, node_id: str, scout_process_generation: str 
         from mino_nexus.core.database import session_scope
         from mino_nexus.services.execution_resources import assert_current
         with session_scope() as db:
-            assert_current(task_id, request.sn, db=db)
+            try:
+                assert_current(task_id, request.sn, db=db)
+            except ValueError as exc:
+                raise WriteAdmissionError(str(exc)) from exc
         blockers = unresolved(doc, request.sn)
         if blockers:
             raise WriteAdmissionError("run_write_stopped", blocking_actions=[
@@ -157,6 +171,11 @@ async def recover_stopped(task_id: str):
     outcomes, baseline, attempts = [], [], set()
     for item in unresolved(doc):
         ref, sn = item.get("action_ref") or {}, item.get("sn", "")
+        if (not isinstance(ref, dict) or not isinstance(ref.get("run_id"), str)
+                or not ref.get("run_id") or type(ref.get("step_idx")) is not int):
+            outcomes.append({"action_ref": {}, "recovered": False, "stop_confirmed": False,
+                             "reason_code": "stop_action_identity_unavailable"})
+            continue
         node, _ = get_registry().resolve(sn)
         generation = str(item.get("scout_process_generation") or "")
         current_generation = str(getattr(node, "scout_process_generation", "") or "")
@@ -180,12 +199,15 @@ async def recover_stopped(task_id: str):
             stored = ((current or {}).get("write_safety") or {}).get(key)
             live_node, _ = get_registry().resolve(sn)
             if valid and current and not run_store.task_is_live(current) and stored == item and live_node is node and node.scout_process_generation == current_generation:
-                # Stale before the put: the put may free the reservation for the next task.
+                # A stopped worker does not prove business data or shared resources were reset.
+                # Keep the original effect boundary and quarantine; a stale baseline is a
+                # requirement for future verification, never evidence of successful reset.
                 marked = _require_fresh_baseline(sn, str(current.get("package") or ""))
-                current["write_safety"][key] = {**item, "state": "recovered", "stop_confirmed": True,
+                current["write_safety"][key] = {**item, "state": "isolated", "stop_confirmed": True,
+                    "reason_code": "resource_reset_verification_required",
                     "recovery": {"mode": proof.get("mode"), "proof": proof, "reviewed_by": actor, "at": run_store._now(),
-                                 "baseline_required": marked}}
-                run_store.put(current)  # Durable evidence precedes reservation/lease release.
+                                 "baseline_required": marked, "resource_reset_verified": False}}
+                run_store.put(current)
                 if marked:
                     baseline.append(marked)
                 attempts.add(str(ref.get("run_id") or ""))
@@ -194,7 +216,9 @@ async def recover_stopped(task_id: str):
         reason = proof.get("reason_code") or ("worker_completed" if valid else "stop_unconfirmed")
         if not valid and reason in {"worker_completed", "predecessor_retired"}:
             reason = "stop_unconfirmed"
-        outcomes.append({"action_ref": ref, "recovered": valid, "mode": proof.get("mode") or mode, "reason_code": reason})
+        outcomes.append({"action_ref": ref, "recovered": False, "stop_confirmed": valid,
+                         "resource_reset_verified": False, "mode": proof.get("mode") or mode,
+                         "reason_code": "resource_reset_verification_required" if valid else reason})
     current = run_store.get(task_id)
     if current and not unresolved(current):
         from mino_nexus.services.account_lease import release_run_lease

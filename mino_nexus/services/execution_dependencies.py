@@ -55,7 +55,7 @@ def account_fact(account, spec, *, profile, run_id, sn):
     if account.get('locked'):
         return fact('blocked', 'account_locked')
     lease = account.get('lease') or {}
-    if protected(str(lease.get('run_id') or '')):
+    if protected(str(lease.get('run_id') or ''), sn=str(lease.get('sn') or '')):
         return fact('blocked', 'account_isolated')
     if lease_blocks_other_holder(lease, run_id=run_id, sn=sn):
         return fact('blocked', 'account_busy')

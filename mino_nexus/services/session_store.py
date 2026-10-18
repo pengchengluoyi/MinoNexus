@@ -309,7 +309,8 @@ def finalize_bound(*, session_id, body, turn=0, phase="done"):
     if not meta or not (meta.get("runtime_context") or {}).get("execution_binding"):
         raise ValueError("binding_not_committed")
     body = dict(body)
-    if protected(meta["run_id"]):
+    target_sn = str(meta['runtime_context']['execution_binding'].get('target', {}).get('sn') or '')
+    if protected(meta["run_id"], sn=target_sn):
         body.update(status="blocked", summary="写动作结果未确认，资源仍隔离", reason_code="write_outcome_unknown")
     records = [{"type": "session/end", "payload": body, "turn": turn, "phase": phase}]
     patch = {"status": str(body.get("status") or "unknown"), "summary": str(body.get("summary") or "")[:2000],

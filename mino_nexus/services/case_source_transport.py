@@ -20,6 +20,13 @@ def read_source(snapshot, *, operation="read"):
         raise ValueError("source_node_heartbeat_stale")
     params = {**snapshot["configuration"], "kind": snapshot["kind"], "source_id": snapshot["source_id"],
         "read_id": snapshot["read_id"], "generation": snapshot["generation"], "contract_version": 1, "operation": operation}
+    if snapshot["kind"] == "case_api":
+        from mino_nexus.services.case_source_api import origin
+        from mino_nexus.services.settings_store import get_case_api_settings
+        service_url = get_case_api_settings()["base_url"]
+        if params.get("service_url") and origin(params["service_url"]) != service_url:
+            raise ValueError("source_api_service_mismatch")
+        params["service_url"] = service_url
     request = P.Execute(run_id="", step_idx=-1, sn="", capability_id="node.source_read", params=params,
         timeout_sec=120, scout_process_generation=node.scout_process_generation,
         node_connection_generation=node.node_connection_generation, capability_revision=node.capability_revision)

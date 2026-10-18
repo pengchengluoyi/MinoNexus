@@ -24,7 +24,8 @@ def claim_in_transaction(db, account_id=""):
     from mino_nexus.models.run import AppRegressionRun
     run = db.get(AppRegressionRun, request["run_id"])
     from mino_nexus.services.execution_policy import remaining
-    if run is None or run.status not in {"running", "queued"} or remaining(run.payload) == 0:
+    if (run is None or run.owner_user_id != request["owner"]
+            or run.status not in {"running", "queued"} or remaining(run.payload) == 0):
         request["reason"] = "task_not_running"
         return False
     is_web = is_web_slot(request["sn"], request["platform"])
@@ -38,18 +39,20 @@ def claim_in_transaction(db, account_id=""):
         request["reason"] = "resource_isolated"
         return False
     for old in db.query(DeviceResourceLease).filter_by(sn=request["sn"]).all():
-        if old.run_id != request["run_id"] and (not is_web or protected(old.run_id, db=db)):
+        if old.run_id != request["run_id"] and (not is_web or protected(old.run_id, db=db, sn=str(old.sn or ''))):
             request["reason"] = "resource_busy"
             return False
     rows = {key: db.get(ExecutionResource, key) for key in keys}
     for row in rows.values():
-        if row and row.state != "released" and (row.run_id != request["run_id"] or row.sn != request["sn"]
-                or row.state == "isolated" or row.expires_at < time.time()):
-            request["reason"] = "resource_isolated" if row.state == "isolated" or row.expires_at < time.time() else "resource_busy"
+        if row and row.state != "released" and (not _same_attempt(row, request)
+                or row.state != "held" or row.expires_at <= time.time()):
+            request["reason"] = "resource_isolated" if row.state != "held" or row.expires_at <= time.time() else "resource_busy"
             return False
+    epochs = {}
     for key in keys:
         old = rows[key]
-        epoch = (old.epoch + 1) if old else 1
+        epoch = old.epoch if old and old.state == "held" else (old.epoch + 1 if old else 1)
+        epochs[key] = epoch
         db.merge(ExecutionResource(resource_key=key, project_id=request["project_id"], owner_user_id=request["owner"],
             run_id=request["run_id"], execution_unit_id=request["execution_unit_id"], attempt_id=request["attempt_id"],
             sn=request["sn"], epoch=epoch, expires_at=time.time() + TTL, state="held",
@@ -61,6 +64,7 @@ def claim_in_transaction(db, account_id=""):
             leased_at=datetime.now(timezone.utc).isoformat())
         db.add(existing)
     existing.expires_at = datetime.fromtimestamp(time.time() + TTL, timezone.utc).isoformat()
+    request["resource_epochs"] = epochs
     request["claimed"] = True
     request["reason"] = ""
     return True
@@ -86,21 +90,63 @@ def claim_without_account():
         return claim_in_transaction(db)
 
 
+def _same_attempt(row, request):
+    return all(getattr(row, field) == request.get(key) for field, key in (
+        ("run_id", "run_id"), ("owner_user_id", "owner"), ("sn", "sn"),
+        ("project_id", "project_id"), ("execution_unit_id", "execution_unit_id"), ("attempt_id", "attempt_id")))
+
+
+def _attempt_rows(db, request):
+    rows = db.query(ExecutionResource).filter_by(attempt_id=request["attempt_id"], owner_user_id=request["owner"]).all()
+    expected = request.get("resource_epochs") or {}
+    valid = bool(expected) and {row.resource_key: row.epoch for row in rows} == expected
+    return rows, valid and all(_same_attempt(row, request) for row in rows)
+
+
 def renew(request):
     from mino_nexus.models.pool_account import PoolAccount
+    from mino_nexus.models.run import AppRegressionRun
+    from mino_nexus.models.resource_ops import DeviceResourceLease
+    from mino_nexus.services.execution_policy import remaining
     with session_scope() as db:
         db.execute(text("BEGIN IMMEDIATE"))
-        rows = db.query(ExecutionResource).filter_by(attempt_id=request["attempt_id"], owner_user_id=request["owner"]).all()
-        if not rows or any(row.state != "held" or row.expires_at < time.time() for row in rows):
+        rows, valid = _attempt_rows(db, request)
+        current_time = time.time()
+        run = db.get(AppRegressionRun, request["run_id"])
+        valid = (valid and run is not None and run.owner_user_id == request["owner"]
+                 and run.status in {"running", "queued"} and remaining(run.payload) != 0
+                 and all(row.state == "held" and row.expires_at > current_time for row in rows))
+        accounts = {}
+        if valid:
+            for account_id in {row.detail.get("account_id") for row in rows} - {"", None}:
+                account = db.get(PoolAccount, account_id)
+                lease = account.lease or {} if account else {}
+                try:
+                    expiry = datetime.fromisoformat(str(lease.get("expires_at") or "")).timestamp()
+                except (TypeError, ValueError, OverflowError):
+                    expiry = 0
+                if (account is None or account.locked or account.project_id != request["project_id"]
+                        or account.env != request["env"] or expiry <= current_time
+                        or any(lease.get(key) != request[key] for key in ("run_id", "case_id", "sn"))):
+                    valid = False
+                    break
+                accounts[account_id] = account
+        if not valid:
             for row in rows:
-                row.state = "isolated"
+                if (_same_attempt(row, request) and row.state == "held"
+                        and (request.get("resource_epochs") or {}).get(row.resource_key) == row.epoch):
+                    row.state = "isolated"
+            request["reason"] = "resource_lease_lost"
             return False
+        expiry = current_time + TTL
         for row in rows:
-            row.expires_at = time.time() + TTL
-            aid = row.detail.get("account_id")
-            account = db.get(PoolAccount, aid) if aid else None
-            if account and (account.lease or {}).get("run_id") == request["run_id"]:
-                account.lease = {**account.lease, "expires_at": datetime.fromtimestamp(time.time() + TTL, timezone.utc).isoformat()}
+            row.expires_at = expiry
+        expires_at = datetime.fromtimestamp(expiry, timezone.utc).isoformat()
+        for account in accounts.values():
+            account.lease = {**account.lease, "expires_at": expires_at}
+        for lease in db.query(DeviceResourceLease).filter_by(run_id=request["run_id"], sn=request["sn"],
+                package_id=request["package"], case_id=request["case_id"]).all():
+            lease.expires_at = expires_at
         return True
 
 
@@ -110,32 +156,56 @@ def heartbeat(request):
     def loop():
         with execution_user(request["owner"]):
             while not stopped.wait(TTL / 3):
-                if not renew(request):
+                try:
+                    renewed = renew(request)
+                except Exception:
+                    request["reason"] = "resource_renewal_failed"
                     break
-    worker = threading.Thread(target=loop, daemon=True, name="resource-renewal")
-    worker.start()
+                if not renewed:
+                    break
+    token = _claim.set(request)
+    worker = None
     try:
+        if not renew(request):
+            raise ValueError("resource_lease_lost")
+        worker = threading.Thread(target=loop, daemon=True, name="resource-renewal")
+        worker.start()
         yield
     finally:
         stopped.set()
-        worker.join(timeout=2)
+        if worker is not None:
+            worker.join(timeout=2)
+        _claim.reset(token)
 
 
-def release(run_id, sn=""):
+def release(run_id, sn="", *, attempt_id=""):
     from mino_nexus.services.run_write_safety import protected
     with session_scope() as db:
         db.execute(text("BEGIN IMMEDIATE"))
         query = db.query(ExecutionResource).filter_by(run_id=run_id)
         if sn:
             query = query.filter_by(sn=sn)
+        if attempt_id:
+            query = query.filter_by(attempt_id=attempt_id)
         for row in query.all():
-            if protected(run_id, db=db, sn=row.sn):
+            if row.state == "released":
+                continue
+            if row.state == "isolated" or row.expires_at <= time.time() or protected(run_id, db=db, sn=row.sn):
+                # Expiry/unknown effects require explicit reset verification.
+                # Ordinary cleanup is not evidence that the resource is clean.
                 row.state = "isolated"
             else:
                 row.state = "released"
 
 
 def assert_current(run_id, sn, *, db):
+    request = _claim.get()
+    if request is not None:
+        if request["run_id"] != run_id or request["sn"] != sn or request.get("reason"):
+            raise ValueError("resource_lease_lost")
+        rows, valid = _attempt_rows(db, request)
+        if not valid or any(row.state != "held" or row.expires_at <= time.time() for row in rows):
+            raise ValueError("resource_lease_lost")
     rows = db.query(ExecutionResource).filter_by(run_id=run_id, sn=sn).filter(ExecutionResource.state != "released").all()
     if rows and any(row.state != "held" or row.expires_at <= time.time() for row in rows):
         raise ValueError("resource_lease_expired")

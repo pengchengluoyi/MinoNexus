@@ -370,7 +370,7 @@ def _dependency_facts(requirements, target_context, target, identifier, env_doc,
             reservations = db.query(DeviceReservation).filter(DeviceReservation.run_id == rid).all()
             if any(row.resource_key == group or row.resource_key.startswith(group + ':') for row in reservations):
                 busy = rid
-    state = 'isolated' if (holder and protected(holder)) or (rid and protected(rid)) else (
+    state = 'isolated' if (holder and protected(holder, sn=target['sn'])) or (rid and protected(rid, sn=target['sn'])) else (
         'contended' if (holder and holder != rid) or (busy and busy != rid) else 'ready')
     facts = {}
     if requirements.get('execution_mode') == 'v5':
@@ -409,7 +409,7 @@ def _dependency_facts(requirements, target_context, target, identifier, env_doc,
                    and (not row.get('env') or row['env'] == target['env_profile'])
                    and match_requirements(account_facet_values_for_match(row), req)[0]]
         usable = [row for row in matched if not lease_blocks_other_holder(row.get('lease') or {}, run_id=rid, sn=target['sn'])
-                  and not protected(str((row.get('lease') or {}).get('run_id') or ''))]
+                  and not protected(str((row.get('lease') or {}).get('run_id') or ''), sn=str((row.get('lease') or {}).get('sn') or ''))]
         facts['resource:account'] = {'status': 'ready' if usable else 'blocked' if matched else 'unknown'}
     return facts, state
 

@@ -44,8 +44,27 @@ def validate(db, session, *, case, actor, context, boundaries):
     if any(value and start < _time(value) for value in boundaries):
         raise ValueError('review_evidence_stale')
     task = db.get(AppRegressionRun, session.run_id)
-    if task and (task.status == 'cancelled' or (task.payload or {}).get('status') == 'cancelled'):
+    if task is None or task.owner_user_id != actor or task.app_id != session.app_id:
+        raise ValueError('review_evidence_run_mismatch')
+    if task.status == 'cancelled' or (task.payload or {}).get('status') == 'cancelled':
         raise ValueError('review_evidence_cancelled')
+    from mino_nexus.services.run_write_safety import unresolved
+    if not runtime.get('sn') or unresolved(task.payload, runtime['sn']):
+        raise ValueError('review_evidence_resource_isolated')
+    unit_id = runtime.get('execution_unit_id')
+    units = [unit for unit in (task.payload or {}).get('cases') or []
+             if isinstance(unit, dict) and unit.get('execution_unit_id') == unit_id]
+    if not unit_id or len(units) != 1:
+        raise ValueError('review_evidence_unit_mismatch')
+    unit = units[0]
+    from mino_nexus.services.run_comparison import frozen_identity
+    if (unit.get('case_id') != session.case_id or unit.get('sn') != runtime['sn']
+            or unit.get('session_id') != session.session_id or unit.get('status') != 'pass'
+            or digest(unit.get('v5_publication') or {}) != digest(publication)
+            or not runtime.get('frozen_identity')
+            or runtime['frozen_identity'] != unit.get('frozen_identity')
+            or runtime['frozen_identity'] != frozen_identity(case)):
+        raise ValueError('review_evidence_unit_mismatch')
     refs = verdict.get('event_refs') or []
     records = []
     for ref in refs:

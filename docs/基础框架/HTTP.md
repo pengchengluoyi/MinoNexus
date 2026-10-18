@@ -24,6 +24,13 @@ Workbench 的项目用例页只保留「导入」，弹窗选择本地文件、�
 
 账号在「设置 → 节点 → 接入配置 → 工作项 → 用例服务 API」保存，密码交由 Scout
 现有凭据管理保存。导入弹窗不接收密码、token 或任意 API 路径，Nexus 不直连外部服务。
+服务地址在「管理 → 集成配置 → 用例服务 API」统一保存，默认 `http://192.168.22.9:3001/`。
+`GET /settings/integrations/case-api` 需要登录，返回 `{base_url}`；`PUT` 接收同形 body，
+仅管理员可写。地址校验为 http/https 根地址并去掉末尾斜杠，独立存入 SQLite
+`settings.id=case-api-integration`，不包含邮箱、密码或 token，不改动其他系统设置。
+Nexus 在每次发现项目、发现会话和读取用例时注入该地址；请求携带的旧地址与当前配置不一致
+时拒绝读取，重新发现项目后可继续。Scout 仅在自己的已认证绑定中读取本节点账号，
+使用 Nexus 下发的地址。节点不再配置服务地址；旧版本 Scout 需升级以使用统一管理的地址。
 历史 `/project/{project_id}/case-sources` 接口保留手动兼容和历史查询，不再接受
 `enabled/auto_compile/interval_seconds/daily_build_limit` 等调度参数。
 

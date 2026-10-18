@@ -813,6 +813,28 @@ class CaseImportSettingsBody(BaseModel):
     preview_batch_size: int | None = None
 
 
+class CaseAPISettingsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    base_url: str = Field(min_length=1, max_length=500)
+
+
+@router.get("/integrations/case-api")
+def get_case_api_settings_route(_sess: dict = Depends(current_session)):
+    return ok(ss.get_case_api_settings())
+
+
+@router.put("/integrations/case-api")
+def put_case_api_settings_route(body: CaseAPISettingsBody, sess: dict = Depends(current_session)):
+    from mino_nexus.services.auth_store import is_admin_role
+    if not is_admin_role(str(sess.get("role") or "")):
+        raise HTTPException(status_code=403, detail="需要管理员才能修改集成配置")
+    try:
+        return ok(ss.save_case_api_settings(body.base_url), msg="已保存")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"reason_code": str(exc),
+            "message": "请填写有效的 http 或 https 服务根地址，不包含账号、路径、查询参数或片段"}) from exc
+
+
 @router.get("/case-import")
 def get_case_import_settings_route(_sess: dict = Depends(current_session)):
     from mino_nexus.services.settings_store import get_case_import_settings

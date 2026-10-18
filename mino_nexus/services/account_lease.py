@@ -414,6 +414,8 @@ def apply_lease_to_ctx(ctx: Any, row: dict[str, Any], *, project_id: str) -> Non
         "project_id": str(project_id or ""),
         "run_id": str(getattr(ctx, "run_id", "") or ""),
         "account_ident": ident,
+        "sn": str(getattr(ctx, "sn", "") or ""),
+        "case_id": str(getattr(ctx, "case_id", "") or ""),
         "env": str(row.get("env") or ""),
         "facets": facets,
         "profile_id": str(row.get("profile_id") or ""),
@@ -957,7 +959,7 @@ def release_ctx_lease(ctx: Any) -> None:
     if not pid or not aid:
         return
     from mino_nexus.services.run_write_safety import protected
-    if protected(rid):
+    if protected(rid, sn=str(lease.get("sn") or getattr(ctx, "sn", "") or "")):
         return
     try:
         _clear_leased(pid, aid, rid)

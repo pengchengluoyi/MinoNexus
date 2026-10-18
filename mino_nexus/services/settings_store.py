@@ -619,6 +619,34 @@ def save_knowledge_job_settings(
     return _public_knowledge_jobs(payload, user_id=uid)
 
 
+def get_case_api_settings() -> dict[str, str]:
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.settings import Settings
+    from mino_nexus.services.case_source_api import origin
+
+    with session_scope() as db:
+        row = db.get(Settings, "case-api-integration")
+        payload = dict(row.payload or {}) if row else {}
+    return {"base_url": origin(payload.get("base_url") or "http://192.168.22.9:3001/")}
+
+
+def save_case_api_settings(base_url: str) -> dict[str, str]:
+    from sqlalchemy import text
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.settings import Settings
+    from mino_nexus.services.case_source_api import origin
+
+    base_url = origin(base_url.strip())
+    with session_scope() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        row = db.get(Settings, "case-api-integration")
+        if row is None:
+            db.add(Settings(id="case-api-integration", payload={"base_url": base_url}))
+        else:
+            row.payload = {**(row.payload or {}), "base_url": base_url}
+    return {"base_url": base_url}
+
+
 def get_case_import_settings() -> dict[str, Any]:
     ci = _root().get("case_import") if isinstance(_root().get("case_import"), dict) else {}
     try:

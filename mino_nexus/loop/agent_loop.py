@@ -2336,7 +2336,12 @@ def _run_loop(
                 expected=str(cur.expected or ""),
             )
             _under_login_ms = login_flow_under_milestones(cursor)
-            if _lf_ok and not _under_login_ms and not getattr(cursor, "login_chain_broken", False):
+            from mino_nexus.loop.visual_review import has_visual_prior
+
+            # An observed login form may be the pending action's expected result.
+            # Review that action before any legacy login chain can take ownership.
+            _login_review_pending = has_visual_prior(cursor)
+            if _lf_ok and not _under_login_ms and not _login_review_pending and not getattr(cursor, "login_chain_broken", False):
                 from mino_nexus.loop.login_account_lease import (
                     login_surface_detected,
                     try_lease_on_login_surface,
@@ -2535,7 +2540,7 @@ def _run_loop(
                     turn_seq=seq,
                     target_package=str(getattr(ctx, "target_package", "") or target_pkg),
                 )
-            if not macro:
+            if not macro and not has_visual_prior(cursor):
                 from mino_nexus.loop.nav_session_fork import (
                     login_flow_interrupt_allowed_for_step,
                     required_session_from_scene,

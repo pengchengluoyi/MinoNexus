@@ -45,9 +45,7 @@ def atomic_json(path: Path, value: dict) -> None:
 
 
 def legacy_path(path):
-    """Keep pre-branding installation records usable without rewriting user data."""
-    old = path.with_name(path.name.replace("mino-", "hi3d-", 1))
-    return old if not path.exists() and old.exists() else path
+    return path
 
 def read_json(path: Path) -> dict:
     value = json.loads(legacy_path(path).read_text())

@@ -91,7 +91,7 @@ def discover(repo, component, tag=""):
     if item.get("dirty") is not False or item.get("payload") not in ({"binary", "static"} if component == "workbench" else {"binary"}):
         raise ValueError("Only clean supported release packages may be downloaded")
     filename = item.get("filename", "")
-    if not isinstance(filename, str) or not re.fullmatch(r"(?:Mino|hi3d-)[A-Za-z0-9._-]+\.zip", filename):
+    if not isinstance(filename, str) or not re.fullmatch(r"Mino[A-Za-z0-9._-]+\.zip", filename):
         raise ValueError("Unsafe package filename")
     if item.get("url") != base + filename:
         raise ValueError("Package URL must belong to the selected repository and fixed release")
@@ -136,8 +136,6 @@ def prepare(root: Path, repo, component, tag, build):
         if target.is_symlink():
             raise ValueError("Prepared release may not be a symlink")
         manifest, package = target / "mino-manifest.json", target / "mino-package.zip"
-        if not manifest.exists():
-            manifest, package = target / "hi3d-manifest.json", target / "hi3d-package.zip"
         for path in (manifest, package):
             if path.is_symlink() or path.stat().st_nlink != 1:
                 raise ValueError("Prepared files may not be linked")
