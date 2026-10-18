@@ -51,3 +51,19 @@ APK 安装超时按未知处理，拒绝不确定情况下自动重装。回执�
 
 最终受控 cli/dev 启停及断线恢复再次通过。原回执只有 ID/参数摘要核验通过才允许恢复终态，读取错误不释放原占用。
 用户指定 mino global 全量用例，已只读核对 Mino平台 / webmino_global / test 下 3 条项目用例。当前会话没有已登录 Nexus MCP/HTTP 连接，因此尚未提交真实跑批，等待接入正常登录入口；未读取凭据或绕过权限。
+
+
+## 开发/正式 Scout 区分与 PyCharm 接入（2026-10-18）
+
+- PyCharm MCP 2026.1 真实连接成功；受控停止仅开发 Nexus 50101 后，通过 cli 运行配置启动，新 PID 59459；正式 50104 保持 1 个在线节点。
+- 旧 cli (1) 实测缺 psutil，已创建 Scout 专用 .venv 并安装其 pyproject 依赖；新增 Scout Development 配置和标准库启动器，避免污染 Nexus SDK。
+- 新配置真实 MCP 执行已进入正常凭证检查，缺开发配置时退出 2；不是节点已上线。未鉴权 install-token HTTP 请求返回 401。
+- 开发接入生成专用源码命令，使用 Scout/.venv，不调用正式 bootstrap 或读取正式凭据。
+- Scout 身份区分查询入口与运行进程，包含环境、数据根、节点 ID、build、解释器及 prefix。开发 Android 默认不分配，动作、APK 安装及输入法维护有分配门禁；不宣称跨环境设备独占已验收。
+- 真机 5fda2f6d 已通过新增 development-devices --add 命令加入开发配置；不依赖正式任务释放。命令保留已有接入信息和设备选择，无参数只查看。
+
+后续实测：用户提供开发接入凭据后，开发 Scout 已经 PyCharm 启动，PID 61700，测试 Nexus 50101 注册、心跳和插件就绪均成功；运行身份为 development/source，独立 .venv、~/.mino-dev/scout、节点 e6d693f7c7f6acce。
+
+安卓执行器实测：唤醒、收起无密码锁屏、HOME、读取前台和截图成功；确认前台 com.miui.home/.launcher.Launcher，showing=false、SCREEN_STATE_ON，截图 1200×2608。初次熄屏下 HOME 返回码成功不能当作界面验收，连续唤醒操作后的实际状态才是有效证据。
+
+待验收：真实 Nexus session 跑批及指定 APK 构建/安装。当前会话尚未暴露用户提供的 mino MCP 连接工具，不能宣称业务链路已验收。正式任务释放不再作为开发调试条件。未复制正式凭据、未直接写业务库、未运行 pytest、未修改正式服务。
