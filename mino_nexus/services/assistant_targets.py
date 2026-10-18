@@ -74,6 +74,8 @@ def channel_candidates(args: dict[str, Any], user_id: str, *, require_available:
     choices, unavailable = [], []
     devices = _visible_devices(user_id) if require_available and app else []
     for channel in doc.get("channels") or []:
+        if app and channel.get("app_id") != app.get("id"):
+            continue
         cid, field = str(channel["id"]), str(channel.get("field") or "value")
         value = str((snapshot.get(cid) or {}).get(field) or "").strip()
         label = str(channel.get("alias") or channel.get("label") or cid)

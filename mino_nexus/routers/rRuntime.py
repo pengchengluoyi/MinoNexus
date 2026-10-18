@@ -118,6 +118,15 @@ def list_runtime_assets(
 
 @router.post("/nodes/install-token")
 def create_install_token(request: Request, response: Response, sess: dict = Depends(current_session)):
+    import sys
+    if not getattr(sys, "frozen", False):
+        from mino_nexus.services.scout_install import development_installation
+        # Validate the source checkout before issuing any credential. No remote
+        # release lookup, production bootstrap or copying production identities.
+        development_installation("")
+        tok = issue(user_id=str(sess.get("user_id") or ""))
+        response.headers["Cache-Control"] = "no-store"
+        return ok({**tok, **development_installation(tok["token"])})
     base = public_nexus_url(request)
     release = installation_release()
     tok = issue(user_id=str(sess.get("user_id") or ""))

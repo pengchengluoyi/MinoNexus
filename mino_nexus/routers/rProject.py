@@ -442,7 +442,10 @@ def update_project_env(project_id: str, item: ProjectEnvUpdate, _sess: dict = De
         raise HTTPException(status_code=400, detail="至少保留一个环境")
     if doc["default_profile"] not in {e["key"] for e in doc["environments"]}:
         raise HTTPException(status_code=400, detail="默认环境不在环境列表里")
-    saved = ps.save_project_env(project_id, doc)
+    try:
+        saved = ps.save_project_env(project_id, doc)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     safe = dict(saved)
     safe.pop("test_accounts", None)
     return ok({"env": safe}, msg="Project env updated")

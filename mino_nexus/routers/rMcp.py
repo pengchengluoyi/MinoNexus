@@ -57,11 +57,16 @@ def _call(uid: str, name: str, args: dict[str, Any]) -> dict[str, Any]:
     if out.ask:
         body["ask"] = out.ask
         body["options"] = out.options
+    # Configuration may contain a rejected plaintext credential. Never copy the
+    # raw binding/connection payload into chat history, including failed calls.
+    args_brief = ("开发配置参数已省略；详见操作回执"
+                  if spec["id"] in {"development.configure", "development.connection"}
+                  else json.dumps(args, ensure_ascii=False)[:180])
     store.save_turn({
         "turn_id": store.new_turn_id(), "user_id": uid, "surface": "mcp", "channel": "mcp",
         "status": "ok" if out.ok else "error", "intent": spec.get("title") or spec["id"],
         "steps": [{"tool": spec["id"], "label": spec.get("title") or spec["id"], "status": "ok" if out.ok else "error",
-                   "ms": out.elapsed_ms, "args_brief": json.dumps(args, ensure_ascii=False)[:180]}],
+                   "ms": out.elapsed_ms, "args_brief": args_brief}],
         "elapsed_ms": int((time.time() - started) * 1000),
     })
     if spec["id"] == "session.screenshot" and out.ok:

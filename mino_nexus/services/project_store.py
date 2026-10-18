@@ -300,7 +300,8 @@ def project_env(project_id: str) -> dict[str, Any]:
     project = require_project(pid)
     base = env_from_project_row(project, _apps_of(root, pid))
     pool = load_pool_config(pid)
-    return merge_pool_config_into_doc(base, pool)
+    from mino_nexus.services.application_channels import application_channels
+    return application_channels(merge_pool_config_into_doc(base, pool), _apps_of(root, pid))
 
 
 def list_apps(project_id: str) -> list[dict[str, Any]]:
@@ -376,6 +377,9 @@ def create_app(
     if not isinstance(platforms, str):
         raise ValueError("platform_set_required")
     platforms = ",".join(platform_set(platforms.split(",") if platforms else []))
+    # Freeze existing unique legacy associations before a second same-platform app is added.
+    if _apps_of(_root(), project_id):
+        save_project_env(project_id, project_env(project_id))
     root = _root()
     now = _now()
     row = {
@@ -441,6 +445,8 @@ def save_project_env(project_id: str, doc: dict[str, Any]) -> dict[str, Any]:
     pid = str(project_id or "").strip()
     previous = require_project(pid)
     src = dict(doc or {})
+    from mino_nexus.services.application_channels import validate_application_channels
+    validate_application_channels(src, _apps_of(_root(), pid))
     from mino_nexus.services.project_env import validate_environment_write
     previous_channels = normalize_project_env(previous.get("env") or default_project_env())["channels"]
     if src.get("channels") != previous_channels:

@@ -74,3 +74,29 @@ def install_commands(release: dict, *, token: str, nexus_url: str) -> dict[str, 
                 f"--manifest-url {shlex.quote(manifest_url)}"
             )
     return commands
+
+
+def development_installation(token: str) -> dict:
+    """Source development pairs locally; never invokes a production installer."""
+    from pathlib import Path
+    import platform
+    import sys
+    source = Path(__file__).resolve().parents[3] / "MinoScout"
+    if not (source / "mino_scout/cli.py").is_file():
+        raise HTTPException(status_code=503, detail="本机缺少同级 MinoScout 源码，不能生成开发接入命令")
+    system = {"Darwin": "darwin", "Windows": "win32", "Linux": "linux"}.get(platform.system())
+    if not system:
+        raise HTTPException(status_code=503, detail="当前开发宿主不支持 Scout 接入")
+    arch = "arm64" if platform.machine().lower() in {"arm64", "aarch64"} else "x64"
+    interpreter = source / ".venv" / ("Scripts/python.exe" if system == "win32" else "bin/python")
+    if not interpreter.is_file():
+        raise HTTPException(status_code=503, detail="请先在 MinoScout/.venv 安装 Scout 开发依赖；不复用 Nexus 解释器")
+    args = [str(interpreter), "-m", "mino_scout.cli", "configure-development",
+            "--nexus-url", "http://127.0.0.1:50101", "--install-token", token]
+    if system == "win32":
+        quote = lambda value: "'" + value.replace("'", "''") + "'"
+        command = "Set-Location -LiteralPath " + quote(str(source)) + "; & " + " ".join(quote(x) for x in args)
+    else:
+        command = "cd " + shlex.quote(str(source)) + " && " + " ".join(shlex.quote(x) for x in args)
+    return {"environment": "development", "nexus_url": "http://127.0.0.1:50101",
+            "targets": {system: [arch]}, "commands": {system: command}}

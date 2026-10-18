@@ -175,6 +175,7 @@ def _norm_channel(raw: Any, seen: set) -> Optional[dict]:
             app_ident = parts[1]
     return {
         "id": cid,
+        **({"app_id": str(raw["app_id"])} if raw.get("app_id") else {}),
         "kind": kind,
         **({"platform": platform} if kind != "server" or "platform" in raw else {}),
         "alias": alias,

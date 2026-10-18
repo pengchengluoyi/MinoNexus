@@ -1,0 +1,156 @@
+{
+  "id": "development.configure",
+  "version": 1,
+  "title": "保存应用开发环境",
+  "description": "保存完整开发绑定，复用应用写权限和 revision 冲突校验。先读取 development.get；先保存并检查正式 Scout 的 IDE 连接，再绑定测试项目、运行配置和测试目标。保存不启动进程、不自动授予执行权限；授权字段仅按用户明确授权填写。",
+  "route": "PUT /project/app/{app_id}/development",
+  "risk": "write",
+  "async": false,
+  "params_schema": {
+    "$defs": {
+      "Binding": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "node_id": {
+            "default": "",
+            "maxLength": 100,
+            "title": "Node Id",
+            "type": "string"
+          },
+          "connection_id": {
+            "default": "",
+            "maxLength": 80,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "connection_revision": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Connection Revision",
+            "type": "integer"
+          },
+          "project_path": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Project Path",
+            "type": "string"
+          },
+          "source_dir": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Source Dir",
+            "type": "string"
+          },
+          "run_configuration": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Run Configuration",
+            "type": "string"
+          },
+          "build_configuration": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Build Configuration",
+            "type": "string"
+          },
+          "target_url": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Target Url",
+            "type": "string"
+          },
+          "expected_build": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Expected Build",
+            "type": "string"
+          },
+          "build_field": {
+            "default": "build_id",
+            "maxLength": 200,
+            "title": "Build Field",
+            "type": "string"
+          },
+          "service_log_path": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Service Log Path",
+            "type": "string"
+          },
+          "apk_path": {
+            "default": "",
+            "maxLength": 2048,
+            "title": "Apk Path",
+            "type": "string"
+          },
+          "android_serial": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Android Serial",
+            "type": "string"
+          },
+          "apk_package": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Apk Package",
+            "type": "string"
+          },
+          "apk_version_code": {
+            "default": "",
+            "maxLength": 50,
+            "title": "Apk Version Code",
+            "type": "string"
+          },
+          "execution_allowed": {
+            "default": false,
+            "title": "Execution Allowed",
+            "type": "boolean"
+          },
+          "test_parameters_confirmed": {
+            "default": false,
+            "title": "Test Parameters Confirmed",
+            "type": "boolean"
+          }
+        },
+        "title": "Binding",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "revision": {
+        "minimum": 0,
+        "title": "Revision",
+        "type": "integer",
+        "description": "先用 development.get 获取 revision；冲突后重新读取，不盲目覆盖。config 是完整配置，保留未修改字段。"
+      },
+      "config": {
+        "$ref": "#/$defs/Binding"
+      },
+      "app_id": {
+        "type": "string",
+        "minLength": 1,
+        "description": "有写权限的应用 ID"
+      }
+    },
+    "required": [
+      "app_id",
+      "revision",
+      "config"
+    ],
+    "type": "object"
+  },
+  "param_resolvers": {},
+  "result_pick": [
+    "data"
+  ],
+  "surfaces": [
+    "mcp"
+  ],
+  "enabled": true
+}

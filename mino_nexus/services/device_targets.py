@@ -15,7 +15,11 @@ def target_channel(app: dict, row: dict, *, surface="", profile="", env_doc=None
     cfg = get_automation_config(app, hydrate_cases=False)
     env = env_doc if env_doc is not None else ps.project_env(str(app.get("project_id") or ""))
     resolved = resolve_run_env_profile(env, requested=profile, automation_default=str(cfg.get("env_profile") or ""))
-    channels = list(env.get("channels") or [])
+    channels = [c for c in env.get("channels") or []
+                if not c.get("app_id") or c.get("app_id") == app.get("id")]
+    owned = [c for c in channels if c.get("app_id") == app.get("id")]
+    if owned:
+        channels = owned
     chosen = surface or str(cfg.get("env_surface") or "")
     if chosen:
         channel = next((c for c in channels if c.get("id") == chosen), None)

@@ -56,6 +56,11 @@ def authorize(app_id, sess):
     return str(sess["user_id"])
 
 
+def is_android_app(app_id):
+    platforms = require_app(app_id).get("platforms") or []
+    return "android" in (platforms.split(",") if isinstance(platforms, str) else platforms)
+
+
 def binding_get(app_id, sess):
     authorize(app_id, sess)
     with session_scope() as db:
@@ -82,6 +87,11 @@ def binding_save(app_id, sess, revision, binding):
     with session_scope() as db:
         db.execute(text("BEGIN IMMEDIATE"))
         row = db.get(DevelopmentBinding, app_id)
+        if not is_android_app(app_id):
+            previous = row.config if row else {}
+            fields = ("apk_path", "android_serial", "apk_package", "apk_version_code")
+            if any(cfg.get(key) and cfg.get(key) != previous.get(key, "") for key in fields):
+                raise HTTPException(422, "APK 安装参数仅适用于 Android 应用")
         if (row.revision if row else 0) != revision:
             raise HTTPException(409, "配置已被修改，请刷新后保存")
         active = db.query(DevelopmentOperation).filter_by(app_id=app_id).filter(DevelopmentOperation.slot.is_not(None)).first()
@@ -129,6 +139,8 @@ def list_operations(app_id, sess):
 @admitted
 def create_operation(app_id, sess, opid, action, revision, connection=None):
     uid = authorize(app_id, sess)
+    if action == "install" and not is_android_app(app_id):
+        raise HTTPException(422, "只有 Android 应用可以安装 APK")
     saved = binding_get(app_id, sess)
     cfg = saved["config"]
     # Connection operations specify their node; binding is only saved after Scout acknowledges.
