@@ -29,7 +29,24 @@ def merge(old: dict | None, new: dict | None) -> dict:
     values = dict((old or {}).get("write_safety") or {})
     for key, value in ((new or {}).get("write_safety") or {}).items():
         if isinstance(value, dict) and rank.get(value.get("state"), -1) >= rank.get((values.get(key) or {}).get("state"), -1):
-            values[key] = dict(value)
+            previous = values.get(key) or {}
+            identity_fields = ("action_ref", "sn", "node_id", "scout_process_generation", "capability_id")
+            if any(field in previous and field in value and previous[field] != value[field]
+                   for field in identity_fields):
+                continue  # Never attach another action's proof to this ledger key.
+            merged = dict(value)
+            # Stop evidence binds the immutable action, not the age of a task snapshot.
+            # A stale isolated projection must not erase a persisted proof.
+            if previous:
+                for field in identity_fields:
+                    if field in previous:
+                        merged[field] = previous[field]
+            if previous.get("stop_confirmed") is True and previous.get("recovery"):
+                merged["stop_confirmed"] = True
+                merged["recovery"] = previous["recovery"]
+                if merged.get("state") == "isolated":
+                    merged["reason_code"] = "resource_reset_verification_required"
+            values[key] = merged
     return values
 
 
@@ -234,7 +251,7 @@ async def recover_stopped(task_id: str):
         if current.get("execution_mode") == "v5":
             for attempt in attempts - {"", task_id}:
                 release_run_lease(attempt, app_id=str(current.get("app_id") or ""))  # strict accounts lease per attempt
-    return {"task_id": task_id, "actions": outcomes, "resource_isolated": bool(unresolved(current)),
+    return {"task_id": task_id, "actions": outcomes, "resource_isolated": protected(task_id),
             "business_result_unchanged": True, "baseline_required": baseline}
 
 

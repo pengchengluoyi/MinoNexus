@@ -438,7 +438,7 @@ Workbench 的“预检所选用例”按当前完整选择逐条调用；选择�
 ### 2026-10-16：MCP 节点更新、写安全复核与多语言证据
 
 - MCP `scout_list` / `scout_update` / `scout_update_status` 复用当前 owner 的节点接口。`scout_update` 只请求节点已配置发布清单的最新版本，不接受任意本地包路径、任意 URL 或指定未发布版本；离线不能宣称升级成功，须通过状态和重新连接核对运行版本。本地未发布修复包的备份安装另记交付记录。
-- `POST /case-runner/tasks/{task_id}/write-safety/recheck`（MCP `task_write_safety_recheck`）：仅当前 owner 的已结束任务可显式复核；其他账号任务 404、在途任务 409。只重新获取 Scout 停止证明，不重放原设备写动作。证明缺失仍 `resource_isolated=true`；成功返回逐动作 `recovered`、`mode`、`reason_code`、`baseline_required`，并明确 `business_result_unchanged=true`。跨进程必须有旧代际退役证明，新进程在线本身不是停止证明。释放后下一任务仍需新观察，历史失败或阻断不改成通过。
+- `POST /case-runner/tasks/{task_id}/write-safety/recheck`（MCP `task_write_safety_recheck`）：仅当前 owner 的已结束任务可显式复核；其他账号任务 404、在途任务 409。只重新获取 Scout 停止证明，不重放原设备写动作。证明缺失仍 `resource_isolated=true`；成功返回逐动作 `recovered`、`mode`、`reason_code`、`baseline_required`，并明确 `business_result_unchanged=true`。跨进程必须有旧代际退役证明，新进程在线本身不是停止证明。停止证明不等于资源复位：当前只更新停止状态并保留隔离，历史失败或阻断不改成通过。迟到的有效停止回执也会更新已结束任务的当前停止状态；普通迟到写回执仅追加对账。
 - 文案检查点冻结 `rules.text_match=exact|intent`。作者指定固定文案仍精确检查；明确跨语言意图按原用例含义核验，保留 `observed_text`、`observed_language`、`evidence` 与逐项 `semantic_checks`。新策略通过新编译/草稿生效，不改写历史发布。缺原文、缺逐项证据、输出语言标签非法等仍拒绝，不能退化成普通布尔断言。
 - 单次观察回看可证明某个语言检查点符合，不自动回写整条业务用例结果。身份、协议、交互能力、完整 check 和严格 `verified_pass` 仍各自按合同核验。
 

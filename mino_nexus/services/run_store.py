@@ -190,6 +190,9 @@ def _upsert_run(doc: dict[str, Any]) -> None:
                 return
             db.add(RunAdmission(id="admission-" + uuid.uuid4().hex, owner_user_id=doc["owner_user_id"],
                 request_id=doc["client_request_id"], request_digest=doc["request_digest"], run_id=doc["run_id"]))
+        if previous is None and doc.get("retry_contract"):
+            from mino_nexus.services.run_retry import validate_admission
+            validate_admission(db, doc)
         guards = merge(previous.payload if previous else None, doc)
         from mino_nexus.services.write_reconciliation import merge_receipts
         reconciliations = merge_receipts(previous.payload if previous else None, doc)
@@ -197,7 +200,7 @@ def _upsert_run(doc: dict[str, Any]) -> None:
             frozen = previous.payload
             for field in ("owner_user_id", "plugin_user_id", "client_request_id", "request_digest", "derived_from",
                           "requested_total", "skipped_cases", "coverage", "sns", "device_targets", "platforms_by_sn",
-                          "environment_baseline_digest", "execution_policy"):
+                          "environment_baseline_digest", "execution_policy", "retry_contract"):
                 if field in frozen:
                     doc[field] = copy.deepcopy(frozen[field])
             before = {case.get("execution_unit_id"): case for case in frozen.get("cases") or []}
@@ -206,7 +209,7 @@ def _upsert_run(doc: dict[str, Any]) -> None:
                 raise ValueError("run_execution_selection_immutable")
             for case in doc.get("cases") or []:
                 original_case = before.get(case.get("execution_unit_id")) or {}
-                for field in ("case_id", "sn", "execution_unit_id", "frozen_identity", "source_revision_id", "v5_publication"):
+                for field in ("case_id", "sn", "execution_unit_id", "frozen_identity", "source_revision_id", "v5_publication", "retry_count", "retry_of", "retry_of_execution_unit_id", "attempt_deadline_at"):
                     if field in original_case:
                         case[field] = copy.deepcopy(original_case[field])
         if previous is not None and previous.status not in _TASK_LIVE:

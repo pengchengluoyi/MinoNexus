@@ -154,7 +154,19 @@ def backup(d: Deployment, row: dict) -> Path:
 
 
 def restore_prestart(d: Deployment, row: dict) -> None:
-    raise RuntimeError("upgrade_and_rollback_removed")
+    if row["writes_reopened"]:
+        raise RuntimeError("Data restore forbidden after normal startup")
+    source = Path(row["backup"])
+    if not read_json(source / "mino-backup.json").get("complete"):
+        raise RuntimeError("No complete backup")
+    data = Path(d.config["data_dir"])
+    retained = data.with_name(data.name + ".failed-" + row["operation_id"])
+    if retained.exists():
+        raise RuntimeError("Previous recovery preserved; operator required")
+    prepared = data.with_name(data.name + ".restore-" + row["operation_id"])
+    shutil.copytree(source, prepared)
+    os.rename(data, retained)  # Preserve failed migration data; do not delete it.
+    os.rename(prepared, data)
 
 
 def health_probe(d: Deployment, build: str) -> None:

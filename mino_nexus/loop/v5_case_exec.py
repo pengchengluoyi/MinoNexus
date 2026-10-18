@@ -80,6 +80,9 @@ def _attempt(task_id, case, doc, number, retry_of):
         operation = next((row for row in (router.execution_binding or {}).get('operations', [])
                           if row['operation_ref'] == operation_ref), {})
         event = PlanEvent(seq=seq, capability_id=cap, params=params or {}, expected_executor="playwright")
+        # Set before dispatch: timeout or missing action_ref must not look like no write.
+        if cap == 'open_web_v5':
+            opened_dispatched = True
         result = router.dispatch(event, timeout_sec=seconds, reserve_sec=reserve,
                                  operation_ref=operation_ref, binding_phase=operation.get('phase', ''))
         raw = result.raw_response
@@ -244,6 +247,9 @@ def _attempt(task_id, case, doc, number, retry_of):
             clear_leases_for_run(pid, attempt_id)
         budget.terminate()
     context.update(session_generation=generation, elapsed_ms=int((time.monotonic() - budget.started) * 1000), executor_stopped=stopped)
+    if not opened_dispatched and stopped:
+        from mino_nexus.services.run_retry import NO_EFFECT_CONTRACT
+        context["retry_safety"] = {"contract": NO_EFFECT_CONTRACT, "write_dispatch_attempted": False}
     verdict = {"verification_status": verification, "reason_code": reason, "legacy_error_kind": "",
                "consumed_required": [e["point_id"] for e in evidence if e["required"]], "flaky": number > 1 and verification == "verified_pass"}
     try:
@@ -265,7 +271,7 @@ def run_case(task_id, case, doc):
     # flag and executor_stopped receipt do not prove business/resource reset.
     # Execute once until an evidence-backed reset admission path is implemented.
     with registry_runtime("v5"):
-        result = _attempt(task_id, case, doc, 1, "")
+        result = _attempt(task_id, case, doc, case.get("retry_count", 0) + 1, case.get("retry_of", ""))
     policy = (case.get("v5_publication") or {}).get("retry_policy") or {}
     retry_blocked = ("resource_reset_verification_required"
                      if result.get("reason_code") == "effect_unknown" and policy.get("max") else "")

@@ -15,7 +15,7 @@ def record_late_result(identity: dict, result, *, receipt_id: str) -> bool:
     from mino_nexus.core.execution_user import current_user_id, execution_user
     from mino_nexus.models.session_event import SessionMeta
     from mino_nexus.services import run_store
-    from mino_nexus.services.run_write_safety import _proof_mode_valid
+    from mino_nexus.services.run_write_safety import _proof_mode_valid, _require_fresh_baseline
 
     owner = identity.get("owner_user_id")
     if (not owner or current_user_id() not in {"", owner} or not receipt_id
@@ -69,6 +69,17 @@ def record_late_result(identity: dict, result, *, receipt_id: str) -> bool:
                 "execution_started": boundary, "stop_confirmed": stopped,
                 "resource_reset_verified": False, "at": run_store._now(),
                 "business_result_unchanged": True}
+            # A late stop reply can satisfy the stop requirement for this exact action.
+            # Never turn a late write success/no-write claim into a reset or a new verdict.
+            if (stopped and not run_store.task_is_live(doc)
+                    and item.get("state") in {"pending", "isolated"}
+                    and item.get("stop_confirmed") is not True):
+                baseline = _require_fresh_baseline(item["sn"], str(doc.get("package") or ""))
+                doc["write_safety"][key] = {**item, "state": "isolated", "stop_confirmed": True,
+                    "reason_code": "resource_reset_verification_required",
+                    "recovery": {"mode": proof.get("mode"), "receipt_id": receipt_id,
+                        "source": "late_stop_receipt", "at": receipts[receipt_id]["at"],
+                        "baseline_required": baseline, "resource_reset_verified": False}}
             doc["write_reconciliation"] = receipts
             run_store.put(doc)
             return True

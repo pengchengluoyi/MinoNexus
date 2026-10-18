@@ -215,7 +215,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="mino-nexus maintenance")
     sub = ap.add_subparsers(dest="command", required=True)
     p = sub.add_parser("migrate"); p.add_argument("--data-dir", required=True); p.add_argument("--root", type=Path)
-    for name in ("install", "bind-workbench", "status", "cancel", "serve", "run-server", "provision-probe", "register", "probe", "start", "stop", "service-status"):
+    for name in ("install", "installer-upgrade", "bind-workbench", "status", "cancel", "serve", "run-server", "provision-probe", "register", "probe", "start", "stop", "service-status"):
         p = sub.add_parser(name); p.add_argument("--root", type=Path, required=True)
         if name in {"install", "stage", "installer-upgrade"}:
             p.add_argument("--manifest", type=Path, required=True); p.add_argument("--package", type=Path, required=True)

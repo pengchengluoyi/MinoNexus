@@ -502,17 +502,28 @@ def run_explore(
     return run_store.to_task_json(doc)
 
 
-def retry_failed(task_id: str, *, sn: str = "") -> dict[str, Any]:
-    # All callers (HTTP and assistant tools) share the same closed admission.
-    # Selecting another device cannot make the old execution's effects safe.
-    from mino_nexus.services.run_retry import eligibility
+@admitted
+def retry_failed(task_id: str, *, sn: str = "", execution_unit_ids=None, client_request_id="") -> dict[str, Any]:
+    from mino_nexus.services.run_retry import create, eligibility
+    if sn:
+        return {"ok": False, "code": 409, "reason": "复跑必须保持原执行目标", "reason_code": "retry_target_changed"}
     try:
-        assessment = eligibility(task_id)
+        doc, created = create(task_id, execution_unit_ids or [], client_request_id)
     except KeyError:
         return {"ok": False, "code": 404, "reason": "任务不存在"}
-    return {"ok": False, "code": 409,
-            "reason": assessment["blockers"][0]["message"],
-            "reason_code": assessment["reason_code"], "eligibility": assessment}
+    except ValueError as exc:
+        try:
+            assessment = eligibility(task_id)
+        except KeyError:
+            return {"ok": False, "code": 404, "reason": "任务不存在"}
+        return {"ok": False, "code": 409, "reason": "复跑准入未通过，请查看阻塞原因",
+                "reason_code": str(exc), "eligibility": assessment}
+    if created:
+        worker = user_thread(target=_run_in_background, kwargs={"run_id": doc["run_id"],
+            "package": doc["package"], "playbook": doc.get("playbook") or {}, "provider_id": doc.get("provider_id", "")},
+            daemon=True, name=f"case-retry-{doc['run_id']}")
+        worker.start()
+    return {"ok": True, "data": run_store.to_task_json(doc), "case_ids": [c["case_id"] for c in doc["cases"]]}
 
 
 def _ensure_web_parallel_capacity(sn: str) -> None:
