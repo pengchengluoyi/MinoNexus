@@ -474,46 +474,24 @@ def cancel_task(task_id: str, _sess: dict = Depends(current_session)):
     return ok(result, msg="任务已取消")
 
 
+@router.get("/tasks/{task_id}/retry-eligibility")
+def retry_eligibility(task_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.services.run_retry import eligibility
+    try:
+        return ok(eligibility(task_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="任务不存在") from exc
+
+
 @router.post("/tasks/{task_id}/retry-failed")
 def retry_failed_cases(task_id: str, body: Optional[RetryFailedRequest] = None, _sess: dict = Depends(current_session)):
     body = body or RetryFailedRequest()
-    sn = (body.sn or "").strip()
-    if sn:
-        from mino_nexus.runtime.run_context import is_web_slot
-
-        if not is_web_slot(sn, ""):
-            busy = run_store.busy_task_for_sn(sn)
-            if busy:
-                raise HTTPException(status_code=409, detail={"message": "device busy", "busy_task_id": busy, "sn": sn})
-    try:
-        result = cr.retry_failed(task_id, sn=sn)
-    except (cr.DeviceBusy, ResourceBusy) as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"message": "device busy", "busy_task_id": exc.busy_task_id, "sn": exc.sn},
-        ) from exc
-    except cr.WebSlotFull as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": "web parallel full",
-                "sn": exc.sn,
-                "active": exc.active,
-                "max": exc.limit,
-            },
-        ) from exc
-    if not result.get("ok"):
-        raise HTTPException(status_code=int(result.get("code") or 400), detail=result.get("reason") or "retry failed")
-    snapshot = result.get("data") or {}
-    return ok(
-        {
-            "task_id": snapshot.get("run_id") or snapshot.get("task_id") or "",
-            "retried_from": task_id,
-            "case_ids": result.get("case_ids") or [],
-            "task": snapshot,
-        },
-        msg=f"已重跑 {len(result.get('case_ids') or [])} 条失败用例",
-    )
+    result = cr.retry_failed(task_id, sn=(body.sn or "").strip())
+    raise HTTPException(status_code=int(result.get("code") or 409), detail={
+        "message": result.get("reason") or "安全复跑尚未开放",
+        "reason_code": result.get("reason_code") or "task_not_found",
+        "eligibility": result.get("eligibility"),
+    })
 
 
 @router.get("/baseline/{case_id}")

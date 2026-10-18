@@ -191,6 +191,8 @@ def _upsert_run(doc: dict[str, Any]) -> None:
             db.add(RunAdmission(id="admission-" + uuid.uuid4().hex, owner_user_id=doc["owner_user_id"],
                 request_id=doc["client_request_id"], request_digest=doc["request_digest"], run_id=doc["run_id"]))
         guards = merge(previous.payload if previous else None, doc)
+        from mino_nexus.services.write_reconciliation import merge_receipts
+        reconciliations = merge_receipts(previous.payload if previous else None, doc)
         if previous is not None:
             frozen = previous.payload
             for field in ("owner_user_id", "plugin_user_id", "client_request_id", "request_digest", "derived_from",
@@ -213,6 +215,8 @@ def _upsert_run(doc: dict[str, Any]) -> None:
             doc.update(frozen)
         if guards:
             doc["write_safety"] = guards
+        if reconciliations:
+            doc["write_reconciliation"] = reconciliations
         admit_in_transaction(db, doc)
         db.merge(_run_row(doc))
 

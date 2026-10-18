@@ -466,6 +466,10 @@ def run_vision_plan_turn_if_enabled(
             writer.append("model/blocked", {k: plan.blocked_error.get(k) for k in
                 ("error", "http_status", "provider_error_code", "provider_error_param", "provider_request_id", "fail_kind", "dispatch_id")})
         return plan
+    from mino_nexus.loop.obstacle_review import review_expected_overlay
+    if review_expected_overlay(cursor, ctx, shot, writer=writer,
+            kind=str(plan.screen_obstacle.get("kind") or "").strip().lower()):
+        return VisionPlanDecision()
     if handle_screen_obstacle(cursor, ctx, plan, writer=writer):
         return plan
     apply_vision_plan_to_cursor(cursor, plan, writer=writer, ctx=ctx)

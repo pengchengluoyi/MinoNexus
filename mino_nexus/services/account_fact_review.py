@@ -58,12 +58,17 @@ def capture(ctx, proposed, *, source, expected_before):
         existing = db.query(AccountFactCandidate).filter_by(owner_user_id=actor, session_id=sid, account_id=aid).one_or_none()
         if existing:
             return view(existing)
-        before = _facets_for_account(db, pid, aid)
+        before = _facets_for_account(db, pid, aid, apply_observations=False)
+        from mino_nexus.services.account_fact_scope import fact_scope
+        with fact_scope(ctx):
+            effective = _facets_for_account(db, pid, aid)
         from mino_nexus.services.resource_pool import account_facet_values_for_match
         from mino_nexus.services.pool_account_store import _account_to_dict
-        if account_facet_values_for_match(_account_to_dict(account, before)) != expected_before:
+        if account_facet_values_for_match(_account_to_dict(account, effective)) != expected_before:
             raise ValueError('account_facts_changed')
-        changes = {k: v for k, v in proposed.items() if before.get(k, 'unknown') != v}
+        # A newer observation can correct an earlier confirmed overlay, including
+        # returning to the manual value. Approval CAS still uses the manual baseline.
+        changes = {k: v for k, v in proposed.items() if effective.get(k, 'unknown') != v}
         if not changes:
             return None
         row = AccountFactCandidate(candidate_id='fact-' + uuid.uuid4().hex, owner_user_id=actor,
@@ -87,7 +92,7 @@ def listing(project_id, *, limit=50, offset=0, status=""):
         items = []
         for row in rows:
             account = db.get(PoolAccount, row.account_id)
-            current = _facets_for_account(db, project_id, row.account_id)
+            current = _facets_for_account(db, project_id, row.account_id, apply_observations=False)
             items.append({**view(row), 'expired': row.status == 'confirmed' and (row.decision or {}).get('expires_at', 0) <= time.time(),
                           'scope_complete': all((row.evidence_context or {}).get(k) for k in ('app_id', 'platform', 'build')),
                           'stale': account is None or account.env != row.env or current != row.before,
@@ -115,7 +120,7 @@ def decide(project_id, candidate_id, body):
                 raise ValueError('account_scope_changed')
             if account.lease:
                 raise ValueError('account_busy')
-            current = _facets_for_account(db, project_id, row.account_id)
+            current = _facets_for_account(db, project_id, row.account_id, apply_observations=False)
             if current != row.before or digest(current) != body.expected_digest:
                 raise ValueError('account_facts_changed')
             session = db.get(SessionMeta, row.session_id)

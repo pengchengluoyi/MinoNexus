@@ -261,16 +261,16 @@ def _attempt(task_id, case, doc, number, retry_of):
 
 
 def run_case(task_id, case, doc):
-    attempts = []
-    frozen = case.get("v5_publication") or {}
-    policy = frozen.get("retry_policy") or {"max": 0, "on": []}
+    # Historical publications may allow effect_unknown retries. Their reversible
+    # flag and executor_stopped receipt do not prove business/resource reset.
+    # Execute once until an evidence-backed reset admission path is implemented.
     with registry_runtime("v5"):
-        for number in range(1, min(2, int(policy.get("max", 0))) + 2):
-            result = _attempt(task_id, case, doc, number, attempts[-1]["attempt_run_id"] if attempts else "")
-            attempts.append(result)
-            if result["reason_code"] != "effect_unknown" or "effect_unknown" not in policy.get("on", []) or not result["executor_stopped"]:
-                break
-    return {**result, "attempts": attempts, "flaky": result["status"] == "pass" and len(attempts) > 1}
+        result = _attempt(task_id, case, doc, 1, "")
+    policy = (case.get("v5_publication") or {}).get("retry_policy") or {}
+    retry_blocked = ("resource_reset_verification_required"
+                     if result.get("reason_code") == "effect_unknown" and policy.get("max") else "")
+    return {**result, "attempts": [result], "flaky": False,
+            "retry_blocked_reason": retry_blocked}
 
 
 def run_case_list(task_id, cases, doc):

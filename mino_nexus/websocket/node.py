@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -79,6 +80,10 @@ class NodeConnection:
         self.ws = ws
         self.node_id = ""
         self._waiters: dict[str, asyncio.Future] = {}
+        self._request_identities: dict[str, dict] = {}
+        self._expired_requests: OrderedDict[str, dict] = OrderedDict()
+        self._late_tasks: set[asyncio.Task] = set()
+        self._reconciling: set[str] = set()
         self._closed = False
 
     # ---------------- 对外：发请求等应答 ----------------
@@ -103,10 +108,24 @@ class NodeConnection:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
         self._waiters[env.msg_id] = fut
+        identity = None
+        if isinstance(payload, P.Execute):
+            node = get_registry().get_node(self.node_id)
+            identity = {"run_id": payload.run_id, "step_idx": payload.step_idx,
+                "sn": payload.sn, "capability_id": payload.capability_id, "node_id": self.node_id,
+                "owner_user_id": getattr(node, "owner_user_id", ""),
+                "scout_process_generation": getattr(node, "scout_process_generation", ""),
+                "node_connection_generation": getattr(node, "node_connection_generation", ""),
+                "expires": time.monotonic() + 900}
+            if payload.capability_id == "write_stop_status":
+                from copy import deepcopy
+                identity["action_ref"] = deepcopy(payload.params.get("action_ref"))
+            self._request_identities[env.msg_id] = identity
         try:
             await self.ws.send_text(json.dumps(P.dumps(env), ensure_ascii=False))
         except Exception as exc:
             self._waiters.pop(env.msg_id, None)
+            self._request_identities.pop(env.msg_id, None)
             SLog.e(TAG, f"[{self.node_id}] 发送 {mtype.value} 失败: {exc}")
             return None
         try:
@@ -119,6 +138,23 @@ class NodeConnection:
             self._waiters.pop(env.msg_id, None)
             SLog.w(TAG, f"[{self.node_id}] {mtype.value} 等待被取消（节点断开）")
             return None
+        finally:
+            self._request_identities.pop(env.msg_id, None)
+            if identity is not None and fut.cancelled():
+                self._expired_requests[env.msg_id] = identity
+                while self._expired_requests and (len(self._expired_requests) > 512
+                        or next(iter(self._expired_requests.values()))["expires"] < time.monotonic()):
+                    self._expired_requests.popitem(last=False)
+
+    async def _record_late_result(self, identity, result, receipt_id):
+        try:
+            from mino_nexus.services.write_reconciliation import record_late_result
+            await asyncio.to_thread(record_late_result, identity, result, receipt_id=receipt_id)
+            self._expired_requests.pop(receipt_id, None)
+        except Exception as exc:
+            SLog.e(TAG, f"[{self.node_id}] 迟到回执持久化失败: {type(exc).__name__}")
+        finally:
+            self._reconciling.discard(receipt_id)
 
     # ---------------- 收帧 ----------------
 
@@ -149,9 +185,20 @@ class NodeConnection:
 
         # RESULT 是应答，交给等待者
         if env.type is P.MsgType.RESULT:
-            fut = self._waiters.pop(env.reply_to or "", None)
-            if fut is None:
-                SLog.w(TAG, f"[{self.node_id}] 收到无人等待的 RESULT（reply_to={env.reply_to}），忽略")
+            receipt_id = env.reply_to or ""
+            identity = self._request_identities.get(receipt_id) or self._expired_requests.get(receipt_id)
+            if identity is not None and (env.payload.run_id, env.payload.step_idx) != (identity["run_id"], identity["step_idx"]):
+                SLog.w(TAG, f"[{self.node_id}] RESULT 动作身份不匹配，保留原等待者")
+                return
+            fut = self._waiters.pop(receipt_id, None)
+            if fut is None or fut.done():
+                if identity is not None and identity["expires"] >= time.monotonic() and receipt_id not in self._reconciling:
+                    self._reconciling.add(receipt_id)
+                    task = asyncio.create_task(self._record_late_result(identity, env.payload, receipt_id))
+                    self._late_tasks.add(task)
+                    task.add_done_callback(self._late_tasks.discard)
+                else:
+                    SLog.w(TAG, f"[{self.node_id}] 收到无匹配请求的 RESULT（reply_to={env.reply_to}）")
                 return
             if not fut.done():
                 fut.set_result(env.payload)

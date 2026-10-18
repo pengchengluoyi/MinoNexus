@@ -187,9 +187,16 @@ async def recover_stopped(task_id: str):
             sn=sn, capability_id="write_stop_status",
             params={"action_ref": ref, "scout_process_generation": generation, "mode": mode,
                     "execution_mode": str(doc.get("execution_mode") or "legacy")})
-        result = await node.send(P.MsgType.EXECUTE, req, timeout=5)
+        try:
+            result = await node.send(P.MsgType.EXECUTE, req, timeout=5)
+        except Exception:
+            outcomes.append({"action_ref": ref, "recovered": False, "stop_confirmed": False,
+                             "reason_code": "stop_evidence_unavailable"})
+            continue
         proof = (result.data or {}).get("stop_evidence", {}) if result else {}
-        valid = (proof.get("contract") == "write_stop.v1" and proof.get("stop_confirmed") is True
+        proof = proof if isinstance(proof, dict) else {}
+        valid = (result is not None and result.run_id == req.run_id and result.step_idx == req.step_idx
+                 and proof.get("contract") == "write_stop.v1" and proof.get("stop_confirmed") is True
                  and proof.get("action_ref") == ref and proof.get("sn") == sn
                  and proof.get("scout_process_generation") == current_generation
                  and _proof_mode_valid(proof, generation, current_generation, doc))

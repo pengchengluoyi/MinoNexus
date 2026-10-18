@@ -13,7 +13,7 @@ def _now() -> int:
     return int(time.time())
 
 
-def _facets_for_account(db, project_id: str, account_id: str) -> dict[str, str]:
+def _facets_for_account(db, project_id: str, account_id: str, *, apply_observations: bool = True) -> dict[str, str]:
     rows = (
         db.query(PoolAccountFacet)
         .filter(
@@ -22,8 +22,11 @@ def _facets_for_account(db, project_id: str, account_id: str) -> dict[str, str]:
         )
         .all()
     )
+    facets = {str(r.facet_key): str(r.facet_value or "unknown") for r in rows}
+    if not apply_observations:
+        return facets
     from mino_nexus.services.account_fact_scope import overlay
-    return overlay(db, project_id, account_id, {str(r.facet_key): str(r.facet_value or "unknown") for r in rows})
+    return overlay(db, project_id, account_id, facets)
 
 
 def _registered_at_iso(ts: int) -> str:

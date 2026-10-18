@@ -503,55 +503,16 @@ def run_explore(
 
 
 def retry_failed(task_id: str, *, sn: str = "") -> dict[str, Any]:
-    doc = run_store.get(task_id)
-    if not doc:
+    # All callers (HTTP and assistant tools) share the same closed admission.
+    # Selecting another device cannot make the old execution's effects safe.
+    from mino_nexus.services.run_retry import eligibility
+    try:
+        assessment = eligibility(task_id)
+    except KeyError:
         return {"ok": False, "code": 404, "reason": "任务不存在"}
-    uid = require_user_id()
-    if str(doc.get("owner_user_id") or "") != uid:
-        return {"ok": False, "code": 403, "reason": "任务归属缺失或与当前账号不一致"}
-    from mino_nexus.services.run_write_safety import unresolved
-    if run_store.task_is_live(doc) or unresolved(doc):
-        return {"ok": False, "code": 409, "reason": "原任务尚未停止或资源仍隔离，不能安全复跑"}
-    selected_sns = [sn] if sn else list(doc.get("sns") or ([doc["sn"]] if doc.get("sn") else []))
-    from mino_nexus.core.platform_contract import TARGET_PLATFORMS
-    from mino_nexus.services.node_registry import get_registry
-    current = {row["sn"]: row for row in get_registry().devices()}
-    for selected in selected_sns:
-        row = current.get(selected)
-        node = get_registry().get_node(str((row or {}).get("node_id") or ""))
-        if (row is None or node is None or node.owner_user_id != uid
-                or row.get("platform") not in TARGET_PLATFORMS):
-            return {"ok": False, "code": 409, "reason": "历史设备身份无法按当前平台合同确认，请重新选择执行设备"}
-    if not selected_sns:
-        return {"ok": False, "code": 409, "reason": "请重新选择执行设备"}
-    failed_ids = list(dict.fromkeys([
-        str(c.get("case_id"))
-        for c in (doc.get("cases") or [])
-        if str(c.get("status") or "") in ("fail", "blocked", "declined")
-    ]))
-    if not failed_ids:
-        return {"ok": False, "code": 400, "reason": "没有失败用例可重跑"}
-    app = ps.require_app(str(doc.get("app_id") or ""))
-    snapshot = run_cases(
-        app,
-        sn=selected_sns[0],
-        sns=selected_sns,
-        coverage=str(doc.get("coverage") or "once"),
-        platform=str(current[selected_sns[0]]["platform"]),
-        case_ids=failed_ids,
-        run_type=str(doc.get("run_type") or "manual"),
-        requirement_id=str(doc.get("requirement_id") or ""),
-        release_id=str(doc.get("release_id") or ""),
-        provider_id=str(doc.get("provider_id") or ""),
-        playwright_headless=bool(doc.get("playwright_headless", True)),
-        env_profile=str(doc.get("env_profile") or ""),
-        env_surface=str(doc.get("env_surface") or ""),
-        action_scheme=str(doc.get("action_scheme") or "dom_preferred"),
-        plugin_user_id=uid,
-        execution_mode=str(doc.get("execution_mode") or "legacy"),
-        derived_from=task_id,
-    )
-    return {"ok": True, "code": 200, "case_ids": failed_ids, "data": snapshot}
+    return {"ok": False, "code": 409,
+            "reason": assessment["blockers"][0]["message"],
+            "reason_code": assessment["reason_code"], "eligibility": assessment}
 
 
 def _ensure_web_parallel_capacity(sn: str) -> None:

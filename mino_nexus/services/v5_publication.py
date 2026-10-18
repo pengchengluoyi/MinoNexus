@@ -200,9 +200,10 @@ def publish(project_id, case_id, expected_revision, *, retry_policy=None, revers
     if not reviewed["eligible"]:
         raise ValueError("v5_ineligible")
     policy = retry_policy or {"on": [], "max": 0}
-    if policy != {"on": [], "max": 0} and not (
-        policy.get("on") == ["effect_unknown"] and type(policy.get("max")) is int and 1 <= policy["max"] <= 2 and reversible):
-        raise ValueError("invalid_retry_policy")
+    if (not isinstance(policy, dict) or type(policy.get("max")) is not int
+            or policy != {"on": [], "max": 0}):
+        # Reversibility is an author declaration, not a verified reset receipt.
+        raise ValueError("retry_reset_verification_required")
     with session_scope() as db:
         db.execute(text("BEGIN IMMEDIATE"))
         row = db.query(ProjectCase).filter_by(project_id=project_id, case_id=case_id).one()

@@ -26,15 +26,20 @@ def overlay(db, project_id, account_id, facets):
     if scope is None or not all(scope.values()):
         return facets
     rows = db.query(AccountFactCandidate).filter_by(project_id=project_id, account_id=account_id,
-        owner_user_id=scope["owner"], env=scope["env"], status="confirmed").order_by(AccountFactCandidate.created_at).all()
+        owner_user_id=scope["owner"], env=scope["env"], status="confirmed").order_by(
+            AccountFactCandidate.created_at, AccountFactCandidate.candidate_id).all()
     result = dict(facets)
+    latest = {}
     for row in rows:
-        if (row.decision or {}).get("expires_at", 0) <= time.time():
-            continue
         if any((row.evidence_context or {}).get(key) != scope[key] for key in ("app_id", "platform", "build")):
             continue
         # A later manual correction invalidates the observation's baseline.
         if any(facets.get(key, "unknown") != (row.before or {}).get(key, "unknown") for key in row.proposed):
             continue
-        result.update(row.proposed)
+        for key, value in row.proposed.items():
+            latest[key] = (value, (row.decision or {}).get("expires_at", 0))
+    for key, (value, expires_at) in latest.items():
+        # Expiration of a newer correction must not resurrect an older observation.
+        if expires_at > time.time():
+            result[key] = value
     return result
