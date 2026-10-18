@@ -294,6 +294,15 @@ def _persist_fields(db, fields, obj=None, *, origin=None):
     from mino_nexus.models.case import ProjectCase
     from mino_nexus.services.case_compilation import record_change
     previous = _public(obj) if obj is not None else None
+    binding = (obj.extra or {}).get("source_binding") if obj is not None else None
+    fields["extra"].pop("source_binding", None)
+    if binding:
+        from mino_nexus.models.case_source import CaseSource
+        source = db.get(CaseSource, binding["source_id"])
+        mapped = set((source.configuration if source else {}).get("columns") or {}) - {"external_case_no"}
+        if source is None or any(getattr(obj, key) != fields[key] for key in mapped):
+            raise ValueError("source_bound_fields_readonly")
+        fields["extra"]["source_binding"] = dict(binding)
     if previous is not None:
         from copy import deepcopy
         previous["meta"] = deepcopy((obj.extra or {}).get("meta") or {})
@@ -375,7 +384,7 @@ def upsert_cases(
         incoming_ids = {fields["case_id"] for fields in prepared}
         if replace and rid:
             for old in db.query(ProjectCase).filter_by(project_id=pid, requirement_id=rid).all():
-                if old.case_id not in incoming_ids and not (old.extra or {}).get("v5_publication"):
+                if old.case_id not in incoming_ids and not (old.extra or {}).get("v5_publication") and not (old.extra or {}).get("source_binding"):
                     db.delete(old)
         for fields in prepared:
             obj = db.query(ProjectCase).filter_by(project_id=pid, case_id=fields["case_id"]).one_or_none()
@@ -449,6 +458,8 @@ def delete_case(project_id: str, case_id: str) -> bool:
         )
         if obj is None:
             return False
+        if (obj.extra or {}).get("source_binding"):
+            raise ValueError("source_bound_fields_readonly")
         db.delete(obj)
         db.flush()
     return True

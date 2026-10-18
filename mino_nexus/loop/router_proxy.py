@@ -1018,6 +1018,15 @@ class RouterProxy:
             allowed = task.get("allowed_node_ids")
             if (target.get("node_id") and target["node_id"] != node.node_id) or (allowed is not None and node.node_id not in allowed):
                 raise NoRouteError("device_owner_drift: 设备已不属于准入时固定节点")
+            from mino_nexus.services.execution_policy import remaining
+            case = next((row for row in task.get("cases") or [] if row.get("sn") == self.sn and row.get("status") == "running"), None)
+            left = remaining(task, case)
+            if left is not None:
+                if left <= 0:
+                    raise NoRouteError("execution_deadline_exceeded")
+                timeout_sec = min(timeout_sec, left)
+                payload.timeout_sec = min(payload.timeout_sec, timeout_sec)
+                pad_sec = min(self.timeout_pad_sec if pad_sec is None else pad_sec, max(0, left - timeout_sec))
         deadline = timeout_sec + (self.timeout_pad_sec if pad_sec is None else pad_sec)
         assert node.send is not None
         return await node.send(mtype, payload, timeout=deadline)

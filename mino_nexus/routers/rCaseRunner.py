@@ -63,6 +63,7 @@ class RunRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     app_id: str = ""
+    client_request_id: str = Field(default="", max_length=160)
     sn: str = ""
     sns: Optional[List[str]] = None
     coverage: str = ""
@@ -192,6 +193,7 @@ def run_cases(body: RunRequest, sess: dict = Depends(current_session)):
             action_scheme=normalize_action_scheme(body.action_scheme),
             plugin_user_id=_plugin_user(sess),
             execution_mode=str(body.execution_mode or "legacy"),
+            client_request_id=body.client_request_id,
         )
         return ok(snapshot, msg="AI-led 回归任务已启动")
     except (cr.DeviceBusy, ResourceBusy) as exc:
@@ -299,6 +301,23 @@ def get_task(task_id: str, _sess: dict = Depends(current_session)):
     if doc is None:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
     return ok(run_store.to_task_json(doc))
+
+
+@router.get("/requests/{request_id}")
+def request_receipt(request_id: str, _sess: dict = Depends(current_session)):
+    receipt = run_store.request_receipt(request_id)
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="run_request_not_found")
+    return ok(receipt)
+
+
+@router.get("/tasks/{task_id}/comparison")
+def compare_runs(task_id: str, other_run_id: str = "", _sess: dict = Depends(current_session)):
+    from mino_nexus.services.run_comparison import compare
+    try:
+        return ok(compare(task_id, other_run_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/tasks/{task_id}/resource-restore-logs")

@@ -125,6 +125,8 @@ def run_cases(
     action_scheme: str = "dom_preferred",
     plugin_user_id: str = "",
     execution_mode: str = "legacy",
+    client_request_id: str = "",
+    derived_from: str = "",
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     phases: list[tuple[str, int]] = []
@@ -134,6 +136,26 @@ def run_cases(
 
     action_scheme = normalize_action_scheme(action_scheme)
     require_user_id(plugin_user_id or None)
+    from mino_nexus.services.case_compilation import digest
+    if client_request_id and (len(client_request_id) > 160 or not all(character.isalnum() or character in "_.:-" for character in client_request_id)):
+        raise ValueError("run_request_id_invalid")
+    request_digest = digest({"app_id": app.get("id"), "sn": sn, "sns": sns, "coverage": coverage,
+        "platform": platform, "case_ids": case_ids, "start_index": start_index, "run_type": run_type,
+        "requirement_id": requirement_id, "release_id": release_id, "slot_id": slot_id, "instruction": instruction,
+        "provider_id": provider_id, "playwright_headless": playwright_headless, "env_profile": env_profile,
+        "env_surface": env_surface, "action_scheme": action_scheme, "execution_mode": execution_mode})
+    if client_request_id:
+        from mino_nexus.core.database import session_scope
+        from mino_nexus.models.run_admission import RunAdmission
+        with session_scope() as database:
+            receipt = database.query(RunAdmission).filter_by(owner_user_id=require_user_id(), request_id=client_request_id).one_or_none()
+            if receipt:
+                if receipt.request_digest != request_digest:
+                    raise ValueError("run_request_conflict")
+                original = run_store.get(receipt.run_id)
+                if original is None:
+                    raise ValueError("run_receipt_target_missing")
+                return run_store.to_task_json(original)
     execution_mode = "legacy" if execution_mode in {"", "agent"} else execution_mode
     if execution_mode not in {"legacy", "v5"}:
         raise ValueError("未知执行模式")
@@ -246,9 +268,19 @@ def run_cases(
     for owned_sn in device_sns:
         require_owned_device(owned_sn)
     provider, gate = ({}, {}) if execution_mode == "v5" else resolve_regression_provider(str(provider_id or "").strip() or None)
+    from mino_nexus.loop.step_pointer import compute_case_wall_budget_sec
+    batch_budget = sum(compute_case_wall_budget_sec(case) + 130 for case in seeded)
     mark("assembled")
     doc: dict[str, Any] = {
         "run_id": run_id,
+        "client_request_id": client_request_id,
+        "request_digest": request_digest,
+        "derived_from": derived_from,
+        "environment_baseline_digest": digest({"profile": resolved_env, "surface": env_surface_id,
+            "package": package, "environment": (env_doc.get("profiles") or {}).get(resolved_env),
+            "channels": env_doc.get("channels") or []}),
+        "execution_policy": {"version": 1, "batch_deadline_at": time.time() + batch_budget,
+            "batch_budget_seconds": batch_budget, "resource_wait_seconds": 120, "cleanup_seconds": 10},
         "task_id": run_id,
         "engine": "agent",
         "execution_mode": execution_mode,
@@ -289,7 +321,9 @@ def run_cases(
         "boot_ms": phases[-1][1] if phases else 0,
         "boot_phases": [{"name": name, "ms": ms} for name, ms in phases],
     }
-    run_store.put(doc)
+    persisted = run_store.put(doc)
+    if persisted.get("run_id") != run_id:
+        return run_store.to_task_json(persisted)
     mark("persisted")
     doc["boot_ms"] = phases[-1][1] if phases else 0
     doc["boot_phases"] = [{"name": name, "ms": ms} for name, ms in phases]
@@ -475,6 +509,9 @@ def retry_failed(task_id: str, *, sn: str = "") -> dict[str, Any]:
     uid = require_user_id()
     if str(doc.get("owner_user_id") or "") != uid:
         return {"ok": False, "code": 403, "reason": "任务归属缺失或与当前账号不一致"}
+    from mino_nexus.services.run_write_safety import unresolved
+    if run_store.task_is_live(doc) or unresolved(doc):
+        return {"ok": False, "code": 409, "reason": "原任务尚未停止或资源仍隔离，不能安全复跑"}
     selected_sns = [sn] if sn else list(doc.get("sns") or ([doc["sn"]] if doc.get("sn") else []))
     from mino_nexus.core.platform_contract import TARGET_PLATFORMS
     from mino_nexus.services.node_registry import get_registry
@@ -487,11 +524,11 @@ def retry_failed(task_id: str, *, sn: str = "") -> dict[str, Any]:
             return {"ok": False, "code": 409, "reason": "历史设备身份无法按当前平台合同确认，请重新选择执行设备"}
     if not selected_sns:
         return {"ok": False, "code": 409, "reason": "请重新选择执行设备"}
-    failed_ids = [
+    failed_ids = list(dict.fromkeys([
         str(c.get("case_id"))
         for c in (doc.get("cases") or [])
         if str(c.get("status") or "") in ("fail", "blocked", "declined")
-    ]
+    ]))
     if not failed_ids:
         return {"ok": False, "code": 400, "reason": "没有失败用例可重跑"}
     app = ps.require_app(str(doc.get("app_id") or ""))
@@ -512,6 +549,7 @@ def retry_failed(task_id: str, *, sn: str = "") -> dict[str, Any]:
         action_scheme=str(doc.get("action_scheme") or "dom_preferred"),
         plugin_user_id=uid,
         execution_mode=str(doc.get("execution_mode") or "legacy"),
+        derived_from=task_id,
     )
     return {"ok": True, "code": 200, "case_ids": failed_ids, "data": snapshot}
 

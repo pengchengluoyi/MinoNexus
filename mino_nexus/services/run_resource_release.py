@@ -8,6 +8,8 @@ def release_run_resource_holdings(doc: dict[str, Any] | None, *, run_id: str = "
     rid = str(run_id or (doc or {}).get("run_id") or "").strip()
     if not rid:
         return
+    from mino_nexus.services.execution_resources import release
+    release(rid)
     from mino_nexus.services.device_resource_lease import release_device_leases_for_run
 
     release_device_leases_for_run(rid)

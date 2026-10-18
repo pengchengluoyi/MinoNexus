@@ -259,7 +259,7 @@ class NodeSession:
 
     @property
     def alive(self) -> bool:
-        return (time.time() - self.last_seen) < HEARTBEAT_TIMEOUT_SEC
+        return (time.time() - self.last_seen) < min(HEARTBEAT_TIMEOUT_SEC, 2 * P.Registered.heartbeat_interval_sec)
 
     def available_executors(self) -> list[str]:
         return sorted(k for k, v in self.executors.items() if v.available)

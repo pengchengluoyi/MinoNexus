@@ -1,6 +1,7 @@
 """Account observations are proposals. Human confirmation uses an atomic CAS."""
 from copy import deepcopy
 import uuid
+import time
 from sqlalchemy import text
 from mino_nexus.core.database import session_scope
 from mino_nexus.core.execution_user import require_user_id
@@ -62,17 +63,23 @@ def capture(ctx, proposed, *, source, expected_before):
         return view(row)
 
 
-def listing(project_id):
+def listing(project_id, *, limit=50, offset=0, status=""):
     with session_scope() as db:
         actor = owned(db, project_id, write=False)
-        rows = db.query(AccountFactCandidate).filter_by(project_id=project_id, owner_user_id=actor).order_by(AccountFactCandidate.created_at.desc()).limit(200).all()
+        query = db.query(AccountFactCandidate).filter_by(project_id=project_id, owner_user_id=actor)
+        if status:
+            query = query.filter_by(status=status)
+        total = query.count()
+        rows = query.order_by(AccountFactCandidate.created_at.desc(), AccountFactCandidate.candidate_id).offset(offset).limit(limit).all()
         items = []
         for row in rows:
             account = db.get(PoolAccount, row.account_id)
             current = _facets_for_account(db, project_id, row.account_id)
-            items.append({**view(row), 'stale': account is None or account.env != row.env or current != row.before,
+            items.append({**view(row), 'expired': row.status == 'confirmed' and (row.decision or {}).get('expires_at', 0) <= time.time(),
+                          'scope_complete': all((row.evidence_context or {}).get(k) for k in ('app_id', 'platform', 'build')),
+                          'stale': account is None or account.env != row.env or current != row.before,
                           'busy': bool(account and account.lease), 'expected_digest': digest(current)})
-        return {'owner_user_id': actor, 'project_id': project_id, 'items': items}
+        return {'owner_user_id': actor, 'project_id': project_id, 'items': items, 'total': total, 'limit': limit, 'offset': offset}
 
 
 def decide(project_id, candidate_id, body):
@@ -104,8 +111,12 @@ def decide(project_id, candidate_id, body):
             event = db.query(SessionEvent).filter_by(session_id=row.session_id, seq=body.evidence_seq).one_or_none() if body.evidence_seq is not None else None
             if event is None or event.type not in {'observe/screen', 'observe/hierarchy', 'tool/result', 'inspection/done'}:
                 raise ValueError('fact_evidence_event_required')
-            _write_facets(db, project_id, row.account_id, {**current, **row.proposed})
+            if not all((row.evidence_context or {}).get(k) for k in ('app_id', 'platform', 'build')):
+                raise ValueError('fact_scope_incomplete')
+            if session.finalization_id != row.evidence_context.get('session_finalization_id'):
+                raise ValueError('fact_evidence_finalization_changed')
         row.status = target
         row.decision = {'reviewer_user_id': actor, 'reason': body.reason, 'at': now(),
-                        'evidence_seq': body.evidence_seq, 'verification_kind': 'human_confirmed'}
+                        'evidence_seq': body.evidence_seq, 'verification_kind': 'human_confirmed',
+                        'expires_at': time.time() + body.valid_for_seconds if body.approve else 0}
         return view(row)

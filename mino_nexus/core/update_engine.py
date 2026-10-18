@@ -121,33 +121,7 @@ def compatibility(d: Deployment, old: str, new: str) -> dict:
 
 
 def request(d: Deployment, operation_id: str, build: str, *, wait_seconds=1800, rollback=False) -> dict:
-    identifier(operation_id); identifier(build)
-    if not d.config.get("registered"):
-        raise ValueError("Formal service baseline has not passed registration and health verification")
-    if not 1 <= wait_seconds <= 1800:
-        raise ValueError("wait_seconds must be 1..1800")
-    with d.lock():
-        history = d.root / "updates" / ("mino-" + operation_id + ".json")
-        if legacy_path(history).exists():
-            old = read_json(history)
-            if (old["target_build"], old["rollback"], old["wait_seconds"]) != (build, rollback, wait_seconds):
-                raise ValueError("operation_id already belongs to different parameters")
-            return old
-        active = d.state()
-        if active and active.get("state") not in TERMINAL:
-            if active.get("state") in {"requested", "waiting_idle"} and active["deadline"] <= time.time():
-                d.save(active, state="expired")
-            else:
-                raise ValueError("Another update or unresolved maintenance operation owns this deployment")
-        current = d.current_build()
-        if current == build:
-            raise ValueError("Target build is already current")
-        # Package staging/compatibility approval happens before claiming the hold.
-        compatibility(d, current, build)
-        return d.save({"operation_id": operation_id, "target_build": build, "previous_build": current,
-            "rollback": rollback, "wait_seconds": wait_seconds, "created_at": time.time(),
-            "deadline": time.time() + wait_seconds, "state": "waiting_idle", "phase": "waiting_idle",
-            "writes_reopened": False, "backup": "", "error": ""})
+    raise RuntimeError("upgrade_and_rollback_removed")
 
 
 def cancel(d: Deployment, operation_id: str) -> dict:
@@ -180,19 +154,7 @@ def backup(d: Deployment, row: dict) -> Path:
 
 
 def restore_prestart(d: Deployment, row: dict) -> None:
-    if row["writes_reopened"]:
-        raise RuntimeError("Data restore forbidden after normal startup")
-    source = Path(row["backup"])
-    if not read_json(source / "mino-backup.json").get("complete"):
-        raise RuntimeError("No complete backup")
-    data = Path(d.config["data_dir"])
-    retained = data.with_name(data.name + ".failed-" + row["operation_id"])
-    if retained.exists():
-        raise RuntimeError("Previous recovery preserved; operator required")
-    prepared = data.with_name(data.name + ".restore-" + row["operation_id"])
-    shutil.copytree(source, prepared)
-    os.rename(data, retained)  # Preserve failed migration data; do not delete it.
-    os.rename(prepared, data)
+    raise RuntimeError("upgrade_and_rollback_removed")
 
 
 def health_probe(d: Deployment, build: str) -> None:
@@ -256,87 +218,4 @@ def _wait_exit(d: Deployment):
 def execute(d: Deployment) -> dict:
     # Independent helper exclusion lasts through stop/start/probe. Control lock is
     # short-lived so queries and cancellation remain available while waiting.
-    with d.lock("helper", blocking=False):
-        resume_target = ""
-        while True:
-            with d.lock():
-                row = d.state()
-                if not row or row["state"] in TERMINAL or row["state"] == "needs_operator":
-                    return row
-                if row["state"] not in {"waiting_idle", "requested"}:
-                    # Probe once without replaying migration, startup or package
-                    # installation. A successful target can complete the original op.
-                    if row["phase"] in {"starting", "probing", "rolling_back", "operator_recovery"}:
-                        target = row["previous_build"] if row["phase"] in {"rolling_back", "operator_recovery"} else row["target_build"]
-                        # HTTP middleware also uses control; probe after releasing it.
-                        resume_target = target
-                        break
-                    return d.save(row, state="needs_operator", error="Helper interrupted during " + row["phase"])
-                if time.time() >= row["deadline"]:
-                    return d.save(row, state="expired")
-                compatibility(d, row["previous_build"], row["target_build"])
-                busy = activity(d)
-                try:
-                    with d.lock("writers", blocking=False):
-                        idle = not any(busy.values())
-                except BlockingIOError:
-                    idle = False
-                if idle:
-                    row = d.save(row, state="installing", phase="stopping")
-                    break
-            time.sleep(2)
-        if resume_target:
-            try:
-                await_health(d, resume_target)
-                return d.save(row, state="succeeded" if resume_target == row["target_build"] else "rolled_back", phase="complete")
-            except Exception as exc:
-                return d.save(row, state="needs_operator", error="Interrupted startup could not be verified: " + type(exc).__name__)
-        exited = None
-        try:
-            control_service(d, "stop")
-            exited = _wait_exit(d)
-            row = d.save(row, phase="backing_up")
-            snapshot = backup(d, row)
-            row = d.save(row, backup=str(snapshot), phase="migrating")
-            build = row["target_build"]
-            log_path = d.root / "updates" / ("mino-" + row["operation_id"] + "-migration.log")
-            exited.__exit__(None, None, None); exited = None
-            with log_path.open("ab") as log:
-                result = subprocess.run(release_command(d, build, "maintenance", "migrate", "--data-dir", d.config["data_dir"], "--root", str(d.root)),
-                    env=release_env(d, build), cwd=d.release(build), stdout=log, stderr=log)
-            exited = _wait_exit(d)
-            if result.returncode:
-                raise RuntimeError(f"Offline migration failed ({result.returncode})")
-            row = d.save(row, phase="switching")
-            d.switch(build)
-            # Persist before bootstrapping: crash here must prohibit restoring DB.
-            row = d.save(row, state="restarting", phase="starting", writes_reopened=True)
-            exited.__exit__(None, None, None); exited = None
-            control_service(d, "start")
-            row = d.save(row, state="verifying", phase="probing")
-            await_health(d, build)
-            return d.save(row, state="succeeded", phase="complete")
-        except Exception as exc:
-            row = d.save(row, error=type(exc).__name__ + ": " + str(exc))
-            try:
-                if not row["backup"]:
-                    raise RuntimeError("No complete backup; operator must verify stop/start state")
-                if row["writes_reopened"]:
-                    control_service(d, "stop")
-                    exited = _wait_exit(d)
-                else:
-                    restore_prestart(d, row)
-                compatibility(d, row["previous_build"], row["target_build"])
-                row = d.save(row, phase="rolling_back")
-                d.switch(row["previous_build"])
-                row = d.save(row, writes_reopened=True)
-                if exited:
-                    exited.__exit__(None, None, None); exited = None
-                control_service(d, "start")
-                await_health(d, row["previous_build"])
-                return d.save(row, state="rolled_back", phase="complete")
-            except Exception as recovery:
-                return d.save(row, state="needs_operator", recovery_error=type(recovery).__name__ + ": " + str(recovery))
-        finally:
-            if exited:
-                exited.__exit__(None, None, None)
+    raise RuntimeError("upgrade_and_rollback_removed")

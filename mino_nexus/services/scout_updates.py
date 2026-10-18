@@ -30,9 +30,9 @@ def hold(db, node_id):
     row = db.query(ScoutUpdate).filter_by(slot=node_id).first()
     # The caller holds BEGIN IMMEDIATE: timeout, cancellation and install compete
     # for the same durable row. Never expire an already dispatched operation.
-    if row and row.state == "waiting_idle" and row.deadline <= time.time():
-        row.state, row.slot = "expired", None
-        row.result = {"reason": "等待空闲超过截止时间，未派发更新"}
+    if row and row.state == "waiting_idle":
+        row.state, row.slot = "cancelled", None
+        row.result = {"reason": "升级和回退功能已移除；尚未派发的旧请求取消"}
         db.flush()
         return None
     return row
@@ -54,13 +54,7 @@ def _supports(node):
 
 def request(node_id, owner, opid, params):
     # A Nexus hold blocks new work, not lookup of an existing idempotent request.
-    with session_scope() as db:
-        previous = db.get(ScoutUpdate, opid)
-        if previous:
-            if (previous.node_id, previous.owner_user_id, previous.params) != (node_id, owner, params):
-                raise HTTPException(409, "operation_id 已用于不同目标或参数")
-            return public(previous)
-    return _request_new(node_id, owner, opid, params)
+    raise RuntimeError("upgrade_and_rollback_removed")
 
 
 @admitted

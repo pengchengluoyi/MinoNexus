@@ -56,6 +56,13 @@ def begin(task_id: str, request, *, node_id: str, scout_process_generation: str 
             raise SessionPersistenceError("write_intent_read") from exc
         if not doc or not run_store.task_is_live(doc):
             raise WriteAdmissionError("task_not_running")
+        from mino_nexus.services.execution_policy import remaining
+        if remaining(doc) == 0:
+            raise WriteAdmissionError("batch_deadline_exceeded")
+        from mino_nexus.core.database import session_scope
+        from mino_nexus.services.execution_resources import assert_current
+        with session_scope() as db:
+            assert_current(task_id, request.sn, db=db)
         blockers = unresolved(doc, request.sn)
         if blockers:
             raise WriteAdmissionError("run_write_stopped", blocking_actions=[

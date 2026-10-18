@@ -176,7 +176,37 @@ def _upsert_run(doc: dict[str, Any]) -> None:
         from mino_nexus.models.run import AppRegressionRun
         from mino_nexus.services.run_write_safety import merge
         previous = db.get(AppRegressionRun, str(doc.get("run_id") or ""))
+        if previous is None and doc.get("client_request_id"):
+            from mino_nexus.models.run_admission import RunAdmission
+            receipt = db.query(RunAdmission).filter_by(owner_user_id=doc["owner_user_id"], request_id=doc["client_request_id"]).one_or_none()
+            if receipt:
+                if receipt.request_digest != doc.get("request_digest"):
+                    raise ValueError("run_request_conflict")
+                original = db.get(AppRegressionRun, receipt.run_id)
+                if original is None:
+                    raise ValueError("run_receipt_target_missing")
+                doc.clear()
+                doc.update(copy.deepcopy(original.payload))
+                return
+            db.add(RunAdmission(id="admission-" + uuid.uuid4().hex, owner_user_id=doc["owner_user_id"],
+                request_id=doc["client_request_id"], request_digest=doc["request_digest"], run_id=doc["run_id"]))
         guards = merge(previous.payload if previous else None, doc)
+        if previous is not None:
+            frozen = previous.payload
+            for field in ("owner_user_id", "plugin_user_id", "client_request_id", "request_digest", "derived_from",
+                          "requested_total", "skipped_cases", "coverage", "sns", "device_targets", "platforms_by_sn",
+                          "environment_baseline_digest", "execution_policy"):
+                if field in frozen:
+                    doc[field] = copy.deepcopy(frozen[field])
+            before = {case.get("execution_unit_id"): case for case in frozen.get("cases") or []}
+            incoming = {case.get("execution_unit_id"): case for case in doc.get("cases") or []}
+            if before and all(before) and set(before) != set(incoming):
+                raise ValueError("run_execution_selection_immutable")
+            for case in doc.get("cases") or []:
+                original_case = before.get(case.get("execution_unit_id")) or {}
+                for field in ("case_id", "sn", "execution_unit_id", "frozen_identity", "source_revision_id", "v5_publication"):
+                    if field in original_case:
+                        case[field] = copy.deepcopy(original_case[field])
         if previous is not None and previous.status not in _TASK_LIVE:
             frozen = copy.deepcopy(previous.payload)
             doc.clear()
@@ -203,7 +233,9 @@ def _trim_runs(keep: int = _KEEP_RUNS) -> None:
             {"n": extra},
         ).fetchall()
         from mino_nexus.services.run_write_safety import unresolved
-        ids = [str(r[0]) for r in old if r and r[0] and not unresolved(_parse_payload(r[1]))]
+        referenced = {str(row[0]) for row in conn.execute(text("SELECT run_id FROM run_admissions"))}
+        referenced.update(str(row[0]) for row in conn.execute(text("SELECT json_extract(payload, '$.derived_from') FROM app_regression_runs WHERE json_extract(payload, '$.derived_from') IS NOT NULL")))
+        ids = [str(r[0]) for r in old if r and r[0] and str(r[0]) not in referenced and not unresolved(_parse_payload(r[1]))]
         if not ids:
             return
         binds = {f"id{i}": rid for i, rid in enumerate(ids)}
@@ -301,6 +333,7 @@ def _run_case_meta(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def seed_case(run_id: str, raw: dict[str, Any], index: int, *, sn: str = "", coverage: str = "once") -> dict[str, Any]:
+    from mino_nexus.services.run_comparison import frozen_identity
     cid = str(raw.get("case_id") or "").strip() or f"case-{index}"
     steps = spec_lines(raw.get("steps"))
     expected = spec_lines(raw.get("expected"))
@@ -313,6 +346,8 @@ def seed_case(run_id: str, raw: dict[str, Any], index: int, *, sn: str = "", cov
     return {
         "case_id": cid,
         "execution_unit_id": "unit-" + uuid.uuid5(uuid.NAMESPACE_URL, f"{run_id}:{cid}:{sn}:{index}").hex,
+        "frozen_identity": frozen_identity(raw),
+        "source_revision_id": raw.get("source_revision_id") or "",
         "name": str(raw.get("name") or raw.get("title") or "").strip() or cid,
         "sn": sn,
         "status": "pending",
@@ -384,6 +419,9 @@ def to_task_json(doc: dict[str, Any] | None, *, include_cases: bool = True) -> d
         sns.insert(0, sn)
     task = {
         "task_id": doc.get("run_id") or doc.get("task_id") or "",
+        "client_request_id": doc.get("client_request_id") or "",
+        "derived_from": doc.get("derived_from") or "",
+        "execution_policy": copy.deepcopy(doc.get("execution_policy") or {}),
         "run_id": doc.get("run_id") or "",
         "app_id": doc.get("app_id") or "",
         "app_name": doc.get("app_name") or "",
@@ -476,7 +514,7 @@ def put(doc: dict[str, Any]) -> dict[str, Any]:
     rid = str(doc.get("run_id") or "")
     with _LOCK:
         _upsert_run(doc)
-        _LIVE[rid] = doc
+        _LIVE[str(doc.get("run_id") or rid)] = doc
         _trim_runs()
     return copy.deepcopy(doc)
 
@@ -648,6 +686,15 @@ def task_is_live(doc: dict[str, Any] | None) -> bool:
     return str((doc or {}).get("status") or "") in _TASK_LIVE
 
 
+def request_receipt(request_id: str) -> dict[str, Any] | None:
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.run_admission import RunAdmission
+    from mino_nexus.core.execution_user import require_user_id
+    with session_scope() as db:
+        row = db.query(RunAdmission).filter_by(owner_user_id=require_user_id(), request_id=request_id).one_or_none()
+        return {"request_id": row.request_id, "run_id": row.run_id} if row else None
+
+
 def _run_matches_sn(row: dict[str, Any], sn: str) -> bool:
     want = str(sn or "").strip()
     if not want:
@@ -748,26 +795,45 @@ def cancel_run(run_id: str, *, reason: str = "已取消") -> dict[str, Any]:
 
 
 def reconcile_stale_running_runs(*, reason: str = "Nexus 重启，任务中断") -> list[str]:
-    """启动时清扫僵尸 running（线程已死、仅 DB 残留）。"""
+    """Keep completed units; recover only units that never started."""
     done: list[str] = []
-    # Drain the first page repeatedly: changing statuses makes OFFSET skip rows.
+    from mino_nexus.core.execution_user import execution_user
+    from contextlib import nullcontext
+    from mino_nexus.services.execution_policy import remaining
     for state in ("running", "queued"):
+        offset = 0
+        snapshots = []
         while True:
-            rows = _fetch_payloads(limit=80, status=state)
+            rows = _fetch_payloads(limit=80, offset=offset, status=state)
             if not rows:
                 break
-            for row in rows:
+            snapshots.extend(rows)
+            offset += len(rows)
+        for row in snapshots:
+            with execution_user(row["owner_user_id"]) if row.get("owner_user_id") else nullcontext():
                 rid = str(row["run_id"])
+                resumable = False
                 for case in row.get("cases") or []:
                     prior = str(case.get("status") or "pending")
+                    if prior == "pending" and row.get("owner_user_id") and remaining(row) not in {None, 0}:
+                        resumable = True
+                        continue
                     if prior in {"pending", "running"}:
                         case.update(status="blocked", reason_code="nexus_restarted",
                                     execution_started="no" if prior == "pending" else "unknown",
                                     summary=reason)
+                    if prior == "running":
+                        guards = row.setdefault("write_safety", {})
+                        if not any(g.get("sn") == case.get("sn") and g.get("state") in {"pending", "isolated"} for g in guards.values()):
+                            guards["restart:" + str(case.get("execution_unit_id") or case.get("report_run_id"))] = {
+                                "state": "isolated", "sn": case.get("sn") or row.get("sn"),
+                                "reason_code": "restart_stop_and_reset_evidence_required", "stop_confirmed": False}
                 row["interruption"] = {"reason_code": "nexus_restarted", "at": _now(),
-                                       "automatic_replay": False}
+                                       "automatic_replay": False, "resume_unstarted": resumable}
+                row["status"] = "running"
                 put(row)
-                finish(rid, status="failed", error=reason)
+                if not resumable:
+                    finish(rid, status="failed", error=reason)
                 done.append(rid)
     return done
 

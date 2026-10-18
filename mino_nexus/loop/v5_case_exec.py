@@ -40,6 +40,11 @@ def _attempt(task_id, case, doc, number, retry_of):
     frozen = copy.deepcopy(case.get("v5_publication") or {})
     source_case = {**case, **frozen.get("source", {})}
     budget = ExecutionControl(compute_case_wall_budget_sec(source_case))
+    from mino_nexus.services.execution_policy import remaining, start_attempt
+    start_attempt(task_id, case)
+    left = remaining(doc, case)
+    if left is not None:
+        budget.deadline = min(budget.deadline, budget.started + left)
     attempt_id = f"{case.get('report_run_id') or task_id + '::' + case['case_id']}::attempt-{number}-{uuid.uuid4().hex[:8]}"
     sn = case.get("sn") or doc.get("sn")
     pid = str(case.get("project_id") or "")

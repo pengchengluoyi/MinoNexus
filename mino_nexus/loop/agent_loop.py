@@ -1540,12 +1540,17 @@ def _run_loop(
 
     if wall_budget_sec > 0:
         setattr(ctx, "case_deadline_ts", t0 + float(wall_budget_sec))
+    fixed_deadline = float(case.get("attempt_deadline_at") or 0)
+    if fixed_deadline:
+        ctx.case_deadline_ts = min(getattr(ctx, "case_deadline_ts", fixed_deadline), fixed_deadline)
     for seq in range(1, max_steps + 1):
         if cancel_check and cancel_check():
             return _leave(status="cancelled", summary="任务已取消")
         credit_sec = min(float(getattr(ctx, "case_budget_credit_sec", 0) or 0), _BUDGET_CREDIT_CAP_SEC)
         if wall_budget_sec > 0:
-            setattr(ctx, "case_deadline_ts", t0 + float(wall_budget_sec) + credit_sec)
+            setattr(ctx, "case_deadline_ts", min(t0 + float(wall_budget_sec) + credit_sec, fixed_deadline or float("inf")))
+        if fixed_deadline and time.time() >= fixed_deadline:
+            return _leave(status="blocked", summary="持久执行期限已到，未派发后续动作")
         if not is_explore and wall_budget_sec > 0 and (time.time() - t0 - credit_sec) >= wall_budget_sec:
             summary = f"超过 {wall_budget_sec} 秒仍未完成" + (
                 f"（已抵扣模型空工具调用重试 {credit_sec:.0f} 秒）" if credit_sec else ""

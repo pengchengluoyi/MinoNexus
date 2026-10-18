@@ -131,6 +131,19 @@ def serve(d: Deployment):
     os.execve(command[0], command, env)
 
 
+def server_mdns_enabled(cfg: dict) -> bool:
+    """Only the production LAN server advertises the shared mino.local name.
+
+    release_env deliberately disables discovery for offline maintenance. The
+    actual server must choose its own policy instead of inheriting that flag.
+    Explicit mdns_enabled=False lets acceptance installations opt out.
+    """
+    return (cfg.get("environment") == "production"
+            and cfg.get("port") == 50104
+            and cfg.get("host") in {"0.0.0.0", "::"}
+            and cfg.get("mdns_enabled", True) is True)
+
+
 def run_server(d: Deployment):
     cfg = d.config
     _explicit_data(cfg["data_dir"])
@@ -151,6 +164,7 @@ def run_server(d: Deployment):
         host = cfg["host"]
         if getattr(sys, "frozen", False) and host in {"127.0.0.1", "localhost"} and cfg["port"] == 50104:
             host = "0.0.0.0"  # Upgrade old standard installations to LAN access.
+        os.environ["MINO_NEXUS_MDNS"] = "1" if server_mdns_enabled({**cfg, "host": host}) else "0"
         return server_main(["--host", host, "--port", str(cfg["port"])])
 
 
@@ -194,45 +208,14 @@ def register(d: Deployment):
 
 
 def recover(d: Deployment, mode: str):
-    from mino_nexus.core.update_engine import _wait_exit, control_service, restore_prestart, await_health, compatibility
-    with d.lock("helper", blocking=False):
-        row = d.state()
-        if row.get("state") != "needs_operator":
-            raise ValueError("Recovery requires needs_operator state")
-        if mode not in {"code-only", "prestart-backup", "restart-previous"}:
-            raise ValueError("Unknown recovery mode")
-        if mode == "restart-previous" and (
-            row.get("phase") not in {"stopping", "backing_up"}
-            or row.get("writes_reopened")
-            or d.current_build() != row["previous_build"]
-        ):
-            raise ValueError("Restart without restore requires proof that migration never started")
-        # Never infer that old/new processes have stopped from a missing journal.
-        control_service(d, "stop")
-        stopped = _wait_exit(d)
-        try:
-            compatibility(d, row["previous_build"], row["target_build"])
-            if mode == "prestart-backup":
-                restore_prestart(d, row)
-            elif mode == "code-only" and not row.get("writes_reopened"):
-                raise ValueError("Pre-start failure requires explicit backup recovery")
-            d.switch(row["previous_build"])
-            row = d.save(row, state="restarting", phase="operator_recovery", writes_reopened=True)
-        finally:
-            stopped.__exit__(None, None, None)
-        try:
-            control_service(d, "start")
-            await_health(d, row["previous_build"])
-            return d.save(row, state="rolled_back", phase="complete")
-        except Exception as exc:
-            return d.save(row, state="needs_operator", recovery_error=str(exc))
+    raise RuntimeError("upgrade_and_rollback_removed")
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="mino-nexus maintenance")
     sub = ap.add_subparsers(dest="command", required=True)
     p = sub.add_parser("migrate"); p.add_argument("--data-dir", required=True); p.add_argument("--root", type=Path)
-    for name in ("installer-upgrade", "install", "stage", "fetch", "check-update", "bind-workbench", "request", "status", "cancel", "helper", "serve", "run-server", "provision-probe", "register", "probe", "recover", "start", "stop", "service-status"):
+    for name in ("install", "bind-workbench", "status", "cancel", "serve", "run-server", "provision-probe", "register", "probe", "start", "stop", "service-status"):
         p = sub.add_parser(name); p.add_argument("--root", type=Path, required=True)
         if name in {"install", "stage", "installer-upgrade"}:
             p.add_argument("--manifest", type=Path, required=True); p.add_argument("--package", type=Path, required=True)

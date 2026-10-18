@@ -37,7 +37,7 @@ def assert_no_delete(route: str) -> None:
 def all_tools() -> list[dict[str, Any]]:
     rows = []
     for spec in list_assistant_tools():
-        if spec.get("enabled") is False:
+        if spec.get("enabled") is False or str(spec.get("id") or "").startswith(("scout.update", "nexus.update", "workbench.update")):
             continue
         route = str(spec.get("route") or "")
         assert_no_delete(route)
@@ -377,6 +377,9 @@ def _asgi_request(method: str, url: str, rest: dict[str, Any], headers: dict[str
 
 def run_tool(spec: dict[str, Any], args: dict[str, Any], *, user_id: str, profile: dict[str, Any] | None = None, surface: str = "im", target: dict[str, Any] | None = None) -> ToolOutcome:
     from mino_nexus.core.execution_user import execution_user
+
+    if str(spec.get("id") or "").startswith(("scout.update", "nexus.update", "workbench.update")):
+        return ToolOutcome(ok=False, status=410, summary="升级与回退功能已取消", tool_id=str(spec.get("id") or ""))
 
     with execution_user(user_id):
         return _run_tool_owned(spec, args, user_id=user_id, profile=profile, surface=surface, target=target)

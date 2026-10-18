@@ -2,6 +2,41 @@
 
 UI **只**打 MinoNexus。没有公网域名时用内网名 `mino.local`：Nexus 进程启动后用 mDNS 注册，客户端不填 IP。
 
+## 手动导入用例（2026-10-18）
+
+Workbench 的项目用例页只保留「导入」，弹窗选择本地文件、飞书表格或用例接口。
+独立来源配置页、定时读取循环、失败退避调度、自动解析和每日预算调度已删除。
+所有远端读取均由用户点击触发，不创建来源配置或绑定，不自动改写用例。
+
+- `GET /project/{project_id}/cases/import/sources`：返回本人在线且支持读取的节点
+  `{items:[{id,label,kinds}]}`，单节点自动选择。要求项目维护权限。
+- `POST /project/{project_id}/cases/import/read-source`：
+  `{kind:"sheets"|"case_api",operation:"read"|"projects"|"sessions",configuration:{...}}`。
+  认证会话决定 owner，Scout 必须属于该账号。复用现有 `node.source_read` 协议。
+- 飞书配置 `{node_id,spreadsheet_url,range}`，链接需带工作表 `sheet` 参数，单元格范围
+  默认 `A1:Z1000`，可修改。读取返回 `{table,filename}`。
+- 用例接口项目发现只需 `{node_id}`，会话发现还需 `service_url/remote_project_id`。
+  返回 `{items:[{id,label}],service_url}`；读取配置包含 `node_id/service_url/remote_project_id`、
+  `scope=project|session`，会话范围还需 `session_id`，返回 `{table,filename}`。
+- 读取后沿用字段核对、解析预览、冲突审阅和确认导入接口；未确认时不写用例。
+  远端 `id` 以 `api-{remote_project_id}-{id}` 作为导入编号，避免跨项目冲突。
+  `test_result` 等远端元数据只展示在原始表格中，不充当本地执行结论。
+
+账号在「设置 → 节点 → 接入配置 → 工作项 → 用例服务 API」保存，密码交由 Scout
+现有凭据管理保存。导入弹窗不接收密码、token 或任意 API 路径，Nexus 不直连外部服务。
+历史 `/project/{project_id}/case-sources` 接口保留手动兼容和历史查询，不再接受
+`enabled/auto_compile/interval_seconds/daily_build_limit` 等调度参数。
+
+## 导入时添加需求分组（2026-10-18）
+
+`POST /project/{project_id}/requirements` 接收 `{app_id,title}`，要求当前项目维护权限并验证
+应用属于该项目。仅向该应用现有的 SQLite `env.automation.qa_process.requirements` 追加
+一个有 ID 和名称的分组，保留其他配置；不启动分析或模型调用。名称去首尾空白，长度
+1–200，空名称拒绝；同一应用同名请求返回已有 ID，避免重试重复创建。
+
+导入弹窗在没有需求分组时显示名称输入和「添加分组」，默认名称为「导入用例」。成功后
+立即更新列表并选中新分组，继续选择文件或核对已选文件。失败时保留输入和文件状态。
+
 开发 / 内网默认：`http://mino.local:10104`。可用 `VITE_NEXUS_URL` 覆盖。
 
 ## 登录

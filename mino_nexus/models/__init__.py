@@ -12,6 +12,9 @@ from mino_nexus.models.assistant import (
 from mino_nexus.models.atlas import AtlasAlias
 from mino_nexus.models.auth import AuthSession, AuthState, User
 from mino_nexus.models.case import ProjectCase
+from mino_nexus.models.case_source import CaseSource, CaseSourceRead, CaseSourceRow
+from mino_nexus.models.run_admission import RunAdmission
+from mino_nexus.models.execution_resource import ExecutionResource, ResourceDomain
 from mino_nexus.models.case_import_preview import CaseImportPreview
 from mino_nexus.models.case_import_receipt import CaseImportReceipt
 from mino_nexus.models.case_import_receipt_line import CaseImportReceiptLine

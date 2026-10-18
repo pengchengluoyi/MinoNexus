@@ -64,7 +64,7 @@ def input_view(case):
     # References only: never freeze project env, provider credentials or accounts.
     scene = clamp_case_scene(case["case_scene"]) if case.get("case_scene") else None
     return {**source_view(case), "case_scene": scene, **{key: deepcopy(case.get(key)) for key in
-        ("case_id", "project_id", "app_id", "requirement_id", "resource_key")}}
+        ("case_id", "project_id", "app_id", "resource_key")}}
 
 
 def build_identity():
@@ -74,6 +74,32 @@ def build_identity():
     from mino_nexus.services.case_resource_key_catalog import CATALOG_VERSION
     return {"nexus_version": build_version, "compiler_contract": _COMPILE_CONTRACT_REVISION,
             "resource_catalog_version": CATALOG_VERSION}
+
+
+def dependency_digest(db, project_id, owner):
+    from pathlib import Path
+    from sqlalchemy import select
+    from mino_nexus.models import CatalogEntry, Project, App, NavFsm, NavFsmState, NavFsmEdge, UiControl, ProjectPoolConfig, Settings
+    from mino_nexus.models.nav_flow_block_catalog import NavFlowBlockCatalog
+    values = []
+    for model in (CatalogEntry, Project, App, NavFsm, NavFsmState, NavFsmEdge, UiControl, ProjectPoolConfig, NavFlowBlockCatalog):
+        statement = select(model.__table__)
+        if model is Project:
+            statement = statement.where(Project.id == project_id)
+        elif "project_id" in model.__table__.c:
+            statement = statement.where(model.__table__.c.project_id == project_id)
+        rows = [dict(row) for row in db.execute(statement).mappings()]
+        values.append([model.__tablename__, sorted(rows, key=lambda row: json.dumps(row, sort_keys=True, default=str))])
+    setting = db.get(Settings, "ai-user:" + owner)
+    if setting:
+        values.append(["provider_configuration", {column.name: getattr(setting, column.name) for column in Settings.__table__.columns}])
+    root = Path(__file__).resolve().parents[1]
+    paths = list((root / "prompts").rglob("*.md")) + list((root / "prompts").rglob("*.yaml"))
+    paths += [root / "services" / name for name in ("case_compilation.py", "case_step_key_compiler.py",
+        "case_step_span_llm.py", "case_resource_claim.py", "account_requirement_compile.py")]
+    values.append(["compiler_files", [(str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest())
+        for path in sorted(paths)]])
+    return digest(values)
 
 
 def job_view(job):
@@ -100,7 +126,7 @@ def _snapshot(db, case, revision, actor, origin):
     return row
 
 
-def _queue(db, row, revision, *, request_id, parent_job_id=""):
+def _queue(db, row, revision, *, request_id, parent_job_id="", initial_status="queued"):
     from mino_nexus.services.control_registry import _assert_runtime_writable
     _assert_runtime_writable()
     actor = owned(db, row.project_id)
@@ -115,13 +141,14 @@ def _queue(db, row, revision, *, request_id, parent_job_id=""):
     job = CaseCompileJob(job_id="compile-" + uuid.uuid4().hex, owner_user_id=actor,
         project_id=row.project_id, case_id=row.case_id, revision_id=revision.revision_id,
         source_revision=revision.revision, request_id=request_id, parent_job_id=parent_job_id,
-        status="queued", input_digest=revision.input_digest, build=build_identity(), created_at=now())
+        status=initial_status, input_digest=revision.input_digest, build={**build_identity(),
+            "dependency_digest": dependency_digest(db, row.project_id, actor)}, created_at=now())
     db.add(job)
     db.flush()
     extra = deepcopy(row.extra or {})
     extra.update(source_digest=revision.source_digest, source_revision=revision.revision, source_revision_id=revision.revision_id,
         v5_draft_revision=revision.revision, latest_compile_job_id=job.job_id,
-        compile_job=job_view(job), compile_state="queued", effective_artifact=None,
+        compile_job=job_view(job), compile_state=initial_status, effective_artifact=None,
         resource_key=deepcopy(revision.compile_input.get("resource_key")),
         case_scene=deepcopy(revision.compile_input.get("case_scene")))
     meta = dict(extra.get("meta") or {})
@@ -138,7 +165,7 @@ def _queue(db, row, revision, *, request_id, parent_job_id=""):
     return job
 
 
-def record_change(db, row, previous=None, *, origin=None):
+def record_change(db, row, previous=None, *, origin=None, initial_status="queued"):
     """Called in the same transaction as the case/receipt write."""
     from mino_nexus.services.case_store import _public
     actor = owned(db, row.project_id)
@@ -147,7 +174,9 @@ def record_change(db, row, previous=None, *, origin=None):
     prior = db.get(CaseRevision, prior_id) if prior_id else None
     if prior and (prior.project_id != row.project_id or prior.case_id != row.case_id):
         raise ValueError("case_revision_conflict")
-    if prior and digest(input_view(previous)) == digest(input_view(current)):
+    source_generation_changed = bool(origin and origin.get("kind") == "source_sync"
+        and (not prior or (prior.origin or {}).get("generation") != origin.get("generation")))
+    if prior and not source_generation_changed and digest(input_view(previous)) == digest(input_view(current)):
         # A metadata save cannot forge compile results, status or history.
         extra = deepcopy(row.extra or {})
         for key in CHAIN_FIELDS:
@@ -166,10 +195,10 @@ def record_change(db, row, previous=None, *, origin=None):
         legacy = _snapshot(db, previous, number, actor, {"kind": "legacy_snapshot", "compile_origin_unknown": True})
         maximum = number
         if legacy.input_digest == digest(input_view(current)):
-            return _queue(db, row, legacy, request_id="source:" + legacy.revision_id)
+            return _queue(db, row, legacy, request_id="source:" + legacy.revision_id, initial_status=initial_status)
     revision = _snapshot(db, current, max(maximum + 1, int(current.get("v5_draft_revision") or 1)), actor,
         origin or {"kind": "save"})
-    return _queue(db, row, revision, request_id="source:" + revision.revision_id)
+    return _queue(db, row, revision, request_id="source:" + revision.revision_id, initial_status=initial_status)
 
 
 def history(project_id, case_id):
@@ -230,6 +259,17 @@ def _owner_matches(db, job):
     return _maintainer(db, db.get(Project, job.project_id), job.owner_user_id)
 
 
+def _source_matches(db, job):
+    revision = db.get(CaseRevision, job.revision_id)
+    origin = revision.origin if revision else {}
+    if origin.get("kind") != "source_sync":
+        return True
+    from mino_nexus.models.case_source import CaseSource, CaseSourceRow
+    source = db.get(CaseSource, origin.get("source_id"))
+    binding = db.query(CaseSourceRow).filter_by(source_id=origin.get("source_id"), case_id=job.case_id).one_or_none()
+    return bool(source and binding and not binding.detached and source.generation == origin.get("generation"))
+
+
 def get_job(project_id, case_id, job_id):
     with session_scope() as db:
         actor = owned(db, project_id, write=False)
@@ -269,7 +309,7 @@ def cancel(project_id, case_id, job_id, expected_revision):
             raise ValueError("compile_job_missing")
         if job.source_revision != expected_revision or (case.extra or {}).get("source_revision") != expected_revision:
             raise ValueError("case_revision_conflict")
-        if job.status in {"queued", "running"}:
+        if job.status in {"queued", "running", "waiting_review", "waiting_budget", "blocked_config"}:
             job.cancel_requested = True
             job.status = "cancelled"
             job.finished_at = now()
@@ -304,6 +344,12 @@ def claim(worker_id, *, lease_seconds=120):
                 job.diagnostics = [{"reason_code": "compile_superseded" if case else "case_deleted"}]
                 db.flush()
                 continue
+            if not _source_matches(db, job):
+                job.status, job.finished_at = "cancelled", now()
+                job.diagnostics = [{"reason_code": "source_generation_changed"}]
+                _project_status(db, job)
+                db.flush()
+                continue
             if not _owner_matches(db, job):
                 job.status, job.finished_at = "failed", now()
                 job.diagnostics = [{"reason_code": "compile_owner_scope_changed"}]
@@ -316,7 +362,8 @@ def claim(worker_id, *, lease_seconds=120):
         _project_status(db, job)
         revision = db.get(CaseRevision, job.revision_id)
         from mino_nexus.services.event_migration import job_input
-        return {**job_view(job), "event_migration": job_input(db, job, case), "claim_token": job.claim_token, "owner_user_id": job.owner_user_id,
+        return {**job_view(job), "automatic_source_build": job.request_id == "source:" + job.revision_id,
+            "event_migration": job_input(db, job, case), "claim_token": job.claim_token, "owner_user_id": job.owner_user_id,
             "project_id": job.project_id, "case_id": job.case_id, "input": deepcopy(revision.compile_input)}
 
 
@@ -353,7 +400,8 @@ def complete(job_id, token, output=None, diagnostics=None):
         matches = (row is not None and (row.extra or {}).get("latest_compile_job_id") == job.job_id
             and (row.extra or {}).get("source_revision_id") == job.revision_id
             and digest(input_view(_public(row))) == job.input_digest
-            and _owner_matches(db, job))
+            and _owner_matches(db, job) and _source_matches(db, job)
+            and job.build.get("dependency_digest") == dependency_digest(db, job.project_id, job.owner_user_id))
         if valid_claim and matches and not diagnostics:
             extra = deepcopy(row.extra or {})
             meta = dict(extra.get("meta") or {})
@@ -404,8 +452,26 @@ def run_one(worker_id):
         with execution_user(job["owner_user_id"]):
             with session_scope() as db:
                 owned(db, job["project_id"])
-            if digest(job["input"]) != job["input_digest"] or job["build"] != build_identity():
-                raise ValueError("compile_input_or_build_changed")
+                runtime_build = build_identity()
+                if (digest(job["input"]) != job["input_digest"]
+                        or any(job["build"].get(key) != value for key, value in runtime_build.items())
+                        or job["build"].get("dependency_digest") != dependency_digest(db, job["project_id"], job["owner_user_id"])):
+                    raise ValueError("compile_input_or_build_changed")
+                revision = db.get(CaseRevision, job["revision_id"])
+                cached = None
+                if job.get("automatic_source_build") and revision and (revision.origin or {}).get("kind") == "source_sync":
+                    for prior in db.query(CaseCompileJob).filter_by(owner_user_id=job["owner_user_id"],
+                        project_id=job["project_id"], case_id=job["case_id"], input_digest=job["input_digest"],
+                        status="succeeded").order_by(CaseCompileJob.finished_at.desc()):
+                        if prior.output and prior.build == job["build"] and not prior.cancel_requested:
+                            cached = {"job_id": prior.job_id, "output": deepcopy(prior.output)}
+                            break
+            if cached:
+                output = cached["output"]
+                output["provenance"] = {**output.get("provenance", {}), "reused_from_job_id": cached["job_id"],
+                    "model_calls_this_build": 0}
+                complete(job["job_id"], job["claim_token"], output)
+                return True
             from mino_nexus.services.case_resource_claim import sync_case_resource_metadata
             from mino_nexus.services.case_step_key_compiler import compile_case_step_program_keys
             if job.get('event_migration'):

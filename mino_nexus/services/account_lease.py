@@ -560,7 +560,13 @@ def persist_account_facets(
     persist_account_facets_with_log(project_id, account_id, facets, log_ctx=ctx)
 
 
-def lease_for_context(
+def lease_for_context(ctx, params, **kwargs):
+    from mino_nexus.services.account_fact_scope import fact_scope
+    with fact_scope(ctx):
+        return _lease_for_context(ctx, params, **kwargs)
+
+
+def _lease_for_context(
     ctx: Any,
     params: dict[str, Any] | None,
     *,
@@ -678,6 +684,10 @@ def lease_for_context(
                     _clear_leased(project_id, aid, run_id)
                     release_ctx_lease(ctx)
                 else:
+                    if not _mark_leased(project_id, aid, run_id,
+                            case_id=str(getattr(ctx, "case_id", "") or ""), sn=holder_sn,
+                            env=env_profile, requirements=requirements):
+                        return None, "resource_busy"
                     return restored, ""
             else:
                 SLog.i(
@@ -849,6 +859,7 @@ def ensure_case_account_lease(
     case: dict[str, Any] | None = None,
     scene: dict[str, Any] | None = None,
     plugin_user_id: str = "",
+    wait_ms: int | None = None,
 ) -> tuple[bool, str]:
     """按当前用例前置租号；与同 run 已有租约冲突时释放并重新选号。"""
     from mino_nexus.loop.session_ensure import account_need_from_case
@@ -900,7 +911,7 @@ def ensure_case_account_lease(
         ctx,
         {"precondition": prompt} if prompt else {},
         need_facets=need,
-        wait_ms=min(_acquire_wait_ms(), 15_000),
+        wait_ms=min(_acquire_wait_ms(), 15_000) if wait_ms is None else max(0, min(wait_ms, 15_000)),
     )
     if row:
         SLog.i(

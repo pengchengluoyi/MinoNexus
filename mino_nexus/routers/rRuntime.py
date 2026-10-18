@@ -26,7 +26,7 @@ router = APIRouter(prefix="/runtime", tags=["Runtime"])
 _SCOUT_UPDATE_LOCK = threading.Lock()
 _SCOUT_UPDATES: set[str] = set()
 
-_REMOTE_COMMANDS = frozenset({"stop", "restart", "update", "sleep", "wake"})
+_REMOTE_COMMANDS = frozenset({"stop", "restart", "sleep", "wake"})
 
 
 class NodeCommandBody(BaseModel):
@@ -525,13 +525,7 @@ def scout_update_status(node_id: str, operation_id: str = "", sess: dict = Depen
 @router.post("/nodes/{node_id}/update")
 async def update_scout(node_id: str, body: ScoutUpdateBody, sess: dict = Depends(current_session)):
     _node_row_for_session(node_id, studio_id="", sess=sess)
-    from mino_nexus.services.scout_updates import request
-    if body.build_id.lower() == "latest" or body.release_tag.lower() == "latest":
-        raise HTTPException(422, "必须指定固定 release tag/build_id")
-    if (body.action == "rollback") != bool(body.rollback_of):
-        raise HTTPException(422, "rollback 动作必须指定原成功 operation_id")
-    params = body.model_dump(exclude={"operation_id"})
-    return ok(request(node_id, str(sess["user_id"]), body.operation_id, params))
+    raise HTTPException(410, {"reason_code": "component_updates_removed"})
 
 
 @router.post("/nodes/{node_id}/updates/{operation_id}/cancel")

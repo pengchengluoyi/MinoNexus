@@ -163,35 +163,13 @@ class WorkbenchInstallation:
         return {"installation_id": self.installation_id, **self._invoke("github-check", arguments)}
 
     def prepare(self, release_tag: str, build_id: str) -> dict:
-        value = self._invoke("github-fetch", ["--tag", identifier(release_tag), "--build", identifier(build_id)])
-        return {"installation_id": self.installation_id, **value}
+        raise WorkbenchUpdateError("升级和回退功能已移除", 410)
 
     def request(self, operation_id: str, build_id: str, rollback: bool = False) -> dict:
-        identifier(operation_id)
-        identifier(build_id)
-        try:
-            existing = self.operation(operation_id)
-        except FileNotFoundError:
-            existing = None
-        kind = "rollback" if rollback else "update"
-        if existing is not None:
-            if (existing.get("kind") != kind or existing["release"]["build_id"] != build_id
-                    or existing.get("local_verification")):
-                raise WorkbenchUpdateError("operation_id 已绑定其他参数或本地验收操作")
-            return self.public(existing)
-        arguments = ["--operation", operation_id]
-        if rollback:
-            arguments += ["--build", build_id]
-        else:
-            manifest, package = self.prepared(build_id, package=True)
-            arguments += ["--manifest", str(manifest), "--package", str(package)]
-        return self._invoke(kind, arguments, operation_id, expected_build=build_id)
+        raise WorkbenchUpdateError("升级和回退功能已移除", 410)
 
     def resume(self, operation_id: str) -> dict:
-        row = self.operation(operation_id)
-        if row.get("local_verification"):
-            raise WorkbenchUpdateError("MCP 不恢复绕过兼容验收的本地操作，请使用本地维护入口")
-        return self._invoke("recover", ["--operation", identifier(operation_id)], operation_id)
+        raise WorkbenchUpdateError("升级和回退功能已移除", 410)
 
     def cancel(self, operation_id: str) -> dict:
         return self._invoke("cancel-update", ["--operation", identifier(operation_id)], operation_id)

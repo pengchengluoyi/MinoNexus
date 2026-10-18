@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from mino_nexus.core.http_util import ok
 from mino_nexus.routers.deps import current_session, project_maintainer
@@ -21,6 +21,12 @@ class ResourceKeyPreviewBody(BaseModel):
     env: str = "test"
 
 
+class ImportRequirementCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    app_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=200)
+
+
 class CaseImportPreviewBody(BaseModel):
     requirement_id: str
     table: list[list[Any]] | None = None
@@ -30,6 +36,13 @@ class CaseImportPreviewBody(BaseModel):
     skip_rows: list[int] = Field(default_factory=list)
     column_map: dict[str, int] = Field(default_factory=dict)
     default_platform: str = ""
+
+
+class CaseImportSourceBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: str
+    configuration: dict[str, Any]
+    operation: str = "read"
 
 
 class CaseImportCommitRow(BaseModel):
@@ -519,6 +532,29 @@ def get_project_case(project_id: str, case_id: str, _sess: dict = Depends(curren
 def list_import_requirements(project_id: str, _sess: dict = Depends(current_session)):
     _project(project_id)
     return ok({"requirements": cim.list_project_requirements(project_id)})
+
+
+@router.post("/{project_id}/requirements")
+def create_import_requirement(project_id: str, body: ImportRequirementCreateBody, _sess: dict = Depends(project_maintainer)):
+    try:
+        return ok({"requirement": cim.create_project_requirement(project_id, body.app_id, body.title)})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{project_id}/cases/import/sources")
+def import_source_nodes(project_id: str, _sess: dict = Depends(project_maintainer)):
+    from mino_nexus.services.case_import_sources import nodes
+    return ok(nodes(project_id))
+
+
+@router.post("/{project_id}/cases/import/read-source")
+def import_read_source(project_id: str, body: CaseImportSourceBody, _sess: dict = Depends(project_maintainer)):
+    from mino_nexus.services.case_import_sources import read
+    try:
+        return ok(read(project_id, body.kind, body.configuration, body.operation))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"reason_code": str(exc)}) from exc
 
 
 @router.post("/{project_id}/cases/import/preview")

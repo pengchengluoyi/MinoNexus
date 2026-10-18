@@ -22,7 +22,8 @@ def _facets_for_account(db, project_id: str, account_id: str) -> dict[str, str]:
         )
         .all()
     )
-    return {str(r.facet_key): str(r.facet_value or "unknown") for r in rows}
+    from mino_nexus.services.account_fact_scope import overlay
+    return overlay(db, project_id, account_id, {str(r.facet_key): str(r.facet_value or "unknown") for r in rows})
 
 
 def _registered_at_iso(ts: int) -> str:
@@ -296,6 +297,9 @@ def try_claim_account_lease(
         if protected(str(existing.get("run_id") or ""), db=db):
             return False
         if lease_blocks_other_holder(existing, run_id=rid, sn=sn):
+            return False
+        from mino_nexus.services.execution_resources import claim_in_transaction
+        if not claim_in_transaction(db, aid):
             return False
         row.lease = payload
         row.updated_at = _now()

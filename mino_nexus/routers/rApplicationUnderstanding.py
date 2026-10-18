@@ -82,11 +82,13 @@ class FactDecision(StrictBody):
     reason: Text
     expected_digest: Text
     evidence_seq: int | None = Field(default=None, ge=0)
+    valid_for_seconds: int = Field(default=86400, ge=60, le=2592000)
 
 @resource_router.get('')
-def account_facts(project_id: str):
+def account_facts(project_id: str, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
+                  status: str = Query('', pattern='^(|candidate|confirmed|rejected)$')):
     from mino_nexus.services.account_fact_review import listing
-    return call(listing, project_id)
+    return call(listing, project_id, limit=limit, offset=offset, status=status)
 
 @resource_router.post('/{candidate_id}', dependencies=[Depends(project_maintainer)])
 def account_fact_decide(project_id: str, candidate_id: str, body: FactDecision):

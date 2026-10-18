@@ -60,6 +60,44 @@ def list_project_requirements(project_id: str) -> list[dict[str, Any]]:
     return out
 
 
+def create_project_requirement(project_id: str, app_id: str, title: str) -> dict[str, str]:
+    import time
+    from sqlalchemy import text
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.project import App
+    from mino_nexus.services.case_compilation import owned
+
+    title = str(title or "").strip()
+    if not title or len(title) > 200 or any(ord(character) < 32 for character in title):
+        raise ValueError("请输入 1 到 200 字的需求分组名称")
+    with session_scope() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        owned(db, project_id)
+        app = db.get(App, app_id)
+        if app is None or app.project_id != project_id:
+            raise ValueError("应用不属于当前项目")
+        env = copy.deepcopy(app.env or {})
+        automation = env.setdefault("automation", {})
+        if not isinstance(automation, dict):
+            raise ValueError("应用需求配置异常，请先修复配置")
+        process = automation.setdefault("qa_process", {})
+        if not isinstance(process, dict):
+            raise ValueError("应用需求配置异常，请先修复配置")
+        requirements = process.setdefault("requirements", [])
+        if not isinstance(requirements, list):
+            raise ValueError("应用需求配置异常，请先修复配置")
+        for requirement in requirements:
+            if (isinstance(requirement, dict) and requirement.get("id")
+                    and requirement.get("id") != "__imported_cases__" and requirement.get("title") == title):
+                return {"id": str(requirement["id"]), "title": title}
+        stamp = _now()
+        requirement = {"id": "req-" + uuid.uuid4().hex[:16], "title": title, "created_at": stamp, "updated_at": stamp}
+        requirements.append(requirement)
+        process["updated_at"] = stamp
+        app.env, app.updated_at = env, int(time.time())
+        return {"id": requirement["id"], "title": title}
+
+
 def _requirement_title(project_id: str, requirement_id: str) -> str:
     rid = str(requirement_id or "").strip()
     for req in list_project_requirements(project_id):

@@ -126,11 +126,29 @@ async def lifespan(app: FastAPI):
     compile_task = asyncio.create_task(_case_compile_loop())
     from mino_nexus.services.development import worker as development_worker
     development_task = asyncio.create_task(development_worker())
-    from mino_nexus.services.scout_updates import worker as scout_update_worker
-    scout_update_task = asyncio.create_task(scout_update_worker())
+    from mino_nexus.core.execution_user import execution_user, user_thread
+    from mino_nexus.services import run_store
+    from mino_nexus.loop.case_exec import _run_in_background
+    for rid in stale:
+        recovered = run_store.get(rid)
+        if not recovered or not run_store.task_is_live(recovered):
+            continue
+        with execution_user(recovered["owner_user_id"]):
+            user_thread(target=_run_in_background, kwargs={"run_id": rid, "package": recovered.get("package") or "",
+                "playbook": recovered.get("playbook") or {}, "provider_id": recovered.get("provider_id") or ""},
+                daemon=True, name="recovered-" + rid).start()
+    async def execution_policy_worker():
+        from mino_nexus.services.execution_policy import expire_runs
+        while True:
+            try:
+                await asyncio.to_thread(expire_runs)
+            except Exception as exc:
+                SLog.w(TAG, f"execution policy tick: {type(exc).__name__}")
+            await asyncio.sleep(2)
+    policy_task = asyncio.create_task(execution_policy_worker())
     yield
-    scout_update_task.cancel()
-    await asyncio.gather(scout_update_task, return_exceptions=True)
+    policy_task.cancel()
+    await asyncio.gather(policy_task, return_exceptions=True)
     development_task.cancel()
     await asyncio.gather(development_task, return_exceptions=True)
     compile_task.cancel()
@@ -185,9 +203,10 @@ def create_app() -> FastAPI:
 
     from mino_nexus.core.maintenance_gate import MaintenanceMiddleware
     app.add_middleware(MaintenanceMiddleware)
-    from mino_nexus.routers import rNexusUpdate, rWorkbenchUpdate
-    app.include_router(rNexusUpdate.router)
-    app.include_router(rWorkbenchUpdate.router)
+    from mino_nexus.routers import rCaseSources
+    app.include_router(rCaseSources.router)
+    from mino_nexus.routers import rExecutionResources
+    app.include_router(rExecutionResources.router)
     app.include_router(rSys.router)
     app.include_router(rAuth.router)
     app.include_router(rMe.router)

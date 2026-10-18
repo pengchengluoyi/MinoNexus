@@ -107,6 +107,8 @@ def _run_case_list(
     env_brief = str(doc.get("env_brief") or "")
     continuity_by_sn: dict = {}
     for case_seq, case in enumerate(cases):
+        if case.get("status") not in {None, "pending", "running"}:
+            continue
         if not _task_still_running(run_id):
             break
         if protected(run_id, sn=str(case.get("sn") or doc.get("sn") or "")):
@@ -226,55 +228,21 @@ def _run_case_list(
         if isinstance(rk, dict) and rk.get("platform"):
             platform = str(rk.get("platform") or platform)
         from mino_nexus.services.device_resource_lease import (
-            acquire_device_lease,
             release_device_lease,
         )
+        from mino_nexus.services.execution_resources import admission, wait_for_admission, heartbeat, release as release_bundle
 
         device_held = False
         try:
-            ok_dev, dev_err = acquire_device_lease(
-                sn=sn,
-                package_id=str(package or ""),
-                run_id=run_id,
-                case_id=cid,
-                project_id=project_id,
-                platform=platform,
-            )
-            if not ok_dev and dev_err:
-                reason = f"设备租约：{dev_err}"
-                _record_case_preflight_fail(
-                    run_id=run_id,
-                    case=case,
-                    reason=reason,
-                    app_id=app_id,
-                    sn=sn,
-                    provider_id=str(doc.get("provider_id") or ""),
-                )
-                run_store.patch_case(run_id, cid, target_sn=sn, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
-                emit_testing_task({
-                    "event": "case_finished",
-                    "run_id": run_id,
-                    "task_id": run_id,
-                    "case_id": cid,
-                    "status": "fail",
-                    "app_id": app_id,
-                })
-                continue
-            device_held = True
             from mino_nexus.services.account_lease import ensure_case_account_lease
-
-            ok, lease_err = ensure_case_account_lease(
-                run_id,
-                app_id=str(doc.get("app_id") or ""),
-                env_profile=str(doc.get("env_profile") or "test"),
-                platform=str(doc.get("platform") or "android"),
-                target_package=str(package or ""),
-                case=case if isinstance(case, dict) else {},
-                scene=scene,
-                plugin_user_id=str(doc.get("plugin_user_id") or ""),
-            )
+            with admission(doc, case, project_id=project_id, package=package, platform=platform) as resource_attempt:
+                ok, lease_err = wait_for_admission(doc, case, resource_attempt, lambda wait_ms: ensure_case_account_lease(
+                    run_id, app_id=app_id, env_profile=str(doc.get("env_profile") or "test"),
+                    platform=platform, target_package=package, case=case, scene=scene, wait_ms=wait_ms,
+                    plugin_user_id=str(doc.get("plugin_user_id") or "")))
+            device_held = resource_attempt["claimed"]
             if not ok and lease_err:
-                reason = f"账号租约：{lease_err}"
+                reason = f"资源组合准入：{lease_err}"
                 _record_case_preflight_fail(
                     run_id=run_id,
                     case=case,
@@ -333,21 +301,16 @@ def _run_case_list(
                 "resource_card": resource_card,
             })
             next_case = cases[case_seq + 1] if case_seq + 1 < len(cases) else None
-            result = run_case(
-                run_id=run_id,
-                case=case,
-                sn=sn,
-                app_id=str(doc.get("app_id") or ""),
-                app_name=str(doc.get("app_name") or ""),
-                package=package,
-                provider_id=provider_id,
-                playbook=playbook if isinstance(playbook, dict) else {},
-                cancel_check=lambda: run_store.task_cancelled(run_id),
-                case_seq=case_seq,
-                playwright_headless=bool(doc.get("playwright_headless", True)),
-                run_env_brief=env_brief,
-                next_case=next_case if isinstance(next_case, dict) else None,
-            )
+            from mino_nexus.services.execution_policy import start_attempt
+            start_attempt(run_id, case)
+            with heartbeat(resource_attempt):
+                result = run_case(
+                    run_id=run_id, case=case, sn=sn, app_id=app_id,
+                    app_name=str(doc.get("app_name") or ""), package=package, provider_id=provider_id,
+                    playbook=playbook if isinstance(playbook, dict) else {},
+                    cancel_check=lambda: run_store.task_cancelled(run_id), case_seq=case_seq,
+                    playwright_headless=bool(doc.get("playwright_headless", True)),
+                    run_env_brief=env_brief, next_case=next_case if isinstance(next_case, dict) else None)
             doc = run_store.get(run_id) or doc
             env_brief = str(doc.get("env_brief") or env_brief)
             run_store.patch_case(
@@ -383,6 +346,7 @@ def _run_case_list(
             )
         finally:
             if device_held:
+                release_bundle(run_id, sn)
                 release_device_lease(sn, str(package or ""), run_id)
 
 
@@ -397,7 +361,7 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
         from mino_nexus.services.resource_transition import mark_web_run_devices
 
         mark_web_run_devices(run_id, "guest", source="task_start", package=package, doc=doc)
-        cases = list(doc.get("cases") or [])
+        cases = [case for case in doc.get("cases") or [] if case.get("status") in {None, "pending"}]
         worker_sns = _worker_sns_for_cases(cases, doc)
         list_kwargs = {
             "run_id": run_id,

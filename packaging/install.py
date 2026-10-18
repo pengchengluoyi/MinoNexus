@@ -119,15 +119,7 @@ def install(component,root,prepared,nexus_url,commands=None):
     root.parent.mkdir(parents=True,exist_ok=True);root=root.parent.resolve()/root.name
     helper=extract_helper(folder,package)
     if root.exists():
-        if component=='workbench' and commands is not None:
-            entry=command_entry.command_file(commands,component)
-            if entry.exists() and not (root/'config/command.json').exists():
-                command_entry.check_upgrade(commands,component,root)
-                command_entry.remember(root,entry,entry.read_text(encoding='utf-8'))
-        prefix=['d2'] if component=='nexus' else []
-        run([helper,*prefix,'installer-upgrade','--root',root,'--manifest',folder/'manifest.json','--package',package])
-        print(f'Upgraded {component}: {root}',flush=True)
-        return
+        raise RuntimeError('升级与回退功能已取消；已有安装目录保持不变，请使用独立目录安装')
     if component=='nexus':
         run([helper,'d2','install','--root',root,'--data-dir',root/'data','--host','0.0.0.0','--port',port,'--manifest',folder/'manifest.json','--package',package])
         helper=exe(root/'launcher/mino-maintain')
