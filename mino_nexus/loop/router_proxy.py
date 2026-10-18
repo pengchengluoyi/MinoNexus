@@ -1164,7 +1164,11 @@ def _fail(
 
 
 def _request_metadata(node, request) -> dict[str, Any]:
+    from mino_nexus.core.build_info import identity
     return {"node_id": node.node_id, "scout_version": node.scout_version,
+            "nexus_identity": identity(),
+            "node_connection_generation": node.node_connection_generation,
+            "scout_process_generation": node.scout_process_generation,
             "sn": request.sn, "platform": request.platform,
             "os": str((request.device_hint or {}).get("os") or ""),
             "run_id": request.run_id, "step_idx": request.step_idx,
@@ -1187,6 +1191,9 @@ def _event_result_from(event: PlanEvent, res: P.Result, started: str, *, node=No
         event.params["sensitive"] = True
     if node is not None and request is not None:
         raw["scout"] = _request_metadata(node, request)
+        receipt = (res.extra or {}).get("execution_identity")
+        if isinstance(receipt, dict):
+            raw["scout"]["execution_identity"] = receipt
         if request.step_idx > 0:
             raw["action_ref"] = _action_ref(request)
             raw["logical_seq"] = event.seq

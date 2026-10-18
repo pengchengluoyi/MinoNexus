@@ -59,9 +59,22 @@ def execution_result_metadata(result: Any) -> dict[str, Any]:
             for row in admission["active_requests"][:16] if isinstance(row, dict)]}
     scout = raw.get("scout")
     if isinstance(scout, dict):
-        out["scout"] = {key: scout[key][:256] for key in ("node_id", "sn", "platform", "os", "scout_version", "run_id") if isinstance(scout.get(key), str)}
+        out["scout"] = {key: scout[key][:256] for key in ("node_id", "sn", "platform", "os", "scout_version", "run_id", "scout_process_generation", "node_connection_generation") if isinstance(scout.get(key), str)}
         if isinstance(scout.get("step_idx"), int):
             out["scout"]["step_idx"] = scout["step_idx"]
+        from mino_nexus.services.execution_evidence import public_identity
+        out["scout"]["nexus_identity"] = public_identity(scout.get("nexus_identity"))
+        receipt = scout.get("execution_identity")
+        if isinstance(receipt, dict):
+            safe = {key: receipt[key][:256] for key in ("node_id", "scout_process_generation", "node_connection_generation")
+                    if isinstance(receipt.get(key), str)}
+            safe["schema_version"] = receipt.get("schema_version") if type(receipt.get("schema_version")) is int else 0
+            build = receipt.get("build")
+            if isinstance(build, dict):
+                safe["build"] = {key: build[key][:256] for key in ("build_id", "source_commit", "source_digest", "identity_kind")
+                                 if isinstance(build.get(key), str)}
+                safe["build"].update({key: build[key] for key in ("dirty", "source_unchanged") if type(build.get(key)) is bool})
+            out["scout"]["execution_identity"] = safe
     fd = raw.get("focus_diag")
     if fd is True:
         # Scout 焦点引用失配诊断：只含 bounds/hint/包名，无输入正文。

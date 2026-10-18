@@ -1,5 +1,16 @@
 # HTTP — Console / Studio 怎么连本仓
 
+## 会话执行版本证据（2026-10-18）
+
+`GET /case-runner/sessions/{session_id}/execution-evidence` 只读取当前账号的历史会话。
+可选查询参数 `expected_instance_id`、`expected_nexus_build_id`、`expected_node_id`、`expected_build_id` 是测试计划中的预期值，不自动采用当前实际值。
+实例不符返回 409（`instance_mismatch`），会话不可读或跨账号返回 404，未认证返回 401。
+返回实际 Nexus 实例/build、Scout 节点/进程/build、设备、结果事件序号、源码提交与快照摘要以及可复制的引用。
+`state=verified` 只代表该会话的执行版本与预期一致且用例通过；缺预期、旧回执、源码变化、未结束或读取截断均不能通过。旧 build/节点/进程不符返回 `state=failed`。
+固定 `scope=session_execution`、`web_chain_verified=false`、`mcp_regression_verified=false`，不把局部执行证据升级成正式 Web 闭环或 MCP 回归结论。不建设跨 Nexus 代理或归档库，删除测试库后原引用不可读取。
+
+开发准备绑定可选 `expected_instance_id`；`probe` 同时核对目标实例与 build，401/403 明确失败。实例/版本检查不执行用例。源码 Scout 的 IDE 操作仅允许其独立配置中 `development_ide_projects` 登记的专用样例项目；通过 `mino-scout development-ide-projects --add <绝对路径>` 登记，不允许自身或 MINO 控制链源码目录。
+
 UI **只**打 MinoNexus。没有公网域名时用内网名 `mino.local`：Nexus 进程启动后用 mDNS 注册，客户端不填 IP。
 
 ## 手动导入用例（2026-10-18）

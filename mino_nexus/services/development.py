@@ -37,6 +37,7 @@ class Binding(BaseModel):
     build_configuration: str = Field(default="", max_length=200)
     target_url: str = Field(default="", max_length=2048)
     expected_build: str = Field(default="", max_length=200)
+    expected_instance_id: str = Field(default="", max_length=100)
     build_field: str = Field(default="build_id", max_length=200)
     service_log_path: str = Field(default="", max_length=2048)
     apk_path: str = Field(default="", max_length=2048)

@@ -27,6 +27,8 @@ def open_meta(
     try:
         row = db.query(SessionMeta).filter(SessionMeta.session_id == session_id).first()
         if row is None:
+            from mino_nexus.core.build_info import identity
+            provenance = identity()
             row = SessionMeta(
                 session_id=session_id,
                 owner_user_id=require_user_id(),
@@ -34,11 +36,14 @@ def open_meta(
                 case_id=case_id,
                 app_id=app_id,
                 status="running",
-                event_count=0,
+                event_count=1,
                 started_at=_now(),
                 format_version=1,
             )
             db.add(row)
+            db.add(SessionEvent(session_id=session_id, seq=1, ts=row.started_at,
+                                type="session/provenance", turn=0, phase="",
+                                payload={"schema_version": 1, "nexus": provenance}))
             db.commit()
             db.refresh(row)
         if row.owner_user_id != require_user_id():
