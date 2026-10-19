@@ -923,6 +923,15 @@ def _seed_login_when_required_session_unmet(cursor: Any, ctx: Any, *, writer: An
         return
     if str(getattr(cursor, "phase", "") or "") != "prep" and _case_steps_include_login(getattr(ctx, "case", None)):
         return
+    if str(getattr(cursor, "phase", "") or "") == "prep":
+        from mino_nexus.loop.step_flow_scope import prep_login_preservation_reason
+
+        reason = prep_login_preservation_reason(ctx)
+        if reason:
+            if writer is not None:
+                writer.append("prep/login_preserved", {"reason_code": "initial_session_required",
+                              "summary": reason, "target_account_login_deferred": True})
+            return
     state = read_state(cursor)
     app_id = str(getattr(ctx, "app_id", "") or "")
     seeded = prepend_login_block_milestones(state, ctx=ctx, app_id=app_id)

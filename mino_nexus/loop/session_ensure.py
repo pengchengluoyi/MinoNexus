@@ -75,7 +75,18 @@ def account_need_from_case(
     lease_requirements = row.get("lease_requirements")
     if not isinstance(lease_requirements, dict):
         lease_requirements = (case or {}).get("lease_requirements") if isinstance((case or {}).get("lease_requirements"), dict) else {}
-    need_account = bool(session or pre or profile or address or template_id)
+    # A compiled resource contract separates device/session setup from account needs.
+    # Free-form guest/browser setup text must not force an account lease.
+    has_account_constraints = any(lease_requirements.get(key) for key in ("all", "prefer"))
+    if isinstance(rk, dict):
+        account = rk.get("account") if isinstance(rk.get("account"), dict) else {}
+        constraints = account.get("requirements") if isinstance(account.get("requirements"), dict) else {}
+        has_account_constraints = has_account_constraints or any(constraints.get(key) for key in ("all", "prefer"))
+        need_account = bool(session or profile or address or template_id or has_account_constraints
+                            or required_session(scene=row) == "logged_in")
+    else:
+        # Preserve legacy uncompiled cases until they have a structured contract.
+        need_account = bool(session or pre or profile or address or template_id or has_account_constraints)
     return {
         "need_account": need_account,
         "session": session,

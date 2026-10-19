@@ -159,3 +159,8 @@ N4 预演/静默窗口按持久 write_safety 动作账本核对停止状态：�
 
 
 V6 D1：`scout_updates` 保存节点更新操作、唯一活动 slot、参数、等待截止和最后执行端回执。门禁与新任务资源准入共用 SQLite 写事务；执行端操作账本是安装状态权威。
+
+
+## 协作消息回复回执（2026-10-19）
+
+collab_message_jobs 以 message_id 为主键，保存 project_id/topic_id、owner_user_id、queued/running/succeeded/failed/interrupted 状态、错误及时间。原文仍只在 collab_messages。随消息同事务创建，不存认证 token；启动 create_all 新建表。处理中断不自动重试命令，queued 可继续；议题删除时清理对应回执，运行中拒绝删除。

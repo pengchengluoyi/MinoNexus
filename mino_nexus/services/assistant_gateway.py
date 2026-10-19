@@ -253,6 +253,13 @@ def _handle_owned_inbound(inbound: dict[str, Any], owner: str) -> None:
     sender = str(inbound.get("sender_id") or "")
     text = str(inbound.get("text") or "").strip()
     msg_id = str(inbound.get("msg_id") or "")
+    if text:
+        try:
+            from mino_nexus.services.mino_bots import mirror_im_to_collab
+
+            mirror_im_to_collab(inbound)
+        except Exception:
+            pass
     if not sender:
         return
     if str(inbound.get("chat_type") or "") == "group" and not inbound.get("mentioned"):

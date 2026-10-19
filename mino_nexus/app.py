@@ -44,6 +44,7 @@ from mino_nexus.routers import (
     rSettings,
     rSys,
     rTask,
+    rMinoBots,
 )
 from mino_nexus.core.schemas import PlanEvent
 from mino_nexus.websocket import node as node_ws
@@ -93,7 +94,7 @@ async def lifespan(app: FastAPI):
             try:
                 from mino_nexus.services.doc_sync import doc_sync_tick
 
-                n = doc_sync_tick()
+                n = await asyncio.to_thread(doc_sync_tick)
                 if n:
                     SLog.i(TAG, f"飞书文档定时同步 {n} 条")
             except Exception as exc:
@@ -124,6 +125,31 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(0.2 if worked else 2)
 
     compile_task = asyncio.create_task(_case_compile_loop())
+
+    async def _collab_loop() -> None:
+        import uuid
+        from mino_nexus.services.collab_worker import tick
+
+        worker_id = "collab-" + uuid.uuid4().hex
+        while True:
+            try:
+                worked = await asyncio.to_thread(tick, worker_id)
+            except Exception as exc:
+                SLog.w(TAG, f"collab tick: {type(exc).__name__}")
+                worked = False
+            if worked:
+                await asyncio.sleep(0.2)
+            else:
+                from mino_nexus.services.collab_worker import _WAKE
+
+                # threading.Event.wait must not block the HTTP event loop.
+                await asyncio.to_thread(_WAKE.wait, timeout=2.0)
+                _WAKE.clear()
+
+    collab_task = asyncio.create_task(_collab_loop())
+    from mino_nexus.services.collab_message_queue import recover_interrupted, worker as message_worker
+    await asyncio.to_thread(recover_interrupted)
+    message_task = asyncio.create_task(message_worker())
     from mino_nexus.services.development import worker as development_worker
     development_task = asyncio.create_task(development_worker())
     from mino_nexus.core.execution_user import execution_user, user_thread
@@ -147,8 +173,11 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(2)
     policy_task = asyncio.create_task(execution_policy_worker())
     yield
+    message_task.cancel()
+    await asyncio.gather(message_task, return_exceptions=True)
+    collab_task.cancel()
     policy_task.cancel()
-    await asyncio.gather(policy_task, return_exceptions=True)
+    await asyncio.gather(collab_task, policy_task, return_exceptions=True)
     development_task.cancel()
     await asyncio.gather(development_task, return_exceptions=True)
     compile_task.cancel()
@@ -203,6 +232,8 @@ def create_app() -> FastAPI:
 
     from mino_nexus.core.maintenance_gate import MaintenanceMiddleware
     app.add_middleware(MaintenanceMiddleware)
+    from mino_nexus.core.request_timing import RequestTimingMiddleware
+    app.add_middleware(RequestTimingMiddleware)
     from mino_nexus.routers import rCaseSources
     app.include_router(rCaseSources.router)
     from mino_nexus.routers import rExecutionResources
@@ -232,6 +263,7 @@ def create_app() -> FastAPI:
     app.include_router(rFlowBlocks.router)
     app.include_router(rAppIntel.router)
     app.include_router(rTask.router)
+    app.include_router(rMinoBots.router)
     app.include_router(rAssistant.router)
     app.include_router(rMcp.router)
     from mino_nexus.services.assistant_tools import bind_app

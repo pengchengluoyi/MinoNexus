@@ -104,7 +104,8 @@ def _mask_secret(secret: str) -> str:
 
 
 def get_mail_settings() -> dict[str, Any]:
-    mail = _root().get("mail") if isinstance(_root().get("mail"), dict) else {}
+    root = _root()
+    mail = root.get("mail") if isinstance(root.get("mail"), dict) else {}
     password = str(mail.get("password") or "").strip()
     host = str(mail.get("host") or "").strip()
     username = str(mail.get("username") or "").strip()
@@ -534,6 +535,44 @@ def save_figma_settings(
     root["figma"] = row
     _save(root)
     return get_figma_settings()
+
+
+def get_openhands_settings() -> dict[str, Any]:
+    import os
+
+    root = _root()
+    integrations = root.get("integrations") if isinstance(root.get("integrations"), dict) else {}
+    oh = integrations.get("openhands") if isinstance(integrations.get("openhands"), dict) else {}
+    saved = str(oh.get("api_url") or "").strip().rstrip("/")
+    env_url = str(os.environ.get("OPENHANDS_API_URL") or "").strip().rstrip("/")
+    if env_url:
+        return {
+            "api_url": env_url,
+            "api_url_saved": saved,
+            "config_source": "env",
+            "editable": False,
+        }
+    return {
+        "api_url": saved,
+        "api_url_saved": saved,
+        "config_source": "settings" if saved else "none",
+        "editable": True,
+    }
+
+
+def save_openhands_settings(api_url: str) -> dict[str, Any]:
+    import os
+
+    if str(os.environ.get("OPENHANDS_API_URL") or "").strip():
+        raise ValueError("openhands_env_locked")
+    root = _root()
+    integrations = root.get("integrations") if isinstance(root.get("integrations"), dict) else {}
+    oh = integrations.get("openhands") if isinstance(integrations.get("openhands"), dict) else {}
+    oh["api_url"] = str(api_url or "").strip().rstrip("/")
+    integrations["openhands"] = oh
+    root["integrations"] = integrations
+    _save(root)
+    return get_openhands_settings()
 
 
 def list_testing_knowledge(*, app_id: str = "", account_id: str = "", account_ident: str = "") -> list[dict[str, Any]]:

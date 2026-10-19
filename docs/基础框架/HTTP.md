@@ -386,6 +386,47 @@ Scout `REGISTER.account_isolation_version=1` 才可接入；旧客户端在安�
 
 Workbench 入口：项目配置 → 「项目维护者」。
 
+## Mino Bots 协作（2026-10-19）
+
+前缀 `/project/{project_id}/collab`。写接口需项目维护者（与上节一致）。执行类工作项在创建时固化 `holder_user_id`，仅持有人可触发。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/templates` | Bot 模板（登录可读） |
+| GET | `/marketplace` | 市场条目（本地 YAML + 内置；可选 env `MINO_COLLAB_MARKETPLACE_URL` 合并远程） |
+| GET/POST | `/bots`、`/bots/ensure-defaults`、`/bots/install` | 项目 Bot |
+| GET/PUT | `/policy` | 项目自动化策略（自动写草稿/编译/执行等；可选 `app_id`） |
+| GET/POST | `/topics`、`PATCH /topics/{id}` | 议题 |
+| POST | `/topics/{id}/pause` / `/resume` / `/close` | 暂停 / 继续 / 结束议题 |
+| GET | `/topics/{id}/digest` | 议题摘要 JSON |
+| POST | `/topics/from-case` | body `{app_id, case_id}`，锚定用例议题；worker 自动挂 `case_run` |
+| GET/POST | `/topics/{id}/messages` | 讨论（含 IM 镜像 `author_kind=im`） |
+| GET | `/topics/{id}/work-items` | 工作项 |
+| POST | `/topics/{id}/decompose` | 拆解；`bump_version`、`include_case_run` |
+| POST | `/topics/{id}/advance` | **推荐** 一键推进：可选 message/goal、同步记忆、跑流水线（默认 `engine=langgraph`，与 qa_cover 同链；`agentscope` 为 Team 实验路径且失败自动回退 LangGraph），返回 `hint` 与 `next_steps` |
+| GET | `/topics/{id}/agent-canvas` | 多 Agent 画布（nodes/edges/position、mermaid、transcript），议题 `agent_canvas` 同步返回；Workbench 默认用 @xyflow/react 渲染 |
+| GET | `/openhands/status` | OpenHands 是否配置、是否可达 |
+| PUT | `/openhands/config` | body `{api_url}` 写入 `settings.integrations.openhands`（环境变量已设时 409） |
+| POST | `/topics/{id}/pipeline/run` | 交付流水线 → 工作项；body `engine`: `agentscope`（默认，TeamPipeline+qa_cover）或 `langgraph` |
+| POST | `/topics/{id}/knowledge/refresh` | `propose_atlas` + 可选 AppIntel `atlas_patch` 提案，写入 `knowledge_graph` |
+| POST | `/topics/{id}/memory/refresh` | LLM 摘要写入 `memory` |
+| POST | `/topics/{id}/im/bind` | body `{channel, chat_id, node_id?, label?}` |
+| POST | `/work-items/{id}/transfer` | 交接执行账号 |
+| GET | `/work-items/{id}/approvals` | 工作项审批单 |
+| POST | `/work-items/{id}/approvals/{approval_id}/decide` | body `{decision: approve\|reject, comment?}`；持有人不可自批 |
+| POST | `/work-items/{id}/trigger` | 立即排队；body 仅 `force_retry` |
+| POST | `/work-items/{id}/redo` | body `{feedback?}`，重做并带人工反馈 |
+| POST | `/work-items/{id}/answer` | body `{fact}`，解除 blocked 项缺事实 |
+
+后台 `collab_worker` 消化 `pending` 工作项；`case_run` / `compile` 提交后进入 `waiting`，由 `run_store` 终态写 `evidence`。不再使用 `confirm` / `execute_cases` 门禁。
+
+讨论 `POST .../messages` 的 `orchestration` 字段：`{action, reply, affected_items}`（快路径 + `collab_intent` 模型 job）。`GET .../digest` 与 WebSocket `testing_task` 事件 `collab_notify` 在失败/阻塞/全部完成时推送摘要。
+
+`action_kind`：`llm_job`、`apply_drafts`、`compile`、`publish`、`case_run`、`diagnose`、`defect`（及遗留 `v5_publish` / `qa_tick`）。完成只认证据字段 `evidence` / `run_id`。
+
+**P3 策略持有者**：`PUT /policy` 的 `auto_publish=true` 时，流水线在 `compile` 后插入 `publish`，`case_run` 依赖发布结果；`publish` 成功证据含 `v5_plan_state`。`POST/PATCH /bots` 可设 `platforms`（如 `["android"]`）与 `policy_override`；worker 按 `topic.app_id` 匹配 Bot，**不在 platforms 内的用例不会被编译/执行/发布**。`PATCH /bots/{bot_id}` 可更新作用域。
+
+协作 OpenHands：`PUT .../openhands/config` 或环境变量 `OPENHANDS_API_URL`（优先于库内配置）；`MINO_COLLAB_MARKETPLACE_URL`（远程 Bot 市场 JSON）；`MINO_COLLAB_AGENTS_SCOPE_LANGGRAPH_ONLY=1`（强制 LangGraph，不走 TeamPipeline）；`MINO_COLLAB_AGENTS_SCOPE_TEAM=1`（仅在 LangGraph 回退时额外跑一轮协调者摘要，一般不必开）。
 
 ### V5 应用平台新写入边界
 
@@ -489,3 +530,8 @@ Workbench 的“预检所选用例”按当前完整选择逐条调用；选择�
 显式恢复在启动前持久写入 state=restarting、phase=operator_recovery。恢复进程中断后，本地 helper 只探测原 previous_build 并完成同一 operation；无法核实则保留 needs_operator，不重放迁移或自动倒库。
 
 Scout 已派发更新与待人工处理状态纳入 Nexus 忙闲检查；维护等待期间不新派发排队 Scout 更新，原操作查询/对账继续。MCP 线程按实际执行生命周期持有写者锁，连接/协程取消不等于写者已退出。
+
+
+## 协作消息快速接收（2026-10-19）
+
+POST /project/{project_id}/collab/topics/{topic_id}/messages 保持 200 信封，消息和回复任务在同一事务提交后即返回消息及 reply_status=queued；不等待模型回复或命令编排完成。GET messages 返回 reply_status/reply_error（历史消息为空）。后台按序处理并重新核对账号及维护权限；完成后经当前账号 WebSocket collab_message_updated 通知，前端有待回复项时每秒兜底查询。queued 重启后继续；已开始但因重启中断的处理标 interrupted，不自动重放可能产生副作用的命令。正在处理回复时拒绝删除议题，防止删除与回复写入竞态。

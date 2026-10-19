@@ -8,6 +8,7 @@ from mino_nexus.core.execution_user import current_user_id
 import json
 import re
 import threading
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Optional
@@ -517,13 +518,26 @@ def _public_case(case: dict[str, Any]) -> dict[str, Any]:
 
 
 def put(doc: dict[str, Any]) -> dict[str, Any]:
+    started = time.perf_counter()
     doc = _slim_doc(_recompute(doc))
     rid = str(doc.get("run_id") or "")
+    prepared = time.perf_counter()
     with _LOCK:
+        acquired = time.perf_counter()
         _upsert_run(doc)
+        persisted = time.perf_counter()
         _LIVE[str(doc.get("run_id") or rid)] = doc
         _trim_runs()
-    return copy.deepcopy(doc)
+        trimmed = time.perf_counter()
+    result = copy.deepcopy(doc)
+    finished = time.perf_counter()
+    if finished - started >= 0.1:
+        from mino_nexus.core.log import SLog
+        SLog.i("RunStore", f"PERF run={rid} prepare_ms={(prepared-started)*1000:.2f} "
+            f"lock_ms={(acquired-prepared)*1000:.2f} persist_ms={(persisted-acquired)*1000:.2f} "
+            f"trim_ms={(trimmed-persisted)*1000:.2f} copy_ms={(finished-trimmed)*1000:.2f}")
+    return result
+
 
 
 def get(run_id: str) -> Optional[dict[str, Any]]:
@@ -966,4 +980,10 @@ def finish(run_id: str, *, status: str = "done", error: str = "") -> dict[str, A
     from mino_nexus.services.run_resource_release import release_run_resource_holdings
 
     release_run_resource_holdings(out)
+    try:
+        from mino_nexus.services.collab_events import on_run_finished
+
+        on_run_finished(out)
+    except Exception:
+        pass
     return out

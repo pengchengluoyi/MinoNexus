@@ -490,6 +490,10 @@ def schedule_prep_reauthentication(cursor: Any, ctx: Any, pending: dict[str, Any
             or pending.get("hook_cap") != "confirm_login_state" or pending.get("required_session") != "logged_in"
             or not submitted_account_enabled(ctx) or submission_current(ctx)):
         return False
+    from mino_nexus.loop.step_flow_scope import prep_login_preservation_reason
+
+    if prep_login_preservation_reason(ctx):
+        return False
     policy = policy_for_context(ctx)
     hint = policy["logout_navigation_hint"]
     current_scope = scope(ctx)

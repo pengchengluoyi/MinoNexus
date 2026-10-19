@@ -321,7 +321,7 @@ class RouterProxy:
         _run_sync(self.notify_scout_cancel_run_async(run_id))
 
     async def notify_scout_cancel_run_async(self, run_id: str = "") -> None:
-        node, why = get_registry().resolve(self.sn)
+        node, why = await asyncio.to_thread(get_registry().resolve, self.sn)
         if node is None:
             SLog.w(TAG, f"cancel_run 跳过 sn={self.sn}: {why}")
             return
@@ -366,7 +366,7 @@ class RouterProxy:
         if self.execution_mode == "v5":
             return await self._dispatch_v5(event, run_id or self.run_id, started, t0, kwargs)
 
-        if self._task_aborted():
+        if await asyncio.to_thread(self._task_aborted):
             return _fail(
                 event,
                 started,
@@ -415,7 +415,7 @@ class RouterProxy:
         if is_local_cap(event.capability_id):
             if self._binding_required:
                 try:
-                    local_projection = self._binding_projection(event, {**kwargs, 'binding_run_id': run_id or self.run_id})
+                    local_projection = await asyncio.to_thread(self._binding_projection, event, {**kwargs, 'binding_run_id': run_id or self.run_id})
                     if local_projection['runs_on'] != 'nexus':
                         raise ValueError('binding_local_assembly_invalid')
                 except Exception as exc:
@@ -439,7 +439,7 @@ class RouterProxy:
                     "runs_on": "nexus"}}
             return local_result
 
-        node, why = get_registry().resolve(self.sn)
+        node, why = await asyncio.to_thread(get_registry().resolve, self.sn)
         if node is None:
             return _fail(event, started, t0, why, executor_used="router_proxy")
 
@@ -453,7 +453,7 @@ class RouterProxy:
         projection = None
         try:
             if self._binding_required:
-                projection = self._binding_projection(event, {**kwargs, 'binding_run_id': run_id or self.run_id})
+                projection = await asyncio.to_thread(self._binding_projection, event, {**kwargs, 'binding_run_id': run_id or self.run_id})
                 order, impl = projection['executor_order'], projection['selected_impl']
             else:
                 order, impl = self._plan_route(event, node)
@@ -576,7 +576,7 @@ class RouterProxy:
             result.status = EventStatus.BLOCKED
             return result
         res = await self._send_with_retry(node, P.MsgType.EXECUTE, req, req.timeout_sec)
-        _trace_device_result(req, res, total_ms=int((time.time() - t0) * 1000), purpose=purpose, logical_seq=event.seq)
+        await asyncio.to_thread(_trace_device_result, req, res, total_ms=int((time.time() - t0) * 1000), purpose=purpose, logical_seq=event.seq)
         if res is None:
             result = _fail(event, started, t0,
                 f"scout 未返回 RESULT（node={node.node_id}）；动作结果未核验，停止未确认",
@@ -606,9 +606,9 @@ class RouterProxy:
         reason = ""
         if cap not in reads | cleanup | writes:
             reason = "unsupported_v5_capability"
-        elif cap in writes and (control.state != "running" or self._task_aborted()):
+        elif cap in writes and (control.state != "running" or await asyncio.to_thread(self._task_aborted)):
             reason = control.reason_code or "task_cancelled"
-        node, why = get_registry().resolve(self.sn)
+        node, why = await asyncio.to_thread(get_registry().resolve, self.sn)
         if not node or self.sn != f"web{node.node_id}":
             reason = reason or "node_pin_mismatch"
         requested = float(options.get("timeout_sec", 6))
@@ -625,7 +625,7 @@ class RouterProxy:
                 raw_response={"execution": {"execution_started": "no", "phase": "admission", "reason_code": reason},
                               "execution_control": stopped})
         try:
-            projection = self._binding_projection(event, {**options, 'binding_run_id': run_id})
+            projection = await asyncio.to_thread(self._binding_projection, event, {**options, 'binding_run_id': run_id})
         except Exception as exc:
             reason = str(exc) if isinstance(exc, ValueError) else 'binding_store_unavailable'
             return _fail(event, started, t0, reason, executor_used='router_proxy',
@@ -659,7 +659,7 @@ class RouterProxy:
                 raw["execution_control"] = control.stop(reason, _action_ref(req))
             return _fail(event, started, t0, reason, executor_used="router_proxy", raw_response=raw)
         result = _event_result_from(event, res, started, node=node, request=req)
-        if cap in writes and (control.state != "running" or self._task_aborted()):
+        if cap in writes and (control.state != "running" or await asyncio.to_thread(self._task_aborted)):
             result.raw_response["execution_control"] = control.stop(control.reason_code or "task_cancelled", _action_ref(req))
             result.status = EventStatus.FAIL
         execution = result.raw_response.get("execution") or {"execution_started": "unknown", "reason_code": "execution_metadata_missing"}
@@ -683,17 +683,17 @@ class RouterProxy:
                 raise ValueError(next(fact['reason_code'] for fact in facts if fact['status'] != 'ready'))
             opts = {**options, 'binding_run_id': run_id}
             parent = PlanEvent(seq=0, capability_id='get_otp', event_kind='get_otp', params={})
-            self._binding_projection(parent, opts)
-            projection = self._binding_projection(event, opts)
+            await asyncio.to_thread(self._binding_projection, parent, opts)
+            projection = await asyncio.to_thread(self._binding_projection, event, opts)
             if projection['runs_on'] != 'scout' or projection['executor_order'] != [GMAIL_EXECUTOR]:
                 raise ValueError('binding_plugin_assembly_invalid')
-            node, _ = get_registry().resolve(self.sn)
+            node, _ = await asyncio.to_thread(get_registry().resolve, self.sn)
             from mino_nexus.core.execution_user import require_user_id
             if node is None or node.owner_user_id != require_user_id():
                 raise ValueError('plugin_node_unavailable')
             left = float(event.params['deadline_ts']) - time.time()
             timeout = min(left, float(event.params['max_wait_ms']) / 1000.0)
-            if timeout <= 0 or self._task_aborted():
+            if timeout <= 0 or await asyncio.to_thread(self._task_aborted):
                 raise ValueError('otp_wait_stopped')
         except (ValueError, PermissionError, KeyError, TypeError) as exc:
             reason = str(exc) if isinstance(exc, ValueError) else 'otp_binding_invalid'
@@ -708,14 +708,14 @@ class RouterProxy:
             res = await self._send_once(node, P.MsgType.EXECUTE, req, timeout, pad_sec=0)
         except Exception:
             res = None
-        _trace_device_result(req, res, total_ms=int((time.time() - t0) * 1000),
+        await asyncio.to_thread(_trace_device_result, req, res, total_ms=int((time.time() - t0) * 1000),
                              purpose='plan_action', logical_seq=event.seq)
-        if self._task_aborted() or time.time() >= float(event.params['deadline_ts']):
+        if await asyncio.to_thread(self._task_aborted) or time.time() >= float(event.params['deadline_ts']):
             return _fail(event, started, t0, 'otp_wait_stopped', executor_used='router_proxy')
         # Revalidate parent/child and generations before accepting a late result.
         try:
-            self._binding_projection(parent, opts)
-            self._binding_projection(event, opts)
+            await asyncio.to_thread(self._binding_projection, parent, opts)
+            await asyncio.to_thread(self._binding_projection, event, opts)
         except Exception:
             return _fail(event, started, t0, 'otp_binding_changed', executor_used='router_proxy')
         if res is None:
@@ -742,7 +742,7 @@ class RouterProxy:
         projection: dict | None = None,
     ) -> EventResult:
         """具名插件能力。参数里没有密钥，密钥在执行节点自己的保险库。"""
-        node, why = get_registry().resolve(self.sn)
+        node, why = await asyncio.to_thread(get_registry().resolve, self.sn)
         if node is None:
             return _fail(event, started, t0, why, executor_used="router_proxy")
         from mino_nexus.core.execution_user import require_user_id
@@ -778,7 +778,7 @@ class RouterProxy:
             **_binding_wire_fields(projection),
         )
         res = await self._send_with_retry(node, P.MsgType.EXECUTE, req, req.timeout_sec)
-        _trace_device_result(req, res, total_ms=int((time.time() - t0) * 1000),
+        await asyncio.to_thread(_trace_device_result, req, res, total_ms=int((time.time() - t0) * 1000),
                              purpose='plan_action', logical_seq=event.seq)
         if res is None:
             return _fail(
@@ -805,9 +805,9 @@ class RouterProxy:
             session_writer.require_persisted()
         t0 = time.monotonic()
         purpose = _diagnostic_purpose(diagnostic_purpose, "loop_observation")
-        if self._task_aborted():
+        if await asyncio.to_thread(self._task_aborted):
             return CapturedScreen(ok=False, source="router_proxy", error="任务已取消")
-        node, why = get_registry().resolve(self.sn)
+        node, why = await asyncio.to_thread(get_registry().resolve, self.sn)
         if node is None:
             return CapturedScreen(ok=False, source="router_proxy", error=why)
 
@@ -843,7 +843,7 @@ class RouterProxy:
         projection = None
         if self._binding_required:
             try:
-                projection = self._binding_projection(PlanEvent(seq=0, capability_id=cap), {})
+                projection = await asyncio.to_thread(self._binding_projection, PlanEvent(seq=0, capability_id=cap), {})
             except Exception as exc:
                 return CapturedScreen(ok=False, source='router_proxy',
                     error=str(exc) if isinstance(exc, ValueError) else 'binding_store_unavailable')
@@ -869,7 +869,7 @@ class RouterProxy:
         res = await self._send_once(
             node, P.MsgType.EXECUTE, req, timeout_sec, pad_sec=_OBSERVE_PAD_SEC,
         )
-        _trace_device_result(req, res, total_ms=int((time.monotonic() - t0) * 1000), purpose=purpose)
+        await asyncio.to_thread(_trace_device_result, req, res, total_ms=int((time.monotonic() - t0) * 1000), purpose=purpose)
         if res is None:
             return CapturedScreen(
                 ok=False, source="router_proxy",
@@ -1012,7 +1012,7 @@ class RouterProxy:
     ) -> Optional[P.Result]:
         from mino_nexus.services import run_store
         task_id = self.task_id or str(getattr(payload, "run_id", "") or self.run_id).split("::", 1)[0]
-        task = run_store.get(task_id) if task_id else None
+        task = await asyncio.to_thread(run_store.get, task_id) if task_id else None
         if task:
             target = (task.get("device_targets") or {}).get(self.sn) or {}
             allowed = task.get("allowed_node_ids")

@@ -167,7 +167,7 @@ async def revoke_node_token(node_id: str, sess: dict = Depends(current_session))
 
 
 @router.patch("/nodes/{node_id}")
-async def patch_node(
+def patch_node(
     node_id: str,
     body: NodePatchBody,
     sess: dict = Depends(current_session),

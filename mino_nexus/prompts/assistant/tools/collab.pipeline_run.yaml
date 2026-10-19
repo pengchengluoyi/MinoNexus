@@ -1,0 +1,41 @@
+id: collab.pipeline_run
+version: 1
+title: 跑协作交付流水线
+description: 对协作议题跑交付流水线（LangGraph 或 AgentScope，分析、评审、用例候选）。用户说提测、出用例、走交付流程时用。
+route: POST /project/{project_id}/collab/topics/{topic_id}/pipeline/run
+risk: write
+async: true
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+    topic_id:
+      type: string
+      description: 协作议题 id
+    goal:
+      type: string
+      description: 可选，覆盖议题目标
+    bump_version:
+      type: boolean
+      default: true
+    engine:
+      type: string
+      enum:
+      - langgraph
+      - agentscope
+      default: langgraph
+  required:
+  - project_id
+  - topic_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data.input_version
+- data.items
+- data.pipeline
+card: answer
+surfaces:
+- im
+- mcp
+enabled: true

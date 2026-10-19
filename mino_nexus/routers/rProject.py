@@ -698,7 +698,7 @@ def preview_project_accounts_import(
 
 
 @router.post("/{project_id}/accounts/import/preview-file")
-async def preview_project_accounts_import_file(
+def preview_project_accounts_import_file(
     project_id: str,
     file: UploadFile = File(...),
     default_env: str = Form("test"),
@@ -713,7 +713,7 @@ async def preview_project_accounts_import_file(
     except KeyError as exc:
         _missing(exc)
     mode = _parse_import_mode(on_duplicate)
-    data = await file.read()
+    data = file.file.read()
     if len(data) > _IMPORT_MAX_BYTES:
         raise HTTPException(status_code=400, detail="文件过大（上限 5MB）")
     fname = str(file.filename or "import.csv")
@@ -763,7 +763,7 @@ def commit_project_accounts_import(
 
 
 @router.post("/{project_id}/accounts/import/commit-file", dependencies=[Depends(project_maintainer)])
-async def commit_project_accounts_import_file(
+def commit_project_accounts_import_file(
     project_id: str,
     file: UploadFile = File(...),
     default_env: str = Form("test"),
@@ -778,7 +778,7 @@ async def commit_project_accounts_import_file(
     except KeyError as exc:
         _missing(exc)
     mode = _parse_import_mode(on_duplicate)
-    data = await file.read()
+    data = file.file.read()
     if len(data) > _IMPORT_MAX_BYTES:
         raise HTTPException(status_code=400, detail="文件过大（上限 5MB）")
     fname = str(file.filename or "import.csv")

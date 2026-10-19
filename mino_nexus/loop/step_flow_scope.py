@@ -17,6 +17,36 @@ _LOGIN_POPUP_RE = re.compile(
 _FULLSCREEN_LOGIN_EXPECT_RE = re.compile(r"全屏.{0,8}登录|进入.{0,12}登录页", re.I)
 
 
+def prep_login_preservation_reason(ctx: object) -> str:
+    """A frozen do-phase login cannot authorize preparing its target account early."""
+    from mino_nexus.loop.step_contract import case_plan_has_login
+    from mino_nexus.runtime.session_gate import session_prep_intent
+
+    case = getattr(ctx, "case", None)
+    scene = getattr(ctx, "case_scene", None)
+    if (not isinstance(case, dict) or not case_plan_has_login(case)
+            or session_prep_intent(scene if isinstance(scene, dict) else None) == "relogin"):
+        return ""
+    return (
+        "【初始会话门槛】原操作计划包含登录，且前置未声明重新登录；"
+        "目标租约账号必须留到原登录步骤使用，不能在前置提前登录、配置或消费其业务初态。"
+        "请准备满足前置的独立初始登录会话；若必须前置重登，须明确其账号角色与重登合同。"
+    )
+
+
+def prep_initial_session_block_reason(ctx: object, session: str) -> str:
+    """Block only a known missing prep session; do-phase login and read-only probes keep their scope."""
+    from mino_nexus.runtime.session_gate import required_session
+
+    cursor = getattr(ctx, "_step_cursor", None)
+    scene = getattr(ctx, "case_scene", None)
+    if (str(getattr(cursor, "phase", "") or "") != "prep"
+            or required_session(scene=scene if isinstance(scene, dict) else None) != "logged_in"
+            or session not in {"logged_out", "guest"}):
+        return ""
+    return prep_login_preservation_reason(ctx)
+
+
 def step_text_requires_login_popup(text: str) -> bool:
     """半屏/弹出类登录预期；全屏登录页不算「延后弹窗」。"""
     raw = str(text or "").strip()

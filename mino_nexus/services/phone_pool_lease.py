@@ -1,10 +1,8 @@
 """手机号自动开号：按应用×环境的起始位递增（默认 17000000000），租号失败或未注册时写入号池。"""
 from __future__ import annotations
 
-import threading
 from typing import Any
 
-from mino_nexus.core.log import SLog
 from mino_nexus.services.gmail_alias_lease import (
     _norm_alias_slot,
     ensure_ctx_env_surface,
@@ -13,18 +11,7 @@ from mino_nexus.services.gmail_alias_lease import (
     requirements_want_unregistered,
 )
 
-TAG = "PhonePoolLease"
 _DEFAULT_PHONE_START = "17000000000"
-_LOCKS: dict[str, threading.Lock] = {}
-
-
-def _project_lock(project_id: str) -> threading.Lock:
-    pid = str(project_id or "").strip()
-    if pid not in _LOCKS:
-        _LOCKS[pid] = threading.Lock()
-    return _LOCKS[pid]
-
-
 def normalize_channel_phone_seq(
     raw: Any,
     channels: list[dict],
@@ -198,9 +185,11 @@ def provision_phone_seq_account(
     from mino_nexus.services import project_store as ps
     from mino_nexus.services.pool_account_store import _account_to_dict, _facets_for_account
 
+    env_profile = str(getattr(ctx, "env_profile", "") or "test").strip() or "test"
+    if requirements.get("env") and requirements["env"] != env_profile:
+        return None
     if not phone_pool_lease_enabled(env_doc, ctx) or not _fresh_requirements_match(requirements, env_doc):
         return None
-    env_profile = str(getattr(ctx, "env_profile", "") or "test").strip() or "test"
     surface = ensure_ctx_env_surface(ctx, env_doc)
     pid = str(project_id or "").strip()
     # 在开启写事务前使用现有项目授权，不能仅凭调用参数选择另一个项目。

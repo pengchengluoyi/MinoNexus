@@ -1,0 +1,28 @@
+# 协作 Bot 市场（内置模板，可安装到项目）
+version: 1
+items:
+  - id: collab-default
+    template_id: collab-default
+    label: 协作助手
+    description: 需求澄清与任务拆解
+    oss: mino-nexus
+  - id: test-focus
+    template_id: test-focus
+    label: 测试助手
+    description: 用例分析与执行准备
+    oss: mino-nexus
+  - id: delivery-pipeline
+    template_id: delivery-pipeline
+    label: 交付流水线
+    description: LangGraph 编排：分析→评审→脑图→用例→评审→执行项
+    oss: langgraph
+  - id: dev-openhands
+    template_id: dev-openhands
+    label: 开发助手（OpenHands）
+    description: 对接 OpenHands 开源代码代理（在 Bot 与市场配置服务地址）
+    oss: openhands
+  - id: review-panel
+    template_id: review-panel
+    label: 多角色评审
+    description: 需求与用例评审 Bot（req-qa-bm / knowledge-reviewer）
+    oss: mino-nexus

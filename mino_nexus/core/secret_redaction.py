@@ -6,13 +6,17 @@ from typing import Any
 
 _lock = threading.RLock()
 _values: set[str] = set()
+_ordered_values: tuple[str, ...] | None = None
 _keys = {"password", "passwd", "secret", "secret_value", "api_key", "access_token", "authorization"}
 
 
 def remember(value: Any) -> None:
+    global _ordered_values
     if isinstance(value, str) and value:
         with _lock:
-            _values.add(value)
+            if value not in _values:
+                _values.add(value)
+                _ordered_values = None
 
 
 def register_inputs(params: dict) -> None:
@@ -29,9 +33,14 @@ def register_inputs(params: dict) -> None:
 
 
 def sanitize(value: Any) -> Any:
+    global _ordered_values
     if isinstance(value, str):
         with _lock:
-            secrets = sorted(_values, key=len, reverse=True)
+            # Reuse the immutable ordering until a new secret is registered.
+            # Every string still acquires the lock and sees the latest snapshot.
+            if _ordered_values is None:
+                _ordered_values = tuple(sorted(_values, key=len, reverse=True))
+            secrets = _ordered_values
         for secret in secrets:
             value = value.replace(secret, "[REDACTED]")
         return value

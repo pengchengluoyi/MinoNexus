@@ -139,6 +139,71 @@ def run_auto_migration() -> None:
                 )
             )
             conn.commit()
+        _ensure_column("collab_topics", "anchor", "anchor JSON NOT NULL DEFAULT '{}'")
+        _ensure_column("collab_topics", "memory", "memory JSON NOT NULL DEFAULT '{}'")
+        _ensure_column("collab_topics", "pipeline_state", "pipeline_state JSON NOT NULL DEFAULT '{}'")
+        _ensure_column("collab_topics", "im_route", "im_route JSON NOT NULL DEFAULT '{}'")
+        _ensure_column("collab_topics", "knowledge_graph", "knowledge_graph JSON NOT NULL DEFAULT '{}'")
+        _ensure_column("collab_topics", "digest", "digest JSON NOT NULL DEFAULT '{}'")
+        _ensure_column("collab_topics", "paused", "paused INTEGER NOT NULL DEFAULT 0")
+        _ensure_column("collab_topics", "requirement_id", "requirement_id TEXT NOT NULL DEFAULT ''")
+        _ensure_column("collab_topics", "modules", "modules JSON NOT NULL DEFAULT '[]'")
+        _ensure_column("collab_topics", "scope_case_ids", "scope_case_ids JSON NOT NULL DEFAULT '[]'")
+        _ensure_column("collab_topics", "env_profile", "env_profile TEXT NOT NULL DEFAULT ''")
+        _ensure_column("collab_topics", "env_surface", "env_surface TEXT NOT NULL DEFAULT ''")
+        _ensure_column("collab_topics", "platform", "platform TEXT NOT NULL DEFAULT ''")
+        _ensure_column("collab_topics", "expected_build", "expected_build TEXT NOT NULL DEFAULT ''")
+        _ensure_column("collab_topics", "scope_snapshot", "scope_snapshot JSON NOT NULL DEFAULT '{}'")
+        for name, ddl in (
+            ('workspace_kind', "workspace_kind TEXT NOT NULL DEFAULT ''"),
+            ('scope_revision', 'scope_revision INTEGER NOT NULL DEFAULT 1'),
+            ('scope_key', 'scope_key TEXT'),
+            ('archived', 'archived INTEGER NOT NULL DEFAULT 0'),
+            ('workspace_policy', "workspace_policy JSON NOT NULL DEFAULT '{}'"),
+        ):
+            _ensure_column('collab_topics', name, ddl)
+        for name in ('message_kind', 'card_kind', 'ref_id', 'origin', 'role', 'thread_id', 'agent_run_id', 'plan_id'):
+            default = 'text' if name == 'message_kind' else ''
+            _ensure_column('collab_messages', name, f"{name} TEXT NOT NULL DEFAULT '{default}'")
+        from mino_nexus.services.collab_workspace import migrate_legacy
+        migrate_legacy()
+        with engine.begin() as conn:
+            conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_collab_scope_key ON collab_topics(scope_key)'))
+            conn.execute(text("UPDATE collab_messages SET card_kind='resources_history' WHERE card_kind='resources' AND rowid NOT IN (SELECT MAX(rowid) FROM collab_messages WHERE card_kind='resources' GROUP BY topic_id)"))
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_collab_active_resource_card ON collab_messages(topic_id,card_kind) WHERE card_kind='resources'"))
+            conn.execute(text("UPDATE collab_message_jobs SET status='interrupted', error='工作区模型已升级，请查看原任务后重新发起' WHERE status IN ('queued', 'running') AND topic_id IN (SELECT topic_id FROM collab_topics WHERE workspace_kind LIKE 'legacy%')"))
+        _ensure_column("project_bots", "platforms", "platforms JSON NOT NULL DEFAULT '[]'")
+        _ensure_column("project_bots", "policy_override", "policy_override JSON NOT NULL DEFAULT '{}'")
+        for col, ddl in (
+            ("depends_on", "depends_on JSON NOT NULL DEFAULT '[]'"),
+            ("run_id", "run_id TEXT NOT NULL DEFAULT ''"),
+            ("case_ids", "case_ids JSON NOT NULL DEFAULT '[]'"),
+            ("evidence", "evidence JSON NOT NULL DEFAULT '{}'"),
+            ("attempt", "attempt INTEGER NOT NULL DEFAULT 0"),
+            ("next_check_at", "next_check_at TEXT NOT NULL DEFAULT ''"),
+            ("origin", "origin TEXT NOT NULL DEFAULT ''"),
+            ("claimed_by", "claimed_by TEXT NOT NULL DEFAULT ''"),
+            ("claimed_at", "claimed_at TEXT NOT NULL DEFAULT ''"),
+            ("activity", "activity TEXT NOT NULL DEFAULT ''"),
+            ("stage", "stage TEXT NOT NULL DEFAULT ''"),
+            ("heartbeat_at", "heartbeat_at TEXT NOT NULL DEFAULT ''"),
+            ("started_at", "started_at TEXT NOT NULL DEFAULT ''"),
+        ):
+            _ensure_column("collab_work_items", col, ddl)
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "UPDATE collab_work_items SET status='blocked' "
+                    "WHERE status='needs_correction'"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE collab_work_items SET status='pending', claimed_by='', claimed_at='' "
+                    "WHERE status='running' AND (claimed_by IS NULL OR claimed_by='')"
+                )
+            )
+            conn.commit()
         from mino_nexus.services.doc_store import ensure_fts
 
         ensure_fts()

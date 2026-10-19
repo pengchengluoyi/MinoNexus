@@ -244,7 +244,13 @@ def dispatch_local(
         req = required_session_enum(scene=scene)
         session, reason = observe_login_state(ctx, router, shot)
         summary = reason or f"session={session}"
-        if req == "guest" and session == "logged_in":
+        from mino_nexus.loop.step_flow_scope import prep_initial_session_block_reason
+
+        preservation_reason = prep_initial_session_block_reason(ctx, session)
+        preserve_initial = bool(preservation_reason)
+        if preserve_initial:
+            summary = preservation_reason
+        elif req == "guest" and session == "logged_in":
             summary = "当前已登录，与访客前置不符；需显式退出流程，观察工具不执行退出。"
         elif req == "logged_in" and session != "logged_in":
             summary = f"当前 session={session}，登录流程仍需执行。{reason}"
@@ -257,10 +263,10 @@ def dispatch_local(
             executor = "internal"
         known = session in {"logged_in", "logged_out", "guest"}
         mismatch = req == "guest" and session == "logged_in"
-        error = "login_observation_unavailable" if not known else "session_requirement_mismatch" if mismatch else ""
+        error = "initial_session_required" if preserve_initial else "login_observation_unavailable" if not known else "session_requirement_mismatch" if mismatch else ""
         return _result(
             event,
-            status=EventStatus.BLOCKED if not known else EventStatus.FAIL if mismatch else EventStatus.PASS,
+            status=EventStatus.BLOCKED if preserve_initial or not known else EventStatus.FAIL if mismatch else EventStatus.PASS,
             summary=summary[:500],
             error=error,
             executor=executor,

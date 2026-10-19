@@ -28,6 +28,9 @@ dependencies = [
   "lark-oapi>=1.7",       # 飞书
   "zeroconf>=0.148",      # mDNS：给 Scout 发现用
   "pyyaml>=6.0",          # prompts/ 文件
+  "langgraph>=0.2.60,<0.4",  # Mino Bots 交付流水线编排（开源）
+  "langchain-core>=0.3,<0.4",
+  "agentscope>=2.0,<3",
 ]
 
 [project.scripts]
@@ -46,6 +49,7 @@ version = {file = "mino_nexus/VERSION"}
 [tool.setuptools.package-data]
 mino_nexus = [
   "VERSION",
+  "catalog/*",
   "prompts/*",
   "prompts/*/*",
   "prompts/*/*/*",

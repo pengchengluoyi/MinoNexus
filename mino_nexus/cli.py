@@ -307,7 +307,7 @@ def _migrate_cli(argv: list[str]) -> int:
     target = Path(args.data_dir).expanduser().resolve()
     if not args.data_dir.strip():
         ap.error("--data-dir must not be empty")
-    os.environ["MINO_NEXUS_DATA_DIR"] = str(target)
+    os.environ["MINO_NEXUS_DEV_DATA_DIR" if not getattr(sys, "frozen", False) else "MINO_NEXUS_DATA_DIR"] = str(target)
     os.environ["MINO_NEXUS_MDNS"] = "0"
     # No paths/database/app import before configuration above.
     from mino_nexus.core.database import ensure_db
@@ -356,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("source development uses port 50101")
 
     import os
-    raw_dir = args.data_dir or os.environ.get("MINO_NEXUS_DATA_DIR", "")
+    raw_dir = args.data_dir or os.environ.get("MINO_NEXUS_DEV_DATA_DIR" if args.dev else "MINO_NEXUS_DATA_DIR", "")
     if args.dev and not raw_dir.strip():
         raw_dir = str(Path.home() / ".mino-dev" / "nexus")
     if args.data_dir is not None and not args.data_dir.strip():
@@ -368,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         production_roots = [default, (Path.home() / "Mino" / "nexus").resolve()]
         if args.dev and any(target == root or root in target.parents or target in root.parents for root in production_roots):
             ap.error("development data root must not overlap the default production root")
-        os.environ["MINO_NEXUS_DATA_DIR"] = str(target)
+        os.environ["MINO_NEXUS_DEV_DATA_DIR" if not getattr(sys, "frozen", False) else "MINO_NEXUS_DATA_DIR"] = str(target)
     if args.dev or args.no_mdns:
         os.environ["MINO_NEXUS_MDNS"] = "0"
 

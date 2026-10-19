@@ -1,5 +1,5 @@
 id: case.run
-version: 5
+version: 6
 title: 跑用例
 description: 在指定设备上执行用例，返回任务 id。用户说跑一下、执行、回归时用。
 route: POST /case-runner/run
@@ -8,6 +8,10 @@ async: true
 params_schema:
   type: object
   properties:
+    client_request_id:
+      type: string
+      maxLength: 160
+      description: 本次执行意图的稳定标识；同一次请求重试保持不变，明确新一轮执行时使用新值。
     project_id:
       type: string
       description: 用户明确指定的项目 id 或名称，用于限定应用和渠道

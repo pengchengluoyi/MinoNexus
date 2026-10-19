@@ -611,7 +611,8 @@ def _lease_for_context(
     if not (requirements.get("all") or requirements.get("prefer")):
         return None, "缺少租号需求（用例前置 / requirements）"
 
-    prompt = str((params or {}).get("precondition") or ai_reasoning or "").strip()
+    prompt = str((params or {}).get("precondition")
+                 or (need_facets or {}).get("prompt") or ai_reasoning or "").strip()
     from mino_nexus.services.account_ident_parse import (
         account_row_matches_hints,
         extract_account_ident_hints,
@@ -669,7 +670,7 @@ def _lease_for_context(
             restored = None
         elif should_provision_phone_seq(
             requirements, prompt=prompt, env_doc=env_doc, ctx=ctx
-        ) and aid != phone_seq_account_id(ctx, project_id=project_id, run_id=run_id):
+        ) and not ident_hints and aid != phone_seq_account_id(ctx, project_id=project_id, run_id=run_id):
             _clear_leased(project_id, aid, run_id)
             release_ctx_lease(ctx)
             restored = None
@@ -721,7 +722,7 @@ def _lease_for_context(
                 apply_lease_to_ctx(ctx, alias_row, project_id=project_id)
                 SLog.i(TAG, f"leased gmail alias (fresh) {account_ident(alias_row)} run={run_id[:12]}")
                 return alias_row, ""
-    if should_provision_phone_seq(requirements, prompt=prompt, env_doc=env_doc, ctx=ctx):
+    if not ident_hints and should_provision_phone_seq(requirements, prompt=prompt, env_doc=env_doc, ctx=ctx):
         phone_row = provision_phone_seq_account(
             ctx,
             project_id=project_id,
@@ -799,7 +800,7 @@ def _lease_for_context(
             requirements=requirements,
             run_id=run_id,
         )
-        if not alias_row:
+        if not alias_row and not ident_hints:
             alias_row = try_provision_phone_after_miss(
                 ctx,
                 project_id=project_id,

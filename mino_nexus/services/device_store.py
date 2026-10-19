@@ -124,7 +124,14 @@ def list_devices() -> dict[str, dict[str, Any]]:
 
 def get_device(sn: str) -> dict[str, Any] | None:
     sid = str(sn or "").strip()
-    return list_devices().get(sid)
+    if not sid:
+        return None
+    from mino_nexus.core.database import SessionLocal, ensure_db
+    from mino_nexus.models.device import Device
+    ensure_db()
+    with SessionLocal() as db:
+        row = db.get(Device, sid)
+        return _row_from_model(row) if row is not None else None
 
 
 def remember(

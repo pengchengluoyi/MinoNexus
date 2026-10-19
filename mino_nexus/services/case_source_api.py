@@ -6,9 +6,9 @@ import re
 from urllib.parse import urlsplit
 
 
-def identifier(value):
+def identifier(value, *, field=""):
     if type(value) not in (int, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", str(value)):
-        raise ValueError("source_api_id_invalid")
+        raise ValueError(f"source_api_{field}_id_invalid" if field else "source_api_id_invalid")
     return str(value)
 
 
@@ -80,16 +80,18 @@ def normalize(records, config):
         raise ValueError("source_api_payload_invalid")
     rows, seen = [], set()
     for record in records:
-        if not isinstance(record, dict) or not {"id", "session_id", "name", "steps", "expected_result"} <= record.keys():
+        if not isinstance(record, dict) or not {"id", "name", "steps", "expected_result"} <= record.keys():
             raise ValueError("source_api_payload_invalid")
-        number = identifier(record["id"])
+        number = identifier(record["id"], field="case")
         if number in seen:
             raise ValueError("source_api_duplicate_id")
         seen.add(number)
-        session_id = identifier(record["session_id"])
+        raw_session_id = record.get("session_id")
+        session_id = (identifier(raw_session_id, field="record_session") if raw_session_id is not None
+            else config["session_id"] if config["scope"] == "session" else "")
         if config["scope"] == "session" and session_id != config["session_id"]:
             raise ValueError("source_api_session_mismatch")
-        if "project_id" in record and identifier(record["project_id"]) != config["remote_project_id"]:
+        if record.get("project_id") is not None and identifier(record["project_id"], field="record_project") != config["remote_project_id"]:
             raise ValueError("source_api_project_mismatch")
         fields = {target: _text(record.get(source), structured=target in {"steps_raw", "expected_raw"}) for target, source in (
             ("name", "name"), ("precondition", "preconditions"), ("module", "module"),

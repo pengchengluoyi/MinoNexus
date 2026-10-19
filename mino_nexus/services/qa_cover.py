@@ -16,6 +16,29 @@ TAG = "QaCover"
 LLM_JOBS = ("analyze_req", "draft_mindmap", "draft_cases", "propose_atlas")
 
 
+def _slim_cases_for_llm(cases: list | None, *, limit: int = 120) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in cases or []:
+        if not isinstance(row, dict):
+            continue
+        steps = row.get("steps_raw") or row.get("steps") or ""
+        if isinstance(steps, list):
+            steps = "\n".join(str(x) for x in steps[:20])
+        out.append(
+            {
+                "case_id": row.get("case_id") or row.get("id"),
+                "name": row.get("name") or row.get("title"),
+                "module": row.get("module") or "",
+                "platform": row.get("platform") or "",
+                "steps_raw": str(steps)[:800],
+                "updated_at": row.get("updated_at"),
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -43,14 +66,19 @@ def _ask_json(job: str, user: str) -> tuple[dict[str, Any] | None, dict[str, Any
     except JobRenderError as e:
         return None, {"error": str(e)}
     call = job_meta.get("call") or {}
-    parsed, meta = call_chat_text(
-        provider=provider,
-        messages=messages,
-        temperature=float(call.get("temperature", 0.2)),
-        max_tokens=int(call.get("max_tokens", 4096)),
-        timeout_sec=int(call.get("timeout_sec", 90)),
-        json_mode=bool(call.get("json_mode", True)),
-    )
+    from mino_nexus.ai import dispatch_log
+    planner_log_token = dispatch_log.bind(job=job, prompt_version=job_meta.get('prompt_version'), prompt_sha=job_meta.get('prompt_sha'))
+    try:
+        parsed, meta = call_chat_text(
+            provider=provider,
+            messages=messages,
+            temperature=float(call.get("temperature", 0.2)),
+            max_tokens=int(call.get("max_tokens", 4096)),
+            timeout_sec=int(call.get("timeout_sec", 90)),
+            json_mode=bool(call.get("json_mode", True)),
+        )
+    finally:
+        dispatch_log.reset(planner_log_token)
     if parsed is None:
         return None, meta
     return parsed, meta
@@ -125,7 +153,12 @@ def _apply_cases(req: dict, payload: dict, *, project_id: str = "", replace: boo
     rows = [_norm_case(x, i) for i, x in enumerate(incoming) if isinstance(x, dict)]
     rid = str(req.get("id") or "")
     if project_id:
-        upsert_cases(project_id, rid, rows, replace=replace)
+        if rows:
+            from mino_nexus.services.collab_apply import apply_case_drafts
+
+            apply_case_drafts(project_id, rid, {"payload": {"cases": rows}}, replace=replace)
+        elif replace:
+            upsert_cases(project_id, rid, rows, replace=replace, collab_emit=False)
         req.pop("draft_cases", None)
     elif replace:
         req["draft_cases"] = rows
@@ -169,7 +202,7 @@ def run_llm_job(job: str, *, requirement: dict, cases: list | None = None, qa_pr
             "title": title,
             "understanding": req.get("understanding") or {},
             "mindmap": req.get("mindmap") or {},
-            "existing_cases": (cases or [])[:40],
+            "existing_cases": _slim_cases_for_llm(cases),
         }, ensure_ascii=False)
         parsed, meta = _ask_json(job, user)
         if parsed is None:
@@ -185,6 +218,7 @@ def run_llm_job(job: str, *, requirement: dict, cases: list | None = None, qa_pr
             return {"job": job, "status": "error", "error": meta.get("error") or "模型未返回图谱建议", "engine": "llm", "meta": meta}
         return {"job": job, "status": "ok", "engine": "llm", "payload": parsed, "meta": meta}
     return {"job": job, "status": "error", "error": f"未知 job：{job}"}
+
 
 
 def _default_jobs(req: dict, requested: list[str], *, project_id: str = "") -> list[str]:

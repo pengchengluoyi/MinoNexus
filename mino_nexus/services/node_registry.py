@@ -246,6 +246,9 @@ class NodeSession:
     host: dict[str, Any] = field(default_factory=dict)
     # None：这台 Scout 还没报插件状态。列表只含 class/id/installed/configured。
     plugins: Optional[list[dict[str, Any]]] = None
+    plugins_ready: Optional[bool] = None
+    plugin_warning: str = ""
+    runtime_environment: str = ""
     plugins_reported: threading.Event = field(default_factory=threading.Event, repr=False, compare=False)
     runtime_capabilities: Optional[list[dict[str, Any]]] = None
     node_connection_generation: str = ""
@@ -319,6 +322,9 @@ class NodeSession:
             "update_job": dict(self.update_job or {}),
             "host": dict(self.host or {}),
             "plugins": None if self.plugins is None else [dict(row) for row in self.plugins],
+            "plugins_ready": self.plugins_ready,
+            "plugin_warning": self.plugin_warning,
+            "runtime_environment": self.runtime_environment,
             "plugin_job": dict(self.plugin_job or {}),
         }
 
@@ -407,6 +413,9 @@ class NodeRegistry:
                 owner_user_id=owner,
                 host=dict(getattr(reg, "host", {}) or {}),
                 plugins=sanitize_plugins(getattr(reg, "plugins", None)),
+                plugins_ready=getattr(reg, "plugins_ready", None) if type(getattr(reg, "plugins_ready", None)) is bool else None,
+                plugin_warning=str(getattr(reg, "plugin_warning", "") or "")[:200] if getattr(reg, "plugins_ready", None) is False else "",
+                runtime_environment=getattr(reg, "runtime_environment", "") if getattr(reg, "runtime_environment", "") in {"development", "production"} else "",
                 runtime_capabilities=getattr(reg, "runtime_capabilities", None),
                 node_connection_generation=uuid.uuid4().hex,
                 scout_process_generation=reg.scout_process_generation,
@@ -562,6 +571,12 @@ class NodeRegistry:
             host = getattr(hb, "host", None)
             if isinstance(host, dict) and host:
                 node.host = dict(host)
+            ready = getattr(hb, "plugins_ready", None)
+            node.plugins_ready = ready if type(ready) is bool else None
+            warning = getattr(hb, "plugin_warning", "")
+            node.plugin_warning = str(warning or "")[:200] if ready is False else ""
+            environment = getattr(hb, "runtime_environment", "")
+            node.runtime_environment = environment if environment in {"development", "production"} else ""
             reported = getattr(hb, "plugins", None)
             if reported is not None:
                 node.plugins = sanitize_plugins(reported)

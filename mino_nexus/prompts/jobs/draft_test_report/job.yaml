@@ -1,0 +1,27 @@
+id: draft_test_report
+version: 1
+label: 测试报告建议
+summary: 根据代码汇总的执行事实整理后续建议，不计算数字或决定目标结论
+engine: json_chat
+role: reporter
+output_schema: report_advice
+enabled: true
+sort_order: 26
+flags: []
+slots:
+- name: user_payload
+  kind: text
+  required: true
+call:
+  temperature: 0.1
+  max_tokens: 768
+  timeout_sec: 45
+  json_mode: true
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: main
+  slot: user_payload
+  heading: ==== 已核实的报告事实 ====

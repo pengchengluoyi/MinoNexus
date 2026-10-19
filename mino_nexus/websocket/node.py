@@ -211,7 +211,7 @@ class NodeConnection:
             if env.payload.node_id != self.node_id:
                 return
             try:
-                reg.heartbeat(env.payload, send=self.request)
+                await asyncio.to_thread(reg.heartbeat, env.payload, send=self.request)
             except (ValueError, TypeError, AttributeError):
                 await self.ws.close(code=1008, reason="心跳平台或嵌套能力合同无效，请升级 Scout")
                 self.close()
@@ -278,7 +278,7 @@ class NodeConnection:
         from mino_nexus.services.runtime_tokens import authenticate_registration
 
         try:
-            identity = authenticate_registration(req.token, req.node_id)
+            identity = await asyncio.to_thread(authenticate_registration, req.token, req.node_id)
         except PermissionError as exc:
             await self._reply(env, P.Registered(
                 accepted=False, nexus_version=NEXUS_VERSION,

@@ -1,3 +1,4 @@
+from mino_nexus.models.collab_message_job import CollabMessageJob
 from mino_nexus.models.account_fact_candidate import AccountFactCandidate
 from mino_nexus.models.development import DevelopmentBinding, DevelopmentOperation
 from mino_nexus.models.app_intel import AppIntelLink, AppIntelProposal
@@ -47,6 +48,15 @@ from mino_nexus.models.project_pool_config import ProjectPoolConfig
 from mino_nexus.models.run import AppRegressionRun, MCaseBaseline, MCaseRunTrace
 from mino_nexus.models.session_event import SessionEvent, SessionMeta
 from mino_nexus.models.settings import Settings
+from mino_nexus.models.collab_approval import CollabApproval
+from mino_nexus.models.collab_policy import CollabPolicy
+from mino_nexus.models.mino_bots import (
+    CollabMessage,
+    CollabTopic,
+    CollabTopicMember,
+    CollabWorkItem,
+    ProjectBot,
+)
 from mino_nexus.models.task import Task
 from mino_nexus.models.token import InstallToken, NodeCredential
 from mino_nexus.models.ui_control import UiControl
@@ -95,6 +105,12 @@ __all__ = [
     "ProjectPoolConfig",
     "Project",
     "ProjectMember",
+    "ProjectBot",
+    "CollabTopic",
+    "CollabTopicMember",
+    "CollabMessage",
+    "CollabWorkItem",
+    "CollabPolicy",
     "SessionEvent",
     "SessionMeta",
     "Settings",
@@ -110,3 +126,5 @@ from mino_nexus.models.case_compile_job import CaseCompileJob
 from mino_nexus.models.case_review_record import CaseReviewRecord
 
 from mino_nexus.models.scout_update import ScoutUpdate
+
+from mino_nexus.models.collab_read import CollabWorkspaceRead

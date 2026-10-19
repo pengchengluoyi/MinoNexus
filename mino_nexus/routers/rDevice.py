@@ -1,6 +1,8 @@
 """设备清单与锁屏密码。权威连通性来自 Scout，密码存在本地 json。"""
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -41,7 +43,7 @@ def set_password(body: SetPasswordBody, _sess: dict = Depends(current_session)):
 @router.post("/{sn}/ime/adbkeyboard")
 async def switch_adb_keyboard(sn: str, _sess: dict = Depends(current_session)):
     """经 Scout 将 Android 设备默认输入法切到 ADB Keyboard。"""
-    require_owned_device(sn)
+    await asyncio.to_thread(require_owned_device, sn)
     try:
         data = await dim.ensure_adb_keyboard(sn)
     except ValueError as exc:
@@ -61,7 +63,7 @@ async def switch_adb_keyboard(sn: str, _sess: dict = Depends(current_session)):
 @router.post("/{sn}/ime/system")
 async def restore_system_ime(sn: str, _sess: dict = Depends(current_session)):
     """经 Scout 关闭 ADB Keyboard，切回系统输入法。"""
-    require_owned_device(sn)
+    await asyncio.to_thread(require_owned_device, sn)
     try:
         data = await dim.restore_system_input_method(sn)
     except ValueError as exc:

@@ -217,16 +217,31 @@ def _find_user(ident: str) -> Optional[dict[str, Any]]:
     return None
 
 
+_SESSION_PURGE_AT = 0
+
+
 def session_of(token: str) -> Optional[dict[str, Any]]:
     tok = str(token or "").strip()
     if not tok:
         return None
-    root = _root()
-    _purge(root)
-    for row in root.get("sessions") or []:
-        if isinstance(row, dict) and hmac.compare_digest(str(row.get("token") or ""), tok):
-            return row
-    return None
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.auth import AuthSession
+
+    global _SESSION_PURGE_AT
+    now = _now()
+    with session_scope() as db:
+        if now - _SESSION_PURGE_AT >= 120:
+            db.query(AuthSession).filter(AuthSession.expires_at <= now).delete(synchronize_session=False)
+            _SESSION_PURGE_AT = now
+        row = db.get(AuthSession, tok)
+        if row is None:
+            return None
+        if int(row.expires_at or 0) <= now:
+            return None
+        extra = row.extra if isinstance(row.extra, dict) else {}
+        if extra:
+            return dict(extra)
+        return {"token": row.token, "user_id": row.user_id, "expires_at": int(row.expires_at or 0)}
 
 
 def _issue_session(user: dict[str, Any]) -> dict[str, Any]:
@@ -263,12 +278,36 @@ def require_session(token: str = "") -> dict[str, Any]:
 
 
 def needs_setup() -> bool:
-    return not any(_norm_email(u.get("email") or "") for u in users())
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.auth import User
+
+    with session_scope() as db:
+        for row in db.query(User).limit(32):
+            if _norm_email(row.email or ""):
+                return False
+    return True
 
 
 def mail_configured() -> bool:
     from mino_nexus.services.settings_store import mail_ready
     return mail_ready()
+
+
+_STATUS_META_CACHE: tuple[float, bool, bool] | None = None
+_STATUS_META_TTL_SEC = 45.0
+
+
+def _status_meta_cached() -> tuple[bool, bool]:
+    import time
+
+    global _STATUS_META_CACHE
+    now = time.monotonic()
+    if _STATUS_META_CACHE is not None and now - _STATUS_META_CACHE[0] < _STATUS_META_TTL_SEC:
+        return _STATUS_META_CACHE[1], _STATUS_META_CACHE[2]
+    need = needs_setup()
+    mail_ok = mail_configured()
+    _STATUS_META_CACHE = (now, need, mail_ok)
+    return need, mail_ok
 
 
 def status(token: str = "", client: str = "") -> dict[str, Any]:
@@ -279,10 +318,11 @@ def status(token: str = "", client: str = "") -> dict[str, Any]:
     pub = _public_user(sess or {}) if sess else {
         "user_id": "", "email": "", "name": "", "username": "", "role": "",
     }
+    need_setup, mail_ok = _status_meta_cached()
     return {
         "logged_in": bool(sess),
-        "needs_setup": needs_setup(),
-        "mail_configured": mail_configured(),
+        "needs_setup": need_setup,
+        "mail_configured": mail_ok,
         "ws_token": str(sess.get("token") or "") if sess else "",
         **pub,
     }
@@ -515,8 +555,12 @@ def create_local_user(
 
 
 def ensure_seed_users() -> None:
-    if users():
-        return
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.auth import User
+
+    with session_scope() as db:
+        if db.query(User).limit(1).first() is not None:
+            return
     password = str(os.environ.get("MINO_BOOTSTRAP_PASSWORD") or "Mino@local")
     created = create_local_user(
         username="admin",

@@ -127,6 +127,7 @@ def run_cases(
     execution_mode: str = "legacy",
     client_request_id: str = "",
     derived_from: str = "",
+    expected_build: str = "",
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     phases: list[tuple[str, int]] = []
@@ -143,7 +144,7 @@ def run_cases(
         "platform": platform, "case_ids": case_ids, "start_index": start_index, "run_type": run_type,
         "requirement_id": requirement_id, "release_id": release_id, "slot_id": slot_id, "instruction": instruction,
         "provider_id": provider_id, "playwright_headless": playwright_headless, "env_profile": env_profile,
-        "env_surface": env_surface, "action_scheme": action_scheme, "execution_mode": execution_mode})
+        "env_surface": env_surface, "action_scheme": action_scheme, "execution_mode": execution_mode, "expected_build": expected_build})
     if client_request_id:
         from mino_nexus.core.database import session_scope
         from mino_nexus.models.run_admission import RunAdmission
@@ -276,6 +277,7 @@ def run_cases(
         "client_request_id": client_request_id,
         "request_digest": request_digest,
         "derived_from": derived_from,
+        "expected_build": expected_build,
         "environment_baseline_digest": digest({"profile": resolved_env, "surface": env_surface_id,
             "package": package, "environment": (env_doc.get("profiles") or {}).get(resolved_env),
             "channels": env_doc.get("channels") or []}),

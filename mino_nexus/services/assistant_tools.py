@@ -314,7 +314,7 @@ def resolve_args(spec: dict[str, Any], args: dict[str, Any], *, user_id: str = "
         if ident != str(raw):
             notes.append(f"{key} 用的是 {label}")
         out[key] = ident
-    if out.get("app_id") and "env_surface" in ((spec.get("params_schema") or {}).get("properties") or {}) and (spec.get("risk") == "write" or spec.get("id") == "device.list"):
+    if spec.get("id") != "collab.scope_update" and out.get("app_id") and "env_surface" in ((spec.get("params_schema") or {}).get("properties") or {}) and (spec.get("risk") == "write" or spec.get("id") == "device.list"):
         from mino_nexus.services import project_store as ps
 
         app = ps.require_app(str(out["app_id"]))
@@ -409,7 +409,7 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         node_id = args.get("node_id")
         if node_id is not None and (not isinstance(node_id, str) or not re.fullmatch(r"[a-z0-9]+", node_id)):
             return ToolOutcome(ok=False, status=400, summary="请使用 scout_list 返回的准确 node_id，不是设备 SN 或路径。", tool_id=str(spec["id"]))
-    for key in ("project_id", "app_id", "env_surface", "env_profile", "module", "modules", "ordinal"):
+    for key in ("project_id", "app_id", "env_surface", "env_profile", "module", "modules", "ordinal", "topic_id"):
         if key in props and target and target.get(key):
             args.setdefault(key, target[key])
     try:
@@ -517,6 +517,8 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
     for name in names:
         url = url.replace("{" + name + "}", str(args.get(name)))
     rest = {k: v for k, v in args.items() if k not in names and k not in ("project_id", "module", "modules", "ordinal", "scope", "scope_revision", "all_cases", "intent") and v not in (None, "")}
+    if spec.get("id") == "collab.scope_update":
+        rest = {k: v for k, v in args.items() if k in props and k not in names}
     if spec.get("id") == "case.list":
         rest["limit"] = min(200, max(1, int(args.get("limit") or 50)))
         if args.get("module"):
@@ -604,6 +606,8 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         if not any(k in receipt_data for k in ("task_id", "run_id", "id")) and isinstance(payload, dict) and isinstance(payload.get("data"), dict):
             receipt_data = payload["data"]
         identifiers = {k: receipt_data[k] for k in ("task_id", "run_id", "id", "status") if isinstance(receipt_data.get(k), (str, int))}
+        if spec.get("id") == "collab.scope_update":
+            identifiers["topic_id"] = receipt_data.get("topic_id", args.get("topic_id", ""))
         if spec.get("id", "").startswith(("workbench.update", "nexus.update")):
             identifiers.update({k: receipt_data[k] for k in (
                 "installation_id", "operation_id", "build_id", "state", "observation", "helper_started", "recovery"

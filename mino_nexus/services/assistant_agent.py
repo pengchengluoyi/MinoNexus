@@ -61,7 +61,8 @@ def _started_summary(answer: str, task_id: str, steps: list[dict[str, Any]]) -> 
     return "\n".join(lines).strip()
 
 
-def _call_model(messages: list[dict[str, Any]], job_meta: dict | None = None) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+def _call_model(messages: list[dict[str, Any]], job_meta: dict | None = None, *, tools: list[dict] | None = None,
+                trace: dict | None = None) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
     from mino_nexus.ai import dispatch_log as dispatch
     from mino_nexus.ai.llm_client import call_chat_plain
     from mino_nexus.ai.llm_client import resolve_regression_provider
@@ -72,8 +73,9 @@ def _call_model(messages: list[dict[str, Any]], job_meta: dict | None = None) ->
         return "", [], {"error": reason}
     job_meta = job_meta or {}
     call = job_meta.get("call") or {}
-    token = dispatch.bind(job="assistant-route", trigger="im", source="assistant", role="assistant",
-                          prompt_version=job_meta.get("prompt_version"), prompt_sha=job_meta.get("prompt_sha"), call_parameters=call)
+    token = dispatch.bind(**{ "job": "assistant-route", "trigger": "im", "source": "assistant", "role": "assistant",
+        "prompt_version": job_meta.get("prompt_version"), "prompt_sha": job_meta.get("prompt_sha"),
+        "call_parameters": call, **(trace or {})})
     try:
         text, meta = call_chat_plain(
             provider=provider,
@@ -83,7 +85,7 @@ def _call_model(messages: list[dict[str, Any]], job_meta: dict | None = None) ->
             timeout_sec=float(call.get("timeout_sec", 60)),
             max_attempts=1,
             on_text=dispatch.ctx().get("assistant_stream_callback"),
-            extra_payload={"tools": openai_tools(), "tool_choice": "auto", "stream": bool(dispatch.ctx().get("assistant_stream_callback"))},
+            extra_payload={"tools": openai_tools() if tools is None else tools, "tool_choice": "auto", "stream": bool(dispatch.ctx().get("assistant_stream_callback"))},
         )
     finally:
         dispatch.reset(token)

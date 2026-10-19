@@ -65,14 +65,14 @@ def search_docs(
 
 
 @router.post("/upload")
-async def upload_doc(
+def upload_doc(
     file: UploadFile = File(...),
     app_id: str = Form(""),
     project_id: str = Form(""),
     title: str = Form(""),
     _sess: dict = Depends(current_session),
 ):
-    data = await file.read()
+    data = file.file.read()
     try:
         row = ds.ingest_upload(
             data=data,

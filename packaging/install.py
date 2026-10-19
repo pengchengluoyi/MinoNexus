@@ -153,6 +153,17 @@ def install(component,root,prepared,nexus_url,commands=None):
             run([nh,'d2','bind-workbench','--root',sibling,'--workbench-root',root])
     print(f'Installed {component}: {root}\nURL: http://127.0.0.1:{port}\nMaintenance: {helper}',flush=True)
 
+def default_component_root(component):
+    if sys.platform != 'darwin':
+        return Path.home() / 'Mino' / component
+    current = Path.home() / 'Library' / 'Application Support' / 'Mino' / component
+    legacy = Path.home() / 'Mino' / component
+    if current.exists() and legacy.exists():
+        raise ValueError(f'Two installation roots exist for {component}; choose --root explicitly. Both are preserved.')
+    # Never silently create a second service/database beside an existing install.
+    return legacy if legacy.exists() else current
+
+
 def main():
     ap=argparse.ArgumentParser(description='Mino installer — GitHub Actions binaries from GitHub Releases')
     ap.add_argument('--components',choices=['nexus','workbench','both'])
@@ -172,8 +183,8 @@ def main():
     selected=args.components or prompt('Select components / 选择安装组件',{'1':('Nexus','nexus'),'2':('Workbench','workbench'),'3':('Nexus + Workbench','both')})
     if selected=='both' and (args.root or args.version):ap.error('Use --base-dir and component-specific version flags for both components')
     components=['nexus','workbench'] if selected=='both' else [selected]
-    base=(args.base_dir or Path.home()/'Mino').expanduser().absolute()
-    roots={c:(args.root.expanduser().absolute() if args.root else base/c) for c in components}
+    base=args.base_dir.expanduser().absolute() if args.base_dir else None
+    roots={c:(args.root.expanduser().absolute() if args.root else base/c if base else default_component_root(c)) for c in components}
     for c,root in roots.items():
         if not args.download_only:
             if root.is_symlink() or root.resolve()!=root:ap.error(f'Installation path must not traverse links: {root}')

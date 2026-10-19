@@ -263,6 +263,8 @@ def read_events(
 ) -> list[dict[str, Any]]:
     from mino_nexus.core.database import SessionLocal, ensure_db
 
+    from time import perf_counter
+    started = perf_counter()
     sid = str(session_id or "").strip()
     if not sid or (current_user_id() and get_meta(sid) is None):
         return []
@@ -275,7 +277,10 @@ def read_events(
             .order_by(SessionEvent.seq.asc())
             .limit(max(1, min(2000, int(limit or 500))))
         )
-        return [
+        query_started = perf_counter()
+        rows = q.all()
+        queried = perf_counter()
+        result = [
             {
                 "session_id": row.session_id,
                 "seq": int(row.seq),
@@ -285,8 +290,16 @@ def read_events(
                 "phase": row.phase or "",
                 "payload": dict(row.payload or {}),
             }
-            for row in q.all()
+            for row in rows
         ]
+        finished = perf_counter()
+        if finished - started >= .1:
+            from mino_nexus.core.log import SLog
+            SLog.i("SessionRead", f"PERF session={sid} rows={len(result)} "
+                f"scope_ms={(query_started-started)*1000:.2f} "
+                f"query_ms={(queried-query_started)*1000:.2f} "
+                f"projection_ms={(finished-queried)*1000:.2f}")
+        return result
     finally:
         db.close()
 

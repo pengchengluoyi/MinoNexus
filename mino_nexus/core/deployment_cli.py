@@ -22,7 +22,7 @@ def _explicit_data(raw: str) -> Path:
     if not raw or not Path(raw).expanduser().is_absolute():
         raise ValueError("An explicit absolute data directory is required")
     path = Path(raw).expanduser().resolve()
-    os.environ["MINO_NEXUS_DATA_DIR"] = str(path)
+    os.environ["MINO_NEXUS_DEV_DATA_DIR" if not getattr(sys, "frozen", False) else "MINO_NEXUS_DATA_DIR"] = str(path)
     return path
 
 

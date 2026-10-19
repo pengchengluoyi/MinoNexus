@@ -26,6 +26,9 @@ def append_batch(session_id, records, meta_patch=None, deadline=None, *, eligibl
     with _lock:
         _counts[prefix + "_append_attempts"] += 1
     db = None
+    started = time.perf_counter()
+    marks = {}
+    outcome = "failed"
     try:
         if time.monotonic() >= deadline:
             raise TimeoutError("store_deadline_exceeded")
@@ -33,7 +36,11 @@ def append_batch(session_id, records, meta_patch=None, deadline=None, *, eligibl
         db = SessionLocal()
         remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
         db.execute(text(f"PRAGMA busy_timeout = {remaining_ms}"))
+        marks["connection_ms"] = (time.perf_counter() - started) * 1000
+        lock_started = time.perf_counter()
         db.execute(text("BEGIN IMMEDIATE"))
+        marks["write_lock_ms"] = (time.perf_counter() - lock_started) * 1000
+        body_started = time.perf_counter()
         meta = db.get(SessionMeta, session_id)
         if meta is None:
             raise ValueError("session_not_open")
@@ -54,12 +61,14 @@ def append_batch(session_id, records, meta_patch=None, deadline=None, *, eligibl
                 digest = ((meta.runtime_context or {}).get("runtime_state") or {}).get("finalization_digest")
                 if digest and digest != finalization_digest(sanitize(records), sanitize(patch)):
                     raise ValueError("finalization_identity_reused")
+                outcome = "replayed"
                 return list((meta.verdict or {}).get("event_refs") or [])
             raise ValueError("session_already_finalized")
         if meta.finished_at:
             raise ValueError("session_already_closed")
         patch, records, existing_refs = binding_batch(meta.runtime_context, patch, records)
         if existing_refs is not None:
+            outcome = "replayed"
             return existing_refs
         refs = []
         seq = int(meta.event_count or 0)
@@ -94,10 +103,16 @@ def append_batch(session_id, records, meta_patch=None, deadline=None, *, eligibl
         for key, value in patch.items():
             setattr(meta, key, sanitize(value))
         meta.event_count = seq
+        marks["prepare_ms"] = (time.perf_counter() - body_started) * 1000
+        flush_started = time.perf_counter()
         db.flush()
+        marks["flush_ms"] = (time.perf_counter() - flush_started) * 1000
         if time.monotonic() >= deadline:
             raise TimeoutError("store_deadline_exceeded")
+        commit_started = time.perf_counter()
         db.commit()
+        marks["commit_ms"] = (time.perf_counter() - commit_started) * 1000
+        outcome = "committed"
         return refs
     except Exception:
         if db is not None:
@@ -108,3 +123,14 @@ def append_batch(session_id, records, meta_patch=None, deadline=None, *, eligibl
     finally:
         if db is not None:
             db.close()
+        marks["total_ms"] = (time.perf_counter() - started) * 1000
+        with _lock:
+            for stage, value in marks.items():
+                _counts["timing_" + stage + "_sum"] += round(value, 3)
+                _counts["timing_" + stage + "_count"] += 1
+                key = "timing_" + stage + "_max"
+                _counts[key] = max(_counts[key], round(value, 3))
+        if marks["total_ms"] >= 250:
+            from mino_nexus.core.log import SLog
+            SLog.i("SessionStore", f"PERF session={session_id} outcome={outcome} "
+                   + " ".join(f"{key}={value:.2f}" for key, value in marks.items()))

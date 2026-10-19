@@ -56,14 +56,14 @@ def _event_owner(payload: dict[str, Any]) -> str:
 
 
 async def _broadcast(payload: dict[str, Any]) -> None:
-    owner = _event_owner(payload)
+    owner = await asyncio.to_thread(_event_owner, payload)
     if not owner:
         return  # 无法确定归属的执行事件不能广播。
     public = {k: v for k, v in payload.items() if k != "_execution_owner"}
     text = json.dumps(public, ensure_ascii=False, default=str)
     for ws, (token, uid) in list(_CLIENTS.items()):
         try:
-            sess = auth_store.session_of(token)
+            sess = await asyncio.to_thread(auth_store.session_of, token)
             if not sess or sess.get("user_id") != uid:
                 _CLIENTS.pop(ws, None)
                 await ws.close(code=1008, reason="登录已失效")
@@ -130,7 +130,7 @@ def register_routes(app: Any) -> None:
             await websocket.close(code=1008, reason="工作台来源未获允许")
             return
         await websocket.accept()
-        sess = auth_store.session_of(token)
+        sess = await asyncio.to_thread(auth_store.session_of, token)
         if not sess or not sess.get("user_id"):
             await websocket.close(code=1008, reason="请先登录")
             return
@@ -149,13 +149,13 @@ def register_routes(app: Any) -> None:
                     continue
                 req_id = str(msg.get("req_id") or "")
                 action = str(msg.get("action") or msg.get("type") or "")
-                sess = auth_store.session_of(token)
+                sess = await asyncio.to_thread(auth_store.session_of, token)
                 if not sess or str(sess.get("user_id") or "") != uid:
                     await websocket.close(code=1008, reason="登录已失效")
                     break
                 from mino_nexus.core.execution_user import execution_user
                 with execution_user(uid):
-                    result = handle_action(action, msg, sess)
+                    result = await asyncio.to_thread(handle_action, action, msg, sess)
                 await websocket.send_text(json.dumps(
                     _reply(req_id, action, result.get("data"), code=int(result.get("code") or 200), msg=str(result.get("msg") or "")),
                     ensure_ascii=False,

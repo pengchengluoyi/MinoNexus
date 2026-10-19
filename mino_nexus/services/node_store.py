@@ -83,7 +83,22 @@ def list_nodes() -> dict[str, dict[str, Any]]:
 
 def get_node(node_id: str) -> dict[str, Any] | None:
     nid = sanitize_id(node_id)
-    return list_nodes().get(nid)
+    if not nid:
+        return None
+    from mino_nexus.core.database import SessionLocal, ensure_db
+    from mino_nexus.models.node import Node
+    ensure_db()
+    with SessionLocal() as db:
+        row = db.get(Node, nid)
+        if row is None:
+            return None
+        extra = dict(row.extra or {}) if isinstance(row.extra, dict) else {}
+        extra.update(node_id=row.node_id,
+            studio_id=row.studio_id or extra.get("studio_id") or "",
+            owner_user_id=row.owner_user_id or extra.get("owner_user_id") or "",
+            first_seen=row.first_seen or extra.get("first_seen") or "",
+            updated_at=row.updated_at or extra.get("updated_at") or "")
+        return extra
 
 
 def upsert(node_id: str, **fields: Any) -> dict[str, Any]:

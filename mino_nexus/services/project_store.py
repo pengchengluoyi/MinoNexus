@@ -229,15 +229,24 @@ def _env_targets(app: dict[str, Any]) -> dict[str, str]:
     return out
 
 
-def _public_app(a: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
+def _public_app(
+    a: dict[str, Any],
+    *,
+    detail: bool = False,
+    project_case_count: int | None = None,
+) -> dict[str, Any]:
     from mino_nexus.services.app_automation import count_qa_process_cases_from_env
 
     env = a.get("env") if isinstance(a.get("env"), dict) else {}
     aid = str(a.get("id") or "")
     pid = str(a.get("project_id") or "")
+    if project_case_count is not None:
+        case_n = int(project_case_count)
+    else:
+        case_n = count_qa_process_cases_from_env(env, project_id=pid)
     stats = {
-        "case_count": count_qa_process_cases_from_env(env, project_id=pid),
-        "feishu_cases": count_qa_process_cases_from_env(env, project_id=pid),
+        "case_count": case_n,
+        "feishu_cases": case_n,
         "knowledge_count": _knowledge_count(aid),
     }
     row = {
@@ -258,19 +267,27 @@ def _public_app(a: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
 
 
 def find_project(project_id: str) -> dict[str, Any] | None:
-    root = _root()
-    for p in root["projects"]:
-        if isinstance(p, dict) and p.get("id") == project_id:
-            return p
-    return None
+    pid = str(project_id or "").strip()
+    if not pid:
+        return None
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.project import Project
+
+    with session_scope() as db:
+        row = db.get(Project, pid)
+        return _project_dict(row) if row is not None else None
 
 
 def find_app(app_id: str) -> dict[str, Any] | None:
-    root = _root()
-    for a in root["apps"]:
-        if isinstance(a, dict) and a.get("id") == app_id:
-            return a
-    return None
+    aid = str(app_id or "").strip()
+    if not aid:
+        return None
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.project import App
+
+    with session_scope() as db:
+        row = db.get(App, aid)
+        return _app_dict(row) if row is not None else None
 
 
 def require_project(project_id: str) -> dict[str, Any]:
@@ -310,20 +327,30 @@ def list_apps(project_id: str) -> list[dict[str, Any]]:
 
 
 def list_projects() -> list[dict[str, Any]]:
-    from mino_nexus.services.project_pool_config_store import project_env_summary
+    """项目首页列表：按项目查库，避免 _root 全表加载与按应用重复 count_cases。"""
+    from collections import defaultdict
+
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.project import App, Project
+    from mino_nexus.services.case_store import count_cases
+    from mino_nexus.services.project_pool_config_store import ensure_migrated_from_project_env, project_env_summary
     from mino_nexus.services.pool_account_store import count_accounts
 
-    root = _root()
-    out = []
-    for p in root["projects"]:
-        if not isinstance(p, dict):
-            continue
-        pid = str(p.get("id") or "")
-        from mino_nexus.services.project_pool_config_store import ensure_migrated_from_project_env
+    with session_scope() as db:
+        project_rows = [_project_dict(r) for r in db.query(Project).order_by(Project.updated_at.desc()).all()]
+        apps_by_pid: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in db.query(App).all():
+            apps_by_pid[str(row.project_id or "")].append(_app_dict(row))
 
+    out: list[dict[str, Any]] = []
+    for p in project_rows:
+        pid = str(p.get("id") or "")
+        if not pid:
+            continue
         ensure_migrated_from_project_env(pid)
-        apps_out = [_public_app(a) for a in _apps_of(root, pid)]
-        case_count = sum(int((a.get("automation_stats") or {}).get("case_count") or 0) for a in apps_out)
+        case_n = count_cases(pid)
+        apps_raw = apps_by_pid.get(pid, [])
+        apps_out = [_public_app(a, project_case_count=case_n) for a in apps_raw]
         knowledge_count = sum(int((a.get("automation_stats") or {}).get("knowledge_count") or 0) for a in apps_out)
         slim_env = p.get("env") if isinstance(p.get("env"), dict) else {}
         summary = project_env_summary(slim_env)
@@ -337,7 +364,7 @@ def list_projects() -> list[dict[str, Any]]:
                 "env_summary": summary,
                 "apps": apps_out,
                 "app_count": len(apps_out),
-                "case_count": case_count,
+                "case_count": case_n,
                 "knowledge_count": knowledge_count,
                 **_owner_public(p),
             }

@@ -1,0 +1,46 @@
+id: workspace-route
+version: 1
+label: 测试工作区对话
+summary: 工作区里的一句话：查事实、调用现有工具、直接回答
+engine: text_chat
+role: conductor
+output_schema: ""
+enabled: true
+sort_order: 6
+flags: []
+slots:
+- name: persona_block
+  kind: text
+  required: true
+- name: workspace_facts
+  kind: text
+  required: true
+- name: recent_turns
+  kind: text
+  required: false
+- name: utterance
+  kind: text
+  required: true
+call:
+  temperature: 0.1
+  max_tokens: 1000
+  timeout_sec: 60
+  total_timeout_sec: 300
+  json_mode: false
+image: {}
+system:
+- id: persona
+  slot: persona_block
+- id: rules
+  file: system/20-rules.md
+- id: facts
+  slot: workspace_facts
+  heading: 【工作区事实】
+user:
+- id: history
+  slot: recent_turns
+  heading: 【最近对话】
+  skip_if_empty: true
+- id: utterance
+  slot: utterance
+  heading: 【这句话】

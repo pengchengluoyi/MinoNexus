@@ -12,16 +12,38 @@ from pathlib import Path
 
 
 def get_app_data_dir() -> Path:
-    env = os.environ.get("MINO_NEXUS_DATA_DIR")
-    if env:
-        p = Path(env).expanduser().resolve()
-    elif not getattr(sys, "frozen", False):
-        p = Path.home() / ".mino-dev" / "nexus"
-    elif os.name == "nt":
-        p = Path(os.environ.get("APPDATA", Path.home())) / "MinoNexus"
-    else:
-        p = Path.home() / ".mino-nexus"
+    development = not getattr(sys, "frozen", False)
+    prod_default = (Path(os.environ.get("APPDATA", Path.home())) / "MinoNexus" if os.name == "nt"
+                    else Path.home() / "Library/Application Support/Mino/nexus/data" if sys.platform == "darwin"
+                    else Path.home() / ".mino-nexus")
+    if not development and sys.platform == "darwin" and not os.environ.get("MINO_NEXUS_DATA_DIR"):
+        legacy = Path.home() / ".mino-nexus"
+        if (legacy / "mino.db").exists():
+            if prod_default.exists():
+                raise ValueError("检测到新旧 Nexus 数据目录，请显式指定 MINO_NEXUS_DATA_DIR；不会自动合并")
+            prod_default = legacy
+    dev_default = Path.home() / ".mino-dev" / "nexus"
+    # Only this process's environment selects its data root. IDEs may retain an
+    # old MINO_NEXUS_DATA_DIR pointing at dev; it is not a production instance.
+    variable = "MINO_NEXUS_DEV_DATA_DIR" if development else "MINO_NEXUS_DATA_DIR"
+    default = dev_default if development else prod_default
+    p = Path(os.environ.get(variable) or default).expanduser().resolve()
+    forbidden = ([prod_default, Path.home() / ".mino-nexus", Path.home() / "Mino" / "nexus",
+                  Path.home() / "Library" / "Application Support" / "Mino" / "nexus"]
+                 if development else [dev_default])
+    for other in forbidden:
+        other = other.resolve()
+        if p == other or p in other.parents or other in p.parents:
+            raise ValueError("开发与正式 Nexus 数据目录必须完全独立，不能相同或互相包含")
     p.mkdir(parents=True, exist_ok=True)
+    marker = p / ".nexus-environment"
+    expected = "development" if development else "production"
+    try:
+        with marker.open("x", encoding="utf-8") as stream:
+            stream.write(expected)
+    except FileExistsError:
+        if marker.read_text(encoding="utf-8").strip() != expected:
+            raise ValueError("Nexus 数据目录属于另一环境，禁止共用")
     return p
 
 

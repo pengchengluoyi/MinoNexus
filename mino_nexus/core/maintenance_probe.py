@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 import urllib.request
 from urllib.parse import urlsplit
@@ -26,7 +27,7 @@ def main(argv=None):
         # Reserve output before creating a credential; never overwrite a secret.
         fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            os.environ["MINO_NEXUS_DATA_DIR"] = str(Path(args.data_dir).expanduser().resolve())
+            os.environ["MINO_NEXUS_DEV_DATA_DIR" if not getattr(sys, "frozen", False) else "MINO_NEXUS_DATA_DIR"] = str(Path(args.data_dir).expanduser().resolve())
             from mino_nexus.core.database import ensure_db
             ensure_db()
             from mino_nexus.services.assistant_store import create_probe_token

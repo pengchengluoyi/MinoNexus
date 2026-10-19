@@ -40,10 +40,12 @@ def require_project_write(project_id: str, sess: dict[str, Any]) -> dict[str, An
 
 def project_maintainer(project_id: str, sess: dict[str, Any] = Depends(current_session)) -> dict[str, Any]:
     from mino_nexus.services import project_store as ps
-    if not ps.find_project(project_id):
-        app = ps.find_app(project_id)
-        project_id = str((app or {}).get("project_id") or project_id)
-    return require_project_write(project_id, sess)
+
+    pid = str(project_id or "").strip()
+    if not ps.find_project(pid):
+        app = ps.find_app(pid)
+        pid = str((app or {}).get("project_id") or pid)
+    return require_project_write(pid, sess)
 
 
 def app_maintainer(app_id: str, sess: dict[str, Any] = Depends(current_session)) -> dict[str, Any]:
