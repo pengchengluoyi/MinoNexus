@@ -76,7 +76,7 @@ def build_identity():
             "resource_catalog_version": CATALOG_VERSION}
 
 
-def dependency_digest(db, project_id, owner):
+def dependency_digest(db, project_id, owner, *, compile_inserts=()):
     from pathlib import Path
     from sqlalchemy import select
     from mino_nexus.models import CatalogEntry, Project, App, NavFsm, NavFsmState, NavFsmEdge, UiControl, ProjectPoolConfig, Settings
@@ -89,6 +89,14 @@ def dependency_digest(db, project_id, owner):
         elif "project_id" in model.__table__.c:
             statement = statement.where(model.__table__.c.project_id == project_id)
         rows = [dict(row) for row in db.execute(statement).mappings()]
+        if model is UiControl and compile_inserts:
+            # Only this job's exact new rows are compilation outputs. A
+            # concurrent edit, delete or unrelated insertion remains visible.
+            inserted = {digest(row) for row in compile_inserts}
+            present = {digest(row) for row in rows}
+            if not inserted <= present:
+                values.append(["compile_insert_conflict", sorted(inserted - present)])
+            rows = [row for row in rows if digest(row) not in inserted]
         values.append([model.__tablename__, sorted(rows, key=lambda row: json.dumps(row, sort_keys=True, default=str))])
     setting = db.get(Settings, "ai-user:" + owner)
     if setting:
@@ -401,7 +409,8 @@ def complete(job_id, token, output=None, diagnostics=None):
             and (row.extra or {}).get("source_revision_id") == job.revision_id
             and digest(input_view(_public(row))) == job.input_digest
             and _owner_matches(db, job) and _source_matches(db, job)
-            and job.build.get("dependency_digest") == dependency_digest(db, job.project_id, job.owner_user_id))
+            and job.build.get("dependency_digest") == dependency_digest(db, job.project_id, job.owner_user_id,
+                compile_inserts=output.get("generated_controls") or ()))
         if valid_claim and matches and not diagnostics:
             extra = deepcopy(row.extra or {})
             meta = dict(extra.get("meta") or {})
@@ -479,8 +488,11 @@ def run_one(worker_id):
                 result = compile_reviewed(job)
             else:
                 source = sync_case_resource_metadata(deepcopy(job["input"]), project_id=job["project_id"])
-                compiled = compile_case_step_program_keys(source)
-                result = {"resource_key": source.get("resource_key"), "case_scene": source.get("case_scene"), "meta": compiled, "provenance": _provenance(compiled)}
+                from mino_nexus.services.control_registry import capture_compile_controls
+                with capture_compile_controls() as generated_controls:
+                    compiled = compile_case_step_program_keys(source)
+                result = {"resource_key": source.get("resource_key"), "case_scene": source.get("case_scene"),
+                    "meta": compiled, "provenance": _provenance(compiled), "generated_controls": generated_controls}
             complete(job["job_id"], job["claim_token"], result)
     except Exception as exc:
         # Exception strings can contain provider URLs/credentials; retain a safe type/code.

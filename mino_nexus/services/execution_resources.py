@@ -28,6 +28,21 @@ def claim_in_transaction(db, account_id=""):
             or run.status not in {"running", "queued"} or remaining(run.payload) == 0):
         request["reason"] = "task_not_running"
         return False
+    # Recheck persisted limits inside the account/resource allocation transaction.
+    # A callback may have waited for a lock past its caller's remaining budget.
+    cases = [case for case in run.payload.get("cases") or []
+             if case.get("execution_unit_id") == request["execution_unit_id"]]
+    if len(cases) != 1 or cases[0].get("status") not in {"pending", "running"}:
+        request["reason"] = "execution_unit_not_pending"
+        return False
+    case = cases[0]
+    if remaining(run.payload, case) == 0:
+        request["reason"] = "attempt_deadline_exceeded"
+        return False
+    wait_end = case.get("resource_wait_deadline_at")
+    if wait_end is not None and time.time() >= wait_end:
+        request["reason"] = "resource_wait_deadline_exceeded"
+        return False
     is_web = is_web_slot(request["sn"], request["platform"])
     keys = ["device:" + request["sn"] + (":" + request["run_id"] if is_web else "")]
     if account_id:
@@ -214,23 +229,43 @@ def assert_current(run_id, sn, *, db):
 def wait_for_admission(doc, case, request, acquire_account):
     from mino_nexus.services import run_store
     from mino_nexus.services.execution_policy import remaining
-    end = case.get("resource_wait_deadline_at")
-    if not end:
-        end = time.time() + (doc.get("execution_policy") or {}).get("resource_wait_seconds", 120)
-        run_store.patch_case(doc["run_id"], case["case_id"], target_sn=case.get("sn") or doc.get("sn"), resource_wait_deadline_at=end)
-        case["resource_wait_deadline_at"] = end
-    while True:
-        if run_store.task_cancelled(doc["run_id"]) or remaining(doc) == 0:
+    from mino_nexus.services.execution_policy import deadline
+    # Reuse the stored deadline even when the caller carries a pre-wait snapshot.
+    with run_store._LOCK:
+        current = run_store.get(doc["run_id"])
+        if not current or not run_store.task_is_live(current):
             return False, "task_not_running"
-        ok, reason = acquire_account(max(0, min(15000, int((end - time.time()) * 1000))))
+        stored = next((row for row in current.get("cases") or []
+                       if row.get("execution_unit_id") == case.get("execution_unit_id")), None)
+        if stored is None or stored.get("status") not in {"pending", "running"}:
+            return False, "execution_unit_not_pending"
+        end = stored.get("resource_wait_deadline_at")
+        if end is None:
+            end = time.time() + (current.get("execution_policy") or {}).get("resource_wait_seconds", 120)
+            stored["resource_wait_deadline_at"] = end
+            current = run_store.put(current)
+            stored = next(row for row in current["cases"] if row["execution_unit_id"] == case["execution_unit_id"])
+            end = stored["resource_wait_deadline_at"]
+        case["resource_wait_deadline_at"] = end
+        execution_end = deadline(current, stored)
+    while True:
+        if run_store.task_cancelled(doc["run_id"]) or remaining(current) == 0:
+            return False, "task_not_running"
+        now = time.time()
+        if execution_end and now >= execution_end:
+            return False, "attempt_deadline_exceeded"
+        if now >= end:
+            return False, "resource_wait_deadline_exceeded"
+        remaining_wait = min(end, execution_end) - now if execution_end else end - now
+        ok, reason = acquire_account(max(0, min(15000, int(remaining_wait * 1000))))
         if ok and not request["claimed"]:
             ok = claim_without_account()
             reason = request["reason"] if not ok else ""
         if ok:
             return True, ""
-        if time.time() >= end:
-            return False, "resource_wait_deadline_exceeded"
-        if request.get("reason") == "resource_isolated":
-            return False, "resource_isolated"
+        if request.get("reason") in {"resource_isolated", "resource_wait_deadline_exceeded",
+                                   "attempt_deadline_exceeded", "execution_unit_not_pending", "task_not_running"}:
+            return False, request["reason"]
         # No part of the resource set is held while waiting.
-        time.sleep(min(1, max(0, end - time.time())))
+        limit = min(end, execution_end) if execution_end else end
+        time.sleep(min(1, max(0, limit - time.time())))

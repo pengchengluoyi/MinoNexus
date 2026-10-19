@@ -248,7 +248,7 @@ def _claim_dispatch(opid, sess):
         if row.action in {"execute", "restart", "build", "install"}:
             from mino_nexus.services.node_workload import workload_for_node_id
             workload = workload_for_node_id(node_id) or {}
-            if workload.get("active_runs") or any(d.get("busy") for d in workload.get("devices", [])):
+            if workload.get("busy") or workload.get("active_runs") or any(d.get("busy") for d in workload.get("devices", [])):
                 row.result = {"reason": "等待当前节点的测试和设备操作结束"}
                 return
         from mino_nexus.services.scout_updates import hold

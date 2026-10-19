@@ -41,6 +41,13 @@ def _expected(check):
         return copy.deepcopy(check["expected"])
     payload = check.get("assert") or {}
     rules = payload.get("rules") or {}
+    if check.get("key_ref") == "expected.ui_absent" and (payload.get("element") or {}).get("name"):
+        return {"predicate": "not_visible"}
+    if (check.get("key_ref") == "expected.ui_copy" and rules.get("text_match") == "exact"
+            and rules.get("match") == "equals"):
+        literals = [rules[key] for key in ("title", "body") if rules.get(key) is not None]
+        if len(literals) == 1 and isinstance(literals[0], str):
+            return {"predicate": "text_equals", "value": literals[0]}
     rule = str(rules.get("rule") or "")
     if rule in {"visible", "not_visible", "secret_nonempty"}:
         return {"predicate": rule}

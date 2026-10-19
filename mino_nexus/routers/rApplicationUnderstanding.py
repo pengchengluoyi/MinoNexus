@@ -94,3 +94,69 @@ def account_facts(project_id: str, limit: int = Query(50, ge=1, le=200), offset:
 def account_fact_decide(project_id: str, candidate_id: str, body: FactDecision):
     from mino_nexus.services.account_fact_review import decide
     return call(decide, project_id, candidate_id, body)
+
+@router.get("/compile-metrics")
+def compile_metrics(project_id: str, app_id: str, platform: str = Query(default="", max_length=40), days: int = Query(default=30, ge=1, le=90)):
+    from mino_nexus.services.compile_metrics import summary
+    return call(summary, project_id, app_id, platform=platform, days=days)
+
+
+class FactRuleBody(StrictBody):
+    expected_revision: int = Field(ge=0)
+    name: Text
+    app_id: Text
+    env: Text
+    platform: Literal['web', 'android', 'ios', 'pc']
+    build: Text
+    case_id: Text
+    point_id: Text
+    build_point_id: Text
+    facet_key: Text
+    facet_value: Text
+    valid_for_seconds: int = Field(default=86400, ge=60, le=2592000)
+    enabled: bool = True
+
+
+@resource_router.get('/rules')
+def fact_rules(project_id: str):
+    from mino_nexus.services.account_fact_verification import rules, options
+    return call(lambda: {**rules(project_id), **options(project_id)})
+
+
+@resource_router.put('/rules/{rule_id}', dependencies=[Depends(project_maintainer)])
+def fact_rule_save(project_id: str, rule_id: str, body: FactRuleBody):
+    from mino_nexus.services.account_fact_verification import save_rule
+    return call(save_rule, project_id, rule_id, body)
+
+
+@resource_router.post('/{candidate_id}/verify', dependencies=[Depends(project_maintainer)])
+def fact_verify(project_id: str, candidate_id: str):
+    from mino_nexus.services.account_fact_verification import verify_candidate
+    return call(verify_candidate, project_id, candidate_id)
+
+
+class RecognitionLabel(StrictBody):
+    request_id: Text
+    expected_revision: int = Field(ge=0)
+    expected_state_id: str = Field(default='', max_length=300)
+    reason: Text
+
+
+@router.get('/comparisons')
+def recognition_comparisons(project_id: str, app_id: str,
+        platform: str = Query('', max_length=40), build: str = Query('', max_length=300),
+        limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0, le=1900)):
+    from mino_nexus.services.page_recognition_comparison import listing
+    return call(listing, project_id, app_id, platform=platform, build=build, limit=limit, offset=offset)
+
+
+@router.post('/comparisons/{session_id}/events/{seq}', dependencies=[Depends(project_maintainer)])
+def recognition_label(project_id: str, app_id: str, session_id: str, seq: int, body: RecognitionLabel):
+    from mino_nexus.services.page_recognition_comparison import label
+    return call(label, project_id, app_id, session_id, seq, body)
+
+
+@resource_router.get('/{candidate_id}/observations')
+def fact_observations(project_id: str, candidate_id: str):
+    from mino_nexus.services.account_fact_review import observations
+    return call(observations, project_id, candidate_id)

@@ -10,5 +10,5 @@
     <option name="ADD_CONTENT_ROOTS" value="true" />
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <method v="2" />
-  </configuration>
+  <envs><env name="MINO_SCOUT_DEV_HOME" value="/Users/changpengcheng/.mino-dev/scout" /></envs></configuration>
 </component>

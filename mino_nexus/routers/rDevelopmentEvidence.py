@@ -10,37 +10,6 @@ from mino_nexus.routers.deps import current_session
 router = APIRouter(prefix="/case-runner", tags=["DevelopmentEvidence"])
 
 
-@router.get("/sessions/{session_id:path}/execution-evidence")
-def execution_evidence(session_id: str, expected_instance_id: str = Query("", max_length=100),
-                       expected_node_id: str = Query("", max_length=100),
-                       expected_build_id: str = Query("", max_length=200),
-                       expected_nexus_build_id: str = Query("", max_length=200),
-                       sess: dict = Depends(current_session)):
-    from mino_nexus.core.build_info import instance_id
-    from mino_nexus.services.execution_evidence import summarize
-    current_instance = instance_id()
-    if expected_instance_id and expected_instance_id != current_instance:
-        raise HTTPException(409, {"reason_code": "instance_mismatch", "message": "目标 Nexus 实例与预期不符，未读取会话"})
-    with session_scope() as db:
-        meta = db.get(SessionMeta, session_id)
-        if not meta or meta.owner_user_id != str(sess["user_id"]):
-            raise HTTPException(404, "会话不可读取；未归档或已删除的测试库不会补造历史证据")
-        rows = db.query(SessionEvent).filter_by(session_id=session_id).filter(SessionEvent.type.in_(
-            ["session/provenance", "tool/result", "device/action", "device/observation"]
-        )).order_by(SessionEvent.seq).limit(10001).all()
-        data = summarize({"session_id": meta.session_id, "run_id": meta.run_id, "case_id": meta.case_id,
-                          "status": meta.status, "finished_at": meta.finished_at, "verdict": meta.verdict},
-                         [{"seq": row.seq, "type": row.type, "payload": row.payload} for row in rows[:10000]],
-                         instance_id=current_instance, expected_node_id=expected_node_id,
-                         expected_build_id=expected_build_id, expected_nexus_build_id=expected_nexus_build_id,
-                         truncated=len(rows) > 10000)
-        if not expected_instance_id:
-            data["issues"].append({"code": "expected_instance_missing", "message": "尚未指定预期测试实例", "failed": False})
-            if data["state"] == "verified":
-                data["state"] = "incomplete"
-        return ok(data)
-
-
 @router.get("/sessions/{session_id:path}/screenshot")
 def screenshot(session_id: str, seq: int = Query(ge=0), sess: dict = Depends(current_session)):
     with session_scope() as db:

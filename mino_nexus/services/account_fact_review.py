@@ -76,8 +76,14 @@ def capture(ctx, proposed, *, source, expected_before):
             env=account.env, source=source, evidence_context={'app_id': session.app_id,
                 'platform': str(getattr(ctx, 'platform', '') or ''),
                 'build': str(getattr(ctx, 'app_version', '') or ''), 'sn': str(getattr(ctx, 'sn', '') or ''),
-                'session_finalization_id': session.finalization_id or '', 'lease_id': held.get('lease_id', '')}, before=before, proposed=changes, status='candidate', created_at=now(), decision={})
+                'session_finalization_id': session.finalization_id or '', 'lease_id': held.get('lease_id', ''), 'lease_digest': digest(held)}, before=before, proposed=changes, status='candidate', created_at=now(), decision={})
         db.add(row)
+        db.flush()
+        from mino_nexus.services.account_fact_verification import verify_in_transaction
+        try:
+            verify_in_transaction(db, row, held=True)
+        except ValueError as exc:
+            row.decision = {'automatic_check': str(exc)}
         return view(row)
 
 
@@ -96,7 +102,7 @@ def listing(project_id, *, limit=50, offset=0, status=""):
             items.append({**view(row), 'expired': row.status == 'confirmed' and (row.decision or {}).get('expires_at', 0) <= time.time(),
                           'scope_complete': all((row.evidence_context or {}).get(k) for k in ('app_id', 'platform', 'build')),
                           'stale': account is None or account.env != row.env or current != row.before,
-                          'busy': bool(account and account.lease), 'expected_digest': digest(current)})
+                          'busy': bool(account and account.lease), 'account_name': account.display_name if account else '', 'expected_digest': digest(current)})
         return {'owner_user_id': actor, 'project_id': project_id, 'items': items, 'total': total, 'limit': limit, 'offset': offset}
 
 
@@ -133,7 +139,7 @@ def decide(project_id, candidate_id, body):
             if protected(row.run_id, db=db, sn=str(row.evidence_context.get('sn') or '')):
                 raise ValueError('resource_isolated')
             event = db.query(SessionEvent).filter_by(session_id=row.session_id, seq=body.evidence_seq).one_or_none() if body.evidence_seq is not None else None
-            if event is None or event.type not in {'observe/screen', 'observe/hierarchy', 'tool/result', 'inspection/done'}:
+            if event is None or event.type not in {'observe/screen', 'observe/hierarchy', 'tool/result', 'inspection/done', 'device/observation'}:
                 raise ValueError('fact_evidence_event_required')
             if not all((row.evidence_context or {}).get(k) for k in ('app_id', 'platform', 'build')):
                 raise ValueError('fact_scope_incomplete')
@@ -144,3 +150,17 @@ def decide(project_id, candidate_id, body):
                         'evidence_seq': body.evidence_seq, 'verification_kind': 'human_confirmed',
                         'expires_at': time.time() + body.valid_for_seconds if body.approve else 0}
         return view(row)
+
+
+def observations(project_id, candidate_id):
+    with session_scope() as db:
+        actor = owned(db, project_id, write=False)
+        row = db.get(AccountFactCandidate, candidate_id)
+        if row is None or row.project_id != project_id or row.owner_user_id != actor:
+            raise ValueError('fact_candidate_missing')
+        session = db.get(SessionMeta, row.session_id)
+        if session is None or session.owner_user_id != actor:
+            raise ValueError('fact_evidence_missing')
+        events = db.query(SessionEvent).filter_by(session_id=row.session_id).filter(SessionEvent.type.in_(
+            ['observe/screen', 'observe/hierarchy', 'tool/result', 'inspection/done', 'device/observation'])).order_by(SessionEvent.seq.desc()).limit(200).all()
+        return {'items': [{'seq': e.seq, 'type': e.type, 'at': e.ts} for e in events]}

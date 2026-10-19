@@ -57,6 +57,17 @@ def protected(run_id: str, *, db=None, sn: str = "") -> bool:
     try:
         if db is not None:
             row = db.get(AppRegressionRun, run_id)
+            if row is None:
+                # Strict account leases are owned by the persisted attempt session.
+                # Resolve its task explicitly; never infer the parent from ID syntax.
+                from mino_nexus.models.session_event import SessionMeta
+                attempt = db.get(SessionMeta, run_id)
+                if attempt is not None:
+                    row = db.get(AppRegressionRun, attempt.run_id)
+                    if (row is None or not attempt.owner_user_id
+                            or attempt.owner_user_id != row.owner_user_id):
+                        return True  # An orphaned/foreign binding is not release evidence.
+                    run_id = row.run_id
             if row and unresolved(row.payload, sn):
                 return True
             from mino_nexus.models.execution_resource import ExecutionResource

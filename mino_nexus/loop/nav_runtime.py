@@ -301,6 +301,19 @@ class NavRuntime:
             fsm_meta=meta,
         )
 
+        # Paired localization uses the same observation; only reviewed page features differ.
+        if writer and nodes and self._app_version and any(state.get("reviewed_features") for state in self.fsm.get("states") or []):
+            try:
+                from mino_nexus.services.page_recognition_comparison import record_pair
+                record_pair(writer, states=self.fsm.get("states") or [], reviewed=self.localized,
+                    nodes=nodes, session_block=session_block, last_edge_to=self._last_edge_to,
+                    last_edge_passed=self._last_edge_passed, state_wireframes=state_wfs,
+                    current_wireframe=cur_wf, extra_signals=extra_vlm, hierarchy_weak=hierarchy_weak,
+                    fsm_meta=meta, project_id=self.project_id, app_id=self.app_id,
+                    platform=self.platform, build=self._app_version, hierarchy_stale=snap.stale)
+            except Exception as exc:
+                SLog.w(TAG, f"recognition comparison unavailable: {type(exc).__name__}")
+
         if not self._preflight_done and nodes:
             self._run_preflight(nodes, writer=writer)
 

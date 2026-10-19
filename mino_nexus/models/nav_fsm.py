@@ -64,3 +64,18 @@ class NavFsmEdge(Base):
     effect_assert = Column(JSON, default=dict)
     on_fail = Column(JSON, default=dict)
     scroll_into_view = Column(JSON, default=dict)
+
+
+class PageRecognitionReview(Base):
+    """Human labels for paired runtime observations, independent of knowledge examples."""
+    __tablename__ = 'page_recognition_reviews'
+    sample_id = Column(String, primary_key=True)
+    project_id = Column(String, nullable=False, index=True)
+    app_id = Column(String, nullable=False, index=True)
+    owner_user_id = Column(String, nullable=False, index=True)
+    session_id = Column(String, nullable=False)
+    event_seq = Column(Integer, nullable=False)
+    evidence_digest = Column(String, nullable=False)
+    expected_state_id = Column(String, nullable=False)
+    revision = Column(Integer, nullable=False)
+    history = Column(JSON, nullable=False, default=list)

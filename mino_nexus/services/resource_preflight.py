@@ -120,11 +120,9 @@ def run_start_resource_blockers(
     cur = "unknown" if row.get("stale") else normalize_device_session(row.get("session") or "")
     if cur != "logged_in":
         return blockers
-    if claim_requires_clear_cache(claim, scene_row, pre):
-        return blockers
     blockers.append(
-        "【拒跑】登记簿机态为 logged_in，用例要求未登录/已登出/游客，且未声明「清除应用缓存」prep，"
-        "请先清缓存或调整前置/密钥。"
+        "【拒跑】登记簿机态为 logged_in，用例要求未登录/已登出/游客，且未声明退出登录前置。"
+        "请先通过应用退出并重新观察确认；清缓存不等于退出登录。"
     )
     return blockers
 
@@ -134,23 +132,15 @@ def _pre_avatar_setup_lane(precondition: str) -> bool:
 
 
 def prep_avatar_setup_gate_issues(ctx: Any, precondition: str) -> list[str]:
-    """前置「未配置形象」：禁止在未清缓存/换号前对 filled 租约空 signal_done。"""
+    """前置「未配置形象」核对明确的形象字段；缓存不是业务复位证据。"""
     pre = str(precondition or "").strip()
     if not _pre_avatar_setup_lane(pre):
-        return []
-    if bool(getattr(ctx, "prep_clear_done", False)):
         return []
     lease = getattr(ctx, "resource_lease", None) or {}
     facets: dict[str, Any] = {}
     if isinstance(lease, dict) and isinstance(lease.get("facets"), dict):
         facets = lease["facets"]
     issues: list[str] = []
-    pd = str(facets.get("profile_data") or "").strip().lower()
-    if pd == "filled":
-        issues.append(
-            "【资源门槛】前置「未配置形象」，但租约账号 profile_data=filled；"
-            "须本任务 clear_app_cache 或 lease 无资料账号，禁止空 signal_done。"
-        )
     from mino_nexus.services.account_requirement_compile import PROFILE_SHAPE_FACETS
 
     for fk in PROFILE_SHAPE_FACETS:
@@ -158,7 +148,7 @@ def prep_avatar_setup_gate_issues(ctx: Any, precondition: str) -> list[str]:
         if fv in ("yes", "有", "filled"):
             issues.append(
                 f"【资源门槛】前置「未配置形象」，但租约 {fk}={fv}；"
-                "须清缓存或换号后再 prep 收工。"
+                "须使用实际满足形象初态的账号；清缓存不能重置账号形象。"
             )
             break
     return issues
@@ -201,16 +191,6 @@ def prep_resource_gate_issues(
             issues.append(
                 "【资源门槛】前置要求清除应用缓存：须本任务 clear_app_cache 成功，不可仅凭 history 或 signal_done 跳过。"
             )
-        else:
-            cur = effective_device_session(ctx, sn=sn, package_id=pkg)
-            if cur == "logged_in":
-                fact = dict(getattr(ctx, "session_fact", None) or {})
-                if str(fact.get("session") or "").lower() in ("logged_out", "guest"):
-                    pass
-                else:
-                    issues.append(
-                        "【资源门槛】已清缓存但机态仍为 logged_in：请 inspect-session 确认或再次 clear_app_cache。"
-                    )
 
     da = claim.get("device_app") if isinstance(claim, dict) and isinstance(claim.get("device_app"), dict) else {}
     req_sess = str(da.get("required_session") or scene.get("required_session") or "").strip().lower()
@@ -238,13 +218,6 @@ def prep_resource_gate_issues(
                 f"【资源门槛】device_app.session 需要 {req_sess}"
                 f"（允许 {allow or [req_sess]}），当前 {cur}。{hint}"
             )
-
-    if not issues and claim_requires_clear_cache(claim, scene, pre):
-        from mino_nexus.services.device_app_session_store import get_session
-
-        row = get_session(sn, pkg) or {}
-        if str(row.get("session") or "") == "logged_in" and not row.get("stale"):
-            issues.append("【资源门槛】登记簿仍为 logged_in，清缓存未写入 device_app_sessions。")
 
     binding = str(da.get("binding") or "").strip()
     if (
@@ -295,7 +268,4 @@ def preflight_device_app_gap(
         pre = str(case.get("precondition") or "").strip()
     if claim_requires_clear_cache(claim, scene, pre) and bool(getattr(ctx, "prep_clear_done", False)):
         gaps = [g for g in gaps if "clear_cache" not in g]
-        cur = effective_device_session(ctx, sn=sn, package_id=package_id)
-        if cur == "logged_in":
-            gaps.append("机态仍为 logged_in（清缓存后未对齐）")
     return gaps

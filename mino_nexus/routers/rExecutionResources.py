@@ -11,7 +11,7 @@ router = APIRouter(prefix="/project/{project_id}/execution-resources", dependenc
 
 
 class DomainBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=100)
     env: str = Field(min_length=1, max_length=32)
     app_id: str = Field(default="", max_length=100)
@@ -25,8 +25,14 @@ def listing(project_id: str):
         actor = owned(db, project_id, write=False)
         domains = db.query(ResourceDomain).filter_by(project_id=project_id).order_by(ResourceDomain.name).all()
         leases = db.query(ExecutionResource).filter_by(project_id=project_id, owner_user_id=actor).filter(ExecutionResource.state != "released").all()
+        from mino_nexus.models.project import App
+        from mino_nexus.models.pool_account import PoolAccount
+        apps = db.query(App).filter_by(project_id=project_id).order_by(App.name).all()
+        accounts = db.query(PoolAccount).filter_by(project_id=project_id).order_by(PoolAccount.display_name).all()
         return ok({"domains": [{key: getattr(row, key) for key in ("domain_id", "name", "env", "app_id", "account_ids", "enabled")} for row in domains],
-            "leases": [{key: getattr(row, key) for key in ("resource_key", "run_id", "execution_unit_id", "attempt_id", "sn", "epoch", "expires_at", "state")} for row in leases]})
+            "leases": [{key: getattr(row, key) for key in ("resource_key", "run_id", "execution_unit_id", "attempt_id", "sn", "epoch", "expires_at", "state")} for row in leases],
+            "apps": [{"id": row.id, "name": row.name} for row in apps],
+            "accounts": [{"id": row.id, "name": row.display_name or row.id, "env": row.env} for row in accounts]})
 
 
 @router.put("/domains/{domain_id}", dependencies=[Depends(project_maintainer)])
@@ -54,3 +60,46 @@ def save_domain(project_id: str, domain_id: str, body: DomainBody):
         for key, value in body.model_dump().items():
             setattr(row, key, value)
         return ok({"domain_id": row.domain_id})
+
+
+class RecoveryProof(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    resource_key: str = Field(min_length=1, max_length=300)
+    session_id: str = Field(min_length=1, max_length=200)
+    seq: int = Field(ge=0)
+    statement: str = Field(min_length=5, max_length=500)
+
+
+class RecoveryBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    request_id: str = Field(min_length=1, max_length=100)
+    expected_digest: str = Field(min_length=64, max_length=64)
+    reason: str = Field(min_length=5, max_length=500)
+    proofs: list[RecoveryProof] = Field(min_length=1, max_length=200)
+
+
+@router.get("/runs/{run_id}/recovery", dependencies=[Depends(project_maintainer)])
+def recovery_preview(project_id: str, run_id: str):
+    from mino_nexus.services.resource_recovery import preview
+    try:
+        return ok(preview(project_id, run_id))
+    except ValueError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/recovery", dependencies=[Depends(project_maintainer)])
+def recover_resources(project_id: str, run_id: str, body: RecoveryBody):
+    from mino_nexus.services.resource_recovery import recover
+    try:
+        return ok(recover(project_id, run_id, body))
+    except ValueError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/recovery/observe", dependencies=[Depends(project_maintainer)])
+async def observe_recovery(project_id: str, run_id: str):
+    from mino_nexus.services.resource_recovery import observe
+    try:
+        return ok(await observe(project_id, run_id))
+    except (ValueError, PermissionError) as exc:
+        raise HTTPException(409, detail=str(exc)) from exc

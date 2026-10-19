@@ -130,15 +130,19 @@ def emit_device_logout(
 
 
 def emit_clear_app_cache(ctx: Any, *, package_id: str = "") -> None:
-    from mino_nexus.services.resource_transition_engine import fire_transition
+    from mino_nexus.loop.observe.session_persist import mark_session_dirty
+    from mino_nexus.services.resource_transition_engine import record_transition
 
-    fire_transition(
-        ctx,
-        "clear_app_cache",
-        source="clear_app_cache",
-        package_id=package_id,
-        meta={"stale_reason": "clear_app_cache"},
-    )
+    mark_session_dirty(ctx, reason="cache_cleared_requires_observation")
+    sn, pkg = _ctx_sn(ctx), _ctx_package(ctx, package_id)
+    if sn and pkg:
+        upsert_session(sn, pkg, session="unknown", stale=True,
+            stale_reason="cache_cleared_requires_observation", source="clear_app_cache",
+            lease_run_id=str(getattr(ctx, "run_id", "") or "")[:80])
+    # No account-facet update: cache removal proves neither logout nor reset
+    # of server-side business data. Persist a fresh-observation requirement.
+    record_transition(ctx, "clear_app_cache", source="clear_app_cache",
+        meta={"package_id": pkg, "cleanup_scope": "cache_only", "session_verified": False})
 
 
 def emit_inspect_session(ctx: Any, row: dict[str, Any] | None, *, package_id: str = "") -> None:

@@ -8,6 +8,22 @@ from contextvars import ContextVar
 from typing import Any, Iterator
 
 _RUNTIME_MODE: ContextVar[str] = ContextVar("control_registry_runtime_mode", default="")
+_COMPILE_INSERTS: ContextVar[list | None] = ContextVar("control_compile_inserts", default=None)
+
+
+@contextmanager
+def capture_compile_controls():
+    """Record exact inserted rows so a compile does not invalidate itself.
+
+    This is local to one compiler worker. Changes to existing controls, or
+    subsequent edits to an inserted control, still invalidate its dependency.
+    """
+    rows = []
+    token = _COMPILE_INSERTS.set(rows)
+    try:
+        yield rows
+    finally:
+        _COMPILE_INSERTS.reset(token)
 
 
 class ControlRegistryReadOnlyError(RuntimeError):
@@ -163,6 +179,9 @@ def ensure_control(
             )
             db.add(row)
             db.flush()
+            captured = _COMPILE_INSERTS.get()
+            if captured is not None:
+                captured.append({column.name: getattr(row, column.name) for column in UiControl.__table__.columns})
         elif not _published_typed(row) and vlm_text and not str((row.locator_value or {}).get("vlm_text") or "").strip():
             locator = _empty_locator()
             locator.update(row.locator_value or {})
@@ -399,7 +418,9 @@ def stamp_compiled_plans(case: dict[str, Any], do_plan: dict[str, Any], check_pl
         kind, assert_params = assert_of(step)
         payload = step.get("assert") if isinstance(step.get("assert"), dict) else {}
         rules = payload.get("rules") if isinstance(payload.get("rules"), dict) else {}
-        desc = str(rules.get("which") or rules.get("label") or rules.get("subject") or step.get("title") or "").strip()
+        element = payload.get("element") if isinstance(payload.get("element"), dict) else {}
+        desc = str(element.get("name") or rules.get("which") or rules.get("label") or rules.get("subject")
+                   or step.get("source_clause") or step.get("title") or "").strip()
         step["assert_id"] = f"as_{int(check_plan.get('case_step') or 1)}_{index + 1}"
         step["step_id"] = first_step
         step["assert_type"] = kind

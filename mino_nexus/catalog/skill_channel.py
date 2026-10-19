@@ -56,6 +56,9 @@ CHANNEL_PLATFORMS = {
 
 # 程序自己派发，规划追加时允许，不要求出现在 case 菜单。
 PROGRAM_CAPS = frozenset({
+    "tap_target",
+    "input_target",
+    "read_web_target_facts",
     "lease_account",
     "get_otp",
     "get_phone",
@@ -127,6 +130,10 @@ def derive_phases(entry_id: str, *, kind: str = "", caller: str = "") -> list[st
     if who in ("base", "system"):
         return []
     eid = canonical_cap(entry_id)
+    if eid == "read_web_target_facts":
+        return ["prep", "do", "check"]
+    if eid in {"tap_target", "input_target"}:
+        return ["do"]
     if str(kind or "") == "check" or eid == "assert_visual":
         return ["check"]
     return ["prep", "do"]
@@ -452,6 +459,7 @@ def _ensure_program_rows(db: Any) -> int:
         ("operation.check_box", "设置复选框状态", "指定准确目标和 checked 状态；最多点击一次并复核，不含登录业务。", ["mac", "win", "android", "web"]),
     )
     specs += (
+        ("clear_app_cache", "仅清除应用缓存", "只清理目标应用缓存，保留应用数据；不证明退出登录或账号业务状态复位。", ["android"]),
         ("reload_page", "刷新当前页面", "程序刷新本次运行的 Web 页面。不进模型菜单。", ["web"]),
         ("plugin.gmail.fetch_otp", "节点 Gmail 取码", "在同一绑定节点读取验证码，不携带邮箱密码。", ["mac", "win", "android", "web"]),
     )
@@ -460,12 +468,21 @@ def _ensure_program_rows(db: Any) -> int:
         row = db.query(CatalogEntry).filter(CatalogEntry.id == eid).first()
         fields = {"caller": "program", "phases": ["prep", "do"],
                   "event_kind": eid, "channel_contract_version": 3}
-        if eid in {"reload_page", "plugin.gmail.fetch_otp"}:
-            executor = "playwright" if eid == "reload_page" else "host_plugin"
+        if eid in {"clear_app_cache", "reload_page", "plugin.gmail.fetch_otp"}:
+            executor = {"clear_app_cache": "adb", "reload_page": "playwright", "plugin.gmail.fetch_otp": "host_plugin"}[eid]
             implementation = {"id": "program.v1:" + eid, "executor": executor,
                 "runs_on": "scout", "platforms": list(platforms), "low_level": {},
                 "params_contract": {"version": 1}, "result_contract": {"version": 1},
                 "device_hint_template": {"execution_mode": "legacy"}}
+            if eid == "clear_app_cache":
+                fields["channel_contract_version"] = 4
+                implementation["requires_caps"] = ["system_pkg_clear"]
+                # Safe on older Scout versions as well: unsupported flags fail,
+                # and this declaration contains no data-clearing fallback.
+                implementation["low_level"] = {"kind": "shell",
+                    "shell": "pm clear --cache-only --user current {package}",
+                    "summary": "仅清除目标应用缓存，保留应用数据"}
+                implementation["result_contract"]["cleanup_scope"] = "cache_only"
             if eid == "reload_page":
                 implementation["requires_caps"] = ["ui_native_input"]
             fields["implementations"] = [implementation]
@@ -596,6 +613,6 @@ def register_program_capabilities() -> dict[str, Any]:
         registered = [{"id": row.id, "platforms": list(row.platforms_json or []),
                        "channel_contract_version": (row.payload_json or {}).get("channel_contract_version")}
                       for row in db.query(CatalogEntry).filter(CatalogEntry.id.in_(
-                          ("confirm_login_state", "operation.check_box", "reload_page", "plugin.gmail.fetch_otp"))).order_by(CatalogEntry.id).all()]
+                          ("confirm_login_state", "operation.check_box", "clear_app_cache", "reload_page", "plugin.gmail.fetch_otp"))).order_by(CatalogEntry.id).all()]
     catalog.reload()
     return {"changed": changed, "registered": registered}

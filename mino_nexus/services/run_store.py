@@ -209,7 +209,7 @@ def _upsert_run(doc: dict[str, Any]) -> None:
                 raise ValueError("run_execution_selection_immutable")
             for case in doc.get("cases") or []:
                 original_case = before.get(case.get("execution_unit_id")) or {}
-                for field in ("case_id", "sn", "execution_unit_id", "frozen_identity", "source_revision_id", "v5_publication", "retry_count", "retry_of", "retry_of_execution_unit_id", "attempt_deadline_at"):
+                for field in ("case_id", "sn", "execution_unit_id", "frozen_identity", "source_revision_id", "v5_publication", "retry_count", "retry_of", "retry_of_execution_unit_id", "attempt_deadline_at", "resource_wait_deadline_at"):
                     if field in original_case:
                         case[field] = copy.deepcopy(original_case[field])
         if previous is not None and previous.status not in _TASK_LIVE:

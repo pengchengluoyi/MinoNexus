@@ -177,6 +177,12 @@ def fire_transition(
     tid = str(trigger_id or "").strip()
     if not tid:
         return False
+    if tid in {"clear_app_cache", "system_pkg_clear"}:
+        # Old databases may still contain a built-in cache -> logout rule.
+        # Such a rule cannot turn cache cleanup into authentication evidence.
+        from mino_nexus.services.resource_transition import emit_clear_app_cache
+        emit_clear_app_cache(ctx, package_id=package_id)
+        return True
     plat = _platform(ctx)
     rules = _rules_for_trigger(tid, plat)
     if not rules:

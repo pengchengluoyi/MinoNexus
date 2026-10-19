@@ -13,7 +13,7 @@ _BLOCK_RE = re.compile(r"【块[:：]\s*([^】]+)】")
 _NAV_RE = re.compile(r"【导航[:：]\s*([^】]+)】")
 _CAP_RE = re.compile(r"【cap[:：]\s*([^】]+)】", re.I)
 _KEY_REF_RE = re.compile(r"\b((?:operation|expected)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)\b", re.I)
-_COMPILE_CONTRACT_REVISION = 12
+_COMPILE_CONTRACT_REVISION = 13
 _SLUG_BAD = re.compile(r"[^\w]+", re.UNICODE)
 _SPATIAL_HINTS: tuple[tuple[str, str], ...] = (
     ("右上", "top_right"),

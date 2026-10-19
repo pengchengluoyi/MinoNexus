@@ -1,5 +1,5 @@
 id: account-facet-commit
-version: 1
+version: 2
 label: 账号 Facet 写回分析
 summary: 读用例 timeline，判断号池 facet 应更新哪些字段
 engine: json_chat

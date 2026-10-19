@@ -254,7 +254,7 @@ def _entries() -> list[dict[str, Any]]:
             resource="device_app_sessions + 账号 session（清缓存联动）",
             config_keys=["kind: clear_cache"],
             dsl='prep_items: [{ "kind": "clear_cache", "phase": "before_launch" }]',
-            runtime="Prep 环境清理：clear_app_cache；成功后机态 session→logged_out、绑定清除",
+            runtime="Prep 环境清理：clear_app_cache 仅清缓存；登录态须重新观察，不重置账号业务数据",
         ),
         _entry(
             section="prep",
@@ -620,6 +620,9 @@ def _entries() -> list[dict[str, Any]]:
             param_slots=[
                 {"id": "title", "required": False},
                 {"id": "body", "required": False},
+                {"id": "target.name", "required": False},
+                {"id": "target.role", "required": False},
+                {"id": "match", "required": False, "enum": ["equals", "contains"]},
             ],
             compile_patterns=[
                 {
@@ -890,6 +893,10 @@ def _entries() -> list[dict[str, Any]]:
             runtime="checkpoint negation",
             key_layer="expected",
             key_ref="expected.ui_absent",
+            param_slots=[
+                {"id": "target.name", "required": False},
+                {"id": "target.role", "required": False},
+            ],
         ),
         _entry(
             section="expected",

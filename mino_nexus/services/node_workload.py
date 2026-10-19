@@ -11,14 +11,31 @@ from mino_nexus.runtime.run_context import WEB_PLAYWRIGHT_PARALLEL_LANES, is_web
 from mino_nexus.services.run_store import get, running_run_ids_for_sn
 
 
+def scout_workload_busy(workload: P.DeviceWorkload | None) -> bool:
+    """A Web lane capacity announcement is not itself an executing step."""
+    if workload is None:
+        return False
+    if workload.run_id or workload.capability_id or workload.step_idx >= 0:
+        return True
+    total, free, quarantined = workload.lanes_total, workload.lanes_free, workload.lanes_quarantined
+    # Missing or invalid capacity must not release an uncertain device.
+    if (type(total) is not int or type(free) is not int or type(quarantined) is not int
+            or total <= 0 or not 0 <= free <= total or not 0 <= quarantined <= total - free):
+        return True
+    return free < total or quarantined > 0
+
+
 def build_node_workload(node: NodeSession) -> dict[str, Any]:
-    scout_by_sn: dict[str, P.DeviceWorkload] = {
-        w.sn: w for w in (node.device_workload or []) if str(w.sn or "").strip()
-    }
+    scout_by_sn: dict[str, list[P.DeviceWorkload]] = {}
+    for workload in node.device_workload or []:
+        if str(workload.sn or "").strip():
+            scout_by_sn.setdefault(workload.sn, []).append(workload)
     devices_out: list[dict[str, Any]] = []
     for sn in sorted(node.devices):
         dev = node.devices[sn]
-        scout = scout_by_sn.get(sn)
+        reported = scout_by_sn.get(sn, [])
+        scout = next((item for item in reported if item.run_id or item.capability_id or item.step_idx >= 0),
+                     reported[-1] if reported else None)
         run_ids = running_run_ids_for_sn(sn)
         nexus_runs: list[dict[str, Any]] = []
         for rid in run_ids:
@@ -34,7 +51,7 @@ def build_node_workload(node: NodeSession) -> dict[str, Any]:
             "scout_step": asdict(scout) if scout else None,
             "nexus_run_ids": run_ids,
             "nexus_runs": nexus_runs,
-            "busy": bool(scout or run_ids),
+            "busy": any(scout_workload_busy(item) for item in reported) or bool(run_ids),
             **(
                 {
                     "web_parallel_active": len(run_ids),

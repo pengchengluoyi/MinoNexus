@@ -2,12 +2,8 @@
 from __future__ import annotations
 
 # 与 registry / recovery_seed 对齐；新增登出能力时在此登记。
-LOGOUT_CAPABILITY_IDS: frozenset[str] = frozenset(
-    {
-        "clear_app_cache",
-        "system_pkg_clear",
-    }
-)
+# Cache cleanup retains application data; neither legacy name proves logout.
+LOGOUT_CAPABILITY_IDS: frozenset[str] = frozenset()
 
 
 def is_logout_capability(cap_id: str) -> bool:

@@ -20,3 +20,14 @@ class AccountFactCandidate(Base):
     status = Column(String, nullable=False, default='candidate')
     created_at = Column(String, nullable=False)
     decision = Column(JSON, nullable=False, default=dict)
+
+
+class AccountFactRule(Base):
+    """Maintainer-reviewed mapping from a frozen business assertion to one fact."""
+    __tablename__ = 'account_fact_rules'
+    rule_id = Column(String, primary_key=True)
+    project_id = Column(String, nullable=False, index=True)
+    app_id = Column(String, nullable=False, index=True)
+    definition = Column(JSON, nullable=False)
+    updated_by = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)

@@ -4625,7 +4625,7 @@ def _run_loop(
                 if cursor.prep_guard_streak >= 6:
                     stop_msg = (
                         f"前置空转 {cursor.prep_guard_streak} 轮（仍为 logged_in 或无法 logout）。"
-                        "请确认清缓存/路线图退出是否可用，或手动将设备登出后再跑。"
+                        "请确认应用退出登录路径可用，或将设备登出并重新观察后再跑；清缓存不等于退出登录。"
                         f" 最近拦截：{skip_reason[:160]}"
                     )
             elif (
@@ -5610,17 +5610,10 @@ def _run_loop(
             if not _filling:
                 if in_prep:
                     setattr(ctx, "app_launch_confirmed", False)
-                from mino_nexus.services.resource_transition import emit_clear_app_cache
+                from mino_nexus.loop.observe.session_persist import mark_session_dirty
 
-                emit_clear_app_cache(ctx)
-                ctx.session_dirty = True
-                ctx.session_fact = {
-                    "session": "unknown",
-                    "identity": "",
-                    "seen": "clear_app_cache",
-                    "source": "clear_app_cache",
-                    "reason": "应用数据已清理，登录态需要重新观察确认",
-                }
+                # Selecting credentials did not clear cache or log out the UI.
+                mark_session_dirty(ctx, reason="account_lease_changed")
             from mino_nexus.loop.observe.session_persist import effective_session_block
 
             inspect_slots["session_block"] = effective_session_block(ctx, "")

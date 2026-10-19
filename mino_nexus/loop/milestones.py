@@ -834,9 +834,9 @@ def note_tool_pass_milestone(
     state["status"] = "in_progress"
     write_state(cursor, state)
     if ctx is not None and cap in ("clear_app_cache", "system_pkg_clear"):
-        from mino_nexus.services.resource_transition import emit_device_logout
+        from mino_nexus.services.resource_transition import emit_clear_app_cache
 
-        emit_device_logout(ctx, source="clear_app_cache")
+        emit_clear_app_cache(ctx)
     if ctx is not None and cap == "close_app":
         plat = str(getattr(ctx, "platform", "") or "").strip().lower()
         if plat in ("web", "browser", "playwright"):

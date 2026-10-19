@@ -17,7 +17,7 @@ from mino_nexus.services.v5_execution import ExecutionControl
 from mino_nexus.services.web_v5_contract import CONTRACTS, PROFILE, evaluate, requested_facts
 
 
-def _input_payload(payload, project_id, attempt_id, sn, *, deadline):
+def _input_payload(payload, project_id, attempt_id, sn, *, deadline, account_bindings):
     if "resource_ref" not in payload:
         return payload
     ref = payload["resource_ref"]
@@ -33,6 +33,20 @@ def _input_payload(payload, project_id, attempt_id, sn, *, deadline):
     expiry = datetime.now(timezone.utc) + timedelta(seconds=max(1, deadline - time.monotonic()) + 30)
     if not try_claim_account_lease(project_id, account_id, {"run_id": attempt_id, "sn": sn, "expires_at": expiry.isoformat()}):
         raise ValueError("resource_busy")
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.pool_account import PoolAccount
+    from mino_nexus.services.pool_account_store import _facets_for_account
+    from mino_nexus.services.case_compilation import digest
+    with session_scope() as db:
+        held = db.get(PoolAccount, account_id)
+        if held is None or (held.lease or {}).get('run_id') != attempt_id or (held.lease or {}).get('sn') != sn:
+            raise ValueError('resource_lease_lost')
+        captured = {'before': _facets_for_account(db, project_id, account_id, apply_observations=False),
+                    'lease_digest': digest(held.lease)}
+        previous = account_bindings.get(account_id)
+        if previous is not None and previous['before'] != captured['before']:
+            raise ValueError('account_facts_changed')
+        account_bindings[account_id] = captured
     return {"text": str(account.get(ref["field"]) or "")}
 
 
@@ -53,7 +67,7 @@ def _attempt(task_id, case, doc, number, retry_of):
     evidence, action_refs = [], {}
     generation, verification, reason, stopped = "", "unverified", "", False
     opened_dispatched = False
-    context = {"env_profile": str(doc.get("env_profile") or ""), "env_surface": str(doc.get("env_surface") or ""), "action_scheme": "dom_preferred",
+    context = {"account_bindings": {}, "env_profile": str(doc.get("env_profile") or ""), "env_surface": str(doc.get("env_surface") or ""), "action_scheme": "dom_preferred",
         "provider_id": str(doc.get("provider_id") or ""), "execution_mode": "v5", "plan_source": "text", "frozen_revision": frozen.get("frozen_revision"),
         "publication": frozen, "controls": frozen.get("controls", {}), "predicate_contract": "web.atomic.v1",
         "verifier_build": "web-atomic-1", "project_id": pid, "sn": sn, "node_id": str((doc.get("device_targets", {}).get(sn) or {}).get("node_id") or ""),
@@ -162,7 +176,7 @@ def _attempt(task_id, case, doc, number, retry_of):
                     seconds=1, operation_ref='classify:' + action['operation_id'])
                 if classification.raw_response.get("target_facts", {}).get("sensitive") and not control.get("sensitive"):
                     raise ValueError("sensitive_classification_missing")
-            payload = _input_payload(action["payload"], pid, attempt_id, sn, deadline=budget.deadline)
+            payload = _input_payload(action["payload"], pid, attempt_id, sn, deadline=budget.deadline, account_bindings=context["account_bindings"])
             params = {"control": control, "payload": payload}
             register_inputs(params)
             receipt = dispatch(action["capability_id"], params, seconds=6, reserve=remaining_checks + 6,
@@ -242,9 +256,6 @@ def _attempt(task_id, case, doc, number, retry_of):
         except Exception:
             if verification == "verified_pass":
                 verification, reason = "unverified", "lane_quarantined"
-        if stopped:
-            from mino_nexus.services.pool_account_store import clear_leases_for_run
-            clear_leases_for_run(pid, attempt_id)
         budget.terminate()
     context.update(session_generation=generation, elapsed_ms=int((time.monotonic() - budget.started) * 1000), executor_stopped=stopped)
     if not opened_dispatched and stopped:
@@ -261,6 +272,17 @@ def _attempt(task_id, case, doc, number, retry_of):
     except Exception:
         # Never redo UI actions to compensate for a storage fault.
         verdict.update(verification_status="unverified", reason_code="store_error", flaky=False)
+    try:
+        if verdict["verification_status"] == "verified_pass":
+            from mino_nexus.services.account_fact_verification import capture_strict_session
+            capture_strict_session(attempt_id)
+    except Exception as exc:
+        from mino_nexus.core.log import SLog
+        SLog.w("AccountFacts", f"automatic verification deferred: {type(exc).__name__}")
+    finally:
+        if stopped:
+            from mino_nexus.services.pool_account_store import clear_leases_for_run
+            clear_leases_for_run(pid, attempt_id)
     return {**verdict, "session_id": attempt_id, "attempt_run_id": attempt_id, "executor_stopped": stopped,
             "status": "pass" if verdict["verification_status"] == "verified_pass" else "fail",
             "summary": verdict["reason_code"] or verdict["verification_status"], "elapsed_ms": context["elapsed_ms"]}

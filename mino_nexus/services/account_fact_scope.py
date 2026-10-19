@@ -36,8 +36,15 @@ def overlay(db, project_id, account_id, facets):
         # A later manual correction invalidates the observation's baseline.
         if any(facets.get(key, "unknown") != (row.before or {}).get(key, "unknown") for key in row.proposed):
             continue
+        expires_at = (row.decision or {}).get("expires_at", 0)
+        if (row.decision or {}).get("verification_kind") == "automatic":
+            from mino_nexus.models.account_fact_candidate import AccountFactRule
+            for proof in (row.decision or {}).get("evidence") or []:
+                rule = db.get(AccountFactRule, proof.get("rule_id"))
+                if rule is None or rule.definition.get("enabled") is not True or rule.definition.get("revision") != proof.get("rule_revision"):
+                    expires_at = 0
         for key, value in row.proposed.items():
-            latest[key] = (value, (row.decision or {}).get("expires_at", 0))
+            latest[key] = (value, expires_at)
     for key, (value, expires_at) in latest.items():
         # Expiration of a newer correction must not resurrect an older observation.
         if expires_at > time.time():
