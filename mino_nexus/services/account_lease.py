@@ -629,6 +629,7 @@ def _lease_for_context(
     )
     from mino_nexus.services.phone_pool_lease import (
         phone_pool_lease_enabled,
+        phone_seq_account_id,
         provision_phone_seq_account,
         should_provision_phone_seq,
         try_provision_after_lease_miss as try_provision_phone_after_miss,
@@ -668,7 +669,7 @@ def _lease_for_context(
             restored = None
         elif should_provision_phone_seq(
             requirements, prompt=prompt, env_doc=env_doc, ctx=ctx
-        ) and "phone_seq auto" not in str(restored.get("note") or ""):
+        ) and aid != phone_seq_account_id(ctx, project_id=project_id, run_id=run_id):
             _clear_leased(project_id, aid, run_id)
             release_ctx_lease(ctx)
             restored = None
@@ -742,6 +743,7 @@ def _lease_for_context(
                 apply_lease_to_ctx(ctx, phone_row, project_id=project_id)
                 SLog.i(TAG, f"leased phone seq (fresh) {account_ident(phone_row)} run={run_id[:12]}")
                 return phone_row, ""
+        return None, "新账号未能满足前置或资源仍被占用；未回退复用旧账号"
 
     accounts = list_test_accounts(env_doc, project_id=project_id)
     if not accounts and not gmail_alias_lease_enabled(env_doc, ctx) and not phone_pool_lease_enabled(

@@ -111,12 +111,17 @@ def should_provision_phone_seq(
     env_doc: dict | None,
     ctx: Any,
 ) -> bool:
-    if not (
-        requirements_want_unregistered(requirements)
-        or precondition_wants_unregistered(prompt)
-    ):
-        return False
-    return phone_pool_lease_enabled(env_doc, ctx)
+    from mino_nexus.services.account_requirement_compile import PROFILE_SHAPE_FACETS
+
+    wants_empty_shape = any(
+        isinstance(clause, dict) and str(clause.get("facet") or "") in PROFILE_SHAPE_FACETS
+        and str(clause.get("op") or "eq") == "eq" and str(clause.get("value") or "") == "no"
+        for clause in requirements.get("all") or []
+    )
+    wants_new = (requirements_want_unregistered(requirements)
+                 or precondition_wants_unregistered(prompt) or wants_empty_shape)
+    return (wants_new and phone_pool_lease_enabled(env_doc, ctx)
+            and _fresh_requirements_match(requirements, env_doc or {}))
 
 
 def _channel_stem(env_doc: dict, surface: str) -> str:
@@ -129,40 +134,48 @@ def _channel_stem(env_doc: dict, surface: str) -> str:
     return str(surface or "")[:40]
 
 
-def _bump_phone_next(
-    project_id: str,
-    *,
-    surface: str,
-    env_profile: str,
-) -> tuple[str, dict[str, Any]]:
-    from mino_nexus.services import project_store as ps
-    from mino_nexus.services.project_env import normalize_project_env
+def fresh_phone_facets(env_doc: dict[str, Any]) -> dict[str, str]:
+    """补池初始值来自 fresh_user 合同；不复制请求中的任意业务事实。"""
+    from mino_nexus.services.account_pool_templates import merged_pool_field_defs
+    from mino_nexus.services.account_requirement_compile import PROFILE_SHAPE_FACETS
+    from mino_nexus.services.resource_pool import facets_from_profile
 
-    pid = str(project_id or "").strip()
-    doc = normalize_project_env(ps.project_env(pid))
-    slot = get_channel_phone_seq(
-        doc,
-        env_surface=surface,
-        env_profile=env_profile,
-        apply_phone_default=True,
-    )
-    start = slot.get("start") or ""
-    if not start:
-        raise ValueError("phone seq start not configured")
-    cur = slot.get("next") or start
-    try:
-        num_int = int(cur)
-    except ValueError:
-        num_int = int(start)
-    phone_str = str(num_int)
-    next_str = str(num_int + 1)
-    ch_map = dict(doc.get("channel_phone_seq") or {})
-    per = dict(ch_map.get(surface) or {})
-    per[env_profile] = {"start": start, "next": next_str}
-    ch_map[surface] = per
-    doc["channel_phone_seq"] = ch_map
-    ps.save_project_env(pid, doc)
-    return phone_str, doc
+    facets = facets_from_profile("fresh_user")
+    # 兼容现有形象字段：新用户尚未配置形象；这属于补池初始值，非 UI 核验证据。
+    for field in merged_pool_field_defs(env_doc):
+        if str(field.get("key") or "") not in PROFILE_SHAPE_FACETS:
+            continue
+        values = {str(option.get("value") or "") for option in field.get("options") or []
+                  if isinstance(option, dict)}
+        if "no" in values:
+            facets[str(field["key"])] = "no"
+    return facets
+
+
+def _fresh_requirements_match(requirements: dict[str, Any], env_doc: dict[str, Any]) -> bool:
+    from mino_nexus.services.account_pool_templates import merged_pool_field_defs
+    from mino_nexus.services.resource_pool import match_requirements
+
+    definitions = {str(field["key"]): field for field in merged_pool_field_defs(env_doc) if field.get("key")}
+    return match_requirements(fresh_phone_facets(env_doc), requirements, field_defs=definitions)[0]
+
+
+def phone_seq_account_id(ctx: Any, *, project_id: str, run_id: str) -> str:
+    """同一执行单元重复申请/进程恢复复用一条补池记录；不同设备不共用。"""
+    import hashlib
+    import json
+    from mino_nexus.core.execution_user import require_user_id
+
+    owner = require_user_id()
+    rid = str(run_id or "").strip()
+    sn = str(getattr(ctx, "sn", "") or "").strip()
+    if not rid or not sn:
+        return ""
+    identity = [owner, str(project_id), str(getattr(ctx, "app_id", "") or ""), rid,
+                str(getattr(ctx, "case_id", "") or ""), sn,
+                str(getattr(ctx, "env_surface", "") or ""),
+                str(getattr(ctx, "env_profile", "") or "test")]
+    return "acc_" + hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()[:24]
 
 
 def provision_phone_seq_account(
@@ -173,53 +186,81 @@ def provision_phone_seq_account(
     requirements: dict[str, Any],
     run_id: str,
 ) -> dict[str, Any] | None:
-    from mino_nexus.services.account_pool_templates import new_account_id
-    from mino_nexus.services.project_env import save_one_test_account
+    """原子保留序号、写入新号与审计；重复申请不消耗下一个号码。"""
+    import copy
+    import time
+    from datetime import datetime, timezone
+    from sqlalchemy import text
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.pool_account import PoolAccount, PoolAccountFacet
+    from mino_nexus.models.project import Project
+    from mino_nexus.models.resource_ops import ResourceAllocationLog
+    from mino_nexus.services import project_store as ps
+    from mino_nexus.services.pool_account_store import _account_to_dict, _facets_for_account
 
-    if not phone_pool_lease_enabled(env_doc, ctx):
+    if not phone_pool_lease_enabled(env_doc, ctx) or not _fresh_requirements_match(requirements, env_doc):
         return None
-
     env_profile = str(getattr(ctx, "env_profile", "") or "test").strip() or "test"
     surface = ensure_ctx_env_surface(ctx, env_doc)
     pid = str(project_id or "").strip()
-    with _project_lock(pid):
-        phone_str, fresh_doc = _bump_phone_next(pid, surface=surface, env_profile=env_profile)
-        stem = _channel_stem(fresh_doc, surface)
-        display = f"{stem}+{phone_str}"[:80]
-        aid = new_account_id()
-        facets = {
-            "lifecycle": "unregistered",
-            "session": "logged_out",
-            "health": "available",
-        }
-        if requirements_want_unregistered(requirements):
-            facets["lifecycle"] = "unregistered"
-        row = {
-            "id": aid,
-            "account_id": aid,
-            "display_name": display,
-            "phone": phone_str,
-            "env": env_profile,
-            "facets": facets,
-            "note": f"phone_seq auto {surface}+{phone_str}",
-        }
-        saved = save_one_test_account(fresh_doc, row, project_id=pid, account_id=aid)
-        SLog.i(TAG, f"provisioned {display} phone={phone_str} project={pid[:8]}")
-        from mino_nexus.services.resource_allocation_log import append_allocation_log
-
-        append_allocation_log(
-            project_id=pid,
-            action="phone_seq_provision",
-            message=f"手机号开号 {display}",
-            env=env_profile,
-            run_id=str(run_id or ""),
+    # 在开启写事务前使用现有项目授权，不能仅凭调用参数选择另一个项目。
+    ps.require_project(pid)
+    aid = phone_seq_account_id(ctx, project_id=pid, run_id=run_id)
+    if not aid:
+        return None
+    initial_facets = fresh_phone_facets(env_doc)
+    with session_scope() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        existing = db.get(PoolAccount, aid)
+        if existing is not None:
+            if existing.project_id != pid or existing.env != env_profile:
+                raise ValueError("phone_seq_request_scope_changed")
+            return _account_to_dict(existing, _facets_for_account(db, pid, aid))
+        project = db.get(Project, pid)
+        if project is None:
+            raise ValueError("phone_seq_project_missing")
+        doc = copy.deepcopy(project.env or {})
+        if surface not in {str(c.get("id") or "") for c in doc.get("channels") or []}:
+            raise ValueError("phone_seq_channel_missing")
+        if env_profile not in {str(e.get("key") or "") for e in doc.get("environments") or []}:
+            raise ValueError("phone_seq_environment_missing")
+        slot = get_channel_phone_seq(doc, env_surface=surface, env_profile=env_profile)
+        start = slot.get("start") or _DEFAULT_PHONE_START
+        number = max(int(start), int(slot.get("next") or start))
+        # 老号可能来自导入/其他渠道；不能把已存在手机号重新宣称为新用户。
+        for _ in range(1000):
+            phone = str(number)
+            if len(phone) != 11:
+                raise ValueError("phone_seq_number_out_of_range")
+            collision = db.query(PoolAccount.id).filter_by(project_id=pid, env=env_profile, phone=phone).first()
+            if collision is None:
+                break
+            number += 1
+        else:
+            raise ValueError("phone_seq_collision_limit")
+        channel_map = dict(doc.get("channel_phone_seq") or {})
+        per_env = dict(channel_map.get(surface) or {})
+        per_env[env_profile] = {"start": start, "next": str(number + 1)}
+        channel_map[surface] = per_env
+        doc["channel_phone_seq"] = channel_map
+        project.env = doc
+        now = int(time.time())
+        account = PoolAccount(id=aid, project_id=pid, env=env_profile, phone=phone,
+            display_name=f"{_channel_stem(doc, surface)}+{phone}"[:80], profile_id="fresh_user",
+            note=f"phone_seq auto {surface}+{phone}", lease={}, locked=0,
+            created_at=now, updated_at=now)
+        db.add(account)
+        for key, value in initial_facets.items():
+            db.add(PoolAccountFacet(project_id=pid, account_id=aid, facet_key=key, facet_value=value))
+        db.add(ResourceAllocationLog(project_id=pid, action="phone_seq_provision",
+            message="手机号新账号补池", env=env_profile, run_id=run_id,
             case_id=str(getattr(ctx, "case_id", "") or "")[:80],
-            sn=str(getattr(ctx, "sn", "") or "")[:64],
-            account_id=aid,
-            account_ident=phone_str,
-            detail={"surface": surface, "phone": phone_str},
-        )
-        return saved
+            sn=str(getattr(ctx, "sn", "") or "")[:64], account_id=aid, account_ident=phone,
+            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            detail_json={"surface": surface, "profile": "fresh_user", "initial_facets": initial_facets,
+                         "business_state_verified": False, "source": "phone_seq_provision.v2"}))
+        db.flush()
+        return _account_to_dict(account, initial_facets)
 
 
 def try_provision_after_lease_miss(
