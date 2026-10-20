@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from mino_nexus.services import auth_store
 from mino_nexus.core import protocol as P
 from mino_nexus.core.http_util import client_header, ok
+from mino_nexus.core.runtime_mode import is_development
 from mino_nexus.services.node_registry import get_registry
 from mino_nexus.services.node_store import filter_nodes, get_node as stored_node, is_admin, node_visible
 from mino_nexus.routers.deps import current_session, require_packs_writer
@@ -118,8 +119,7 @@ def list_runtime_assets(
 
 @router.post("/nodes/install-token")
 def create_install_token(request: Request, response: Response, sess: dict = Depends(current_session)):
-    import sys
-    if not getattr(sys, "frozen", False):
+    if is_development():
         from mino_nexus.services.scout_install import development_installation
         # Validate the source checkout before issuing any credential. No remote
         # release lookup, production bootstrap or copying production identities.
