@@ -42,10 +42,8 @@ def _channel_value(value: Any) -> str:
 
 
 def device_channels_online(channels: Any) -> bool:
-    """True when Scout reported at least one exec channel as connected."""
-    if not isinstance(channels, dict):
-        return False
-    return any(_channel_value(v) in _ONLINE_CHANNEL for v in channels.values())
+    from mino_nexus.core.platform_contract import channel_connected
+    return isinstance(channels, dict) and any(channel_connected(value) for value in channels.values())
 
 
 def device_ui_online(node_alive: bool, channels: Any) -> bool:

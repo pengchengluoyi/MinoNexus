@@ -16,7 +16,6 @@ from typing import Any, Optional
 
 from mino_nexus.services import settings_store as ss
 
-_LEGACY_MIGRATED = False
 
 IM_PLUGIN_IDS = ("feishu", "wecom", "dingtalk", "slack", "wechat")
 
@@ -208,60 +207,10 @@ def _normalize_user_root(raw: Any) -> dict[str, Any]:
     return root
 
 
-def ensure_legacy_keys_migrated() -> None:
-    """按账号拆 key 尚未接完路由，先不要把全局密钥搬空。"""
-    global _LEGACY_MIGRATED
-    _LEGACY_MIGRATED = True
-    return
-    if False:  # noqa: keep body for the later cutover
-        _legacy_migrate_shared_keys()
 
 
-def _legacy_migrate_shared_keys() -> None:
-    root = ss._root()
-    integrations = root.get("integrations") if isinstance(root.get("integrations"), dict) else {}
-    robots = root.get("robots") if isinstance(root.get("robots"), dict) else {}
-    figma = root.get("figma") if isinstance(root.get("figma"), dict) else {}
-    robot_items = robots.get("items") if isinstance(robots.get("items"), list) else []
-    has_secrets = bool(integrations or robot_items or str(figma.get("access_token") or "").strip())
-    if not has_secrets:
-        return
-    from mino_nexus.services import auth_store
 
-    admin = auth_store.seed_admin_user()
-    uid = str(admin.get("user_id") or "").strip()
-    if not uid:
-        return
-    try:
-        user = _load_user(uid)
-    except ValueError:
-        return
-    empty = (
-        not user.get("integrations")
-        and not (user.get("robots") or {}).get("items")
-        and not str((user.get("figma") or {}).get("access_token") or "").strip()
-    )
-    if empty:
-        user["integrations"] = {k: dict(v) for k, v in integrations.items() if isinstance(v, dict)}
-        user["robots"] = {"items": [dict(x) for x in robot_items if isinstance(x, dict)]}
-        user["figma"] = dict(figma)
-        _save_user(uid, user)
-    policy = _policy_root()
-    changed = False
-    for pid, cfg in integrations.items():
-        if not isinstance(cfg, dict) or "enabled" not in cfg:
-            continue
-        row = dict(policy["plugins"].get(pid) or _default_policy_row())
-        row["enabled"] = bool(cfg.get("enabled"))
-        policy["plugins"][str(pid)] = row
-        changed = True
-    if changed:
-        _persist_policy(policy)
-    root["integrations"] = {}
-    root["robots"] = {"items": []}
-    if isinstance(root.get("figma"), dict):
-        root["figma"]["access_token"] = ""
-    ss._save(root)
+
 
 
 def _settings_root() -> dict[str, Any]:

@@ -37,23 +37,6 @@ BASE_ENTRY_IDS = frozenset({
     "vlm",
 })
 
-# 同目的的第二种写法。对外 id 见 CAP_ALIASES。
-CAP_ALIASES = {
-    "ui_input_text": "input_text",
-    "key_event": "press_key",
-    "clipboard_set": "set_clipboard",
-    "system_pkg_clear": "clear_app_cache",
-    "app_force_stop": "kill_app",
-    "app_launch_native": "launch_app",
-    "vision_assert": "assert_visual",
-}
-
-# 目录里没有、但逻辑块会写的渠道技能。
-CHANNEL_PLATFORMS = {
-    "clear_app_cache": frozenset({"android"}),
-    "confirm_login_state": frozenset({"mac", "win", "android", "web"}),
-}
-
 # 程序自己派发，规划追加时允许，不要求出现在 case 菜单。
 PROGRAM_CAPS = frozenset({
     "tap_target",
@@ -109,48 +92,25 @@ SYSTEM_ONLY_IDS = frozenset({
     "probe_device_state",
 })
 
-
-def derive_caller(entry_id: str, *, kind: str = "", visible_to: list | None = None) -> str:
-    """目录还没写 caller 时，用 kind / visible_to / 程序白名单推出。"""
-    eid = canonical_cap(entry_id)
-    if str(kind or "") == "base" or eid in BASE_ENTRY_IDS:
-        return "base"
-    vis = {str(x).strip().lower() for x in (visible_to or []) if str(x).strip()}
-    if eid in PROGRAM_CAPS:
-        return "program"
-    if eid in SYSTEM_ONLY_IDS or vis == {"system"}:
-        return "system"
-    if "case" in vis:
-        return "case"
-    return "system"
+# 程序直接派到设备、不进用例菜单的系统动作。启动时按这份声明入库。
+SYSTEM_DEVICE_IDS = frozenset({"wake_screen", "dismiss_keyguard", "probe_device_state"})
 
 
-def derive_phases(entry_id: str, *, kind: str = "", caller: str = "") -> list[str]:
-    who = str(caller or "")
-    if who in ("base", "system"):
-        return []
-    eid = canonical_cap(entry_id)
-    if eid == "read_web_target_facts":
-        return ["prep", "do", "check"]
-    if eid in {"tap_target", "input_target"}:
-        return ["do"]
-    if str(kind or "") == "check" or eid == "assert_visual":
-        return ["check"]
-    return ["prep", "do"]
+
+
+
+
+
+
+def system_device_dispatch(cap_id: str) -> bool:
+    """唤醒、解锁、取证由程序直接派，不经过用例菜单和绑定菜单。"""
+    return canonical_cap(cap_id) in SYSTEM_DEVICE_IDS
 
 
 def is_program_caller(cap_id: str) -> bool:
-    """程序在看图之前派。目录 caller 优先，没有行时才回落到 PROGRAM_CAPS。"""
-    cap = canonical_cap(cap_id)
-    if not cap:
-        return False
     from mino_nexus.catalog.registry import get_capability
-
-    row = get_capability(cap)
-    caller = str(getattr(row, "caller", "") or "") if row is not None else ""
-    if caller:
-        return caller == "program"
-    return cap in PROGRAM_CAPS
+    row = get_capability(canonical_cap(cap_id))
+    return row is not None and row.caller == "program"
 
 
 def capability_enabled(cap_id: str) -> bool:
@@ -162,10 +122,10 @@ def capability_enabled(cap_id: str) -> bool:
 
     row = get_capability(cap)
     if row is None:
-        return True
+        return False
     if getattr(row, "enabled", True) is False:
         return False
-    return str(getattr(row, "lifecycle", "") or "active") != "deprecated"
+    return str(getattr(row, "lifecycle", "")) == "active"
 
 
 def capability_ui_coverable(cap_id: str) -> bool:
@@ -177,7 +137,7 @@ def capability_ui_coverable(cap_id: str) -> bool:
 
     row = get_capability(cap)
     if row is None:
-        return True
+        return False
     return getattr(row, "ui_coverable", True) is not False
 
 
@@ -223,59 +183,33 @@ def phase_allows(cap_id: str, phase: str) -> bool:
     row = get_capability(cap)
     phases = [str(x) for x in (getattr(row, "phases", None) or [])] if row is not None else []
     if not phases:
-        return True
+        return False
     return str(phase or "").strip().lower() in phases
 
 
 def menu_caller_ok(cap: Any, phase: str) -> bool:
-    """模型菜单只收 caller=case，且 phases 含本阶段。"""
-    caller = str(getattr(cap, "caller", "") or "")
-    if caller != "case":
-        return False
-    phases = [str(x) for x in (getattr(cap, "phases", None) or [])]
-    p = str(phase or "").strip().lower()
-    if phases and p in ("prep", "do", "check") and p not in phases:
-        return False
-    return True
+    return cap.caller == "case" and phase in cap.phases and cap.lifecycle == "active" and cap.enabled
 
 
 def canonical_cap(cap_id: str) -> str:
-    raw = str(cap_id or "").strip()
-    return CAP_ALIASES.get(raw, raw)
+    """IDs are exact; former aliases are not rewritten."""
+    return str(cap_id or "").strip()
 
 
 def normalize_platform(platform: str) -> str:
-    p = str(platform or "").strip().lower()
-    if p in ("web", "browser", "playwright"):
-        return "web"
-    if p in ("ios", "ios_wda"):
-        return "ios"
-    return p
+    from mino_nexus.core.platform_contract import target_platform
+    return target_platform(platform)
 
 
-def channel_platforms_for(cap_id: str) -> frozenset[str] | None:
-    """有明确渠道限制时返回平台集合。全渠道返回 None。以目录 platforms 为准。"""
-    cap = canonical_cap(cap_id)
+def channel_platforms_for(cap_id: str) -> frozenset[str]:
     from mino_nexus.catalog.registry import get_capability
-
-    row = get_capability(cap)
-    plats = [normalize_platform(p) for p in (getattr(row, "platforms", None) or []) if str(p).strip()]
-    if plats:
-        return frozenset(plats)
-    extra = CHANNEL_PLATFORMS.get(cap)
-    if extra:
-        return extra
-    return None
+    from mino_nexus.core.platform_contract import platform_set
+    row = get_capability(canonical_cap(cap_id))
+    return frozenset(platform_set(row.platforms)) if row is not None else frozenset()
 
 
 def channel_supports(cap_id: str, platform: str) -> bool:
-    allowed = channel_platforms_for(cap_id)
-    if allowed is None:
-        return True
-    got = normalize_platform(platform)
-    if not got:
-        return True
-    return got in allowed
+    return normalize_platform(platform) in channel_platforms_for(cap_id)
 
 
 def milestone_cap_ids(row: dict[str, Any]) -> list[str]:
@@ -361,12 +295,15 @@ def milestone_caps_registered(
     def _cap_ok(cap: str) -> bool:
         if cap in allowed:
             return True
-        return bool(
-            allow_program and is_program_caller(cap)
-            and capability_dispatch_ok(cap)
-            and channel_supports(cap, platform)
-            and (not phase or phase_allows(cap, phase))
-        )
+        if not (allow_program and (is_program_caller(cap) or system_device_dispatch(cap))):
+            return False
+        from mino_nexus.catalog.registry import get_capability
+
+        row = get_capability(cap)
+        impls = list(getattr(row, "implementations", None) or []) if row is not None else []
+        if not impls or not capability_dispatch_ok(cap):
+            return False
+        return channel_supports(cap, platform)
 
     primary: list[str] = []
     for key in ("hook_cap", "device_cap", "cap"):
@@ -378,6 +315,13 @@ def milestone_caps_registered(
         for item in (raw.get("exec_caps") or [])
         if str(item or "").strip()
     ] if isinstance(raw.get("exec_caps"), list) else []
+    # nav_target 是导航策略名，不是目录能力。这一步能不能做，看 exec_caps。
+    if "nav_target" in primary and (
+        str(raw.get("tier") or "") == "policy" or raw.get("nav_target") or extras
+    ):
+        primary = [cap for cap in primary if cap != "nav_target"]
+        if not extras:
+            return False
     if primary and not all(_cap_ok(cap) for cap in primary):
         return False
     # exec_caps 是这一步可选的动作，渠道上有其中一个即可，不要因为 press_key 仅安卓就把整步丢掉。
@@ -386,63 +330,136 @@ def milestone_caps_registered(
     return True
 
 
-def upgrade_skill_channel_layout() -> int:
-    """把基座行移出技能菜单，并把常用技能收成通用 / 预期。"""
-    from mino_nexus.catalog import registry as catalog
-    from mino_nexus.core.database import session_scope
+
+
+
+def _ensure_core_execution_rows(db: Any) -> int:
+    """Register missing built-in primitives used by ordinary compiled plans.
+
+    Existing rows, including disabled rows and custom implementations, remain
+    authoritative. Declaring an implementation does not bypass Scout admission.
+    """
+    from mino_nexus.models.catalog import CatalogEntry
+    from mino_nexus.catalog.tool_schema import PARAM_DEFAULTS, schema_to_param_rows
+
+    specs = (
+        ("tap_element", "点击元素", "case", "adb", "ui_native_input", ["android"]),
+        ("press_key", "按键", "case", "adb", "key_event", ["android"]),
+        ("launch_app", "启动被测应用", "program", "adb", "app_launch_native", ["android"]),
+        ("lease_account", "筛选并租用账号", "program", "internal", "", ["mac", "win", "android", "web"]),
+    )
+    added = 0
+    for eid, title, caller, executor, abstract, platforms in specs:
+        if db.query(CatalogEntry).filter(CatalogEntry.id == eid).first() is not None:
+            continue
+        implementation = {
+            "id": "builtin.v1:" + eid, "executor": executor,
+            "runs_on": "nexus" if executor == "internal" else "scout",
+            "platforms": list(platforms), "low_level": {},
+            "params_contract": {"version": 1}, "result_contract": {"version": 1},
+            "device_hint_template": {"execution_mode": "legacy"},
+        }
+        if abstract:
+            implementation["requires_caps"] = [abstract]
+        db.add(CatalogEntry(
+            kind="generic", id=eid, display_name=title,
+            enabled=True, lifecycle="active", platforms_json=list(platforms),
+            visible_to_json=["case", "system"] if caller == "case" else ["system"],
+            payload_json={"event_kind": eid, "caller": caller, "phases": ["prep", "do"],
+                "channel_contract_version": 1, "implementations": [implementation],
+                "params": schema_to_param_rows(PARAM_DEFAULTS.get(eid))},
+        ))
+        added += 1
+    if added:
+        db.flush()
+    return added
+
+
+def _system_device_implementation(eid: str, platforms: list[str], low_level: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": "system.v1:" + eid,
+        "executor": "adb",
+        "runs_on": "scout",
+        "platforms": list(platforms),
+        "low_level": dict(low_level),
+        "params_contract": {"version": 1},
+        "result_contract": {"version": 1},
+        "device_hint_template": {"execution_mode": "legacy"},
+    }
+
+
+def _ensure_system_device_rows(db: Any) -> int:
+    """唤醒、解锁、取证必须有实现。缺行就补上，已有行补上缺失的实现。"""
     from mino_nexus.models.catalog import CatalogEntry
 
+    specs = (
+        (
+            "wake_screen",
+            "唤醒屏幕",
+            "程序点亮屏幕。不进模型菜单。",
+            ["android"],
+            {"kind": "shell", "shell": "input keyevent KEYCODE_WAKEUP", "summary": "唤醒屏幕"},
+        ),
+        (
+            "dismiss_keyguard",
+            "解除锁屏",
+            "程序收起锁屏界面。不进模型菜单。",
+            ["android"],
+            {"kind": "shell", "shell": "wm dismiss-keyguard", "summary": "解除锁屏"},
+        ),
+        (
+            "probe_device_state",
+            "读取屏幕状态",
+            "程序读取电源、锁屏和输入法。不进模型菜单。",
+            ["android"],
+            {
+                "kind": "shell_batch",
+                "commands": [
+                    {"name": "power", "shell": "dumpsys power", "parse": "keyvalue_lines"},
+                    {"name": "keyguard", "shell": "dumpsys window", "parse": "keyvalue_lines"},
+                    {"name": "ime", "shell": "dumpsys input_method", "parse": "keyvalue_lines"},
+                ],
+            },
+        ),
+    )
     n = 0
-    with session_scope() as db:
-        rows = db.query(CatalogEntry).all()
-        by_key = {(str(r.kind), str(r.id)): r for r in rows}
-        for row in rows:
-            eid = str(row.id or "")
-            if eid in V5_EXCLUDED_IDS:
-                continue
-            kind = str(row.kind or "")
-            if eid in BASE_ENTRY_IDS or eid in CAP_ALIASES:
-                target = BASE_KIND
-                if (target, eid) in by_key and by_key[(target, eid)] is not row:
-                    if row.enabled:
-                        row.enabled = False
-                        row.lifecycle = "deprecated"
-                        n += 1
-                    continue
-                if kind != target:
-                    row.kind = target
-                    n += 1
-                vis = ["system"]
-                if list(row.visible_to_json or []) != vis:
-                    row.visible_to_json = vis
-                    n += 1
-                continue
-            if eid in SYSTEM_ONLY_IDS:
-                if list(row.visible_to_json or []) != ["system"]:
-                    row.visible_to_json = ["system"]
-                    n += 1
-                continue
-            if eid in CASE_GENERIC_IDS:
-                want_kind = "check" if eid == "assert_visual" else "generic"
-                if kind != want_kind and (want_kind, eid) not in by_key:
-                    row.kind = want_kind
-                    n += 1
-                vis = ["case", "system"]
-                if list(row.visible_to_json or []) != vis:
-                    row.visible_to_json = vis
-                    n += 1
-                continue
-            if eid == "fsm_navigate":
-                vis = ["case", "system"]
-                if list(row.visible_to_json or []) != vis:
-                    row.visible_to_json = vis
-                    n += 1
-        n += _retire_prep_do_kinds(db)
-        n += _rewrite_skill_tool_kinds(db)
-        n += _ensure_program_rows(db)
-        n += _stamp_dispatch_caller(db)
-    catalog.reload()
-    return 1 if n else 0
+    for eid, title, desc, platforms, low_level in specs:
+        implementation = _system_device_implementation(eid, platforms, low_level)
+        fields = {
+            "caller": "system",
+            "phases": [], "params": [], "observe": "program",
+            "event_kind": eid,
+            "channel_contract_version": 1,
+            "implementations": [implementation],
+        }
+        row = db.query(CatalogEntry).filter(CatalogEntry.id == eid).first()
+        if row is None:
+            db.add(CatalogEntry(
+                kind="generic", id=eid, display_name=title, description=desc,
+                enabled=True, lifecycle="active", platforms_json=list(platforms),
+                visible_to_json=["system"], payload_json=fields,
+            ))
+            n += 1
+            continue
+        payload = dict(row.payload_json or {})
+        impls = list(payload.get("implementations") or [])
+        if not impls:
+            payload["implementations"] = [implementation]
+        payload.update({k: v for k, v in fields.items() if k != "implementations"})
+        if impls:
+            payload["implementations"] = impls
+        changed = dict(row.payload_json or {}) != payload or list(row.platforms_json or []) != list(platforms)
+        if list(row.platforms_json or []) != list(platforms):
+            row.platforms_json = list(platforms)
+        if list(row.visible_to_json or []) != ["system"]:
+            row.visible_to_json = ["system"]
+            changed = True
+        if changed:
+            row.payload_json = payload
+            n += 1
+    if n:
+        db.flush()
+    return n
 
 
 def _ensure_program_rows(db: Any) -> int:
@@ -463,10 +480,12 @@ def _ensure_program_rows(db: Any) -> int:
         ("reload_page", "刷新当前页面", "程序刷新本次运行的 Web 页面。不进模型菜单。", ["web"]),
         ("plugin.gmail.fetch_otp", "节点 Gmail 取码", "在同一绑定节点读取验证码，不携带邮箱密码。", ["mac", "win", "android", "web"]),
     )
-    n = 0
+    n = _ensure_core_execution_rows(db)
+    n += _ensure_system_device_rows(db)
     for eid, title, desc, platforms in specs:
         row = db.query(CatalogEntry).filter(CatalogEntry.id == eid).first()
-        fields = {"caller": "program", "phases": ["prep", "do"],
+        fields = {"caller": "program", "phases": ["prep", "do"], "observe": "program",
+                  "params": [], "implementations": [],
                   "event_kind": eid, "channel_contract_version": 3}
         if eid in {"clear_app_cache", "reload_page", "plugin.gmail.fetch_otp"}:
             executor = {"clear_app_cache": "adb", "reload_page": "playwright", "plugin.gmail.fetch_otp": "host_plugin"}[eid]
@@ -512,95 +531,16 @@ def _ensure_program_rows(db: Any) -> int:
     return n
 
 
-def _stamp_dispatch_caller(db: Any) -> int:
-    """把 caller / phases 写进 payload。不改 enabled / lifecycle。"""
-    from sqlalchemy.orm.attributes import flag_modified
-
-    from mino_nexus.models.catalog import CatalogEntry
-
-    n = 0
-    for row in db.query(CatalogEntry).all():
-        if str(row.id or "") in V5_EXCLUDED_IDS:
-            continue
-        payload = dict(row.payload_json or {})
-        vis = list(row.visible_to_json or [])
-        caller = derive_caller(str(row.id or ""), kind=str(row.kind or ""), visible_to=vis)
-        phases = derive_phases(str(row.id or ""), kind=str(row.kind or ""), caller=caller)
-        changed = False
-        if str(payload.get("caller") or "") != caller:
-            payload["caller"] = caller
-            changed = True
-        if list(payload.get("phases") or []) != phases:
-            payload["phases"] = phases
-            changed = True
-        want_vis = ["case", "system"] if caller == "case" else ["system"]
-        if list(row.visible_to_json or []) != want_vis:
-            row.visible_to_json = want_vis
-            changed = True
-        # These local resource adapters have no target-OS implementation.
-        # Declare their supported targets explicitly; do not reinterpret every
-        # empty business capability platform list as unrestricted.
-        if canonical_cap(str(row.id or "")) in {"lease_account", "get_otp", "get_phone", "release_account", "relogin"}:
-            targets = ["mac", "win", "android", "web"]
-            if list(row.platforms_json or []) != targets:
-                row.platforms_json = targets
-                changed = True
-        extra_plats = CHANNEL_PLATFORMS.get(canonical_cap(str(row.id or "")))
-        if extra_plats and not list(row.platforms_json or []):
-            row.platforms_json = sorted(extra_plats)
-            changed = True
-        if changed:
-            row.payload_json = payload
-            flag_modified(row, "payload_json")
-            n += 1
-    return n
 
 
-def _retire_prep_do_kinds(db: Any) -> int:
-    """前置 / 操作分组里剩下的行并入通用，或在已有同 id 时删掉重复行。"""
-    from mino_nexus.models.catalog import CatalogEntry
-
-    n = 0
-    leftovers = db.query(CatalogEntry).filter(CatalogEntry.kind.in_(("prep", "do"))).all()
-    for row in leftovers:
-        eid = str(row.id or "")
-        if eid in V5_EXCLUDED_IDS:
-            continue
-        survivor = (
-            db.query(CatalogEntry)
-            .filter(
-                CatalogEntry.id == eid,
-                CatalogEntry.kind.notin_(("prep", "do")),
-                CatalogEntry.pk != row.pk,
-            )
-            .first()
-        )
-        if survivor is not None:
-            db.delete(row)
-            n += 1
-            continue
-        row.kind = "generic"
-        if eid in SYSTEM_ONLY_IDS:
-            row.visible_to_json = ["system"]
-        n += 1
-    return n
 
 
-def _rewrite_skill_tool_kinds(db: Any) -> int:
-    """技能 SOP 已改由 prompts/ 维护，不再改库。"""
-    del db
-    return 0
 
 
-def _without_legacy_kinds(kinds: list[Any]) -> list[str]:
-    out: list[str] = []
-    for item in kinds:
-        name = str(item or "").strip()
-        if name in ("prep", "do"):
-            name = "generic"
-        if name and name not in out:
-            out.append(name)
-    return out
+
+
+
+
 
 
 def register_program_capabilities() -> dict[str, Any]:
@@ -613,6 +553,8 @@ def register_program_capabilities() -> dict[str, Any]:
         registered = [{"id": row.id, "platforms": list(row.platforms_json or []),
                        "channel_contract_version": (row.payload_json or {}).get("channel_contract_version")}
                       for row in db.query(CatalogEntry).filter(CatalogEntry.id.in_(
-                          ("confirm_login_state", "operation.check_box", "clear_app_cache", "reload_page", "plugin.gmail.fetch_otp"))).order_by(CatalogEntry.id).all()]
+                          ("confirm_login_state", "operation.check_box", "clear_app_cache", "reload_page", "plugin.gmail.fetch_otp",
+                           "tap_element", "press_key", "launch_app", "lease_account",
+                           "wake_screen", "dismiss_keyguard", "probe_device_state"))).order_by(CatalogEntry.id).all()]
     catalog.reload()
     return {"changed": changed, "registered": registered}

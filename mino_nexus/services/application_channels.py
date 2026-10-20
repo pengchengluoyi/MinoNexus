@@ -1,4 +1,4 @@
-"""Project applications own runtime channels; legacy values keep their original keys."""
+"""Project applications own runtime channels through explicit app_id bindings."""
 from copy import deepcopy
 
 
@@ -19,12 +19,6 @@ def application_channels(document, apps):
                 continue
             owned = [c for c in channels if c.get("app_id") == aid and c.get("platform") == platform]
             if owned:
-                continue
-            peers = [a for a in apps if platform in app_platforms(a)]
-            candidates = [c for c in channels if not c.get("app_id") and c.get("platform") == platform]
-            # Reuse only a unique historical target for a unique application.
-            if len(peers) == 1 and len(candidates) == 1:
-                candidates[0]["app_id"] = aid
                 continue
             field, placeholder = presets[platform]
             stem = f"{platform}.app_{aid.replace('-', '_')}"

@@ -1,4 +1,4 @@
-"""项目维护者权限：写接口须为管理员、项目创建者或显式维护者；读接口不经此处。"""
+"""项目协作：所有登录用户可访问和使用所有项目；维护者名册保留为管理信息。"""
 from __future__ import annotations
 
 import time
@@ -37,9 +37,16 @@ def is_maintainer(project_id: str, sess: dict[str, Any] | None) -> bool:
         return db.get(ProjectMember, (project_id, uid)) is not None
 
 
+def require_project_access(project_id: str, sess: dict[str, Any] | None) -> None:
+    """Project collaboration is shared across authenticated users."""
+    if not _uid(sess):
+        raise PermissionError("login_required")
+    _project(project_id)
+
+
 def require_maintainer(project_id: str, sess: dict[str, Any] | None) -> None:
-    if not is_maintainer(project_id, sess):
-        raise PermissionError("project_maintainer_required")
+    """Compatibility for existing callers; membership no longer gates project use."""
+    require_project_access(project_id, sess)
 
 
 def list_maintainers(project_id: str) -> list[dict[str, Any]]:

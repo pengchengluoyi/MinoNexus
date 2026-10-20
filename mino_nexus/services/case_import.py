@@ -425,6 +425,33 @@ def _start_preview_worker(token: str) -> None:
             raise
 
 
+def _apply_preview_compile_row(row: dict[str, Any], summary: dict[str, Any] | None, exc: Exception | None) -> None:
+    if exc is not None:
+        row["parse_status"] = "error"
+        row["remark"] = str(exc)[:200]
+        row["selected_by_default"] = False
+        return
+    assert summary is not None
+    compiled_meta = dict(summary.get("compiled_meta") or {})
+    row["steps_parsed"] = list(summary.get("steps_parsed") or [])
+    row["expected_parsed"] = list(summary.get("expected_parsed") or [])
+    row["remark"] = str(summary.get("remark") or "")
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    payload["meta"] = compiled_meta
+    row["payload"] = payload
+    row["meta"] = compiled_meta
+    row["step_key_validation"] = {key: summary[key] for key in summary if key != "compiled_meta"}
+    row["automation_details"] = summary.get("automation_details") or {}
+    row["ui_automation"] = summary.get("ui_automation") or {"coverable": True, "blocked_by": []}
+    flags = [flag for flag in row.get("flags") or [] if flag not in ("step_key_issues", "ui_not_coverable")]
+    if summary.get("issues"):
+        flags.append("step_key_issues")
+    if row["ui_automation"].get("coverable") is False:
+        flags.append("ui_not_coverable")
+    row["flags"] = flags
+    row["parse_status"] = "done"
+
+
 def _compile_preview_batches(token: str, worker_id: str) -> None:
     from mino_nexus.services.case_key_registry import import_row_key_summary
 
@@ -436,40 +463,41 @@ def _compile_preview_batches(token: str, worker_id: str) -> None:
             pending = [row for row in doc.get("rows") or [] if row.get("parse_status") == "pending"]
             if not pending:
                 return
-            batch = pending[: max(1, min(4, int(doc.get("batch_size") or 5)))]
+            batch_size = max(1, int(doc.get("batch_size") or 5))
+            batch = pending[:batch_size]
+            compiled: list[tuple[int, dict[str, Any] | None, Exception | None]] = []
             with ThreadPoolExecutor(max_workers=len(batch)) as executor:
                 futures = {
-                    executor.submit(copy_context().run, import_row_key_summary, row.get("payload") or {}, project_id=str(doc.get("project_id") or ""), app_id=str(doc.get("app_id") or ""), env_doc=doc.get("env_doc")): row["row_index"]
+                    executor.submit(
+                        copy_context().run,
+                        import_row_key_summary,
+                        row.get("payload") or {},
+                        project_id=str(doc.get("project_id") or ""),
+                        app_id=str(doc.get("app_id") or ""),
+                        env_doc=doc.get("env_doc"),
+                    ): int(row["row_index"])
                     for row in batch
                 }
                 for future in as_completed(futures):
-                    doc = preview_store.get(token)
-                    if not doc or doc.get("cancel"):
-                        return
-                    row = next(item for item in doc["rows"] if item["row_index"] == futures[future])
+                    row_index = futures[future]
                     try:
-                        summary = future.result()
+                        compiled.append((row_index, future.result(), None))
                     except Exception as exc:
-                        row["parse_status"] = "error"
-                        row["remark"] = str(exc)[:200]
-                        row["selected_by_default"] = False
-                    else:
-                        row["steps_parsed"] = list(summary.get("steps_parsed") or [])
-                        row["expected_parsed"] = list(summary.get("expected_parsed") or [])
-                        row["remark"] = str(summary.get("remark") or "")
-                        row["payload"]["meta"] = summary.pop("compiled_meta", {})
-                        row["step_key_validation"] = summary
-                        row["automation_details"] = summary.get("automation_details") or {}
-                        row["ui_automation"] = summary.get("ui_automation") or {"coverable": True, "blocked_by": []}
-                        flags = [flag for flag in row.get("flags") or [] if flag not in ("step_key_issues", "ui_not_coverable")]
-                        if summary.get("issues"):
-                            flags.append("step_key_issues")
-                        if row["ui_automation"].get("coverable") is False:
-                            flags.append("ui_not_coverable")
-                        row["flags"] = flags
-                        row["parse_status"] = "done"
-                    if not preview_store.update_row(token, row, worker_id=worker_id):
-                        return
+                        compiled.append((row_index, None, exc))
+            doc = preview_store.get(token)
+            if not doc or doc.get("cancel"):
+                return
+            for row_index, summary, exc in sorted(compiled, key=lambda item: item[0]):
+                row = next((item for item in doc["rows"] if int(item.get("row_index", -1)) == row_index), None)
+                if not row:
+                    continue
+                _apply_preview_compile_row(row, summary, exc)
+                if not preview_store.update_row(token, row, worker_id=worker_id):
+                    preview_store.release(token, worker_id)
+                    return
+                doc = preview_store.get(token)
+                if not doc or doc.get("cancel"):
+                    return
     finally:
         preview_store.release(token, worker_id)
 
@@ -591,6 +619,20 @@ def _preview_row_blocks_import(item: dict[str, Any], snapshot: dict[str, Any]) -
     return ""
 
 
+def _merge_preview_compile_payload(item: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Import commit carries the same compile view the user already reviewed in preview."""
+    out = dict(payload)
+    row_meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    payload_meta = out.get("meta") if isinstance(out.get("meta"), dict) else {}
+    merged = {**payload_meta, **row_meta}
+    if merged:
+        out["meta"] = merged
+    for key in ("automation_details", "ui_automation"):
+        if isinstance(item.get(key), dict):
+            out[key] = copy.deepcopy(item[key])
+    return out
+
+
 def prepare_receipt_line(snapshot, item):
     from mino_nexus.services.case_store import prepare_import_row
 
@@ -604,6 +646,8 @@ def prepare_receipt_line(snapshot, item):
             "case_id": str((item.get("payload") or {}).get("case_id") or item.get("case_id") or ""),
         }
     payload = dict(item.get("payload") if isinstance(item.get("payload"), dict) else item)
+    if snapshot.get("compiled"):
+        payload = _merge_preview_compile_payload(item, payload)
     if snapshot["default_platform"] and not str(payload.get("platform") or "").strip():
         payload["platform"] = snapshot["default_platform"]
     index = int(payload.get("index") or item.get("row_index") or 0)

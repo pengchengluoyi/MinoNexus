@@ -17,12 +17,6 @@ def get_app_data_dir() -> Path:
     prod_default = (Path(os.environ.get("APPDATA", Path.home())) / "MinoNexus" if os.name == "nt"
                     else Path.home() / "Library/Application Support/Mino/nexus/data" if sys.platform == "darwin"
                     else Path.home() / ".mino-nexus")
-    if not development and sys.platform == "darwin" and not os.environ.get("MINO_NEXUS_DATA_DIR"):
-        legacy = Path.home() / ".mino-nexus"
-        if (legacy / "mino.db").exists():
-            if prod_default.exists():
-                raise ValueError("检测到新旧 Nexus 数据目录，请显式指定 MINO_NEXUS_DATA_DIR；不会自动合并")
-            prod_default = legacy
     dev_default = Path.home() / ".mino-dev" / "nexus"
     # Only this process's environment selects its data root. IDEs may retain an
     # old MINO_NEXUS_DATA_DIR pointing at dev; it is not a production instance.

@@ -318,16 +318,10 @@ def sync_case_resource_metadata(
         env=env,
         package=pkg,
     )
-    from mino_nexus.runtime.session_gate import clamp_case_scene
-
-    if not scene_existing:
-        out["case_scene"] = clamp_case_scene(merged)
-    else:
-        patched = dict(scene_existing)
-        for field in ("prep_items", "lease_requirements", "required_session", "platform", "device_need"):
-            if not patched.get(field) and merged.get(field):
-                patched[field] = merged[field]
-        out["case_scene"] = clamp_case_scene(patched)
+    # Resource metadata is not an executable CaseScene. The compiler must supply
+    # explicit scene fields; execution admission validates them separately.
+    if scene_existing:
+        out["case_scene"] = dict(scene_existing)
     return out
 
 

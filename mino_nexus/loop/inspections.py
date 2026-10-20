@@ -68,7 +68,6 @@ def program_session_block_from_hierarchy(
         list(nodes),
         target_package=pkg,
         platform=str(getattr(ctx, "platform", "") or ""),
-        launch_confirmed=bool(getattr(ctx, "app_launch_confirmed", False)),
     )
     overlay = str(fg.get("system_overlay") or "").strip().lower()
     af = str(fg.get("app_foreground") or "").strip().lower()

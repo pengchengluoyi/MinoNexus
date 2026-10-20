@@ -1,5 +1,6 @@
 """Persistent, serial message replies. Never replay an uncertain started action."""
 import asyncio
+import json
 import threading
 from sqlalchemy import text
 from mino_nexus.core.database import session_scope
@@ -50,6 +51,7 @@ def run_one():
             job.status, job.error, job.updated_at = "failed", "原消息已不存在。", _now()
             return True
         mid, pid, tid, owner, body = job.message_id, job.project_id, job.topic_id, job.owner_user_id, message.body
+        origin, ref = message.origin, message.ref_id
         job.status, job.updated_at = "running", _now()
     status, error = "succeeded", ""
     try:
@@ -60,12 +62,16 @@ def run_one():
         with execution_user(owner):
             _require_access(pid, sess)
             _notify(pid, tid, mid)
-            orchestrate_after_user_message(pid, tid, sess, body, source_message_id=mid)
+            if origin == 'workspace_automation':
+                from mino_nexus.services.workspace_automation import process
+                process(pid, tid, sess, mid, json.loads(ref))
+            else:
+                orchestrate_after_user_message(pid, tid, sess, body, source_message_id=mid)
     except Exception as exc:
         SLog.w("CollabMessage", f"reply failed: {type(exc).__name__}")
         status, error = "failed", str(exc)[:500]
         from mino_nexus.services import collab_workspace as ws
-        with session_scope() as db:
+        with execution_user(owner), session_scope() as db:
             try:
                 topic = ws.owned(db, pid, tid)
                 ws.message(db, topic, '本轮处理未完成：' + error + '。消息已保留，未确认的动作不会自动重发。')

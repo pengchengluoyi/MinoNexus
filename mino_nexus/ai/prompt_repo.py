@@ -320,7 +320,7 @@ def _check_refs(repo: Repo) -> None:
             job = repo.jobs.get(jid)
             if not job or not job.get("enabled"):
                 raise PromptRepoError(f"角色 {row.get('id')} chat_jobs 引用了不存在或停用的 job {jid}")
-            if job.get("engine") not in ("text_chat", "chat_reply", "rule"):
+            if job.get("engine") not in ("text_chat", "chat_reply", "rule") and not (row.get("id") == "report-writer" and jid == "draft_test_report" and job.get("engine") == "json_chat"):
                 raise PromptRepoError(f"角色 {row.get('id')} chat_jobs 不允许设备或结构化 job {jid}")
         tools = row.get("tools", [])
         if not isinstance(tools, list) or any(not isinstance(t, str) for t in tools):

@@ -74,7 +74,7 @@ mino_nexus/
 │
 ├── core/                 基础设施（不谈业务）
 │   database.py           engine / SessionLocal / get_db → mino.db
-│   migration.py          启动时 additive ALTER
+│   schema_contract.py    空库初始化、已有库严格校验，不自动迁移
 │   paths.py              数据目录（与 engine 分开，避免拼路径被迫 import ORM）
 │   log.py protocol.py schemas.py http_util.py client_gate.py mdns.py
 ├── models/               ORM，一张表一个文件

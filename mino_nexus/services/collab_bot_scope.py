@@ -7,15 +7,11 @@ from mino_nexus.models.mino_bots import CollabTopic, ProjectBot
 from mino_nexus.services.case_store import get_case
 from mino_nexus.services.collab_policy import policy_for_topic
 
-_PLATFORM_ALIASES = {
-    "mac": ("mac", "pc"),
-    "win": ("win", "pc"),
-    "pc": ("pc", "mac", "win"),
-}
 
 
 def _norm_platform(value: str) -> str:
-    return str(value or "android").strip().lower()
+    from mino_nexus.core.platform_contract import target_platform
+    return target_platform(value)
 
 
 def matching_bot(db, project_id: str, app_id: str) -> ProjectBot | None:
@@ -60,16 +56,9 @@ def resolve_topic_policy(db, topic: CollabTopic) -> dict[str, Any]:
 
 
 def platform_allowed(case_platform: str, allowed: list[str]) -> bool:
-    if not allowed:
-        return True
+    from mino_nexus.core.platform_contract import platform_set
     plat = _norm_platform(case_platform)
-    allow = {_norm_platform(x) for x in allowed}
-    if plat in allow:
-        return True
-    for alias in _PLATFORM_ALIASES.get(plat, ()):
-        if alias in allow:
-            return True
-    return False
+    return not allowed or plat in platform_set(allowed)
 
 
 def filter_case_ids_by_platform(
@@ -83,8 +72,12 @@ def filter_case_ids_by_platform(
     skipped: list[str] = []
     for cid in case_ids:
         case = get_case(project_id, cid) or {}
-        plat = str(case.get("platform") or case.get("meta", {}).get("platform") or "android")
-        if platform_allowed(plat, allowed_platforms):
+        from mino_nexus.core.platform_contract import covered_platforms, platform_set
+        try:
+            matches = bool(covered_platforms(case) & set(platform_set(allowed_platforms)))
+        except ValueError:
+            matches = False
+        if matches:
             kept.append(cid)
         else:
             skipped.append(cid)
@@ -101,6 +94,6 @@ def execution_env_allowed(policy: dict[str, Any], *, env_profile: str = "test", 
     surfaces = policy.get("execute_surfaces")
     if isinstance(surfaces, list) and surfaces:
         surf = str(surface or "").strip()
-        if surf and surf not in [str(x) for x in surfaces]:
+        if not surf or surf not in [str(x) for x in surfaces]:
             return False
     return True

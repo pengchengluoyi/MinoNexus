@@ -21,9 +21,18 @@ def _visible_to(cap: Capability, audience: str) -> bool:
     return audience in allowed
 
 
+def _first_line(*parts: object) -> str:
+    """取第一行非空文本。空串 splitlines() 是 []，不能再取 [0]。"""
+    for part in parts:
+        lines = str(part or "").strip().splitlines()
+        line = lines[0].strip() if lines else ""
+        if line:
+            return line
+    return ""
+
+
 def _cap_summary(cap: Capability) -> str:
-    text = (cap.description or "").strip().splitlines()[0].strip()
-    return text[:120] if text else ""
+    return _first_line(cap.description, getattr(cap, "display_name", ""))[:120]
 
 
 def phase_kinds(phase: str, *, tool_kinds: Optional[list[str]] = None, phase_cfg: Optional[dict] = None) -> list[str]:
@@ -88,7 +97,7 @@ def available_menu_brief(
     for cap in available:
         if audience == "case" and not menu_caller_ok(cap, phase):
             continue
-        if not _visible_to(cap, audience):
+        if audience != "case" and not _visible_to(cap, audience):
             continue
         row: dict[str, Any] = {"id": cap.id, "kind": cap.kind}
         summary = _cap_summary(cap)
@@ -116,7 +125,9 @@ def available_menu_brief(
 
         if not capability_dispatch_ok(cap_id):
             continue
-        if (audience == "case" and not menu_caller_ok(cap, phase)) or not _visible_to(cap, audience):
+        if audience == "case" and not menu_caller_ok(cap, phase):
+            continue
+        if audience != "case" and not _visible_to(cap, audience):
             continue
         if plat and not plugin_registry.platform_ok(list(cap.platforms or []), plat):
             continue
@@ -152,7 +163,7 @@ def recovery_menu_brief(ctx: RunContext, *, platform: str = "") -> list[dict[str
     for rule in plugin_registry.list_recovery_rules(enabled_only=True):
         if not plugin_registry.platform_ok(list(rule.platforms or []), plat):
             continue
-        summary = (rule.when or rule.prompt_snippet or rule.title or rule.id).strip().splitlines()[0][:120]
+        summary = _first_line(rule.when, rule.prompt_snippet, rule.title, rule.id)[:120]
         rows.append({
             "id": f"{RECOVER_PREFIX}{rule.id}",
             "kind": "recovery",

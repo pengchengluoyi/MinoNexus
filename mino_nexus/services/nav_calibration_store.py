@@ -23,7 +23,6 @@ from mino_nexus.core.paths import nav_calibration_dir
 from mino_nexus.loop.hierarchy_slots import HIERARCHY_FORMAT
 
 MANIFEST_NAME = "manifest.json"
-DRAFT_NAME = "nav_fsm_draft.json"
 WALKTHROUGH_NAME = "walkthrough.json"
 HIERARCHY_DIR = "hierarchy"
 
@@ -189,90 +188,27 @@ def list_calibrations(app_id: str) -> list[dict[str, Any]]:
 
 # ---------------- 待校准草稿 ----------------
 #
-# 草稿**故意不进 `nav_fsm*` 表**：设计稿 §10.5 的门禁是「任意字段含 `__CALIBRATE__` →
-# load / PUT 一律拒绝」，也就是**库里永远不该有占位符**。但人填表要跨会话保存进度，
-# 于是把半成品放在证据目录旁边 —— 它本来就是照着同一批 walkthrough 证据填的。
-# 填完走 `promote()` 校验后才进库。
-
-
-def _legacy_draft_path(app_id: str) -> Path:
-    return nav_calibration_dir(app_id) / DRAFT_NAME
-
-
-def _read_legacy_draft_file(app_id: str) -> dict[str, Any] | None:
-    path = _legacy_draft_path(app_id)
-    if not path.exists():
-        return None
-    legacy = _read_json(path, None)
-    return legacy if isinstance(legacy, dict) else None
-
-
-def _migrate_legacy_draft(app_id: str) -> dict[str, Any] | None:
-    """一次性：旧版 `nav_fsm_draft.json` → `nav_fsm` 表 version=draft。"""
-    legacy = _read_legacy_draft_file(app_id)
-    if not legacy:
-        return None
-    from mino_nexus.services import nav_fsm_store as store
-
-    try:
-        saved = store.save_draft(app_id, legacy)
-        try:
-            _legacy_draft_path(app_id).unlink()
-        except OSError:
-            pass
-        return saved
-    except Exception:
-        return legacy
+# 草稿与发布版本均存入 SQLite；发布时校验占位符。
 
 
 def save_draft(app_id: str, doc: dict[str, Any], *, updated_by: str = "") -> dict[str, Any]:
-    """草稿写入 `nav_fsm` 表（version=draft）。DB 不可用时回退遗留 JSON（仅测试/离线）。"""
+    """SQLite is the only draft authority; persistence failures propagate."""
     from mino_nexus.services import nav_fsm_store as store
-
-    try:
-        return store.save_draft(app_id, doc, updated_by=updated_by)
-    except Exception:
-        payload = dict(doc or {})
-        payload["_draft_saved_at"] = int(time.time())
-        _write_json(_legacy_draft_path(app_id), payload)
-        return payload
+    return store.save_draft(app_id, doc, updated_by=updated_by)
 
 
 def read_draft(app_id: str) -> dict[str, Any] | None:
     from mino_nexus.services import nav_fsm_store as store
-
-    try:
-        doc = store.read_draft(app_id)
-        if doc:
-            return doc
-    except Exception:
-        pass
-    legacy = _read_legacy_draft_file(app_id)
-    if legacy:
-        return legacy
-    try:
-        return _migrate_legacy_draft(app_id)
-    except Exception:
-        return None
+    return store.read_draft(app_id)
 
 
 def delete_draft(app_id: str) -> bool:
     from mino_nexus.services import nav_fsm_store as store
-
-    deleted = store.delete(app_id, version=store.DRAFT_VERSION)
-    path = _legacy_draft_path(app_id)
-    if path.exists():
-        try:
-            path.unlink()
-            return True
-        except OSError:
-            pass
-    return deleted
+    return store.delete(app_id, version=store.DRAFT_VERSION)
 
 
 def promote_draft(app_id: str, *, updated_by: str = "") -> dict[str, Any]:
     """draft 表行 → v1 正式发布。"""
-    read_draft(app_id)  # 触发遗留 JSON 迁移
     from mino_nexus.services import nav_fsm_store as store
 
     return store.promote_draft(app_id, updated_by=updated_by)

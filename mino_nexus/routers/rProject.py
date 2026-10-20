@@ -501,15 +501,10 @@ def list_project_accounts(project_id: str, env: str = "", _sess: dict = Depends(
 @router.put("/{project_id}/accounts", dependencies=[Depends(project_maintainer)])
 def save_project_accounts(project_id: str, body: TestAccountSaveBody, _sess: dict = Depends(current_session)):
     project_id = _resolve_project_id(project_id)
-    from mino_nexus.services.pool_account_store import env_has_test_accounts_blob, persist_env_strip_test_accounts_if_needed
 
     try:
         base = ps.project_env(project_id)
         doc = save_test_accounts(base, body.accounts, project_id=project_id)
-        if env_has_test_accounts_blob(base):
-            ps.save_project_env(project_id, doc)
-        else:
-            persist_env_strip_test_accounts_if_needed(project_id, base)
     except KeyError as exc:
         _missing(exc)
     return ok(
@@ -534,7 +529,6 @@ def patch_project_account(
     from mino_nexus.services.account_pool_templates import merged_pool_field_defs
     from mino_nexus.services.project_env import save_one_test_account
 
-    from mino_nexus.services.pool_account_store import persist_env_strip_test_accounts_if_needed
 
     try:
         doc = ps.project_env(project_id)
@@ -577,13 +571,11 @@ def patch_project_account(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        persist_env_strip_test_accounts_if_needed(project_id, doc)
     elif not template_patch:
         try:
             saved = save_one_test_account(doc, row, project_id=project_id, account_id=account_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        persist_env_strip_test_accounts_if_needed(project_id, doc)
     if saved is None:
         raise HTTPException(status_code=400, detail="无变更")
     doc = ps.project_env(project_id)
@@ -600,7 +592,6 @@ def create_project_account(
     from mino_nexus.services.account_pool_templates import new_account_id
     from mino_nexus.services.project_env import save_one_test_account
 
-    from mino_nexus.services.pool_account_store import persist_env_strip_test_accounts_if_needed
 
     try:
         doc = ps.project_env(project_id)
@@ -612,7 +603,6 @@ def create_project_account(
         saved = save_one_test_account(doc, row, project_id=project_id, account_id=aid)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    persist_env_strip_test_accounts_if_needed(project_id, doc)
     public = _public_accounts([saved], doc, include_password=True)[0]
     return ok({"account": public}, msg="已保存")
 
@@ -1161,7 +1151,7 @@ def _maintainer_call(fn, *args):
 def list_project_maintainers(project_id: str, sess: dict = Depends(current_session)):
     from mino_nexus.services import project_members as pm
     data = _maintainer_call(pm.list_maintainers, project_id)
-    data["data"] = {"items": data["data"], "can_edit": pm.is_maintainer(project_id, sess),
+    data["data"] = {"items": data["data"], "can_edit": bool(sess.get("user_id")),
                     "can_manage": auth_store.is_admin_role(str(sess.get("role") or ""))}
     return data
 

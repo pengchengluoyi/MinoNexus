@@ -25,7 +25,7 @@ from mino_nexus.runtime.session_gate import (
     ensure_case_scene,
     is_login_module_case,
 )
-from mino_nexus.runtime.platform_gate import bind_case_execution_target, platform_skip_reason
+from mino_nexus.runtime.platform_gate import platform_skip_reason
 from mino_nexus.loop.sop_runtime import merge_phase_tool_kinds, normalize_inspections, normalize_phases, phase_for_id
 from mino_nexus.core.log import SLog
 from mino_nexus.loop.observe.agent_stream import emit_agent_event, make_thumb
@@ -480,10 +480,6 @@ def run_case(
             ctx.action_scheme = (
                 normalize_action_scheme(_doc.get("action_scheme"))
             )
-            case = bind_case_execution_target(
-                case, (_doc.get("device_targets") or {}).get(sn) or {},
-                surface=ctx.env_surface, action_scheme=ctx.action_scheme, package=package,
-            )
             ctx.plugin_user_id = str(_doc.get("plugin_user_id") or getattr(ctx, "plugin_user_id", "") or "")
             # GuardGate stop 时 ask_human 还是 give_up 取决于它（设计稿 §11.5）
             run_type = str(_doc.get("run_type") or "manual").lower()
@@ -601,6 +597,11 @@ def run_case(
     if fork_state and writer:
         writer.append("session/fork", dict(fork_state))
     outcome: dict[str, Any] = {"status": "fail", "summary": "未开始", "steps": steps}
+    scene_error = ""
+    try:
+        ctx.case_scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
+    except ValueError as exc:
+        scene_error = str(exc)
     plat_skip = platform_skip_reason(case, ctx.platform, device_os=ctx.desktop_os)
     try:
         with bind_writer(writer), registry_runtime(ctx.execution_mode):
@@ -615,6 +616,9 @@ def run_case(
                     "retryable": False,
                 })
                 outcome = _finish(emit, status="blocked", summary=project_scope_error, steps=steps, t0=t0)
+            elif scene_error:
+                writer.append("contract/blocked", {"reason_code":"case_scene_invalid","reason":scene_error,"retryable":False})
+                outcome = _finish(emit,status="blocked",summary=f"场景合同无效，需重新编译：{scene_error}",steps=steps,t0=t0)
             elif plat_skip:
                 def _skip_emit(phase: str, **extra: Any) -> None:
                     payload = {
@@ -686,12 +690,16 @@ def run_case(
                    "reason_code": exc.reason_code, "failure_stage": exc.failure_stage}
         return outcome
     except Exception as exc:
+        import traceback
+
+        summary = f"{type(exc).__name__}: {exc}"[:240] or "执行异常"
+        SLog.e(TAG, f"run_case failed run={run_id} case={cid}: {summary}\n{traceback.format_exc()}")
         outcome = {
             "status": "fail",
-            "summary": str(exc)[:240] or "执行异常",
+            "summary": summary,
             "steps": steps,
         }
-        raise
+        return outcome
     finally:
         from mino_nexus.services.account_facet_commit import commit_case_facet_effects
 
@@ -1104,22 +1112,14 @@ def _run_loop(
         provider_id=provider_id,
     )
 
-    display_guard: Optional[Any] = None
-    screen_recovery_exclude: frozenset[str] | None = None
     target_pkg = str(getattr(ctx, "target_package", "") or "")
 
-    def _stop_display_guard() -> None:
-        if display_guard is not None:
-            display_guard.stop()
-
     def _leave(*, status: str, summary: str, pack=None):
-        _stop_display_guard()
         if nav is not None:
             nav.shutdown(writer=writer, status=status, summary=summary)
         return _finish(emit, status=status, summary=summary, steps=steps, t0=t0, pack=pack or _pack)
 
     def _leave_case(cursor):
-        _stop_display_guard()
         result = _finish_case(emit, cursor=cursor, steps=steps, t0=t0, pack=_pack)
         if nav is not None:
             nav.shutdown(
@@ -1131,7 +1131,11 @@ def _run_loop(
 
     ran_case_start_inspection = False
     last_phase_seen = ""
-    ctx.case_scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
+    try:
+        ctx.case_scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
+    except ValueError as exc:
+        writer.append("contract/blocked", {"reason_code":"case_scene_invalid", "reason":str(exc), "retryable":False})
+        return _leave(status="blocked", summary=f"场景合同无效，需重新编译用例：{exc}")
     ctx.case = case
     if isinstance(cursor, StepCursor):
         setattr(cursor, "case", case)
@@ -1368,21 +1372,16 @@ def _run_loop(
                 ensure_single_in_progress(cursor, writer=writer)
 
     from mino_nexus.loop.recovery import recover_if_needed
-    from mino_nexus.loop.device_display_guard import DeviceDisplayGuard, platform_needs_display_guard
 
-    if platform_needs_display_guard(ctx):
-        try:
-            display_guard = DeviceDisplayGuard(
-                ctx,
-                proxy,
-                target_package=target_pkg,
-                cancel_check=cancel_check,
-            )
-            display_guard.start(initial_timeout=90.0)
-            screen_recovery_exclude = frozenset({"screen_asleep_or_locked"})
-        except Exception as exc:
-            SLog.w(TAG, f"DisplayGuard start failed: {exc!r}")
-            display_guard = None
+    def _screen_unregistered(out) -> str:
+        if out is None:
+            return ""
+        text = str(getattr(out, "error", "") or "")
+        summary = out.summary() if callable(getattr(out, "summary", None)) else ""
+        text = f"{text} {summary}"
+        if "capability_unregistered" in text or "能力目录里没有" in text:
+            return text.strip()[:240]
+        return ""
 
     preflight_shot = None
     try:
@@ -1443,10 +1442,12 @@ def _run_loop(
         target_package=target_pkg,
         shot=preflight_shot,
         execute_only=True,
-        exclude_rule_ids=screen_recovery_exclude,
     )
     if recovery_out:
         _log_preflight_recovery(recovery_out, source="preflight")
+        missing = _screen_unregistered(recovery_out)
+        if missing:
+            return _leave(status="blocked", summary=missing)
         if recovery_out.stop_run:
             return _leave(status="blocked", summary=recovery_out.summary())
 
@@ -1587,14 +1588,6 @@ def _run_loop(
         if cursor.done:
             return _leave_case(cursor)
 
-        if display_guard is not None:
-            if cancel_check and cancel_check():
-                _log_turn_end(writer, cap="", status="cancelled")
-                return _leave(status="cancelled", summary="任务已取消")
-            if not display_guard.wait_ready(timeout=60.0):
-                _log_turn_end(writer, cap="wait_screen_ready", status="blocked")
-                return _leave(status="blocked", summary="设备屏幕未就绪或屏幕守护失败，已暂停执行。请检查设备的亮屏、解锁和截图状态。")
-
         setattr(ctx, "decision_screenshot_hash", "")
         from mino_nexus.loop.observe.session_log import set_screenshot_hash
 
@@ -1667,6 +1660,22 @@ def _run_loop(
             emit("observe", thought=summary, step=seq, status="fail")
             _log_turn_end(writer, cap="", status="fail")
             return _leave(status="fail", summary=summary)
+
+        from mino_nexus.loop.device_display_guard import platform_needs_display_guard
+        from mino_nexus.loop.screen_capture import analyze_shot
+
+        if platform_needs_display_guard(ctx):
+            facts = analyze_shot(shot)
+            if facts.get("capture_ok") == "no" or facts.get("capture_black") == "yes":
+                screen_out = recover_if_needed(
+                    ctx, proxy, target_package=target_pkg, shot=shot, execute_only=True,
+                )
+                missing = _screen_unregistered(screen_out)
+                if missing:
+                    _log_turn_end(writer, cap="wake_screen", status="blocked")
+                    return _leave(status="blocked", summary=missing)
+                if screen_out is not None and (screen_out.applied or screen_out.recovered):
+                    shot = proxy.observe("screenshot", force_fresh=True)
 
         from mino_nexus.action_space.scheme import action_scheme as _action_scheme, select_observation
 
@@ -2211,11 +2220,6 @@ def _run_loop(
                     "open_url",
                     "recover_bring_target_app_foreground",
                 )
-            ]
-        if bool(getattr(ctx, "display_guard_active", False)):
-            menu = [
-                c for c in menu
-                if str(c.get("id") or "") not in ("recover_screen_asleep_or_locked",)
             ]
         from mino_nexus.loop.step_contract import instruction_allows_login_flow
 

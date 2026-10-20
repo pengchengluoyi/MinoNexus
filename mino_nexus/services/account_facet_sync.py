@@ -8,7 +8,7 @@ from mino_nexus.core.log import SLog
 from mino_nexus.services import project_store as ps
 from mino_nexus.services.account_facet_schema import facets_for_storage
 from mino_nexus.services.account_pool_templates import merged_pool_field_defs
-from mino_nexus.services.pool_account_store import list_accounts, persist_env_strip_test_accounts_if_needed
+from mino_nexus.services.pool_account_store import list_accounts
 from mino_nexus.services.project_env import account_ident, save_one_test_account
 from mino_nexus.services.resource_allocation_log import (
     ACTION_FACET_RESTORE,
@@ -178,8 +178,6 @@ def apply_account_template_state(
         saved = save_one_test_account(env_doc, save_payload, project_id=pid, account_id=aid)
     except ValueError as exc:
         return None, [str(exc)]
-    persist_env_strip_test_accounts_if_needed(pid, env_doc)
-    ps.save_project_env(pid, env_doc)
     after_facets = facets_for_storage(account_facet_values_for_match(saved), defs)
     after_fields = _scalar_snapshot(saved)
     if not ctx.skip_log and (

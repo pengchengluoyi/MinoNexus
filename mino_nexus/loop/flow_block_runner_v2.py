@@ -106,10 +106,15 @@ def try_dispatch_block_hook(
             "capability_id": cap,
             "milestone_id": mid,
         }
-    from mino_nexus.catalog.skill_channel import phase_allows
+    from mino_nexus.catalog.skill_channel import phase_allows, system_device_dispatch
 
     phase = str(getattr(cursor, "phase", "") or "")
-    if phase in ("prep", "do", "check") and not phase_allows(cap, phase):
+    if (
+        phase in ("prep", "do", "check")
+        and not is_program_caller(cap)
+        and not system_device_dispatch(cap)
+        and not phase_allows(cap, phase)
+    ):
         if writer is not None:
             writer.append(
                 "guard/block",

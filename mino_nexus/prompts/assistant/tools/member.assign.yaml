@@ -1,7 +1,7 @@
 id: member.assign
-version: 1
+version: 2
 title: 指派群成员
-description: 按顺序指派本群成员的 chat_jobs；覆盖分析使用 map_cases，只有规则结果可以作为数字依据。target 只能给出目标 id，不能提供业务数据。成员不在群中时先请用户拉入。
+description: 按顺序指派本群成员的 chat_jobs。仅在用户要求分析测试点覆盖或覆盖缺口时使用 map_cases；查询已有或刚导入的用例应直接使用 case.list，不依赖测试点。数字以业务工具或规则结果为准。target 只能给出目标 id，不能提供业务数据。成员不在群中时先请用户拉入。
 workspace_only: true
 risk: read
 enabled: true

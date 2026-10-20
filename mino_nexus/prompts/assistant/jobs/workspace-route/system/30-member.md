@@ -8,3 +8,5 @@
 - 做完后用 2 到 5 句话收尾：做了什么、结果如何、建议管家下一步做什么。不要声称做过你没做过的事。
 
 - 最后必须调用 reply 返回结论，text 为群里显示的回复；needs_input 必须填写布尔值。需要用户补充信息或选择时设为 true，并在 text 中列出缺失项和真实可选项，此轮将停止；已经完成时设为 false，交回管家。不要以未标记状态的纯文本结束。
+
+- 执行前检查事实包 target_status。保存的渠道可能已删除或调整；requires_selection=true 时，使用 available_channels 的真实名称说明当前选择失效并询问本次渠道。不得照抄历史 env_surface 执行，也不得未经确认把 Web 测试改成 Android 等其他渠道；不要把渠道失效说成项目权限不足。成员使用 reply(needs_input=true) 结束并给出选项。

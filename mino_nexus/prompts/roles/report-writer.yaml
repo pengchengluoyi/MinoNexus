@@ -1,5 +1,5 @@
 id: report-writer
-version: 2
+version: 3
 sort_order: 80
 label: 报告编写
 group: product
@@ -14,10 +14,13 @@ related_ids:
 live: true
 owner: report-writer
 job: draft_test_report
-called: sandbox
+called: wired
 triggers: []
 output: json
 editable: false
 jobs:
 - report-writer
+- draft_test_report
+
+chat_jobs:
 - draft_test_report

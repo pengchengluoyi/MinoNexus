@@ -351,12 +351,14 @@ def seed_case(run_id: str, raw: dict[str, Any], index: int, *, sn: str = "", cov
     expected_raw = str(raw.get("expected_raw") or "").strip() or "\n".join(
         f"{i + 1}. {t}" for i, t in enumerate(expected)
     )
+    title = str(raw.get("title") or raw.get("name") or "").strip() or cid
     return {
         "case_id": cid,
         "execution_unit_id": "unit-" + uuid.uuid5(uuid.NAMESPACE_URL, f"{run_id}:{cid}:{sn}:{index}").hex,
         "frozen_identity": frozen_identity(raw),
         "source_revision_id": raw.get("source_revision_id") or "",
-        "name": str(raw.get("name") or raw.get("title") or "").strip() or cid,
+        "name": title,
+        "title": title,
         "sn": sn,
         "status": "pending",
         "report_run_id": report_run_id(run_id, cid, sn=sn, coverage=coverage),
@@ -489,14 +491,19 @@ def to_task_json(doc: dict[str, Any] | None, *, include_cases: bool = True) -> d
 
 
 _CASE_BRIEF_KEYS = (
-    "case_id", "name", "sn", "status", "summary", "report_run_id",
+    "case_id", "name", "title", "sn", "status", "summary", "report_run_id",
     "session_id", "duration_ms",
     "elapsed_ms", "module", "platform", "hitl",
 )
 
 
+def _case_display_title(case: dict[str, Any]) -> str:
+    return str(case.get("title") or case.get("name") or case.get("case_id") or "").strip()
+
+
 def _case_brief(case: dict[str, Any]) -> dict[str, Any]:
     out = {k: case.get(k) for k in _CASE_BRIEF_KEYS}
+    out["title"] = _case_display_title(case)
     out["elapsed_ms"] = int(case.get("elapsed_ms") or 0)
     out["hitl"] = bool(case.get("hitl"))
     duration = case.get("duration_ms")
@@ -508,6 +515,7 @@ def _case_brief(case: dict[str, Any]) -> dict[str, Any]:
 def _public_case(case: dict[str, Any]) -> dict[str, Any]:
     """详情接口：保留用例原文，执行轨迹单独放 engine_steps。"""
     row = dict(case)
+    row["title"] = _case_display_title(row)
     leaked = [x for x in (row.get("steps") or []) if looks_like_engine_step(x)]
     if leaked and not row.get("engine_steps"):
         row["engine_steps"] = leaked

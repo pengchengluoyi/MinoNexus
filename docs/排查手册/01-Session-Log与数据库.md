@@ -17,23 +17,11 @@ Agent / 自动化排查：**禁止**为定位问题新增 `tests/test_*.py` 或�
 
 ## 2. 数据目录与库文件
 
-默认数据目录（macOS / Linux）：
+开发源码运行默认使用 `~/.mino-dev/nexus/mino.db`，覆盖变量为 `MINO_NEXUS_DEV_DATA_DIR`。
+正式运行使用 `MINO_NEXUS_DATA_DIR`；未指定时 macOS 为 `~/Library/Application Support/Mino/nexus/data/mino.db`，Windows 为 `%APPDATA%/MinoNexus/mino.db`，Linux 为 `~/.mino-nexus/mino.db`。
+以当前进程模式和显式配置为准，不能仅因旧目录里存在库文件就去查旧库。开发与正式路径不得共用。
 
-```text
-~/.mino-nexus/
-  mino.db          # 主库（session、跑批、设置、目录等）
-  nav/             # 导航采集证据（与 mino.db 同根）
-```
-
-覆盖目录：
-
-```bash
-export MINO_NEXUS_DATA_DIR=/path/to/data
-```
-
-库路径：`$MINO_NEXUS_DATA_DIR/mino.db`（未设置 env 时即 `~/.mino-nexus/mino.db`）。
-
-> Console 文档里偶写 `~/Library/Application Support/MinoNexus`；**以 `mino_nexus/core/paths.py` 为准**（非 Windows 默认 `~/.mino-nexus`）。
+V7 不再自动迁移旧 schema 或环境结构；发现不支持结构时应保留原库、报告问题，不得在排查中直接改库或清空数据。
 
 ## 3. 表结构（排查常用）
 

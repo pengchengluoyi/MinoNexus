@@ -63,9 +63,11 @@ def update_row(token: str, row: dict[str, Any], *, worker_id: str = "", restart:
             CaseImportPreview.owner_user_id == require_user_id(),
         )
         if worker_id:
-            query = query.filter(CaseImportPreview.worker_id == worker_id, CaseImportPreview.payload["cancel"].as_boolean() == False)
+            query = query.filter(CaseImportPreview.worker_id == worker_id)
         preview = query.first()
         if not preview:
+            return False
+        if worker_id and bool((preview.payload or {}).get("cancel")):
             return False
         index = next((index for index, item in enumerate(preview.payload.get("rows") or []) if item.get("row_index") == row.get("row_index")), None)
         if index is None:
@@ -89,19 +91,21 @@ def claim(token: str, worker_id: str) -> bool:
         row = query.first()
         if not row:
             return False
-        previous_worker = row.worker_id
-        stale = False
-        if previous_worker:
+        previous_worker = str(row.worker_id or "")
+        lease_expired = not previous_worker or str(row.worker_expires_at or "") < _now().isoformat()
+        stale_process = False
+        if previous_worker and not lease_expired:
             try:
                 process_id = int(previous_worker.split(":", 1)[0])
                 if process_id > 0:
                     os.kill(process_id, 0)
             except ProcessLookupError:
-                stale = True
+                stale_process = True
             except (ValueError, PermissionError):
                 pass
+        # worker_id embeds server pid; a finished thread must not block reclaim until lease expires.
         available = or_(CaseImportPreview.worker_id == "", CaseImportPreview.worker_expires_at < _now().isoformat())
-        if stale:
+        if stale_process:
             available = or_(available, CaseImportPreview.worker_id == previous_worker)
         return bool(query.filter(available).update({
             CaseImportPreview.worker_id: worker_id,

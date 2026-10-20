@@ -93,7 +93,11 @@ def assign(project_id, topic_id, sess, args, *, context, deadline, state=None):
         raise ValueError('本轮处理时间已用完')
     trace = dispatch_log.bind(job=job, role=member, trigger='workspace_member', source='workspace_assign', engine=spec['engine'])
     try:
-        if spec['engine'] == 'rule':
+        if member == 'report-writer' and job == 'draft_test_report':
+            from mino_nexus.services.workspace_reports import generate, markdown
+            result = generate(project_id, topic_id, sess, str(target.get('run_id') or ''), deadline=deadline)
+            body = markdown(result)
+        elif spec['engine'] == 'rule':
             if job not in RULE_JOBS:
                 raise ValueError('规则任务尚未接入业务输入合同')
             from mino_nexus.services.qa_process_assist import run_job

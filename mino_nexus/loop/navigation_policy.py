@@ -457,6 +457,17 @@ def dispatch_pending(proxy, ctx, cursor, *, turn_seq, writer=None):
     result = plan_and_dispatch_next(PlanEvent(seq=turn_seq, capability_id='tap_element',
         params={'to_state': pending['nav_target']}, label='项目导航策略'), ctx=ctx, router=proxy, t0=time.time())
     attempt = (result.raw_response or {}).get('nav_attempt') or {}
+    missing_fsm = (
+        str(getattr(result, "error", "") or "") == "missing fsm"
+        or str(attempt.get("plan_error") or "") == "missing fsm"
+    )
+    if missing_fsm:
+        if writer:
+            writer.append('policy/navigation', {'milestone_id': pending['id'], 'attempt': attempt,
+                'status': 'blocked', 'reason_code': 'navigation_configuration_required'})
+        return {'ok': False, 'case_fail': True, 'status': 'blocked',
+                'error_kind': 'navigation_configuration_required', 'milestone_id': pending['id'],
+                'summary': '缺少已发布导航图；已停止导航，不自动切换 DOM 或视觉执行'}
     ok = result.status == EventStatus.PASS
     # A planned edge reaching the destination is not observation of arrival.
     arrived = bool(ok and attempt.get('resolved_to') and

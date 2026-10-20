@@ -357,35 +357,18 @@ CONTROL_TOOLS: list[dict[str, Any]] = [
 ]
 
 
-def _params_to_schema(rows: Any) -> Optional[dict[str, Any]]:
-    if not isinstance(rows, list) or not rows:
-        return None
-    props: dict[str, Any] = {}
-    required: list[str] = []
+def _params_to_schema(rows: Any) -> dict[str, Any]:
+    if not isinstance(rows,list): raise ValueError("catalog_params_required")
+    props, required = {}, []
     for row in rows:
-        if not isinstance(row, dict):
-            continue
-        name = str(row.get("name") or "").strip()
-        if not name:
-            continue
-        spec: dict[str, Any] = {"type": str(row.get("type") or "string")}
-        if row.get("description"):
-            spec["description"] = str(row.get("description"))
-        if row.get("enum"):
-            spec["enum"] = list(row.get("enum") or [])
-        if row.get("minimum") is not None:
-            spec["minimum"] = row.get("minimum")
-        if row.get("maximum") is not None:
-            spec["maximum"] = row.get("maximum")
-        props[name] = spec
-        if row.get("required"):
-            required.append(name)
-    if not props:
-        return None
-    out: dict[str, Any] = {"type": "object", "properties": props}
-    if required:
-        out["required"] = required
-    return out
+        if not isinstance(row,dict) or not isinstance(row.get("name"),str) or not row["name"] or row["name"] in props:
+            raise ValueError("catalog_param_identity_invalid")
+        name=row["name"]
+        if row.get("type") not in {"string","integer","number","boolean","array","object","null"}:
+            raise ValueError("catalog_param_type_invalid")
+        props[name]={k:v for k,v in row.items() if k not in {"name","required"}}
+        if row.get("required"): required.append(name)
+    return {"type":"object","properties":props,**({"required":required} if required else {})}
 
 
 def _merge_param_schemas(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -407,16 +390,8 @@ def _merge_param_schemas(base: dict[str, Any], overlay: dict[str, Any]) -> dict[
 
 
 def params_schema_for(cap_id: str, catalog_params: Any = None) -> dict[str, Any]:
-    """目录 params 与 PARAM_DEFAULTS 合并：目录为空时用默认，避免无参工具进模型。"""
-    default = dict(PARAM_DEFAULTS.get(str(cap_id or ""), {"type": "object", "properties": {}}))
-    from_catalog = _params_to_schema(catalog_params)
-    if not from_catalog:
-        return _strip_target_app_params(str(cap_id or ""), default)
-    if not (default.get("properties") or {}):
-        schema = from_catalog
-    else:
-        schema = _merge_param_schemas(default, from_catalog)
-    return _strip_target_app_params(str(cap_id or ""), schema)
+    """Schema is projected only from the catalog; defaults are registration inputs."""
+    return _strip_target_app_params(str(cap_id or ""), _params_to_schema(catalog_params))
 
 
 def schema_to_param_rows(schema: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -434,19 +409,7 @@ def schema_to_param_rows(schema: dict[str, Any] | None) -> list[dict[str, Any]]:
             continue
         if not isinstance(spec, dict):
             spec = {"type": "string"}
-        row: dict[str, Any] = {
-            "name": key,
-            "type": str(spec.get("type") or "string"),
-            "required": key in required,
-        }
-        if spec.get("description"):
-            row["description"] = str(spec["description"])
-        if spec.get("enum"):
-            row["enum"] = list(spec.get("enum") or [])
-        if spec.get("minimum") is not None:
-            row["minimum"] = spec["minimum"]
-        if spec.get("maximum") is not None:
-            row["maximum"] = spec["maximum"]
+        row: dict[str, Any] = {**spec, "name":key, "required":key in required}
         rows.append(row)
     return rows
 

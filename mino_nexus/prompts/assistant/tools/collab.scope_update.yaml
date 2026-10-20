@@ -16,7 +16,6 @@ params_schema:
       items: {type: string}
     env_profile: {type: string}
     env_surface: {type: string}
-    expected_build: {type: string}
   required: [project_id, topic_id]
 result_pick: [data]
 card: answer

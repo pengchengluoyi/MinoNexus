@@ -33,7 +33,8 @@ def identity(value):
 
 
 def public(row):
-    return {c.name: getattr(row, c.name) for c in row.__table__.columns}
+    return {c.name: getattr(row, c.name) for c in row.__table__.columns
+            if not (isinstance(row, CollabTopic) and c.name == 'expected_build')}
 
 
 def authorize(project_id, sess):
@@ -46,8 +47,10 @@ def authorize(project_id, sess):
 
 
 def owned(db, project_id, topic_id, *, write=False):
+    from mino_nexus.core.execution_user import require_user_id
+    owner = require_user_id()
     row = db.get(CollabTopic, topic_id)
-    if row is None or row.project_id != project_id:
+    if row is None or row.project_id != project_id or row.lead_user_id != owner:
         raise KeyError('工作区不存在')
     if write and (row.archived or row.workspace_kind.startswith('legacy')):
         raise ValueError('已归档工作区只读，请先恢复有效范围工作区')
@@ -141,7 +144,9 @@ def target_selection(opts, body, current=None):
         surface = matches[0]['id'] if matches else ''
     channel = next((c for c in opts['channels'] if c['id'] == surface), None)
     if surface and not channel:
-        raise ValueError('测试目标不属于当前项目')
+        choices = '、'.join(c['label'] + '（' + c['id'] + '）' for c in opts['channels'])
+        suffix = '当前可选：' + choices + '。请确认本次测试渠道。' if choices else '当前项目尚未配置应用渠道，请先配置测试目标。'
+        raise ValueError(f'渠道「{surface}」不在当前项目的渠道配置中，可能已删除或调整。' + suffix)
     if channel and 'app_id' in body and aid and aid != channel['app_id']:
         raise ValueError('应用与渠道不一致，请重新选择测试目标')
     return (channel['app_id'], surface, channel['platform']) if channel else ('', '', '')
@@ -157,11 +162,18 @@ def create_workspace(project_id, sess, body):
     env = str(body.get('env_profile') or '')
     if env and env not in {e['key'] for e in opts['environments']}:
         raise ValueError('环境不属于当前项目')
-    key = identity([project_id, rid, modules]) if rid or modules else None
+    key = identity([project_id, owner, rid, modules]) if rid or modules else None
     with session_scope() as db:
         db.execute(text('BEGIN IMMEDIATE'))
-        existing = db.query(CollabTopic).filter_by(project_id=project_id, scope_key=key).first() if key else None
+        existing = db.query(CollabTopic).filter_by(project_id=project_id, lead_user_id=owner).filter(CollabTopic.scope_key.in_([key, identity([project_id, rid, modules])])).first() if key else None
         if existing:
+            if not existing.archived:
+                # Reusing a conversation must retain explicit choices from this request.
+                if 'env_surface' in body or 'app_id' in body:
+                    existing.app_id, existing.env_surface, existing.platform = aid, surface, platform
+                if 'env_profile' in body:
+                    existing.env_profile = env
+                existing.updated_at = now()
             return public(existing)
         title = body.get('title') or next((r['title'] for r in opts['requirements'] if r['id'] == rid), '') or '、'.join(modules) or '新对话'
         row = CollabTopic(topic_id=uid(), project_id=project_id, app_id=aid, title=title,
@@ -179,7 +191,7 @@ def create_workspace(project_id, sess, body):
 def list_workspaces(project_id, sess, archived=False):
     user_id = authorize(project_id, sess)
     with session_scope() as db:
-        rows = db.query(CollabTopic).filter_by(project_id=project_id, archived=int(archived)).order_by(CollabTopic.updated_at.desc()).all()
+        rows = db.query(CollabTopic).filter_by(project_id=project_id, lead_user_id=user_id, archived=int(archived)).order_by(CollabTopic.updated_at.desc()).all()
         output = []
         for t in rows:
             if not archived and t.workspace_kind not in ('scope', 'project'):
@@ -209,7 +221,7 @@ def mark_read(project_id, topic_id, sess):
 
 
 def update_workspace(project_id, topic_id, sess, body):
-    authorize(project_id, sess)
+    owner = authorize(project_id, sess)
     opts = scope_options(project_id, sess)
     with session_scope() as db:
         db.execute(text('BEGIN IMMEDIATE'))
@@ -221,8 +233,8 @@ def update_workspace(project_id, topic_id, sess, body):
             mods = sorted(set(body.get('modules', t.modules) or []))
             if rid and rid not in {r['id'] for r in opts['requirements']} or set(mods) - set(opts['modules']):
                 raise ValueError('范围不属于当前项目')
-            key = identity([project_id, rid, mods]) if rid or mods else None
-            other = db.query(CollabTopic).filter(CollabTopic.scope_key == key, CollabTopic.topic_id != topic_id).first()
+            key = identity([project_id, owner, rid, mods]) if rid or mods else None
+            other = db.query(CollabTopic).filter_by(project_id=project_id, lead_user_id=owner).filter(CollabTopic.scope_key.in_([key, identity([project_id, rid, mods])]), CollabTopic.topic_id != topic_id).first()
             if key and other:
                 if other.archived:
                     return public(other)
@@ -239,7 +251,7 @@ def update_workspace(project_id, topic_id, sess, body):
                 if value and value not in allowed:
                     raise ValueError(name + ' 不属于当前项目配置')
                 setattr(t, name, value)
-        for key in ('title', 'expected_build'):
+        for key in ('title',):
             if key in body:
                 setattr(t, key, str(body[key] or '')[:200])
         for key in ('paused', 'archived'):
@@ -277,13 +289,15 @@ def resources(project_id, topic, owner):
     node_ids = {n.node_id for n in registry.nodes() if n.owner_user_id == owner and n.alive}
     devices = [d for d in registry.devices() if d.get('node_alive') and d.get('node_id') in node_ids
         and (not topic.platform or d.get('platform') == topic.platform)]
-    with session_scope() as db:
-        accounts = db.query(PoolAccount).filter_by(project_id=project_id, env=topic.env_profile or 'test').all()
-        free = [a for a in accounts if not a.locked and not a.lease]
-    return {'online_devices': len(devices), 'available_accounts': len(free),
+    free = None
+    if topic.env_profile:
+        with session_scope() as db:
+            accounts = db.query(PoolAccount).filter_by(project_id=project_id, env=topic.env_profile).all()
+            free = [a for a in accounts if not a.locked and not a.lease]
+    return {'online_devices': len(devices), 'available_accounts': len(free) if free is not None else None,
         'devices': [{k: d.get(k) for k in ('sn', 'platform', 'model')} for d in devices],
-        'env_profile': topic.env_profile or 'test', 'expected_build': topic.expected_build or '',
-        'account_note': '未锁定且无租约的账号数；具体资源条件仍以执行前准入为准'}
+        'env_profile': topic.env_profile or '',
+        'account_note': '未锁定且无租约的账号数；具体资源条件仍以执行前准入为准' if free is not None else '尚未选择环境，账号可用数量未核验'}
 
 
 def snapshot(project_id, topic, owner):
@@ -324,11 +338,13 @@ def detail(project_id, topic_id, sess):
         snap = snapshot(project_id, t, owner)
     # Run cards render live from run_store; nothing is frozen into the message.
     from mino_nexus.services import run_store
+    from mino_nexus.services.workspace_review import freshness
+    versions = freshness(project_id, topic_id)
     runs = {}
     for m in messages:
         if m['card_kind'] == 'run' and m['ref_id'] and m['ref_id'] not in runs:
             doc = run_store.get(m['ref_id']) or {}
-            runs[m['ref_id']] = {'run_id': m['ref_id'], 'status': doc.get('status', 'unknown'), 'total': doc.get('total'),
+            runs[m['ref_id']] = {'run_id': m['ref_id'], 'app_id': doc.get('app_id', ''), 'status': doc.get('status', 'unknown'), 'freshness': versions.get(m['ref_id'], 'unknown'), **run_outcome(doc), 'total': doc.get('total'),
                 'passed': doc.get('passed'), 'failed': doc.get('failed'), 'cases': [
                     {'case_id': c.get('case_id'), 'status': c.get('status'), 'session_id': c.get('session_id')}
                     for c in (doc.get('cases') or []) if isinstance(c, dict)]}
@@ -336,13 +352,30 @@ def detail(project_id, topic_id, sess):
     return {'topic': topic, 'snapshot': snap, 'messages': messages, 'runs': runs, 'members': list_members(project_id, topic_id, sess)}
 
 
-def reference_run(project_id, topic_id, run_id):
+def reference_run(project_id, topic_id, run_id, *, source=''):
     with session_scope() as db:
-        message(db, owned(db, project_id, topic_id), card='run', ref=run_id, role='conductor')
+        from mino_nexus.services.workspace_review import capture
+        capture(db, owned(db, project_id, topic_id), run_id)
+        message(db, owned(db, project_id, topic_id), card='run', ref=run_id, role='conductor', origin='message:' + source if source else '')
+    from mino_nexus.services.workspace_automation import attach_notifications
+    attach_notifications(project_id, topic_id, run_id)
     from mino_nexus.services import run_store
     doc = run_store.get(run_id) or {}
     if doc.get('status') in ('done', 'finished', 'failed', 'cancelled', 'blocked', 'passed'):
-        notify_run_finished(doc)
+        from mino_nexus.services.collab_events import on_run_finished
+        on_run_finished(doc)
+
+
+def run_outcome(doc):
+    """Nothing passed and nothing failed means nothing ran: say so instead of 'failed 0'."""
+    doc = doc or {}
+    if int(doc.get('passed') or 0) + int(doc.get('failed') or 0) > 0:
+        return {'outcome': str(doc.get('status') or ''), 'reason': ''}
+    if str(doc.get('status') or '') not in ('done', 'finished', 'failed', 'cancelled', 'blocked'):
+        return {'outcome': str(doc.get('status') or ''), 'reason': ''}
+    reasons = [str(c.get('fail_reason') or c.get('failure') or c.get('reason') or '') for c in (doc.get('cases') or []) if isinstance(c, dict)]
+    reason = str(doc.get('error') or '') or next((r for r in reasons if r), '')
+    return {'outcome': 'not_executed', 'reason': reason}
 
 
 def notify_run_finished(doc):
@@ -355,12 +388,53 @@ def notify_run_finished(doc):
         topics = {m.topic_id for m in db.query(CollabMessage).filter_by(card_kind='run', ref_id=run_id)}
         for tid in topics:
             t = db.get(CollabTopic, tid)
-            if t is None:
+            if t is None or not doc.get('owner_user_id') or t.lead_user_id != doc['owner_user_id']:
                 continue
-            status = str(doc.get('status') or '')
-            message(db, t, f"运行已结束：{status}。通过 {doc.get('passed', 0)}，失败 {doc.get('failed', 0)}。", role='conductor', card='run_finished', ref=run_id)
+            res = run_outcome(doc)
+            if res['outcome'] == 'not_executed':
+                body = '本次没有执行任何用例' + ('：' + res['reason'] if res['reason'] else '，原因未记录，请查看运行与证据。')
+            else:
+                body = f"运行已结束：{doc.get('status') or ''}。通过 {doc.get('passed', 0)}，失败 {doc.get('failed', 0)}。"
+            message(db, t, body, role='conductor', card='run_finished', ref=run_id)
 
 
-def migrate_legacy():
-    """Historical workspaces remain unchanged; retained for startup compatibility."""
-    return
+
+
+def pin_cases(project_id, topic_id, sess, case_ids):
+    authorize(project_id, sess)
+    ids = list(dict.fromkeys(case_ids))
+    if not ids or len(ids) > 1000:
+        raise ValueError('请选择 1—1000 条用例')
+    with session_scope() as db:
+        db.execute(text('BEGIN IMMEDIATE'))
+        topic = owned(db, project_id, topic_id, write=True)
+        if topic.paused:
+            raise ValueError('工作区已暂停，请先恢复')
+        available = {r[0] for r in db.query(ProjectCase.case_id).filter(ProjectCase.project_id == project_id, ProjectCase.case_id.in_(ids))}
+        if set(ids) != available:
+            raise ValueError('所选用例已删除或不属于当前项目；本次未加入任何用例')
+        topic.scope_case_ids = sorted(set(topic.scope_case_ids or []) | set(ids))
+        message(db, topic, f'已钉住 {len(ids)} 条用例。', card='case_set')
+        return {'topic_id': topic_id, 'case_ids': scope_ids(db, topic)}
+
+
+def list_runs(project_id, topic_id, sess, offset=0, limit=20):
+    """Read existing referenced runs; independent from the chat history window."""
+    authorize(project_id, sess)
+    from sqlalchemy import func
+    from mino_nexus.services import run_store
+    with session_scope() as db:
+        owned(db, project_id, topic_id)
+        refs = db.query(CollabMessage.ref_id, func.max(CollabMessage.created_at).label('stamp')).filter_by(
+            topic_id=topic_id, card_kind='run').group_by(CollabMessage.ref_id)
+        total = refs.count()
+        rows = refs.order_by(func.max(CollabMessage.created_at).desc(), CollabMessage.ref_id).offset(offset).limit(limit).all()
+    items = []
+    for rid, _ in rows:
+        doc = run_store.get(rid) or {}
+        items.append({'run_id': rid, 'app_id': doc.get('app_id', ''),
+            'name': doc.get('name') or doc.get('app_name') or '测试任务',
+            'status': doc.get('status', 'unknown'), **run_outcome(doc),
+            **{key: doc.get(key) for key in ('total', 'completed', 'passed', 'failed')},
+            'started_at': doc.get('started_at') or '', 'finished_at': doc.get('finished_at') or ''})
+    return {'items': items, 'total': total, 'offset': offset, 'limit': limit}

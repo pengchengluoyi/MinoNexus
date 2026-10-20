@@ -38,13 +38,19 @@ def _public(row) -> dict[str, Any]:
     if out.get("source_revision_id"):
         from mino_nexus.services.case_compilation import readiness
         meta = dict(out.get("meta") or {})
-        if readiness(out):
-            # Do not display an old frozen plan as the understanding of new text.
-            meta["step_program_keys"] = {}
-            for key in ("steps_parsed", "expected_parsed", "automation_details", "precondition_parsed", "payload"):
-                out.pop(key, None)
+        issue = readiness(out)
+        if issue:
+            spk = meta.get("step_program_keys") if isinstance(meta.get("step_program_keys"), dict) else {}
+            job_status = str((out.get("compile_job") or {}).get("status") or out.get("compile_state") or "").lower()
+            in_flight = job_status in ("queued", "running", "claimed", "preparing")
+            if not (spk and in_flight):
+                # Do not display an old frozen plan as the understanding of new text.
+                meta["step_program_keys"] = {}
+                for key in ("steps_parsed", "expected_parsed", "automation_details", "precondition_parsed", "payload"):
+                    out.pop(key, None)
+                out["meta"] = meta
+                return out
             out["meta"] = meta
-            return out
         if "v5_draft_step_program_keys" in meta:
             meta["step_program_keys"] = meta["v5_draft_step_program_keys"]
             out["meta"] = meta
@@ -247,12 +253,19 @@ def _row_fields(
     for key in CHAIN_FIELDS:
         raw.pop(key, None)
     meta = dict(raw.get("meta") or {})
+    bootstrap = (
+        {key: deepcopy(meta[key]) for key in COMPILED_META if key in meta and meta[key]}
+        if compiled
+        else {}
+    )
     for key in COMPILED_META:
         meta.pop(key, None)
     if old:
         for key in COMPILED_META:
             if key in (old.get("meta") or {}):
                 meta[key] = deepcopy(old["meta"][key])
+    if bootstrap and (not old or compiled):
+        meta.update(bootstrap)
     raw["meta"] = meta
     # The source transaction is deterministic. Preview/client compiled output is
     # never an authoritative artifact; only the fenced worker can activate it.
@@ -524,30 +537,3 @@ def delete_cases(project_id: str, case_ids: list[str]) -> int:
         if delete_case(project_id, str(cid or "").strip()):
             removed += 1
     return removed
-
-
-def promote_from_env(app: dict[str, Any]) -> int:
-    """把 env 里残留的 draft_cases 搬进 project_cases，只搬一次。"""
-    pid = str(app.get("project_id") or "").strip()
-    aid = str(app.get("id") or "").strip()
-    if not pid or not aid:
-        return 0
-    env = app.get("env") if isinstance(app.get("env"), dict) else {}
-    auto = env.get("automation") if isinstance(env.get("automation"), dict) else {}
-    qp = auto.get("qa_process") if isinstance(auto.get("qa_process"), dict) else {}
-    moved = 0
-    for req in qp.get("requirements") or []:
-        if not isinstance(req, dict):
-            continue
-        drafts = req.get("draft_cases") if isinstance(req.get("draft_cases"), list) else []
-        rows = [x for x in drafts if isinstance(x, dict) and str(x.get("case_id") or "").strip()]
-        if not rows:
-            continue
-        rid = str(req.get("id") or "")
-        existing_ids = {str(c.get("case_id") or "") for c in list_cases(pid, rid)}
-        to_add = [x for x in rows if str(x.get("case_id") or "") not in existing_ids]
-        if not to_add:
-            continue
-        upsert_cases(pid, rid, to_add, replace=False)
-        moved += len(to_add)
-    return moved

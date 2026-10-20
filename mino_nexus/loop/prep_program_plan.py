@@ -79,7 +79,8 @@ def _device_session_clause(pre: str) -> tuple[str, str]:
 
 def _extra_prep_catalog_steps(pre: str, used_caps: set[str]) -> list[dict[str, Any]]:
     """编号前置行里目录能认出、固定模板又没收的事件，按 hook 追加。"""
-    from mino_nexus.catalog.skill_channel import capability_dispatch_ok
+    from mino_nexus.catalog.skill_channel import capability_dispatch_ok, canonical_cap
+    from mino_nexus.catalog.registry import get_capability
     from mino_nexus.services.account_requirement_compile import TITLE_OTHER, classify_precondition_title
     from mino_nexus.services.case_resource_key_catalog import catalog_payload
 
@@ -114,7 +115,12 @@ def _extra_prep_catalog_steps(pre: str, used_caps: set[str]) -> list[dict[str, A
         if not hit or best < 2:
             continue
         caps = [str(x).strip() for x in (hit.get("config_keys") or []) if str(x).strip()]
-        cap = next((c for c in caps if capability_dispatch_ok(c)), "")
+        # config_keys also contains resource fields such as session/profile.
+        # Only registered executable events may become extra prep hooks;
+        # resource claims retain their own preflight and session-gate checks.
+        cap = next((canonical_cap(c) for c in caps
+                    if get_capability(canonical_cap(c)) is not None
+                    and capability_dispatch_ok(c)), "")
         if not cap or cap in known:
             continue
         known.add(cap)

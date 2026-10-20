@@ -1,4 +1,4 @@
-"""项目 / 应用 JSON 库。契约对齐上游 `rProject` + `models/project`。"""
+"""项目 / 应用 SQLite 存储；读取不回填归属或迁移环境。"""
 from __future__ import annotations
 
 import copy
@@ -22,55 +22,17 @@ def _now() -> int:
 
 def _owner_from(actor: dict[str, Any] | None) -> dict[str, str]:
     row = actor if isinstance(actor, dict) else {}
-    uid = str(row.get("user_id") or row.get("created_by") or row.get("id") or "").strip()
-    name = str(row.get("name") or row.get("created_by_name") or row.get("username") or "").strip()
-    if uid:
-        return {"created_by": uid, "created_by_name": name}
-    from mino_nexus.services.auth_store import seed_admin_user
-
-    admin = seed_admin_user()
-    return {
-        "created_by": str(admin.get("user_id") or ""),
-        "created_by_name": str(admin.get("name") or admin.get("username") or "管理员"),
-    }
+    uid = str(row.get("user_id") or "").strip()
+    if not uid:
+        raise ValueError("project_owner_required")
+    return {"created_by": uid, "created_by_name": str(row.get("name") or row.get("username") or "").strip()}
 
 
-def _default_owner() -> dict[str, str]:
-    """导入 / 旧数据缺创建人：回填 Nexus 种子账号 `admin`，避免 UI 看起来无主。"""
-    return _owner_from(None)
 
 
-def _ensure_ownership(root: dict[str, Any]) -> bool:
-    dirty = False
-    fallback: dict[str, str] | None = None
-    now = _now()
 
-    def owner() -> dict[str, str]:
-        nonlocal fallback
-        if fallback is None:
-            fallback = _default_owner()
-        return fallback
 
-    for bucket in ("projects", "apps"):
-        for row in root[bucket]:
-            if not isinstance(row, dict):
-                continue
-            if not str(row.get("created_by") or "").strip():
-                row.update(owner())
-                dirty = True
-            elif not str(row.get("created_by_name") or "").strip():
-                from mino_nexus.services.auth_store import public_user_by_id
 
-                pub = public_user_by_id(str(row.get("created_by") or ""))
-                row["created_by_name"] = str((pub or {}).get("name") or owner()["created_by_name"])
-                dirty = True
-            if row.get("created_at") in (None, ""):
-                row["created_at"] = now
-                dirty = True
-            if row.get("updated_at") in (None, ""):
-                row["updated_at"] = row.get("created_at") or now
-                dirty = True
-    return dirty
 
 
 def _project_dict(row) -> dict[str, Any]:
@@ -116,8 +78,6 @@ def _root() -> dict[str, Any]:
         }
     finally:
         db.close()
-    if _ensure_ownership(raw):
-        _save(raw)
     return raw
 
 
@@ -306,13 +266,11 @@ def require_app(app_id: str) -> dict[str, Any]:
 
 def project_env(project_id: str) -> dict[str, Any]:
     from mino_nexus.services.project_pool_config_store import (
-        ensure_migrated_from_project_env,
         load_pool_config,
         merge_pool_config_into_doc,
     )
 
     pid = str(project_id or "").strip()
-    ensure_migrated_from_project_env(pid)
     root = _root()
     project = require_project(pid)
     base = env_from_project_row(project, _apps_of(root, pid))
@@ -333,7 +291,7 @@ def list_projects() -> list[dict[str, Any]]:
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.project import App, Project
     from mino_nexus.services.case_store import count_cases
-    from mino_nexus.services.project_pool_config_store import ensure_migrated_from_project_env, project_env_summary
+    from mino_nexus.services.project_pool_config_store import project_env_summary
     from mino_nexus.services.pool_account_store import count_accounts
 
     with session_scope() as db:
@@ -347,7 +305,6 @@ def list_projects() -> list[dict[str, Any]]:
         pid = str(p.get("id") or "")
         if not pid:
             continue
-        ensure_migrated_from_project_env(pid)
         case_n = count_cases(pid)
         apps_raw = apps_by_pid.get(pid, [])
         apps_out = [_public_app(a, project_case_count=case_n) for a in apps_raw]
@@ -404,9 +361,6 @@ def create_app(
     if not isinstance(platforms, str):
         raise ValueError("platform_set_required")
     platforms = ",".join(platform_set(platforms.split(",") if platforms else []))
-    # Freeze existing unique legacy associations before a second same-platform app is added.
-    if _apps_of(_root(), project_id):
-        save_project_env(project_id, project_env(project_id))
     root = _root()
     now = _now()
     row = {
@@ -470,14 +424,12 @@ def save_project_env(project_id: str, doc: dict[str, Any]) -> dict[str, Any]:
     )
 
     pid = str(project_id or "").strip()
-    previous = require_project(pid)
+    require_project(pid)
     src = dict(doc or {})
     from mino_nexus.services.application_channels import validate_application_channels
     validate_application_channels(src, _apps_of(_root(), pid))
     from mino_nexus.services.project_env import validate_environment_write
-    previous_channels = normalize_project_env(previous.get("env") or default_project_env())["channels"]
-    if src.get("channels") != previous_channels:
-        validate_environment_write(src)
+    validate_environment_write(src)
     pool_patch = extract_pool_config_from_doc(src)
     if pool_patch:
         save_pool_config(pid, pool_patch)

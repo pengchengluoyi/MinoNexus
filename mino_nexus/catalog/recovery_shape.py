@@ -29,6 +29,8 @@ def is_recovery_atomic_payload(entry_id: str, payload: dict[str, Any]) -> bool:
     """恢复原子能力：implementations / 本地编排 / 资源网关。"""
     if not isinstance(payload, dict):
         return False
+    if is_recovery_rule_payload(payload):
+        return False
     if payload.get("implementations"):
         return True
     if str(entry_id or "") in LOCAL_ORCH_IDS:

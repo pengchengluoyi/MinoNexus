@@ -475,7 +475,7 @@ def list_topics(project_id: str, sess: dict[str, Any]) -> list[dict[str, Any]]:
 
     _require_access(project_id, sess)
     with session_scope() as db:
-        rows = db.query(CollabTopic).filter_by(project_id=project_id).order_by(CollabTopic.updated_at.desc()).all()
+        rows = db.query(CollabTopic).filter_by(project_id=project_id, lead_user_id=_uid(sess)).order_by(CollabTopic.updated_at.desc()).all()
         return [_topic_list_item(row) for row in rows]
 
 
@@ -821,7 +821,7 @@ def get_topic(project_id: str, topic_id: str, sess: dict[str, Any]) -> dict[str,
     _require_access(project_id, sess)
     with session_scope() as db:
         row = db.get(CollabTopic, topic_id)
-        if row is None or row.project_id != project_id:
+        if row is None or row.project_id != project_id or row.lead_user_id != _uid(sess):
             raise KeyError("topic_not_found")
         from mino_nexus.services.collab_steward import steward_overview, work_items_for_ui
 
@@ -861,7 +861,7 @@ def list_messages(project_id: str, topic_id: str, sess: dict[str, Any], limit: i
     _require_access(project_id, sess)
     with session_scope() as db:
         topic = db.get(CollabTopic, topic_id)
-        if topic is None or topic.project_id != project_id:
+        if topic is None or topic.project_id != project_id or topic.lead_user_id != _uid(sess):
             raise KeyError("topic_not_found")
         query = db.query(CollabMessage).filter_by(topic_id=topic_id)
         if through_message_id:

@@ -1,11 +1,10 @@
-"""项目号池配置 SQLite 真源；从 projects.env 懒迁移。"""
+"""项目号池配置 SQLite 真源；读取不迁移历史 projects.env。"""
 from __future__ import annotations
 
 import copy
 from typing import Any
 
 from mino_nexus.core.database import session_scope
-from mino_nexus.models.project import Project
 from mino_nexus.models.project_pool_config import ProjectPoolConfig
 
 POOL_ENV_KEYS = (
@@ -121,52 +120,7 @@ def delete_pool_config(project_id: str) -> None:
         )
 
 
-def ensure_migrated_from_project_env(project_id: str) -> bool:
-    """若 projects.env 仍含号池配置，迁入 project_pool_config 并瘦身 env 列。"""
-    pid = str(project_id or "").strip()
-    if not pid:
-        return False
-    from mino_nexus.services.pool_account_store import merge_env_test_accounts
 
-    with session_scope() as db:
-        project = db.query(Project).filter(Project.id == pid).one_or_none()
-        if project is None:
-            return False
-        env = copy.deepcopy(project.env) if isinstance(project.env, dict) else {}
-        if not isinstance(env, dict):
-            return False
-        has_pool = any(k in env for k in POOL_ENV_KEYS)
-        has_accounts_blob = "test_accounts" in env
-        if not has_pool and not has_accounts_blob:
-            return False
-
-    if has_accounts_blob:
-        merge_env_test_accounts(pid, env)
-
-    with session_scope() as db:
-        project = db.query(Project).filter(Project.id == pid).one_or_none()
-        if project is None:
-            return False
-        env = copy.deepcopy(project.env) if isinstance(project.env, dict) else {}
-        patch = extract_pool_config_from_doc(env)
-        if patch:
-            row = db.query(ProjectPoolConfig).filter(ProjectPoolConfig.project_id == pid).one_or_none()
-            if row is None:
-                row = ProjectPoolConfig(project_id=pid)
-                db.add(row)
-            from mino_nexus.services.account_facet_schema import normalize_extensions
-            from mino_nexus.services.project_env import _norm_template_ids
-
-            if "account_facet_extensions" in patch:
-                row.facet_extensions = normalize_extensions(patch.get("account_facet_extensions"))
-            if "account_template_ids" in patch:
-                row.template_ids = _norm_template_ids(patch.get("account_template_ids"))
-            if "account_pool_local" in patch:
-                row.pool_local = _norm_pool_local(patch.get("account_pool_local"))
-
-        slim = strip_pool_keys_from_doc(env)
-        project.env = slim
-        return True
 
 
 def project_env_summary(env: dict[str, Any] | None) -> dict[str, Any]:

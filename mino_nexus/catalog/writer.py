@@ -119,12 +119,10 @@ def patch(kind: str, entry_id: str, body: dict[str, Any]) -> dict[str, Any]:
             fields["sort_order"] = int(body["sort_order"] or 0)
         if "platforms" in body and body["platforms"] is not None:
             fields["platforms_json"] = list(body["platforms"] or [])
-        elif isinstance(body.get("scope"), dict) and "platforms" in (body.get("scope") or {}):
-            fields["platforms_json"] = list((body.get("scope") or {}).get("platforms") or [])
+
         if "visible_to" in body and body["visible_to"] is not None:
             fields["visible_to_json"] = list(body["visible_to"] or [])
-        elif isinstance(body.get("scope"), dict) and "visible_to" in (body.get("scope") or {}):
-            fields["visible_to_json"] = list((body.get("scope") or {}).get("visible_to") or [])
+
         if isinstance(body.get("payload"), dict):
             fields["payload_json"] = _clean_payload(dict(body["payload"]))
         payload = dict(fields.get("payload_json") or {})
@@ -198,20 +196,17 @@ def _clean_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _prepare(kind: str, eid: str, body: dict[str, Any]) -> dict[str, Any]:
+    if "scope" in body: raise CatalogWriteError("obsolete_catalog_scope")
     payload = dict(body.get("payload") or {})
     for key in (
         "event_kind", "needs_vlm", "params", "ui", "implementations",
         "when", "mode", "match", "actions", "verify", "forbid", "prompt_snippet",
-        "priority", "max_attempts", "evidence_notes", "caller", "returns", "observe",
+        "priority", "max_attempts", "evidence_notes", "caller", "phases", "returns", "observe",
     ):
         if key in body and key not in payload:
             payload[key] = body[key]
     platforms = body.get("platforms")
-    if platforms is None and isinstance(body.get("scope"), dict):
-        platforms = (body.get("scope") or {}).get("platforms")
     visible = body.get("visible_to")
-    if visible is None and isinstance(body.get("scope"), dict):
-        visible = (body.get("scope") or {}).get("visible_to")
     return {
         "kind": kind,
         "id": eid,
@@ -232,6 +227,16 @@ def _prepare(kind: str, eid: str, body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate(kind: str, fields: dict[str, Any]) -> None:
+    from mino_nexus.core.platform_contract import platform_set
+    from mino_nexus.catalog.contracts import validate_capability_payload
+    try:
+        platform_set(fields.get("platforms_json"))
+        if fields.get("lifecycle") not in {"active","draft","deprecated"}: raise ValueError("catalog_lifecycle_invalid")
+        body=fields.get("payload_json") or {}
+        if kind in CAPABILITY_KINDS or kind == BASE_KIND or is_recovery_atomic_payload(str(fields.get("id") or ""),body):
+            validate_capability_payload(body,platforms=fields.get("platforms_json"),lifecycle=fields.get("lifecycle"))
+    except ValueError as exc:
+        raise CatalogWriteError(str(exc)) from exc
     from mino_nexus.catalog.skill_channel import V5_EXCLUDED_IDS
     from mino_nexus.services.business_event_contract import RETIRED, references
     if str(fields.get('id') or '').startswith('guard.') and (kind != RECOVERY_KIND or not is_recovery_rule_payload(fields.get('payload_json') or {})):

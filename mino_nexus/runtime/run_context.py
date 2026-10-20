@@ -115,10 +115,11 @@ class RunContext:
     def connectivity_flags(self) -> dict[str, bool]:
         """喂给 catalog.registry.filter_capabilities。
 
-        取值口径与上游一致：只有 `connected` / `available` 算通。
+        使用 platform_contract.channel_connected 的统一连通状态口径。
         """
         def _ok(d: dict[str, Any]) -> bool:
-            return str((d or {}).get("state") or "") in ("connected", "available", "Authenticated")
+            from mino_nexus.core.platform_contract import channel_connected
+            return channel_connected(d)
 
         return {
             "adb": _ok(self.adb),
@@ -323,8 +324,6 @@ def _probe_hitl() -> dict[str, Any]:
 
 # ---------------- 平台判断（上游同名函数，去掉 playwright_hub 依赖） ----------------
 
-LEGACY_WEB_SLOT_SN = "web-local"
-LEGACY_WEB_SLOT_SNS = frozenset({"web-local", "web_local"})
 
 
 def _looks_ios_token(value: str) -> bool:
@@ -336,24 +335,13 @@ def _looks_ios_token(value: str) -> bool:
 WEB_PLAYWRIGHT_PARALLEL_LANES = 4
 
 
-def is_legacy_web_sn(sn: str = "") -> bool:
-    """Old global Playwright slot names. Purge-only; not a valid current sn."""
-    return str(sn or "").strip().lower() in LEGACY_WEB_SLOT_SNS
+
 
 
 def is_web_slot(sn: str = "", platform: str = "") -> bool:
-    """上游在 `runtime/playwright_hub` 里，那个模块归 Scout。这里只做纯判断。
-
-    Current sn is `web` + alphanumeric scout_id. `web-local` / `web_local` are
-    leftovers, still recognized so an upgrading node can retire them.
-    """
-    s = str(sn or "").strip().lower()
-    plat = str(platform or "").strip().lower()
-    if plat in ("web", "browser", "playwright"):
-        return True
-    if is_legacy_web_sn(s) or s == "web" or s.startswith("web-"):
-        return True
-    return s.startswith("web") and len(s) > 3 and s[3:].isalnum()
+    s = str(sn or "")
+    valid = s.startswith("web") and len(s)>3 and s[3:].isascii() and s[3:].isalnum() and s==s.lower()
+    return valid and (not platform or platform=="web")
 
 
 def is_per_node_web_sn(sn: str = "") -> bool:

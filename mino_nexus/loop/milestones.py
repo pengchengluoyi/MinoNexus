@@ -468,6 +468,12 @@ def _tool_matches_declared(row: dict[str, Any], cap: str) -> bool:
         for key in ("device_cap", "hook_cap", "cap")
         if str(row.get(key) or "").strip()
     }
+    if row.get("fsm_unavailable"):
+        listed = row.get("exec_caps") if isinstance(row.get("exec_caps"), list) else []
+        actions = {str(item or "").strip() for item in listed if str(item or "").strip()}
+        actions.discard("nav_target")
+        if actions:
+            declared = actions
     if not declared:
         return True
     return cap in declared or any(_hook_cap_matches_tool(item, cap) for item in declared)

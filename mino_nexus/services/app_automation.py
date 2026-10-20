@@ -262,16 +262,7 @@ def count_qa_process_cases_from_env(env: dict | None, project_id: str = "") -> i
     return n
 
 
-def _raw_env_has_draft_cases(app: dict) -> bool:
-    env = app.get("env") if isinstance(app.get("env"), dict) else {}
-    auto = env.get("automation") if isinstance(env.get("automation"), dict) else {}
-    qp = auto.get("qa_process") if isinstance(auto.get("qa_process"), dict) else {}
-    if isinstance(qp.get("draft_cases"), list) and qp.get("draft_cases"):
-        return True
-    for req in qp.get("requirements") or []:
-        if isinstance(req, dict) and isinstance(req.get("draft_cases"), list) and req.get("draft_cases"):
-            return True
-    return False
+
 
 
 def list_project_cases(project_id: str) -> list[dict[str, Any]]:
@@ -290,16 +281,8 @@ def list_project_cases(project_id: str) -> list[dict[str, Any]]:
 
 
 def list_app_cases(app: dict) -> list[dict[str, Any]]:
-    from mino_nexus.services.case_store import promote_from_env
-
     pid = _project_id(app)
-    if not pid:
-        return []
-    moved = promote_from_env(app)
-    if moved or _raw_env_has_draft_cases(app):
-        qp = get_automation_config(app, hydrate_cases=False).get("qa_process") or {}
-        save_automation_config(app, {"qa_process": qp})
-    return list_project_cases(pid)
+    return list_project_cases(pid) if pid else []
 
 
 def cases_payload(app: dict) -> dict[str, Any]:
@@ -316,45 +299,23 @@ def cases_payload(app: dict) -> dict[str, Any]:
     }
 
 
-def package_for_app(
-    app: dict,
-    env_profile: str | None = None,
-    platform: str = "android",
-    *,
-    surface: str = "",
-    env_doc: dict | None = None,
-) -> str:
+def package_for_app(app: dict, env_profile: str | None = None, platform: str = "android", *,
+                    surface: str = "", env_doc: dict | None = None) -> str:
     from mino_nexus.services import project_store as ps
-
-    plat = str(platform or "android").lower()
-    pid = str(app.get("project_id") or "")
-    try:
-        if env_doc is None:
-            env_doc = ps.project_env(pid) if pid else {"default_profile": "test", "profiles": {}}
-    except KeyError:
-        env_doc = {"default_profile": "test", "profiles": {}}
-    cfg = get_automation_config(app, hydrate_cases=False)
-    profile = env_profile or cfg.get("env_profile")
-    name = resolve_profile_name(env_doc, profile)
-    snap = profile_snapshot(env_doc, name)
-    want = "web" if plat in ("web", "browser", "playwright") else ("ios" if plat in ("ios", "iphone", "ipad") else plat)
-    if want not in ("android", "ios", "web", "mac", "macos", "win", "pc", "windows", "linux"):
-        return ""
-    sid = str(surface or "").strip()
-    if sid:
-        tid = target_id_from_snapshot(snap, want, surface=sid)
-        if tid:
-            return tid
-    tid = target_id_from_snapshot(snap, want)
-    if tid:
-        return tid
-    if want == "web":
-        sid = resolve_surface_id(env_doc, platform="web", env_profile=name, surface=sid)
-        if sid:
-            return target_id_from_snapshot(snap, want, surface=sid)
-    elif sid:
-        return target_id_from_snapshot(snap, want, surface=sid)
-    return ""
+    from mino_nexus.core.platform_contract import target_platform
+    from mino_nexus.services.project_env import _profile_value
+    plat=target_platform(platform)
+    pid=str(app.get("project_id") or "")
+    if not pid: raise ValueError("project_identity_required")
+    doc=ps.project_env(pid) if env_doc is None else env_doc
+    cfg=get_automation_config(app,hydrate_cases=False)
+    name=resolve_profile_name(doc,env_profile or cfg.get("env_profile"))
+    channels=[c for c in doc.get("channels",[]) if c.get("app_id")==str(app.get("id") or "") and c.get("platform")==plat]
+    if surface: channels=[c for c in channels if c.get("id")==surface]
+    if not channels: return ""
+    if len(channels)!=1: raise ValueError("application_channel_ambiguous")
+    channel=channels[0]
+    return _profile_value(profile_snapshot(doc,name).get(channel["id"]),channel["field"])
 
 
 def get_playbook(app: dict) -> dict[str, Any]:

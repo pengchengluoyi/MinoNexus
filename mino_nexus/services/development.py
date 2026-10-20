@@ -136,7 +136,7 @@ def list_operations(app_id, sess):
     return [get_operation(app_id, opid, sess) for opid in ids]
 
 
-def create_operation(app_id, sess, opid, action, revision, connection=None):
+def create_operation(app_id, sess, opid, action, revision, connection=None, *, expected_build=None):
     uid = authorize(app_id, sess)
     if action == "install" and not is_android_app(app_id):
         raise HTTPException(422, "只有 Android 应用可以安装 APK")
@@ -165,6 +165,10 @@ def create_operation(app_id, sess, opid, action, revision, connection=None):
         if revision != saved["revision"] or not cfg["enabled"]:
             raise HTTPException(409, "开发配置未启用或 revision 已变化")
         node_id = cfg["node_id"]
+        if expected_build is not None:
+            if action != 'probe' or not isinstance(expected_build, str) or not expected_build or len(expected_build) > 200:
+                raise HTTPException(422, 'build 覆盖仅支持只读版本探测')
+            cfg = {**cfg, 'expected_build': expected_build}
         params = {"action": action, "operation_id": opid, "binding": cfg}
     node_row = _node_row_for_session(node_id, sess=sess, studio_id="")
     if node_row.get("owner_user_id") != uid:
@@ -268,14 +272,20 @@ async def _execute_dispatch(opid, sess, pending):
         payload = P.Execute(run_id="", step_idx=-1, sn="", capability_id="node.ide_prepare", params=params,
             timeout_sec=100, executor_order=["ide"], low_level={},
             selected_impl={"id": "ide.prepare.v1", "executor": "ide", "runs_on": "scout", "params_contract": {"version": 1}, "result_contract": {"version": 1}})
+        generation = live.node_connection_generation
         sent = True
         result = live.send(P.MsgType.EXECUTE, payload, timeout=110)
         if inspect.isawaitable(result):
             result = await result
+        from mino_nexus.services.node_registry import get_registry
+        current = get_registry().get_node(node_id)
+        if not current or current.node_connection_generation != generation:
+            raise RuntimeError('Scout connection changed during observation')
         raw = getattr(result, "extra", {}) or {}
         data = raw.get("development") or (getattr(result, "data", {}) or {}).get("development")
         if not isinstance(data, dict) or data.get("state") not in {"ready", "failed", "awaiting_developer", "unknown"}:
             data = {"state": "unknown", "reason": "节点未返回可确认的开发操作回执；不会自动重试"}
+        data = {**data, 'node_connection_generation': generation}
     except asyncio.CancelledError:
         if asyncio.current_task().cancelling():
             raise  # Shutdown leaves the persisted running record for expiry/recovery.

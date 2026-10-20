@@ -55,6 +55,11 @@ def facts(project_id, topic_id, sess, content):
         if doc:
             runs.append({k: doc.get(k) for k in ('run_id', 'status', 'total', 'passed', 'failed')})
     from mino_nexus.services.workspace_members import list_members
+    selected = next((c for c in opts['channels'] if c['id'] == view['env_surface'] and c['app_id'] == view['app_id']), None)
+    target_status = {'valid': bool(selected), 'requires_selection': not bool(selected),
+                     'saved_channel': view['env_surface'], 'available_channels': opts['channels']}
+    if not selected:
+        target_status['reason'] = 'saved_channel_unavailable' if view['env_surface'] else 'channel_not_selected'
     return {
         'members': list_members(project_id, topic_id, sess),
         'project_id': project_id, 'topic_id': topic_id,
@@ -62,6 +67,7 @@ def facts(project_id, topic_id, sess, content):
         'cases': {'total': snap['total'], 'executable': len(snap['executable']), 'blocked': len(snap['blocked']),
                   'case_ids': snap['case_ids'][:200], 'items': snap['cases'][:50], 'truncated': len(snap['case_ids']) > 200},
         'resources': snap['resources'], 'runs_from_this_workspace': runs,
+        'target_status': target_status,
         'choices': {k: opts[k] for k in ('modules', 'requirements', 'apps', 'environments', 'channels')},
         'recent_messages': recent,
     }
@@ -83,7 +89,7 @@ def execution_args(project_id, topic_id, sess, spec, args):
         raise ValueError('工作区已暂停，请在菜单中恢复后再提交操作。')
     if args.get('project_id', project_id) != project_id:
         raise ValueError('请使用当前工作区所属项目。')
-    if spec['id'] == 'collab.scope_update':
+    if spec['id'] in ('collab.scope_update', 'collab.scope_get', 'collab.pin_cases'):
         if args.get('topic_id', topic_id) != topic_id:
             raise ValueError('请修改当前工作区的范围。')
         return {**args, 'project_id': project_id, 'topic_id': topic_id}
@@ -99,21 +105,41 @@ def execution_args(project_id, topic_id, sess, spec, args):
             raise ValueError('原运行不可读取或不属于当前项目。')
         if not {c['case_id'] for c in doc.get('cases', [])} <= set(scope):
             raise ValueError('原运行包含当前范围之外的用例，请先明确本次范围。')
+        # A retry keeps the original run's target; validate it against today's channels.
+        ws.target_selection(ws.scope_options(project_id, sess), {
+            'app_id': doc.get('app_id'), 'env_surface': doc.get('env_surface')})
+        if not doc.get('env_surface') or not doc.get('env_profile'):
+            raise ValueError('原运行缺少应用·渠道或环境，请明确测试目标后重新执行。')
         return args
-    for key in ('app_id', 'env_profile', 'env_surface'):
+    for key in ('env_profile', 'env_surface'):
         if not args.get(key) and view.get(key):
             args[key] = view[key]
     if not args.get('env_surface'):
         raise ValueError('执行前请选择应用·渠道')
-    target_app, _, _ = ws.target_selection(ws.scope_options(project_id, sess), args)
-    if args.get('app_id') != target_app:
-        raise ValueError('执行应用与渠道不一致')
+    opts = ws.scope_options(project_id, sess)
+    target_app, _, _ = ws.target_selection(opts, args)
+    args['app_id'] = target_app
+    if args.get('env_profile') and args['env_profile'] not in {e['key'] for e in opts['environments']}:
+        raise ValueError('执行环境已失效，请从当前项目环境中重新选择。')
     if not args.get('app_id') or not args.get('env_profile'):
         raise ValueError('执行前请明确应用与环境；可以先保存到工作区范围与资源。')
     if args.get('all_cases'):
         raise ValueError('工作区只执行已绑定的范围，请明确模块、需求或用例。')
-    if any(args.get(key) for key in ('module', 'modules', 'search', 'ordinal')) and not args.get('case_ids'):
-        raise ValueError('请从当前范围选择准确的 case_ids；修改范围请先保存工作区。')
+    if 'case_ids' not in args:
+        # A module name is a narrowing of the scope, not a reason to bounce the user.
+        wanted = {str(m).strip() for m in ([args.get('module')] if args.get('module') else []) + list(args.get('modules') or []) if str(m).strip()}
+        if wanted:
+            with session_scope() as db:
+                rows = db.query(ProjectCase.case_id, ProjectCase.module).filter(
+                    ProjectCase.project_id == project_id, ProjectCase.case_id.in_(scope)).all()
+            picked = [cid for cid, module in rows if module in wanted]
+            if not picked:
+                raise ValueError('当前范围内没有「' + '、'.join(sorted(wanted)) + '」模块的可执行用例。')
+            args['case_ids'] = picked
+        elif any(args.get(key) for key in ('search', 'ordinal')):
+            raise ValueError('没能定位到你说的那条用例，请说出用例名称或所属模块。')
+        for key in ('module', 'modules', 'search', 'ordinal'):
+            args.pop(key, None)
     ids = args['case_ids'] if 'case_ids' in args else scope
     if not isinstance(ids, list) or not ids or not set(ids) <= set(scope):
         raise ValueError('执行用例必须属于当前工作区范围。')
@@ -125,15 +151,17 @@ def execution_args(project_id, topic_id, sess, spec, args):
 def run_one_tool(project_id, topic_id, sess, owner, spec, args, state, target):
     """One tool call under the workspace rules. Shared by the conductor and members,
     so the one-write-per-message limit is counted in one place."""
+    if state.get('read_only') and spec.get('risk') == 'write':
+        return {'stop': '本轮为自动分析，只能读取事实，不允许写操作。'}
     if spec.get('risk') == 'write' and state['wrote']:
-        return {'stop': state['summary'] + ' 本条消息已提交一次写操作，后续操作请另发消息。'}
+        return {'stop': '本条消息已提交过写操作，不会重复提交。' + state['summary']}
     try:
         args = execution_args(project_id, topic_id, sess, spec, args)
     except ValueError as exc:
         return {'stop': str(exc)}
     if spec.get('risk') == 'write':
-        state['wrote'] = spec['id'] != 'collab.scope_update'  # Non-execution scope selection can precede a single write.
-        if spec['id'] == 'case.run':
+        state['wrote'] = spec['id'] not in ('collab.scope_update', 'collab.pin_cases')  # Non-execution scope selection can precede a single write.
+        if spec['id'] in ('case.run', 'case.retry_failed'):
             args['client_request_id'] = state['source']
     from mino_nexus.services.assistant_tools import run_tool
     out = run_tool(spec, args, user_id=owner, target=target, surface='workspace')
@@ -145,7 +173,7 @@ def run_one_tool(project_id, topic_id, sess, owner, spec, args, state, target):
         data = out.data
         rid = data if isinstance(data, str) else (data.get('task_id') or data.get('run_id')) if isinstance(data, dict) else ''
         if rid:
-            ws.reference_run(project_id, topic_id, str(rid))
+            ws.reference_run(project_id, topic_id, str(rid), source=state['source'])
             state['summary'] = '执行请求已提交，实时结果见运行卡片。'
     if spec['id'] == 'collab.scope_update' and isinstance(out.data, dict):
         tid = out.data.get('topic_id')
@@ -220,7 +248,7 @@ def member_loop(project_id, topic_id, sess, member, job, question, target, conte
     return member_result('成员处理已达 5 步上限，本轮已停止。' + state['summary'], stopped=True)
 
 
-def process(project_id, topic_id, sess, content, *, source_message_id):
+def process(project_id, topic_id, sess, content, *, source_message_id, read_only=False, event_context=None):
     owner = ws.authorize(project_id, sess)
     parsed = urlparse(content)
     if parsed.scheme in ('http', 'https') and parsed.netloc and not any(c.isspace() for c in content):
@@ -237,6 +265,7 @@ def process(project_id, topic_id, sess, content, *, source_message_id):
     from mino_nexus.services.assistant_tools import openai_tools, tool_by_function_name
 
     fact = facts(project_id, topic_id, sess, content)
+    fact['automation_context'] = {'read_only': read_only, **(event_context or {})}
     recent_messages = fact['recent_messages']
     history = '\n'.join(f"{'用户' if m['author'] == 'user' else '助手'}：{m['body']}" for m in recent_messages)
     messages, meta = render('workspace-route', {'persona_block': _persona({}),
@@ -249,7 +278,7 @@ def process(project_id, topic_id, sess, content, *, source_message_id):
         'description': assign_spec['description'], 'parameters': assign_spec['params_schema']}}]
     deadline = time.monotonic() + float((meta.get('call') or {}).get('total_timeout_sec', 300))
     seen, answer = set(), ''
-    state = {'wrote': False, 'summary': '', 'source': source_message_id}
+    state = {'wrote': False, 'summary': '', 'source': source_message_id, 'read_only': read_only}
     assignments = 0
     assignment_results = []
     token = dispatch_log.bind(assistant_mutation_scope=source_message_id)
@@ -335,8 +364,7 @@ def process(project_id, topic_id, sess, content, *, source_message_id):
                         break
                     assignment_results.append(json.loads(bounded_json(result, 4000)))
                     if result.get('stopped') or result.get('needs_input'):
-                        answer = result['result']['explanation']
-                        break
+                        return  # assign() already published the member's explanation; do not echo it.
                     if not state['summary']:
                         state['summary'] = '成员已回复，分析结果见上方消息。'
                     result['write_submitted_this_turn'] = state['wrote']

@@ -74,12 +74,8 @@ def ensure_db() -> None:
     try:
         from mino_nexus import models  # noqa: F401 — 注册表
 
-        from mino_nexus.core.migration_backup import backup_before_account_migration
-        backup_before_account_migration(DB_PATH)
-        Base.metadata.create_all(bind=engine)
-        from mino_nexus.core.migration import run_auto_migration
-
-        run_auto_migration()
+        from mino_nexus.core.schema_contract import initialize_current_schema
+        initialize_current_schema(engine, Base.metadata)
         from mino_nexus.core.bootstrap import bootstrap
 
         bootstrap()

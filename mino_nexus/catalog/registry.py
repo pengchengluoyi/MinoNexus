@@ -47,14 +47,9 @@ def _executor_ok(executor: str, connectivity: ConnectivityFlags) -> bool:
 
 
 def platform_ok(platforms: list[str], platform: str) -> bool:
-    """platforms 为空 = 全平台。"""
-    want = [str(p).strip().lower() for p in (platforms or []) if str(p).strip()]
-    if not want:
-        return True
-    got = str(platform or "").strip().lower()
-    if not got:
-        return True
-    return got in want
+    from mino_nexus.core.platform_contract import platform_set, target_platform
+    try: return target_platform(platform) in platform_set(platforms)
+    except ValueError: return False
 
 
 def filter_capabilities(
@@ -67,7 +62,7 @@ def filter_capabilities(
     """连通性看 impl.executor 是否在 Scout 通道里；无 implementation 的本地能力仍保留。"""
     out: list[Capability] = []
     for cap in list_capabilities(kinds=kinds):
-        if cap.enabled is False or str(cap.lifecycle or "active") == "deprecated":
+        if cap.enabled is False or cap.lifecycle != "active":
             continue
         if getattr(cap, "ui_coverable", True) is False:
             continue

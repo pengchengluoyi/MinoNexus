@@ -99,7 +99,6 @@ def _public(row: Any) -> dict[str, Any]:
         "project_id": row.project_id,
         "target_desc": str(merged.get("vlm_text") or row.desc_key or ""),
         "control_id": row.control_id,
-        "legacy_control_id": str(merged.get("legacy_control_id") or ""),
         "element_type": row.element_type or "button",
         "scope": row.scope or "page",
         "locator_value": merged,
@@ -136,7 +135,6 @@ def ensure_control(
     key = _desc_key(desc)
     if not key:
         key = uuid.uuid4().hex[:8]
-    legacy_key = key
     kind = _ROLE_TYPE.get(str(element_type or "").strip(), str(element_type or "button"))
     if kind not in _ELEMENT_TYPES:
         kind = "button"
@@ -159,15 +157,6 @@ def ensure_control(
             text = str(vlm_text or desc)[:200]
             locator["vlm_text"] = text
             locator["source"]["vlm_text"] = "case"
-            if page or container:
-                # 明确记录旧身份来源；新作用域只继承描述，不继承可能串页面的定位器。
-                legacy = (
-                    db.query(UiControl)
-                    .filter(UiControl.project_id == pid, UiControl.desc_key == legacy_key)
-                    .first()
-                )
-                if legacy is not None:
-                    locator["legacy_control_id"] = str(legacy.control_id)
             row = UiControl(
                 control_id=f"ctl_{uuid.uuid4().hex[:8]}",
                 project_id=pid,
@@ -207,12 +196,10 @@ def ensure_control(
 
 
 def _find_control_row(db: Any, pid: str, cid: str) -> Any:
-    """Legacy compatibility only; V5 never borrows another project's identity."""
+    """All execution modes require exact project ownership."""
     from mino_nexus.models.ui_control import UiControl
 
     rows = db.query(UiControl).filter(UiControl.project_id == pid, UiControl.control_id == cid).all()
-    if not rows and pid != "_project" and not runtime_readonly():
-        rows = db.query(UiControl).filter(UiControl.project_id == "_project", UiControl.control_id == cid).all()
     if len(rows) > 1:
         raise ValueError("control_identity_conflict")
     return rows[0] if rows else None
@@ -232,14 +219,12 @@ def get_control(project_id: str, control_id: str) -> dict[str, Any] | None:
 
 
 def locator_cell(scheme: str, platform: str) -> str:
-    """看图只用描述。DOM 按设备取 Playwright 或 UI Automation。"""
-    visual = str(scheme or "").strip().lower() not in ("dom", "dom_preferred")
-    if visual:
-        return "vlm_text"
-    plat = str(platform or "").strip().lower()
-    if plat in ("android", "ios"):
-        return "uiautomator"
-    return "playwright"
+    from mino_nexus.core.platform_contract import target_platform
+    plat = target_platform(platform)
+    if scheme == "visual": return "vlm_text"
+    if scheme not in {"dom","dom_preferred"}: raise ValueError("locator_scheme_invalid")
+    if plat in {"mac","win"}: raise ValueError("native_dom_locator_unsupported; select visual explicitly")
+    return {"android":"uiautomator","web":"playwright"}[plat]
 
 
 def read_locator(control: dict[str, Any] | None, *, scheme: str, platform: str) -> str:

@@ -125,7 +125,7 @@ def ordinary_compilation_diagnostics(case):
 def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferred', provider_id=''):
     from mino_nexus.core.execution_user import require_user_id
     from mino_nexus.catalog import registry
-    from mino_nexus.catalog.skill_channel import canonical_cap, derive_caller
+    from mino_nexus.catalog.skill_channel import canonical_cap
     from mino_nexus.services.case_resource_claim import _case_resource_key
     from mino_nexus.loop.prep_program_plan import build_prep_program_plan
     from mino_nexus.services.execution_binding_runtime import BindingAdmissionError
@@ -144,9 +144,11 @@ def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferre
         if not cid:
             return
         cap = registry.get_capability(cid)
-        caller = cap.caller if cap is not None else derive_caller(cid, visible_to=['case', 'system'])
+        caller = cap.caller if cap is not None else ''
         if cid in {'screenshot', 'hierarchy', 'probe_device_state'} or (cid == 'close_app' and platform == 'web'):
             caller = 'system'
+        if not caller:
+            raise BindingAdmissionError('catalog_capability_missing:' + cid)
         key = phase + ':' + cid
         row = operations.setdefault(key, {'operation_ref': key, 'event_id': cid, 'phase': phase,
             'applicable': True, 'optional': optional, 'caller': caller, 'case_ref': str(case.get('case_id') or ''),

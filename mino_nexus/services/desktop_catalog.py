@@ -5,6 +5,7 @@ from copy import deepcopy
 
 from mino_nexus.catalog import registry
 from mino_nexus.catalog.models import Capability, Implementation
+from mino_nexus.catalog.tool_schema import schema_to_param_rows
 
 _CAPS = {
     "tap_element": ("点击元素", "根据最新桌面截图点击坐标；x、y 为 0–1000 归一化坐标。", {
@@ -50,7 +51,7 @@ def capabilities(reported: list[str], os_name: str, *, platform: str = "desktop"
             continue
         current = registry.get_capability(cap_id)
         if current is not None and (
-            not current.enabled or current.lifecycle == "deprecated" or not current.ui_coverable
+            not current.enabled or current.lifecycle != "active" or not current.ui_coverable
         ):
             continue
         parameters = deepcopy(schema)
@@ -63,6 +64,6 @@ def capabilities(reported: list[str], os_name: str, *, platform: str = "desktop"
             platforms=[platform], caller="case", phases=["prep", "do"],
             visible_to=list(current.visible_to) if current is not None else ["case", "system"],
             implementations=[Implementation(id="desktop.cua", executor="desktop", display_name="Cua Desktop")],
-            parameters=parameters,
+            params=schema_to_param_rows(parameters),
         ))
     return out

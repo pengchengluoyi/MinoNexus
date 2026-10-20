@@ -516,7 +516,6 @@ def commit_import(
     on_duplicate: OnDuplicate = "merge",
 ) -> dict[str, Any]:
     from mino_nexus.services.account_pool_templates import new_account_id
-    from mino_nexus.services.pool_account_store import persist_env_strip_test_accounts_if_needed
     from mino_nexus.services.project_env import list_test_accounts, save_one_test_account
 
     prev = preview_import(
@@ -600,7 +599,6 @@ def commit_import(
         except ValueError as exc:
             errors.append({"row": row_num, "error": str(exc)})
 
-    persist_env_strip_test_accounts_if_needed(pid, doc)
     return {
         "ok": True,
         "committed": True,

@@ -16,23 +16,20 @@ def _now() -> str:
 
 
 def emit(kind: str, **ctx: Any) -> None:
-    # V7 observes committed source/compile/resource changes in the existing worker.
-    # Document import never creates a workspace or invokes a generation pipeline.
-    if kind == 'run_finished':
-        from mino_nexus.services.collab_workspace import notify_run_finished
-        try:
-            notify_run_finished(ctx.get('doc') or {})
-        except Exception as exc:
-            SLog.w(TAG, f"workspace event: {type(exc).__name__}: {exc}")
-    _wake()
-
-
-
-
-
-
-
-
+    # Only referenced run completion is part of the V7 workspace contract.
+    # Source, compilation and resource events must not awaken an execution queue.
+    if kind != 'run_finished':
+        return
+    from mino_nexus.services.collab_workspace import notify_run_finished
+    try:
+        notify_run_finished(ctx.get('doc') or {})
+    except Exception as exc:
+        SLog.w(TAG, f"workspace notification: {type(exc).__name__}: {exc}")
+    try:
+        from mino_nexus.services.workspace_automation import on_finished
+        on_finished(ctx.get('doc') or {})
+    except Exception as exc:
+        SLog.w(TAG, f"workspace automation: {type(exc).__name__}: {exc}")
 
 
 def on_run_finished(doc: dict[str, Any]) -> None:

@@ -104,7 +104,7 @@ def validate_assignment(project_id, topic_id, sess, member, job):
     if job not in roles[member]['chat_jobs']:
         raise ValueError('该成员不能执行此聊天任务：' + str(job))
     spec = get_job(job)
-    if not spec or not spec.get('enabled') or spec.get('engine') not in ('text_chat', 'chat_reply', 'rule'):
+    if not spec or not spec.get('enabled') or (spec.get('engine') not in ('text_chat', 'chat_reply', 'rule') and not (member == 'report-writer' and job == 'draft_test_report' and spec.get('engine') == 'json_chat')):
         raise ValueError('此任务不可从聊天执行')
     return spec
 

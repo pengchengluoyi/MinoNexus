@@ -265,6 +265,7 @@ def ensure_read_web_auth_capability() -> int:
             "platforms": ["web"],
             "visible_to": ["system"],
             "payload": {
+                "caller": "system", "phases": [], "observe": "program",
                 "params": [],
                 "implementations": [{"id": "playwright", "executor": "playwright"}],
             },

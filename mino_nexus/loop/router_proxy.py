@@ -376,14 +376,7 @@ class RouterProxy:
                 local_reason="task_cancelled",
             )
 
-        from mino_nexus.catalog.skill_channel import CAP_ALIASES, canonical_cap, capability_dispatch_ok
-
-        raw_cap = str(getattr(event, "capability_id", "") or "")
-        if raw_cap in CAP_ALIASES:
-            mapped = canonical_cap(raw_cap)
-            event.capability_id = mapped
-            if str(getattr(event, "event_kind", "") or "") == raw_cap:
-                event.event_kind = mapped
+        from mino_nexus.catalog.skill_channel import canonical_cap, capability_dispatch_ok
 
         from mino_nexus.catalog.tool_schema import CONFIRM_ACTION_RESULT
 
@@ -451,8 +444,13 @@ class RouterProxy:
             if not dev or dev.desktop_state != "ready" or hint.get("session_generation") != dev.session_generation or not owns_desktop(task_id, node.node_id):
                 return _fail(event, started, t0, "桌面未就绪、会话已变化或没有独占租约", executor_used="router_proxy", local_reason="desktop_not_admitted")
         projection = None
+        from mino_nexus.catalog.skill_channel import system_device_dispatch
+
+        direct = system_device_dispatch(event.capability_id)
         try:
-            if self._binding_required:
+            if direct:
+                order, impl = self._plan_route(event, node)
+            elif self._binding_required:
                 projection = await asyncio.to_thread(self._binding_projection, event, {**kwargs, 'binding_run_id': run_id or self.run_id})
                 order, impl = projection['executor_order'], projection['selected_impl']
             else:
@@ -463,8 +461,14 @@ class RouterProxy:
                     'execution_started': 'no', 'phase': 'binding', 'reason_code': str(exc)}})
         except NoRouteError as exc:
             msg = str(exc)
-            reason = "no_impl_for_device" if "无可用实现" in msg else "cap_not_in_catalog"
-            return _fail(event, started, t0, msg, executor_used="router_proxy", local_reason=reason)
+            if direct or "能力目录里没有" in msg:
+                reason = "capability_unregistered"
+            elif "无可用实现" in msg:
+                reason = "no_impl_for_device"
+            else:
+                reason = "cap_not_in_catalog"
+            return _fail(event, started, t0, msg, executor_used="router_proxy", local_reason=reason,
+                raw_response={'execution': {'execution_started': 'no', 'phase': 'route', 'reason_code': reason}})
         except Exception:
             if not self._binding_required:
                 raise
@@ -903,11 +907,7 @@ class RouterProxy:
         screenshot / hierarchy 是协议框架指令，不进能力目录，所以 observe 不走这里。
         选路函数仍是同一个：executors_for_device(sn) —— 只看这台设备，不看节点上其它插件。
 
-        顺序：
-          1. event.expected_executor（AI 选的）
-          2. event.fallback_executors
-          3. 该 cap 在目录里允许的其它 executor
-        再按 **这台 sn 已连通且类型匹配的通道** 过滤。
+        只接受明确执行器或唯一可用实现；缺失、歧义和失败都不换路。
         """
         plat = _device_platform(self.sn, node)
         cap = catalog.get_capability(event.capability_id)
@@ -932,30 +932,19 @@ class RouterProxy:
             if ex and ex not in by_executor:
                 by_executor[ex] = impl
 
-        ordered: list[str] = []
-        for ex in [event.expected_executor, *(event.fallback_executors or [])]:
-            if ex and ex not in ordered and ex in by_executor:
-                ordered.append(ex)
-        for ex in by_executor:
-            if ex not in ordered:
-                ordered.append(ex)
-
-        plat = _device_platform(self.sn, node)
+        if event.fallback_executors:
+            raise NoRouteError("executor_fallback_forbidden")
         allowed = set(executors_for_device(self.sn, node))
-        out: list[str] = []
-        dropped: dict[str, str] = {}
-        for ex in ordered:
-            if ex not in allowed:
-                dropped[ex] = f"不是 sn={self.sn}（{plat}）的执行通道"
-                continue
-            out.append(ex)
-
-        if not out:
-            raise NoRouteError(
-                f"cap={event.capability_id} 对设备 {self.sn}（{plat}）无可用实现："
-                f"{dropped or '该能力没有任何 implementation'}"
-                f"（该设备通道={sorted(allowed)}）"
-            )
+        chosen = str(event.expected_executor or "")
+        if chosen:
+            if chosen not in by_executor or chosen not in allowed:
+                raise NoRouteError("selected_executor_unavailable:" + chosen)
+        else:
+            eligible = [ex for ex in by_executor if ex in allowed]
+            if len(eligible) != 1:
+                raise NoRouteError("executor_selection_required:" + ",".join(eligible))
+            chosen = eligible[0]
+        out = [chosen]
 
         impl = by_executor[out[0]]
         impl_dict = impl.model_dump() if hasattr(impl, "model_dump") else dict(impl)

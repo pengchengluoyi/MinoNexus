@@ -83,10 +83,7 @@ def resolve_gmail_inbox(env_doc: dict | None, ctx: Any | None = None) -> str:
 
 
 def login_kind_from_secrets(secrets: dict | None) -> str:
-    sec = secrets if isinstance(secrets, dict) else {}
-    login = sec.get("login") if isinstance(sec.get("login"), dict) else {}
-    kind = str(login.get("kind") or sec.get("login_kind") or "phone").strip().lower()
-    return kind if kind in ("phone", "email") else "phone"
+    return _norm_env_secrets(secrets)["login"]["kind"]
 
 
 def account_row_matches_login_kind(row: dict | None, kind: str) -> bool:

@@ -1,4 +1,4 @@
-"""导航目标作用域：按 app + 平台区分 Android 包名 / iOS Bundle / Web 网址。
+"""导航目标作用域：按 app + 平台区分 Android 包名 / macOS Bundle / Windows 应用 / Web 网址。
 
 同一 project 下可有多个 app；每个 app 的 NavFSM / 采集 / 合成只认本 app 的 target_scope，
 不把其它包名或站点混进图谱。
@@ -35,7 +35,7 @@ _SYSTEM_ONLY_PKGS = frozenset(
 class TargetScope:
     platform: str
     target_id: str
-    kind: str  # package | bundle | url
+    kind: str  # package | bundle | application | url
 
     def as_dict(self) -> dict[str, str]:
         return {
@@ -49,22 +49,20 @@ class TargetScope:
         if not isinstance(raw, dict):
             return None
         platform = _norm_platform(str(raw.get("platform") or ""))
-        target_id = str(raw.get("target_id") or raw.get("target_package") or "").strip()
+        target_id = str(raw.get("target_id") or "").strip()
         kind = str(raw.get("kind") or "").strip().lower()
         if not target_id:
             return None
-        if not kind:
-            kind = _kind_for(platform, target_id)
+        expected_kind = _kind_for(platform, target_id)
+        if kind and kind != expected_kind:
+            raise ValueError("target_scope_kind_conflict")
+        kind = expected_kind
         return cls(platform=platform, target_id=_normalize_target_id(platform, kind, target_id), kind=kind)
 
 
 def _norm_platform(platform: str) -> str:
-    plat = str(platform or "android").strip().lower()
-    if plat in ("web", "browser", "playwright"):
-        return "web"
-    if plat in ("ios", "iphone", "ipad"):
-        return "ios"
-    return "android"
+    from mino_nexus.core.platform_contract import target_platform
+    return target_platform(platform)
 
 
 def _looks_like_url(value: str) -> bool:
@@ -73,51 +71,41 @@ def _looks_like_url(value: str) -> bool:
 
 
 def _kind_for(platform: str, target_id: str) -> str:
-    plat = _norm_platform(platform)
-    if plat == "web" or _looks_like_url(target_id):
-        return "url"
-    if plat == "ios" and target_id and "." in target_id and not target_id.startswith("com."):
-        return "bundle"
-    return "package"
+    return {"web": "url", "android": "package", "mac": "bundle", "win": "application"}[_norm_platform(platform)]
 
 
 def web_page_matches_target(target: str, page: str) -> bool:
-    """目标网址与当前页 URL / origin 是否同一被测站点。"""
-    tgt = str(target or "").strip()
-    pg = str(page or "").strip()
-    if not tgt or not pg:
-        return False
-    if _looks_like_url(tgt) or _looks_like_url(pg):
-        o_t = normalize_web_origin(tgt if _looks_like_url(tgt) else pg)
-        o_p = normalize_web_origin(pg if _looks_like_url(pg) else tgt)
-        if o_t and o_p and o_t == o_p:
-            return True
-        low_t = tgt.lower().rstrip("/")
-        low_p = pg.lower().rstrip("/")
-        return low_t == low_p or low_p.startswith(low_t) or low_t in low_p
-    return tgt == pg or tgt in pg or pg in tgt
+    """Only an exact parsed origin proves that the page belongs to this site."""
+    left, right = normalize_web_origin(target), normalize_web_origin(page)
+    return bool(left and right and left == right)
 
 
 def normalize_web_origin(url: str) -> str:
     raw = str(url or "").strip()
-    if not raw:
+    try:
+        parsed = urlparse(raw)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            return ""
+        port = parsed.port
+        host = parsed.hostname.encode("idna").decode("ascii").lower()
+        if ":" in host:
+            host = f"[{host}]"
+        if port is not None and port != {"http": 80, "https": 443}[parsed.scheme]:
+            host += f":{port}"
+        return f"{parsed.scheme}://{host}"
+    except (ValueError, UnicodeError):
         return ""
-    if not _looks_like_url(raw):
-        raw = f"https://{raw}"
-    parsed = urlparse(raw)
-    if not parsed.netloc:
-        return raw.lower().rstrip("/")
-    scheme = parsed.scheme or "https"
-    host = parsed.netloc.lower()
-    return f"{scheme}://{host}".rstrip("/")
 
 
 def _normalize_target_id(platform: str, kind: str, target_id: str) -> str:
     val = str(target_id or "").strip()
     if not val:
         return ""
-    if kind == "url" or _norm_platform(platform) == "web" or _looks_like_url(val):
-        return normalize_web_origin(val)
+    if _norm_platform(platform) == "web":
+        origin = normalize_web_origin(val)
+        if not origin:
+            raise ValueError("target_origin_invalid")
+        return origin
     return val
 
 
@@ -155,7 +143,7 @@ def infer_foreground(
         target = scope.target_id
     else:
         target = str(target_package or "").strip()
-        plat = _norm_platform(platform) if platform else ("web" if _looks_like_url(target) else "android")
+        plat = _norm_platform(platform)
         if _looks_like_url(target):
             target = normalize_web_origin(target)
 
@@ -171,21 +159,19 @@ def infer_foreground(
     if plat == "web":
         page_url = ""
         for node in nodes or []:
-            for key in ("url", "page_url", "location", "href"):
+            for key in ("url", "page_url", "location"):
                 val = str(node.get(key) or "").strip()
                 if _looks_like_url(val):
                     page_url = normalize_web_origin(val)
                     break
             if page_url:
                 break
-        fg = page_url or target
+        fg = page_url
         if is_launcher:
             kind = "launcher"
         elif target and page_url and not web_page_matches_target(target, page_url):
             kind = "foreign"
-        elif target and not page_url and fg and not web_page_matches_target(target, fg):
-            kind = "foreign"
-        elif target:
+        elif target and page_url:
             kind = "app"
         else:
             kind = "unknown"
@@ -216,8 +202,8 @@ def infer_foreground(
             fg = target
             kind = "app"
         elif not app_pkgs:
-            fg = target or ""
-            kind = "app" if target else "unknown"
+            fg = ""
+            kind = "unknown"
         elif target:
             fg = sorted(app_pkgs)[0]
             kind = "foreign"
@@ -245,8 +231,8 @@ def turn_matches_scope(turn: dict[str, Any], scope: TargetScope | None) -> bool:
     if not scope or not scope.target_id:
         return True
     stored = TargetScope.from_dict(turn.get("target_scope") if isinstance(turn.get("target_scope"), dict) else None)
-    if stored and stored.target_id == scope.target_id and stored.platform == scope.platform:
-        return True
+    if stored and (stored.target_id != scope.target_id or stored.platform != scope.platform):
+        return False
     fg = infer_foreground(
         turn.get("nodes") or [],
         scope=scope,
@@ -257,46 +243,37 @@ def turn_matches_scope(turn: dict[str, Any], scope: TargetScope | None) -> bool:
         return False
     if scope.kind == "url":
         fg_id = normalize_web_origin(str(fg.get("foreground_id") or fg.get("foreground_package") or ""))
-        return not fg_id or fg_id == scope.target_id
+        return bool(fg_id) and fg_id == scope.target_id
     fg_pkg = str(fg.get("foreground_id") or fg.get("foreground_package") or "").strip()
-    return not fg_pkg or fg_pkg == scope.target_id
+    return bool(fg_pkg) and fg_pkg == scope.target_id
 
 
-def resolve_app_target_scope(
-    app_id: str,
-    *,
-    platform: str = "",
-    target_package: str = "",
-) -> TargetScope | None:
-    """从 nav_fsm.meta / apps.env 解析本 app 的导航作用域。"""
+def resolve_app_target_scope(app_id: str, *, platform: str = "", target_package: str = "") -> TargetScope | None:
+    """Use published scope or an explicit app target; read/contract errors propagate."""
     aid = str(app_id or "").strip()
     if not aid:
         return None
-    try:
-        from mino_nexus.services import nav_fsm_store as store
-
-        doc = store.read_raw(aid)
-        if doc:
-            meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
-            scoped = TargetScope.from_dict(meta.get("target_scope"))
-            if scoped:
-                return scoped
-    except Exception:  # noqa: BLE001
-        pass
-
-    tid = str(target_package or "").strip()
+    from mino_nexus.services import nav_fsm_store as store
+    doc = store.read_raw(aid)
+    if doc:
+        meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+        scoped = TargetScope.from_dict(meta.get("target_scope"))
+        if scoped:
+            if platform and scoped.platform != _norm_platform(platform):
+                raise ValueError("target_scope_platform_conflict")
+            if target_package and scope_from_values(scoped.platform, target_package).target_id != scoped.target_id:
+                raise ValueError("target_scope_identity_conflict")
+            return scoped
     plat = _norm_platform(platform)
+    tid = str(target_package or "").strip()
     if not tid:
-        try:
-            from mino_nexus.services import project_store as ps
-            from mino_nexus.services.app_automation import package_for_app
-
-            app = ps.find_app(aid)
-            if app:
-                tid = str(package_for_app(app, platform=plat) or "").strip()
-        except Exception:  # noqa: BLE001
-            tid = ""
+        from mino_nexus.services import project_store as ps
+        from mino_nexus.services.app_automation import package_for_app
+        app = ps.find_app(aid)
+        if app:
+            tid = str(package_for_app(app, platform=plat) or "").strip()
     return scope_from_values(plat, tid)
+
 
 
 def attach_scope_to_turn(turn: dict[str, Any], scope: TargetScope | None) -> dict[str, Any]:

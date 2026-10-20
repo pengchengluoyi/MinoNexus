@@ -155,7 +155,7 @@ def builtin_recovery_rules() -> list[dict[str, Any]]:
             "description": "前台不是被测 App 时 launch 目标包拉回前台。",
             "enabled": True,
             "lifecycle": "active",
-            "platforms_json": ["android", "ios"],
+            "platforms_json": ["android"],
             "sort_order": 20,
             "payload_json": dict(_BRING_TARGET_APP_FOREGROUND),
         },
@@ -166,7 +166,7 @@ def builtin_recovery_rules() -> list[dict[str, Any]]:
             "description": "设备已 awake 且未锁屏，但截图全黑（FLAG_SECURE 等）。",
             "enabled": True,
             "lifecycle": "active",
-            "platforms_json": ["android", "ios"],
+            "platforms_json": ["android"],
             "sort_order": 15,
             "payload_json": dict(_SCREEN_SECURE_OR_NO_CAPTURE),
         },
@@ -177,7 +177,7 @@ def builtin_recovery_rules() -> list[dict[str, Any]]:
             "description": "关进程再 launch，回到近似首次进入状态。迷路时由 agent 主动调用。",
             "enabled": True,
             "lifecycle": "active",
-            "platforms_json": ["android", "ios"],
+            "platforms_json": ["android"],
             "sort_order": 25,
             "payload_json": dict(_RESTART_TARGET_APP),
         },
@@ -303,153 +303,13 @@ _SYSTEM_MEDIA_PICKER_DISMISS: dict[str, Any] = {
 }
 
 
-def upgrade_system_permission_recovery_rules() -> int:
-    """升级系统权限弹窗 deterministic 规则：补 MIUI 文案与 match 变体。"""
-    from mino_nexus.core.database import session_scope
-    from mino_nexus.models.catalog import CatalogEntry
-
-    want = dict(_SYSTEM_PERMISSION_WHILE_USING_DETERMINISTIC)
-    updated = 0
-    with session_scope() as db:
-        row = (
-            db.query(CatalogEntry)
-            .filter(
-                CatalogEntry.kind == "recovery",
-                CatalogEntry.id == "system_permission_dialog_while_using_deterministic",
-            )
-            .first()
-        )
-        if not row:
-            return 0
-        cur = dict(row.payload_json or {})
-        if cur == want:
-            return 0
-        row.payload_json = want
-        updated = 1
-    if updated:
-        from mino_nexus.catalog.loader import force_reload
-
-        force_reload()
-    return updated
 
 
-def upgrade_system_media_picker_recovery_rules() -> int:
-    """升级系统相册/选择器 deterministic 关闭规则。"""
-    from mino_nexus.core.database import session_scope
-    from mino_nexus.models.catalog import CatalogEntry
-
-    want = dict(_SYSTEM_MEDIA_PICKER_DISMISS)
-    updated = 0
-    with session_scope() as db:
-        row = (
-            db.query(CatalogEntry)
-            .filter(
-                CatalogEntry.kind == "recovery",
-                CatalogEntry.id == "system_media_picker_dismiss",
-            )
-            .first()
-        )
-        if not row:
-            db.add(
-                CatalogEntry(
-                    kind="recovery",
-                    id="system_media_picker_dismiss",
-                    display_name="关闭系统相册/选择器",
-                    description="前台为系统相册或文档选择器时 BACK + 取消，回到被测 App。",
-                    enabled=True,
-                    lifecycle="active",
-                    platforms_json=["android"],
-                    payload_json=want,
-                    sort_order=18,
-                )
-            )
-            updated = 1
-        else:
-            cur = dict(row.payload_json or {})
-            if cur != want:
-                row.payload_json = want
-                updated = 1
-    if updated:
-        from mino_nexus.catalog.loader import force_reload
-
-        force_reload()
-    return updated
 
 
-def upgrade_recovery_rules() -> int:
-    """已有库：screen_asleep v3 match + 补新 L0 规则 + read_device_data 摘要。"""
-    from mino_nexus.core.database import session_scope
-    from mino_nexus.models.catalog import CatalogEntry
 
-    updated = 0
-    with session_scope() as db:
-        row = (
-            db.query(CatalogEntry)
-            .filter(CatalogEntry.kind == "recovery", CatalogEntry.id == "screen_asleep_or_locked")
-            .first()
-        )
-        if row:
-            payload = dict(row.payload_json or {})
-            if _bare_capture_black_branch(payload) or not payload.get("match", {}).get("evidence_any"):
-                row.display_name = "锁屏 / 休眠 / 黑屏"
-                row.description = builtin_recovery_rules()[0]["description"]
-                row.payload_json = dict(_RECOVERY_PAYLOAD_V3)
-                updated += 1
 
-        for spec in builtin_recovery_rules()[1:]:
-            cid = str(spec["id"])
-            if db.query(CatalogEntry).filter(CatalogEntry.kind == "recovery", CatalogEntry.id == cid).first():
-                continue
-            db.add(
-                CatalogEntry(
-                    kind=str(spec["kind"]),
-                    id=cid,
-                    display_name=str(spec.get("display_name") or cid),
-                    description=str(spec.get("description") or ""),
-                    enabled=bool(spec.get("enabled", True)),
-                    lifecycle=str(spec.get("lifecycle") or "active"),
-                    platforms_json=list(spec.get("platforms_json") or []),
-                    payload_json=dict(spec.get("payload_json") or {}),
-                    sort_order=int(spec.get("sort_order") or 0),
-                )
-            )
-            updated += 1
 
-        prep = (
-            db.query(CatalogEntry)
-            .filter(CatalogEntry.kind == "generic", CatalogEntry.id == "read_device_data")
-            .first()
-        )
-        if prep and str(prep.description or "").strip() != READ_DEVICE_DATA_DESCRIPTION:
-            prep.description = READ_DEVICE_DATA_DESCRIPTION
-            updated += 1
-
-        secure = (
-            db.query(CatalogEntry)
-            .filter(CatalogEntry.kind == "recovery", CatalogEntry.id == "screen_secure_or_no_capture")
-            .first()
-        )
-        want_secure = dict(_SCREEN_SECURE_OR_NO_CAPTURE)
-        if secure and dict(secure.payload_json or {}) != want_secure:
-            secure.payload_json = want_secure
-            secure.description = builtin_recovery_rules()[2]["description"]
-            updated += 1
-
-        restart = (
-            db.query(CatalogEntry)
-            .filter(CatalogEntry.kind == "recovery", CatalogEntry.id == "restart_target_app")
-            .first()
-        )
-        want_restart = dict(_RESTART_TARGET_APP)
-        if restart and dict(restart.payload_json or {}) != want_restart:
-            restart.payload_json = want_restart
-            updated += 1
-
-    if updated:
-        from mino_nexus.catalog.loader import force_reload
-
-        force_reload()
-    return updated
 
 
 CHECK_RUN_ENV_DESCRIPTION = (
@@ -457,9 +317,7 @@ CHECK_RUN_ENV_DESCRIPTION = (
 )
 
 
-def upgrade_check_run_env_capability() -> int:
-    """Retired; retain historical rows without re-registering an event."""
-    return 0
+
 
 
 FSM_NAVIGATE_DESCRIPTION = (
@@ -473,9 +331,7 @@ _FSM_NAVIGATE_PAYLOAD: dict[str, Any] = {
 }
 
 
-def upgrade_fsm_navigate_capability() -> int:
-    """Retired; retain historical rows without re-registering an event."""
-    return 0
+
 
 
 GET_OTP_DESCRIPTION = (
@@ -507,121 +363,13 @@ _STRUCTURAL_RECOVERY_PAYLOAD: dict[str, Any] = {
 }
 
 
-def upgrade_get_otp_capability() -> int:
-    """get_otp：prep → generic，进 do 菜单；本地执行。"""
-    from mino_nexus.core.database import session_scope
-    from mino_nexus.models.catalog import CatalogEntry
-
-    updated = 0
-    with session_scope() as db:
-        rows = db.query(CatalogEntry).filter(CatalogEntry.id == "get_otp").all()
-        generic = next((r for r in rows if r.kind == "generic"), None)
-        others = [r for r in rows if r.kind != "generic"]
-        if generic is None and others:
-            generic = others[0]
-            generic.kind = "generic"
-            others = others[1:]
-            updated += 1
-        if generic is None:
-            db.add(
-                CatalogEntry(
-                    kind="generic",
-                    id="get_otp",
-                    display_name="取验证码",
-                    description=GET_OTP_DESCRIPTION,
-                    enabled=True,
-                    lifecycle="active",
-                    platforms_json=["android", "ios", "web"],
-                    payload_json=dict(_GET_OTP_PAYLOAD),
-                    sort_order=12,
-                )
-            )
-            updated += 1
-        else:
-            if str(generic.description or "").strip() != GET_OTP_DESCRIPTION or not generic.enabled:
-                generic.description = GET_OTP_DESCRIPTION
-                generic.enabled = True
-                generic.lifecycle = "active"
-                generic.payload_json = dict(_GET_OTP_PAYLOAD)
-                updated += 1
-        for row in others:
-            db.delete(row)
-            updated += 1
-    if updated:
-        from mino_nexus.catalog.loader import force_reload
-
-        force_reload()
-    return updated
 
 
-def upgrade_consent_ime_capabilities() -> int:
-    """结构 recovery：accept_legal_consent / dismiss_ime / request_sms_code。"""
-    from mino_nexus.core.database import session_scope
-    from mino_nexus.models.catalog import CatalogEntry
-
-    specs = [{"id": "dismiss_ime", "display_name": "收起输入法",
-              "description": DISMISS_IME_DESCRIPTION, "sort_order": 29}]
-    updated = 0
-    with session_scope() as db:
-        for spec in specs:
-            cid = str(spec["id"])
-            row = (
-                db.query(CatalogEntry)
-                .filter(CatalogEntry.kind == "recovery", CatalogEntry.id == cid)
-                .first()
-            )
-            if row:
-                if str(row.description or "").strip() != spec["description"] or not row.enabled:
-                    row.description = spec["description"]
-                    row.enabled = True
-                    row.lifecycle = "active"
-                    row.payload_json = dict(_STRUCTURAL_RECOVERY_PAYLOAD)
-                    updated += 1
-                continue
-            db.add(
-                CatalogEntry(
-                    kind="recovery",
-                    id=cid,
-                    display_name=str(spec["display_name"]),
-                    description=str(spec["description"]),
-                    enabled=True,
-                    lifecycle="active",
-                    platforms_json=["android", "ios"],
-                    payload_json=dict(_STRUCTURAL_RECOVERY_PAYLOAD),
-                    sort_order=int(spec["sort_order"]),
-                )
-            )
-            updated += 1
-    if updated:
-        from mino_nexus.catalog.loader import force_reload
-
-        force_reload()
-    return updated
 
 
-def upgrade_account_capabilities() -> int:
-    """更新 recovery 原子能力 lease_account 的菜单摘要（旧文案写「开跑前」易误导）。"""
-    from mino_nexus.core.database import session_scope
-    from mino_nexus.models.catalog import CatalogEntry
 
-    updated = 0
-    with session_scope() as db:
-        row = (
-            db.query(CatalogEntry)
-            .filter(CatalogEntry.kind == "recovery", CatalogEntry.id == "lease_account")
-            .first()
-        )
-        if not row:
-            return 0
-        if str(row.description or "").strip() == LEASE_ACCOUNT_DESCRIPTION:
-            return 0
-        row.description = LEASE_ACCOUNT_DESCRIPTION
-        updated = 1
-    if updated:
-        from mino_nexus.catalog.loader import force_reload
 
-        force_reload()
-    return updated
+
 
 
 _TARGET_APP_CAPS = (
@@ -636,69 +384,31 @@ _TARGET_APP_CAPS = (
 )
 
 
-def upgrade_package_param_capabilities() -> int:
-    """被测应用的打开、关闭、清缓存：扩展里去掉 package，由本趟上下文填。"""
-    from sqlalchemy.orm.attributes import flag_modified
 
+
+
+
+
+
+def register_current_local_capabilities() -> None:
+    """Synchronize current local declarations, retaining disabled state and audit rows."""
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.catalog import CatalogEntry
-
-    updated = 0
-    with session_scope() as db:
-        rows = (
-            db.query(CatalogEntry)
-            .filter(CatalogEntry.id.in_(_TARGET_APP_CAPS))
-            .all()
-        )
-        for row in rows:
-            payload = dict(row.payload_json or {})
-            cur = [p for p in (payload.get("params") or []) if isinstance(p, dict)]
-            nxt = [p for p in cur if str(p.get("name") or "") not in ("package", "url")]
-            if nxt == cur:
-                continue
-            payload["params"] = nxt
-            row.payload_json = payload
-            flag_modified(row, "payload_json")
-            updated += 1
-    if updated:
-        from mino_nexus.catalog.loader import force_reload
-
-        force_reload()
-    return updated
-
-
-def upgrade_capability_empty_params() -> int:
-    """空 params 用 PARAM_DEFAULTS 写回目录，避免无业务参工具进 agent-decide。"""
-    from sqlalchemy.orm.attributes import flag_modified
-
-    from mino_nexus.catalog.exec_classes import CAPABILITY_KINDS, RECOVERY_KIND
-    from mino_nexus.catalog.recovery_shape import is_recovery_atomic_payload, is_recovery_rule_payload
     from mino_nexus.catalog.tool_schema import PARAM_DEFAULTS, schema_to_param_rows
-    from mino_nexus.core.database import session_scope
-    from mino_nexus.models.catalog import CatalogEntry
-
-    kinds = tuple(CAPABILITY_KINDS) + (RECOVERY_KIND,)
-    updated = 0
+    from mino_nexus.catalog.system_registration import sync_system_capability
+    specs = [("get_otp", "generic", "取验证码", GET_OTP_DESCRIPTION, ["mac", "win", "android", "web"]),
+             ("dismiss_ime", "recovery", "收起输入法", DISMISS_IME_DESCRIPTION, ["android"])]
     with session_scope() as db:
-        rows = db.query(CatalogEntry).filter(CatalogEntry.kind.in_(kinds)).all()
-        for row in rows:
-            payload = dict(row.payload_json or {})
-            if row.kind == RECOVERY_KIND:
-                if is_recovery_rule_payload(payload) and not is_recovery_atomic_payload(row.id, payload):
-                    continue
-            cur_params = payload.get("params")
-            empty_params = not isinstance(cur_params, list) or not cur_params
-            if not empty_params:
-                continue
-            rows_spec = schema_to_param_rows(PARAM_DEFAULTS.get(str(row.id or "")))
-            if not rows_spec:
-                continue
-            payload["params"] = rows_spec
-            row.payload_json = payload
-            flag_modified(row, "payload_json")
-            updated += 1
-    if updated:
-        from mino_nexus.catalog.loader import force_reload
-
-        force_reload()
-    return updated
+        for cid, kind, title, description, platforms in specs:
+            sync_system_capability(db, cid=cid, kind=kind, title=title,
+                description=description, platforms=platforms,
+                fields={"event_kind": cid, "caller": "program", "phases": ["prep", "do"],
+                        "observe": "program", "implementations": [],
+                        "channel_contract_version": 1,
+                        "params": schema_to_param_rows(PARAM_DEFAULTS[cid])})
+        for cid, title, payload in [
+            ("system_permission_dialog_while_using_deterministic", "系统权限弹窗", _SYSTEM_PERMISSION_WHILE_USING_DETERMINISTIC),
+            ("system_media_picker_dismiss", "关闭系统相册/选择器", _SYSTEM_MEDIA_PICKER_DISMISS)]:
+            if db.query(CatalogEntry).filter(CatalogEntry.id==cid).first(): continue
+            db.add(CatalogEntry(id=cid,kind="recovery",display_name=title,enabled=True,lifecycle="active",
+                               platforms_json=["android"],payload_json=dict(payload)))

@@ -95,17 +95,8 @@ def _save(root: dict[str, Any]) -> None:
 
 
 def _kind_of(sn: str, platform: str = "") -> str:
-    sid = str(sn or "").strip().lower()
-    plat = str(platform or "").strip().lower()
-    if sid.startswith("web"):
-        return "web"
-    if plat == "desktop":
-        return "desktop"
-    if plat in ("ios", "wda") or "ios" in sid:
-        return "ios"
-    if plat in ("android", "adb") or sid:
-        return "adb"
-    return plat or "unknown"
+    from mino_nexus.core.platform_contract import target_platform
+    return {"android": "adb", "web": "web", "mac": "desktop", "win": "desktop"}[target_platform(platform)]
 
 
 def list_devices() -> dict[str, dict[str, Any]]:

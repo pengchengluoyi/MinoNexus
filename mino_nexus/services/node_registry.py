@@ -22,8 +22,6 @@ from mino_nexus.services.device_store import remember as remember_device, get_de
 from mino_nexus.core.log import SLog
 from mino_nexus.services.node_store import get_node as stored_node, sanitize_id, upsert as persist_node
 from mino_nexus.runtime.run_context import (
-    LEGACY_WEB_SLOT_SNS,
-    is_legacy_web_sn,
     is_per_node_web_sn,
 )
 
@@ -47,23 +45,11 @@ def _channel_connected(channels: Any) -> bool:
 
 
 def _device_identity_valid(device: P.DeviceManifest, node_id: str, host_platform: str) -> bool:
-    """A node cannot move another account's host slot by reporting its SN."""
-    if device.platform in {"mac", "win"} or device.sn.startswith(("mac:", "win:")):
-        from mino_nexus.core.platform_contract import device_identity
-        from dataclasses import asdict
-        system = {"darwin": "mac", "macos": "mac", "mac": "mac", "windows": "win", "win32": "win", "win": "win", "linux": "linux"}.get(host_platform.lower())
-        try:
-            device_identity({k: v for k, v in asdict(device).items() if k != "os" or v}, node_id=node_id, host={"os": system})
-        except ValueError:
-            return False
+    from mino_nexus.core.platform_contract import device_identity
+    try:
+        device_identity({k:v for k,v in asdict(device).items() if k!="os" or v},node_id=node_id,host={"os":host_platform})
         return True
-    if device.platform == "desktop" or device.sn.startswith("desktop:"):
-        os_name = {"darwin": "macos", "macos": "macos", "windows": "windows", "win32": "windows", "linux": "linux"}.get(host_platform.lower())
-        return bool(device.platform == "desktop" and device.sn == f"desktop:{node_id}:console"
-                    and device.session_key == "console" and device.os == os_name)
-    if device.platform == "web" and device.sn.startswith("web") and not is_legacy_web_sn(device.sn):
-        return device.sn == f"web{node_id}"
-    return True
+    except ValueError: return False
 
 
 _PLUGIN_CLASSES = frozenset({"cli", "mcp", "bot", "mail", "im"})
@@ -374,15 +360,11 @@ class NodeRegistry:
             if len(accepted_devices) != len(reg.devices):
                 warnings.append("已拒绝与节点身份或宿主系统不匹配的设备槽")
             incoming = {d.sn: d for d in accepted_devices}
-            has_new_web = any(is_per_node_web_sn(sn) for sn in incoming)
-            self._retire_legacy_web_slot(reg.node_id, has_new_web)
 
             devices = dict(incoming)
             if prev is not None:
                 for sn, old in prev.devices.items():
                     if sn in devices:
-                        continue
-                    if is_legacy_web_sn(sn) or old.platform == "desktop":
                         continue
                     if self._owner.get(sn, reg.node_id) != reg.node_id:
                         continue
@@ -430,7 +412,6 @@ class NodeRegistry:
                 self._place_device(d.sn, reg.node_id, device=d, session=session)
                 if d.sn not in session.devices and "部分设备归属未确认或不属于当前账号，已忽略" not in warnings:
                     warnings.append("部分设备归属未确认或不属于当前账号，已忽略")
-            self._purge_orphaned_legacy_web_slots()
 
         avail = session.available_executors()
         SLog.i(
@@ -442,24 +423,7 @@ class NodeRegistry:
             warnings.append("该节点没有任何可用 executor，无法承接任务")
         return warnings
 
-    def _retire_legacy_web_slot(self, node_id: str, has_new_web: bool) -> None:
-        """Drop leftover `web-local` when this node now reports `web{scout_id}`.
 
-        Only this node's leftover (or a dead previous owner after node_id
-        format change). Never steal a live node's devices.
-        """
-        if has_new_web:
-            for sn in LEGACY_WEB_SLOT_SNS:
-                owner = self._owner.get(sn)
-                if owner is None:
-                    continue
-                if owner == node_id:
-                    self._owner.pop(sn, None)
-                    continue
-                other = self._nodes.get(owner)
-                if other is None or not other.alive:
-                    self._owner.pop(sn, None)
-        self._purge_orphaned_legacy_web_slots()
 
     def _record_device(self, session: NodeSession, device: P.DeviceManifest, *, status: str = "") -> None:
         owner_name = ""
@@ -523,19 +487,7 @@ class NodeRegistry:
         if node is not None and device is not None:
             self._record_device(node, device)
 
-    def _purge_orphaned_legacy_web_slots(self) -> None:
-        """Drop leftover web-local / web_local unless a live node still reports it."""
-        for sn in LEGACY_WEB_SLOT_SNS:
-            owner = self._owner.get(sn)
-            node = self._nodes.get(owner) if owner else None
-            if node is not None and node.alive and sn in node.devices:
-                continue
-            if owner is not None:
-                self._owner.pop(sn, None)
-            if node is not None:
-                node.devices.pop(sn, None)
-            for other in self._nodes.values():
-                other.devices.pop(sn, None)
+
 
     def heartbeat(self, hb: P.Heartbeat, *, send=None) -> None:
         with self._lock:
@@ -551,23 +503,13 @@ class NodeRegistry:
             validate_platform_announcement(hb, fallback_host=node.host)
             if hb.host and hb.host.get("os") != node.host.get("os"):
                 raise ValueError("host_os_changed_requires_registration")
+            if type(hb.executor_snapshot_version) is not int or hb.executor_snapshot_version != 1 or hb.executors is None:
+                raise ValueError("executor_snapshot_version_required")
             node.last_seen = time.time()
             node.busy = hb.busy
             node.active_runs = list(hb.active_runs or [])
             node.device_workload = list(hb.device_workload or [])
-            reported_executors = getattr(hb, "executors", None)
-            if reported_executors is not None:
-                snapshot_version = getattr(hb, "executor_snapshot_version", 0)
-                if type(snapshot_version) is int and snapshot_version == 1:
-                    node.executors = {executor.id: executor for executor in reported_executors}
-                elif type(snapshot_version) is int and snapshot_version == 0:
-                    # Old installed Scouts report desktop-only deltas. Never treat
-                    # that payload as a full snapshot during a rolling upgrade.
-                    for executor in reported_executors:
-                        node.executors[executor.id] = executor
-                else:
-                    node.executors = {}
-                    SLog.w(TAG, "心跳 executor 快照版本不支持，已停止使用该节点的执行能力")
+            node.executors = {executor.id: executor for executor in hb.executors}
             host = getattr(hb, "host", None)
             if isinstance(host, dict) and host:
                 node.host = dict(host)
@@ -589,13 +531,8 @@ class NodeRegistry:
             if ver:
                 node.scout_version = ver
             for d in hb.device_delta or []:
-                if not _device_identity_valid(d, hb.node_id, node.platform):
+                if not _device_identity_valid(d, hb.node_id, node.host.get("os", "")):
                     SLog.w(TAG, "拒绝心跳中与节点身份不匹配的设备槽")
-                    continue
-                if is_legacy_web_sn(d.sn) and not _channel_connected(d.channels):
-                    node.devices.pop(d.sn, None)
-                    if self._owner.get(d.sn) == hb.node_id:
-                        self._owner.pop(d.sn, None)
                     continue
                 if d.sn in node.devices:
                     node.devices[d.sn] = d
@@ -604,7 +541,6 @@ class NodeRegistry:
                     node.devices[d.sn] = d
                     self._place_device(d.sn, hb.node_id, device=d, session=node)
                     SLog.i(TAG, f"心跳里出现设备 {d.sn}，当前节点 {hb.node_id}")
-            self._purge_orphaned_legacy_web_slots()
             if node is not None:
                 node.persist_snapshot()
 
@@ -690,13 +626,8 @@ class NodeRegistry:
             if node is None:
                 return []
             if event == "device_lost" and sn in node.devices:
-                if is_legacy_web_sn(sn):
-                    node.devices.pop(sn, None)
-                    if self._owner.get(sn) == nid:
-                        self._owner.pop(sn, None)
-                else:
-                    for ch in node.devices[sn].channels:
-                        node.devices[sn].channels[ch] = "disconnected"
+                for ch in node.devices[sn].channels:
+                    node.devices[sn].channels[ch] = "disconnected"
                 from mino_nexus.services.run_store import running_run_ids_for_sn
 
                 interrupted.extend(running_run_ids_for_sn(sn))
@@ -745,7 +676,6 @@ class NodeRegistry:
                     }
                 inbound = dict(im)
                 inbound["node_id"] = nid
-            self._purge_orphaned_legacy_web_slots()
             if node is not None:
                 node.persist_snapshot()
         SLog.i(TAG, f"EXECUTE {cap} node={nid} sn={sn} {detail}")
@@ -781,7 +711,6 @@ class NodeRegistry:
                     runs.extend(running_run_ids_for_sn(dev_sn))
                 runs = list(dict.fromkeys(runs))
                 node.persist_snapshot()
-            self._purge_orphaned_legacy_web_slots()
         if node is not None:
             SLog.i(
                 TAG,
@@ -828,7 +757,6 @@ class NodeRegistry:
         """给 UI / 调试接口用的设备清单。连通性来自 Scout 上报。"""
         out: list[dict[str, Any]] = []
         with self._lock:
-            self._purge_orphaned_legacy_web_slots()
             for sn, node_id in sorted(self._owner.items()):
                 node = self._nodes.get(node_id)
                 d = node.devices.get(sn) if node else None

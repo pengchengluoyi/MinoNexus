@@ -32,20 +32,6 @@ DEFAULT_CHANNELS = [
 
 _PLATFORM_PRESET = {c["id"]: c for c in DEFAULT_CHANNELS}
 
-_PLATFORM_PRESET.update({
-    "ios": {"id": "ios", "kind": "app", "platform": "ios", "label": "iOS", "field": "bundle"},
-    "pc": {"id": "pc", "kind": "app", "platform": "pc", "label": "PC", "field": "path"},
-})
-
-_KIND_PREFIX = (
-    ("android", "app", "android"),
-    ("ios", "app", "ios"),
-    ("pc", "app", "pc"),
-    ("mac", "app", "mac"),
-    ("server", "server", "server"),
-    ("web", "web", "web"),
-)
-
 DEFAULT_ENVIRONMENTS = [
     {"key": "test", "label": "测试"},
     {"key": "pre", "label": "预发"},
@@ -95,15 +81,7 @@ def default_project_env() -> dict:
     }
 
 
-def _infer_kind_platform(cid: str, kind: str = "", platform: str = "") -> Tuple[str, str]:
-    # Read legacy values verbatim; only absent legacy fields may use a known preset.
-    k, p = str(kind or ""), str(platform or "")
-    if k or p:
-        return k or ("web" if p == "web" else "app"), p
-    preset = _PLATFORM_PRESET.get(cid)
-    if preset:
-        return str(preset["kind"]), str(preset.get("platform") or "")
-    return "", ""
+
 
 
 def _channel_title(ch: Optional[dict]) -> str:
@@ -124,67 +102,20 @@ def _channel_by_id(channels: Optional[List[dict]], cid: str) -> Optional[dict]:
     return None
 
 
-def _norm_channel(raw: Any, seen: set) -> Optional[dict]:
-    if not isinstance(raw, dict):
-        return None
-    alias = str(raw.get("alias") or "").strip()[:24]
-    third_raw = raw.get("third_party")
-    third_party = bool(third_raw) if third_raw is not None else bool(alias)
-    cid_in = str(raw.get("id") or raw.get("key") or "")
-    kind, platform = _infer_kind_platform(
-        cid_in,
-        str(raw.get("kind") or ""),
-        str(raw.get("platform") or ""),
-    )
-    preset = _PLATFORM_PRESET.get(platform) or _PLATFORM_PRESET.get(cid_in)
-    # 旧数据：无简称的 android/ios/web 保持原 id，方便包名解析。有简称的不折回成唯一 web。
-    if cid_in and cid_in not in seen:
-        cid = cid_in
-    elif not cid_in and not alias and preset and preset["id"] not in seen:
-        cid = preset["id"]
-    else:
-        alias_slug = _slug(alias, "")
-        if alias_slug and alias_slug != platform:
-            cid = f"{platform}.{alias_slug}"
-        else:
-            cid = alias_slug or platform
-        stem = cid or platform
-        cid = stem
-        n = 2
-        while cid in seen:
-            cid = f"{stem}-{n}"
-            n += 1
-    if not cid or cid in seen:
-        return None
-    field = _slug(raw.get("field") or (preset or {}).get("field") or "value", "value")
-    if not field or field[0].isdigit():
-        field = (preset or {}).get("field") or "value"
-    label = str(raw.get("label") or alias or (preset or {}).get("label") or cid).strip()[:24] or cid
-    if not alias and preset and label in {cid, preset["id"]}:
-        label = preset["label"]
-    placeholder = str(raw.get("placeholder") or (preset or {}).get("placeholder") or "").strip()[:80]
+def _norm_channel(raw: Any, seen: set) -> dict:
+    from mino_nexus.core.platform_contract import environment_channel
+    if not isinstance(raw, dict): raise ValueError("channel_object_required")
+    cid = raw.get("id")
+    if not isinstance(cid, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", cid) or cid in seen:
+        raise ValueError("channel_identity_invalid_or_duplicate")
+    environment_channel(raw)
+    field = raw.get("field")
+    if not isinstance(field, str) or not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", field):
+        raise ValueError("channel_field_required")
     seen.add(cid)
-    app_ident = _slug(str(raw.get("app_identifier") or ""), "")
-    if not app_ident and alias:
-        app_ident = _slug(alias, "")
-    elif cid and cid not in _PLATFORM_PRESET and "." in cid:
-        app_ident = cid.split(".", 1)[-1]
-    elif cid and cid not in _PLATFORM_PRESET and "-" in cid:
-        parts = cid.split("-", 1)
-        if len(parts) == 2 and parts[0] in CHANNEL_PLATFORMS:
-            app_ident = parts[1]
-    return {
-        "id": cid,
-        **({"app_id": str(raw["app_id"])} if raw.get("app_id") else {}),
-        "kind": kind,
-        **({"platform": platform} if kind != "server" or "platform" in raw else {}),
-        "alias": alias,
-        "app_identifier": app_ident,
-        "third_party": bool(third_party),
-        "label": alias or label,
-        "field": field,
-        "placeholder": placeholder,
-    }
+    return {**raw, "id":cid, "field":field, "label":str(raw.get("label") or cid),
+            "alias":str(raw.get("alias") or ""), "app_identifier":str(raw.get("app_identifier") or ""),
+            "third_party":bool(raw.get("third_party",False)), "placeholder":str(raw.get("placeholder") or "")}
 
 
 OTP_MODES = ("auto", "fixed", "gmail", "hitl")
@@ -203,23 +134,19 @@ def default_env_secrets() -> dict:
             "max_wait_ms": 90000,
         },
         "login": {"mode": "auto", "kind": "phone"},
-        "phone": {"mode": "auto"},
     }
 
 
-def _migrate_legacy_mode(mode: str, *, slot: str) -> str:
-    m = str(mode or "auto").strip().lower()
-    if m == "adapter":
-        return "hitl"
-    allowed = OTP_MODES if slot == "otp" else LOGIN_MODES
-    if m not in allowed:
-        return "auto"
-    return m
+def _validated_mode(mode: str | None, *, slot: str) -> str:
+    value = "auto" if mode is None else mode
+    if value not in (OTP_MODES if slot == "otp" else LOGIN_MODES):
+        raise ValueError(f"{slot}_mode_invalid")
+    return value
 
 
 def _norm_otp_slot(raw: Any) -> dict:
     src = raw if isinstance(raw, dict) else {}
-    mode = _migrate_legacy_mode(src.get("mode"), slot="otp")
+    mode = _validated_mode(src.get("mode"), slot="otp")
     allow = src.get("from_allowlist")
     if isinstance(allow, str):
         allow = [x.strip() for x in allow.split(",") if x.strip()]
@@ -240,24 +167,18 @@ def _norm_login_slot(raw: Any) -> dict:
     src = raw if isinstance(raw, dict) else {}
     if not src and isinstance(raw, type(None)):
         src = {}
-    mode = _migrate_legacy_mode(src.get("mode"), slot="login")
+    mode = _validated_mode(src.get("mode"), slot="login")
     kind = str(src.get("kind") or "phone").strip().lower()
     if kind not in LOGIN_KINDS:
-        kind = "phone"
+        raise ValueError("login_kind_invalid")
     return {"mode": mode, "kind": kind}
 
 
 def _norm_env_secrets(raw: Any) -> dict:
-    src = raw if isinstance(raw, dict) else {}
-    login_src = src.get("login") if isinstance(src.get("login"), dict) else {}
-    if not login_src and isinstance(src.get("phone"), dict):
-        login_src = {"mode": src["phone"].get("mode"), "kind": src.get("login_kind")}
-    login = _norm_login_slot(login_src)
-    return {
-        "otp": _norm_otp_slot(src.get("otp")),
-        "login": login,
-        "phone": {"mode": login["mode"]},
-    }
+    if raw is not None and not isinstance(raw, dict): raise ValueError("secrets_object_required")
+    src = raw or {}
+    if "phone" in src or "login_kind" in src: raise ValueError("obsolete_login_fields")
+    return {"otp":_norm_otp_slot(src.get("otp")), "login":_norm_login_slot(src.get("login"))}
 
 
 def _norm_gmail_inbox(raw: Any) -> dict:
@@ -302,12 +223,12 @@ def _norm_channel_secrets(raw: Any, channels: List[dict], env_keys: set[str]) ->
     out: dict = {}
     for cid, per_env in src.items():
         if cid not in ch_ids or not isinstance(per_env, dict):
-            continue
+            raise ValueError("channel_secrets_channel_invalid")
         row: dict = {}
         for ek, slot in per_env.items():
-            env_k = _slug(str(ek or ""), "")
+            env_k = str(ek)
             if env_k not in env_keys or not isinstance(slot, dict):
-                continue
+                raise ValueError("channel_secrets_environment_invalid")
             if bool(slot.get("inherit")):
                 continue
             row[env_k] = _norm_env_secrets(slot)
@@ -324,25 +245,21 @@ def env_secrets(env_doc: dict | None, env_key: str = "") -> dict:
     return default_env_secrets()
 
 
-def _norm_environment(raw: Any, seen: set) -> Optional[dict]:
-    if not isinstance(raw, dict):
-        return None
-    key = _slug(raw.get("key") or raw.get("id") or raw.get("label"), "")
-    if not key or key in seen:
-        return None
-    label = str(raw.get("label") or ENV_PROFILE_LABELS.get(key) or key).strip()[:20] or key
+def _norm_environment(raw: Any, seen: set) -> dict:
+    if not isinstance(raw, dict): raise ValueError("environment_object_required")
+    key = raw.get("key")
+    if not isinstance(key,str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,24}",key) or key in seen:
+        raise ValueError("environment_identity_invalid_or_duplicate")
     seen.add(key)
-    return {"key": key, "label": label, "secrets": _norm_env_secrets(raw.get("secrets"))}
+    return {"key":key,"label":str(raw.get("label") or key),"secrets":_norm_env_secrets(raw.get("secrets"))}
 
 
 def _profile_value(block: Any, field: str) -> str:
-    if not isinstance(block, dict):
-        return str(block or "").strip() if block not in (None, "") else ""
-    for k in (field, "value", "package", "bundle", "base_url", "path", "url", "host"):
-        v = str(block.get(k) or "").strip()
-        if v:
-            return v
-    return ""
+    if block is None: return ""
+    if not isinstance(block,dict): raise ValueError("profile_channel_object_required")
+    value = block.get(field, "")
+    if not isinstance(value,str): raise ValueError("profile_channel_value_invalid")
+    return value.strip()
 
 
 def _norm_profile(raw: Any, channels: List[dict]) -> dict:
@@ -358,70 +275,16 @@ def _norm_profile(raw: Any, channels: List[dict]) -> dict:
 
 
 def normalize_project_env(raw: Any) -> dict:
-    """规范结构：environments + channels + pipeline + profiles。兼容旧四套 android/ios/web。"""
-    if not isinstance(raw, dict):
-        return default_project_env()
-
-    profiles_in = raw.get("profiles") if isinstance(raw.get("profiles"), dict) else None
-    if profiles_in is None and any(k in raw for k in ("android", "ios", "web")):
-        profiles_in = {"test": {k: raw[k] for k in ("android", "ios", "web") if isinstance(raw.get(k), dict)}}
-
-    channels: List[dict] = []
-    seen_ch: set = set()
-    for row in raw.get("channels") or []:
-        ch = _norm_channel(row, seen_ch)
-        if ch:
-            channels.append(ch)
-    if not channels:
-        inferred = set()
-        if isinstance(profiles_in, dict):
-            for snap in profiles_in.values():
-                if isinstance(snap, dict):
-                    inferred.update(k for k, v in snap.items() if isinstance(v, dict))
-        if not inferred:
-            inferred = {"mac", "win", "android", "web", "server"}
-        for preset in DEFAULT_CHANNELS:
-            if preset["id"] in inferred:
-                channels.append(copy.deepcopy(preset))
-                seen_ch.add(preset["id"])
-        for cid in sorted(inferred):
-            if cid not in seen_ch:
-                ch = _norm_channel({"id": cid, "label": cid, "field": "value"}, seen_ch)
-                if ch:
-                    channels.append(ch)
-
-    environments: List[dict] = []
-    seen_env: set = set()
-    for row in raw.get("environments") or []:
-        env = _norm_environment(row, seen_env)
-        if env:
-            environments.append(env)
-    if not environments:
-        keys = list(profiles_in.keys()) if isinstance(profiles_in, dict) and profiles_in else list(ENV_PROFILE_KEYS)
-        for key in keys:
-            env = _norm_environment({"key": key, "label": ENV_PROFILE_LABELS.get(key, key)}, seen_env)
-            if env:
-                environments.append(env)
-    if not environments:
-        environments = [copy.deepcopy(e) for e in DEFAULT_ENVIRONMENTS]
-        seen_env = {e["key"] for e in environments}
-
-    pipeline: List[str] = []
-    for item in raw.get("pipeline") or []:
-        key = _slug(item, "")
-        if key in seen_env and key not in pipeline:
-            pipeline.append(key)
-    if not pipeline:
-        # 旧数据默认三步走：测试 → 预发 → 正式；其余环境可单独开测但不在上线路径里
-        for key in ("test", "pre", "prod"):
-            if key in seen_env:
-                pipeline.append(key)
-        if not pipeline:
-            pipeline = [e["key"] for e in environments]
-
-    default_profile = _slug(raw.get("default_profile") or "", "")
-    if default_profile not in seen_env:
-        default_profile = pipeline[0] if pipeline else environments[0]["key"]
+    """Current environment contract only; empty new projects use explicit defaults."""
+    if raw is None or raw == {}: return default_project_env()
+    if not isinstance(raw, dict): raise ValueError("environment_document_required")
+    validate_environment_write(raw)
+    profiles_in = raw["profiles"]
+    seen_ch, seen_env = set(), set()
+    channels = [_norm_channel(row,seen_ch) for row in raw["channels"]]
+    environments = [_norm_environment(row,seen_env) for row in raw["environments"]]
+    pipeline = list(raw["pipeline"])
+    default_profile = raw["default_profile"]
 
     profiles = {}
     src_profiles = profiles_in or {}
@@ -450,15 +313,7 @@ def normalize_project_env(raw: Any) -> dict:
         "account_pool_local": raw.get("account_pool_local")
         if isinstance(raw.get("account_pool_local"), dict)
         else {},
-        "test_accounts": _norm_test_accounts(
-            raw.get("test_accounts"),
-            env_doc={
-                "account_template_ids": _norm_template_ids(raw.get("account_template_ids")),
-                "account_pool_local": raw.get("account_pool_local")
-                if isinstance(raw.get("account_pool_local"), dict)
-                else {},
-            },
-        ),
+
     }
 
 
@@ -520,7 +375,7 @@ def _norm_test_accounts(raw: Any, env_doc: dict | None = None) -> List[dict]:
         from mino_nexus.services.resource_pool import account_facets
 
         display_name = str(item.get("display_name") or "").strip()[:80]
-        tags_legacy = item.get("tags") if isinstance(item.get("tags"), list) else []
+        if "tags" in item: raise ValueError("obsolete_account_tags; use facets")
         profile_id = str(item.get("profile_id") or "").strip()[:40]
         stored = item.get("facets") if isinstance(item.get("facets"), dict) else {}
         defaults = facets_defaults_from_catalog(env_doc)
@@ -529,7 +384,7 @@ def _norm_test_accounts(raw: Any, env_doc: dict | None = None) -> List[dict]:
         }
         combined = {**defaults, **stored_lower}
         core = account_facets(
-            {"tags": tags_legacy, "facets": combined, "profile_id": profile_id}
+            {"facets": combined, "profile_id": profile_id}
         )
         from mino_nexus.services.account_facet_schema import merge_account_facets
         from mino_nexus.services.account_pool_templates import merged_pool_field_defs
@@ -761,58 +616,30 @@ def account_fits_surface(row: dict | None, want: str, channels: Optional[List[di
 
 
 def resolve_surface_id(
-    env_doc: dict | None,
-    *,
-    surface: str = "",
-    platform: str = "",
-    target_id: str = "",
-    prompt: str = "",
-    env_profile: str = "",
+    env_doc: dict | None, *, surface: str = "", platform: str = "",
+    target_id: str = "", prompt: str = "", env_profile: str = "",
 ) -> str:
-    """开跑/筛号时落到哪一条应用配置：显式 id > 启动标识匹配 > 设备端主应用 > 简称命中。"""
-    doc = env_doc if isinstance(env_doc, dict) else {}
-    channels = [c for c in (doc.get("channels") or []) if isinstance(c, dict) and c.get("id")]
-    want = _slug(surface, "")
-    if want and any(str(c.get("id")) == want for c in channels):
+    """Resolve exactly one channel without changing an explicit identity."""
+    from mino_nexus.core.platform_contract import target_platform
+    channels = [c for c in (env_doc or {}).get("channels", []) if isinstance(c, dict) and c.get("id")]
+    plat = target_platform(platform) if platform else ""
+    want = str(surface or "")
+    if want:
+        matches = [c for c in channels if c["id"] == want]
+        if len(matches) != 1:
+            raise ValueError("surface_not_found_or_ambiguous")
+        if plat and matches[0].get("platform") != plat:
+            raise ValueError("surface_platform_mismatch")
         return want
-    tid = str(target_id or "").strip().rstrip("/")
+    if plat:
+        channels = [c for c in channels if c.get("platform") == plat]
+    tid = str(target_id or "").strip()
     if tid:
-        snap = profile_snapshot(doc, env_profile) if doc.get("profiles") or doc.get("environments") else {}
-        for ch in channels:
-            val = _profile_value(snap.get(ch["id"]) if isinstance(snap, dict) else {}, ch.get("field") or "value")
-            if val and val.rstrip("/") == tid:
-                return str(ch["id"])
-    plat = str(platform or "").lower()
-    kind = ""
-    if plat in ("web", "browser", "playwright"):
-        kind = "web"
-    elif plat == "server":
-        kind = "server"
-    elif plat in ("android", "ios", "win", "pc", "mac"):
-        kind = "app"
-    if kind:
-        matching = [c for c in channels if str(c.get("kind") or "") == kind]
-        if plat in ("android", "ios", "win", "pc", "mac"):
-            matching = [
-                c for c in matching
-                if str(c.get("platform") or "") == plat or str(c.get("id") or "") == plat
-            ] or matching
-        primaries = [c for c in matching if _surface_is_primary(c)]
-        pool = primaries or matching
-        if pool:
-            return str(pool[0]["id"])
-    q = str(prompt or "")
-    alias_hits = []
-    for ch in channels:
-        alias = str(ch.get("alias") or "").strip()
-        label = str(ch.get("label") or "").strip()
-        if alias and alias in q:
-            alias_hits.append(str(ch["id"]))
-        elif ch.get("third_party") and label and len(label) >= 2 and label in q:
-            alias_hits.append(str(ch["id"]))
-    if len(set(alias_hits)) == 1:
-        return alias_hits[0]
-    return want
+        snap = profile_snapshot(env_doc, env_profile)
+        channels = [c for c in channels if _profile_value(snap.get(c["id"], {}), c.get("field") or "value") == tid]
+    if len(channels) != 1:
+        raise ValueError("surface_selection_required" if channels else "surface_not_found")
+    return str(channels[0]["id"])
 
 
 def resolve_pick_requirements(
@@ -916,23 +743,17 @@ def pick_test_accounts(
 
 
 def profile_keys(env_doc: dict) -> List[str]:
-    envs = env_doc.get("environments") if isinstance(env_doc, dict) else None
-    if isinstance(envs, list) and envs:
-        return [str(e.get("key")) for e in envs if isinstance(e, dict) and e.get("key")]
-    profiles = (env_doc or {}).get("profiles") if isinstance(env_doc, dict) else {}
-    if isinstance(profiles, dict) and profiles:
-        return [str(k) for k in profiles.keys()]
-    return list(ENV_PROFILE_KEYS)
+    rows = env_doc.get("environments") if isinstance(env_doc,dict) else None
+    if not isinstance(rows,list) or not rows: raise ValueError("environments_required")
+    return [row["key"] for row in rows]
 
 
 def pipeline_keys(env_doc: dict) -> List[str]:
     keys = set(profile_keys(env_doc))
-    pipe = env_doc.get("pipeline") if isinstance(env_doc, dict) else None
-    if isinstance(pipe, list) and pipe:
-        out = [str(k) for k in pipe if str(k) in keys]
-        if out:
-            return out
-    return profile_keys(env_doc)
+    pipe = env_doc.get("pipeline")
+    if not isinstance(pipe,list) or len(pipe)!=len(set(pipe)) or any(k not in keys for k in pipe):
+        raise ValueError("environment_pipeline_invalid")
+    return list(pipe)
 
 
 def resolve_run_env_profile(
@@ -956,22 +777,18 @@ def resolve_run_env_profile(
             raise ValueError(f"运行环境「{req}」不在项目环境配置中。可选：{hint}")
         return req
     auto = str(automation_default or "").strip()
-    if auto and (not keys or auto in keys):
+    if auto:
         return resolve_profile_name(doc, auto)
     return resolve_profile_name(doc, None)
 
 
 def resolve_profile_name(env_doc: dict, env_profile: Optional[str] = None) -> str:
     keys = set(profile_keys(env_doc))
-    if env_profile and str(env_profile) in keys:
-        return str(env_profile)
-    default = str((env_doc or {}).get("default_profile") or "")
-    if default in keys:
-        return default
-    pipe = pipeline_keys(env_doc)
-    if pipe:
-        return pipe[0]
-    return next(iter(keys), "test")
+    selected = str(env_profile) if env_profile else str((env_doc or {}).get("default_profile") or "")
+    if not selected or selected not in keys:
+        raise ValueError("environment_profile_missing_or_invalid")
+    return selected
+
 
 
 def profile_snapshot(env_doc: dict, env_profile: Optional[str] = None) -> dict:
@@ -990,51 +807,34 @@ def profile_snapshot(env_doc: dict, env_profile: Optional[str] = None) -> dict:
 
 
 def target_id_from_snapshot(snap: dict, platform: str = "android", surface: str = "") -> str:
-    """从某一环境 profile 快照取启动标识：Android 包名 / iOS Bundle / Web 网址。"""
-    data = snap if isinstance(snap, dict) else {}
-    sid = str(surface or "").strip()
-    if sid:
-        block = data.get(sid)
-        return _profile_value(block, "value") if isinstance(block, dict) else ""
-    plat = str(platform or "android").lower()
-    if plat in data and plat not in ("android", "ios", "web", "browser", "playwright", "iphone", "ipad"):
-        block = data.get(plat)
-        if isinstance(block, dict):
-            val = _profile_value(block, "value")
-            if val:
-                return val
-    if plat in ("web", "browser", "playwright"):
-        web = data.get("web") if isinstance(data.get("web"), dict) else {}
-        return str(web.get("base_url") or web.get("url") or "").strip()
-    if plat in ("ios", "iphone", "ipad"):
-        ios = data.get("ios") if isinstance(data.get("ios"), dict) else {}
-        return str(ios.get("bundle") or ios.get("bundle_id") or "").strip()
-    if plat not in ("android", "adb"):
-        return ""
-    android = data.get("android") if isinstance(data.get("android"), dict) else {}
-    pkg = str(android.get("package") or "").strip()
-    if pkg:
-        return pkg
-    return ""
+    from mino_nexus.core.platform_contract import target_platform
+    plat = target_platform(platform)
+    field = {"android":"package","web":"base_url","mac":"bundle","win":"path"}[plat]
+    return _profile_value(snap.get(surface or plat),field)
 
 
 def env_from_project_row(project: dict | None, apps: Optional[List[dict]] = None) -> dict:
-    """从 JSON 行取出规范环境。空项目时尝试用第一个应用 env 填 test。"""
+    """Read this project's environment only; app order cannot select its values."""
     if not isinstance(project, dict):
         return default_project_env()
-    raw = project.get("env")
-    doc = normalize_project_env(raw)
-    if raw:
-        return doc
-    for app in apps or []:
-        if isinstance(app, dict) and isinstance(app.get("env"), dict) and app.get("env"):
-            doc["profiles"]["test"] = normalize_project_env(app.get("env"))["profiles"]["test"]
-            break
-    return doc
+    return normalize_project_env(project.get("env"))
+
 
 
 def validate_environment_write(doc: dict) -> None:
     """Reject before normalization; never guess platform or rewrite channel identities."""
+    if not isinstance(doc,dict): raise ValueError("environment_document_required")
+    if any(key in doc for key in ("android","ios","web","phone","login_kind","test_accounts")):
+        raise ValueError("obsolete_environment_fields")
+    envs=doc.get("environments")
+    if not isinstance(envs,list) or not envs: raise ValueError("environments_required")
+    seen_env=set()
+    for row in envs: _norm_environment(row,seen_env)
+    if doc.get("default_profile") not in seen_env: raise ValueError("default_profile_invalid")
+    pipeline_keys(doc)
+    profiles=doc.get("profiles")
+    if not isinstance(profiles,dict) or set(profiles)!=seen_env or any(not isinstance(v,dict) for v in profiles.values()):
+        raise ValueError("environment_profiles_mismatch")
     from mino_nexus.core.platform_contract import environment_channel
     channels = doc.get("channels")
     if not isinstance(channels, list) or not channels:

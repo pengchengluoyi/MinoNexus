@@ -348,6 +348,8 @@ def _collect_evidence_uncached(ctx, router, *, target_package: str = "") -> Evid
     showing = keyguard.get("isKeyguardShowing")
     if showing is None:
         showing = keyguard.get("mDreamingLockscreen")
+    if showing is None:
+        showing = keyguard.get("isStatusBarKeyguard") or keyguard.get("mShowingLockscreen")
     if showing is not None:
         ev.locked = _yes_no(str(showing).lower() == "true")
 
@@ -402,17 +404,13 @@ def resolve_app_foreground_guard(
     from mino_nexus.runtime.run_context import is_web_slot
     from mino_nexus.services.nav_capture_store import run_guard_foreground
 
-    launch_ok = bool(getattr(ctx, "app_launch_confirmed", False))
     fg = run_guard_foreground(
         list(nodes or []),
         target_package=pkg,
         platform=plat,
-        launch_confirmed=launch_ok,
     )
     af = str(fg.get("app_foreground") or "").strip().lower()
     if is_web_slot(str(getattr(ctx, "sn", "") or ""), plat):
-        if af == "unknown" and launch_ok and pkg:
-            fg = {**fg, "app_foreground": "yes", "screen_kind": "app"}
         setattr(ctx, "app_foreground", str(fg.get("app_foreground") or ""))
         return fg
     if af != "unknown" or router is None or not pkg:
@@ -618,6 +616,14 @@ def apply_rule(
             )
             res = _dispatch(router, ctx, event, agent_turn=agent_turn, action_idx=idx)
             status = getattr(res.status, "value", res.status)
+            raw_reason = ""
+            raw_resp = getattr(res, "raw_response", None)
+            if isinstance(raw_resp, dict):
+                raw_reason = str(raw_resp.get("local_reason") or "")
+            _trace_recovery(ctx, "recovery/action", {
+                "rule_id": rule.id, "capability": action.capability, "status": str(status),
+                "summary": str(res.summary or "")[:240], "reason": raw_reason,
+            })
             out.actions.append({
                 "capability": action.capability,
                 "status": str(status),
@@ -628,6 +634,8 @@ def apply_rule(
                 return out
             if res.status not in (EventStatus.PASS, EventStatus.SKIPPED):
                 out.error = res.error or f"{action.capability} 执行失败"
+                if raw_reason == "capability_unregistered" or "能力目录里没有" in str(res.summary or ""):
+                    out.error = f"capability_unregistered: {action.capability}"
 
         verify = rule.verify
         if not (verify.evidence or verify.evidence_any or verify.screen_text_any or verify.top_window_pkg_prefix):

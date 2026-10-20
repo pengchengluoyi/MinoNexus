@@ -125,13 +125,6 @@ def _run_case_list(
         from mino_nexus.ai import dispatch_log
         dispatch_log.bind(task_id=run_id, case_id=cid, case_step_index=0,
                           session_id=str(case.get("report_run_id") or run_store.report_run_id(run_id, cid, sn=sn, coverage=str(case.get("coverage") or ""))))
-        from mino_nexus.runtime.platform_gate import bind_case_execution_target
-
-        case = bind_case_execution_target(
-            case, (doc.get("device_targets") or {}).get(sn) or {},
-            surface=str(doc.get("env_surface") or ""),
-            action_scheme=str(doc.get("action_scheme") or "dom_preferred"), package=package,
-        )
         run_store.patch_case(run_id, cid, target_sn=sn, status="running")
         emit_testing_task({
             "event": "case_running",
@@ -343,6 +336,30 @@ def _run_case_list(
                 precondition=str(case.get("precondition") or ""),
                 case=case if isinstance(case, dict) else {},
                 summary=str(result.get("summary") or ""),
+            )
+        except Exception as exc:
+            import traceback
+
+            reason = f"{type(exc).__name__}: {exc}"[:240] or "执行异常"
+            SLog.e(TAG, f"case {cid} run={run_id} crashed: {reason}\n{traceback.format_exc()}")
+            run_store.patch_case(
+                run_id, cid, target_sn=sn, status="fail", summary=reason, error=reason,
+                **_case_trace_fields(run_id, case),
+            )
+            emit_testing_task({
+                "event": "case_finished",
+                "run_id": run_id,
+                "task_id": run_id,
+                "case_id": cid,
+                "status": "fail",
+                "app_id": str(doc.get("app_id") or ""),
+            })
+            update_after_case(
+                sn_state,
+                status="fail",
+                precondition=str(case.get("precondition") or ""),
+                case=case if isinstance(case, dict) else {},
+                summary=reason,
             )
         finally:
             if device_held:

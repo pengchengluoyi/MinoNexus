@@ -17,7 +17,9 @@ def enqueue(project_id, topic_id, sess, content, thread_id=''):
         db.flush()
         db.add(CollabMessageJob(message_id=m.message_id, project_id=project_id, topic_id=topic_id,
             owner_user_id=owner, status='queued', created_at=ws.now(), updated_at=ws.now()))
+        from mino_nexus.services.workspace_members import sender_name
         result = {**ws.public(m), 'reply_status': 'queued'}
+        result['sender_name'] = sender_name(result)
     from mino_nexus.services.collab_message_queue import wake
     wake()
     return result

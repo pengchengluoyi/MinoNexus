@@ -28,7 +28,9 @@ _LOGIN_TEST_STEP_RE = re.compile(
 _SESSION_PREP = frozenset({"relogin", "logout", "skip"})
 _REQUIRED = frozenset({"logged_in", "guest", "any"})
 _DEVICE_NEED = frozenset({"app", "web", "app_web", "ab_pair"})
-_SCENE_PLATFORM = frozenset({"android", "ios", "web", "desktop", "mac", "macos", "pc", "windows", "linux", "any"})
+from mino_nexus.core.platform_contract import TARGET_PLATFORMS, target_platform
+
+_SCENE_PLATFORM = frozenset(TARGET_PLATFORMS)
 PREP_KINDS = frozenset({
     "clear_cache",
     "check_sim",
@@ -70,134 +72,40 @@ def prep_kind_phase(kind: str) -> str:
 
 
 def clamp_prep_items(raw: Any, warnings: Optional[list[str]] = None) -> list[dict[str, Any]]:
-    notes = warnings if warnings is not None else []
-    rows = raw if isinstance(raw, list) else []
-    out: list[dict[str, Any]] = []
-    for item in rows[:20]:
-        if not isinstance(item, dict):
-            continue
-        text = str(item.get("text") or "").strip()[:240]
-        if not text:
-            continue
-        kind_raw = str(item.get("kind") or "").strip().lower()
-        if kind_raw in PREP_KINDS:
-            kind = kind_raw
-        else:
-            if kind_raw:
-                notes.append(f"prep kind={kind_raw!r} → unknown")
-            kind = "unknown"
-        phase_raw = str(item.get("phase") or "").strip().lower()
-        phase = phase_raw if phase_raw in {"before_launch", "after_launch"} else prep_kind_phase(kind)
-        out.append({"text": text, "kind": kind, "phase": phase})
+    if not isinstance(raw,list) or len(raw)>20: raise ValueError("scene_prep_items_invalid")
+    out=[]
+    for item in raw:
+        if not isinstance(item,dict) or not isinstance(item.get("text"),str) or not item["text"].strip():
+            raise ValueError("scene_prep_text_required")
+        if item.get("kind") not in PREP_KINDS or item.get("kind")=="unknown": raise ValueError("scene_prep_kind_invalid")
+        if item.get("phase") not in {"before_launch","after_launch"}: raise ValueError("scene_prep_phase_invalid")
+        out.append(dict(item))
     return out
 
 
 def clamp_case_scene(raw: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """把模型 JSON 钳成合法枚举。非法或空对象 → skip（不自动登录）、device_need=app。"""
-    row = raw if isinstance(raw, dict) else {}
-    warnings: list[str] = []
-    prep_raw = str(row.get("session_prep") or "").strip().lower()
-    req_raw = str(row.get("required_session") or "").strip().lower()
-    if prep_raw in _SESSION_PREP:
-        prep = prep_raw
-    else:
-        if prep_raw:
-            warnings.append(f"session_prep={prep_raw!r} → skip")
-        prep = "skip"
-    if req_raw in _REQUIRED:
-        req = req_raw
-    else:
-        if req_raw:
-            warnings.append(f"required_session={req_raw!r} → any")
-        req = "any"
-    if prep == "relogin" and req == "guest":
-        warnings.append("relogin 与游客前置冲突 → logout")
-        prep = "logout"
-    auth = prep != "relogin"
-    need_raw = str(row.get("device_need") or "").strip().lower()
-    if need_raw in _DEVICE_NEED:
-        device_need = need_raw
-    else:
-        if need_raw:
-            warnings.append(f"device_need={need_raw!r} → app")
-        elif "device_need" not in row:
-            warnings.append("device_need 缺失 → app")
-        device_need = "app"
-    plat_raw = str(row.get("platform") or "").strip().lower()
-    if plat_raw in _SCENE_PLATFORM:
-        platform = plat_raw
-    else:
-        if plat_raw:
-            warnings.append(f"platform={plat_raw!r} → android")
-        elif "platform" not in row:
-            warnings.append("platform 缺失 → android")
-        platform = "android"
-    if "prep_items" not in row:
-        warnings.append("prep_items 缺失")
-        prep_items = []
-    else:
-        prep_items = clamp_prep_items(row.get("prep_items"), warnings)
-    reason = str(row.get("reason") or "").strip()[:240]
-    if not reason:
-        reason = {
-            "relogin": "业务用例，前置退出再登录",
-            "logout": "登录/游客用例，前置只退出不登录",
-            "skip": "退出/切号用例或无法判定，不自动登录",
-        }[prep]
-    how = "fallback"
-    if prep_raw in _SESSION_PREP and req_raw in _REQUIRED and need_raw in _DEVICE_NEED and plat_raw in _SCENE_PLATFORM:
-        how = "clamp" if warnings else "llm"
-    elif prep_raw or req_raw or need_raw or plat_raw or "prep_items" in row:
-        how = "clamp"
-    account_template_id = str(
-        row.get("account_template_id") or row.get("template_id") or ""
-    ).strip()[:48]
-    lease_requirements = row.get("lease_requirements")
-    if not isinstance(lease_requirements, dict):
-        lease_requirements = {}
-    out = {
-        "session_prep": prep,
-        "required_session": req,
-        "auth_under_test": auth,
-        "device_need": device_need,
-        "platform": platform,
-        "prep_items": prep_items,
-        "reason": reason,
-        "how": how,
-        "parse_warnings": warnings,
-    }
-    if account_template_id:
-        out["account_template_id"] = account_template_id
-    if lease_requirements:
-        out["lease_requirements"] = lease_requirements
-    ff_raw = str(row.get("foreign_foreground_llm_image") or "deny").strip().lower()
-    if ff_raw not in ("deny", "allow_always"):
-        if ff_raw:
-            warnings.append(f"foreign_foreground_llm_image={ff_raw!r} → deny")
-        ff_raw = "deny"
-    out["foreign_foreground_llm_image"] = ff_raw
-    pre = str(row.get("precondition") or "").strip()
-    if pre:
-        out["precondition"] = pre[:2000]
-    return out
-
-
-def fallback_case_scene(reason: str = "", precondition: str = "") -> dict[str, Any]:
-    items = [
-        {"text": line, "kind": "unknown", "phase": "before_launch"}
-        for line in split_precondition_text(precondition)
-    ]
-    row = clamp_case_scene({
-        "session_prep": "skip",
-        "required_session": "any",
-        "device_need": "app",
-        "platform": "android",
-        "prep_items": items,
-        "reason": (reason or "").strip()[:240] or "场景理解不可用，不自动登录",
-    })
-    row["how"] = "fallback"
-    row["reason"] = (reason or "").strip()[:240] or "场景理解不可用，不自动登录"
+    """Validate a complete scene. Never turn parse failure into executable defaults."""
+    if not isinstance(raw,dict): raise ValueError("case_scene_required")
+    row=dict(raw)
+    if row.get("how") in {"fallback","clamp"}: raise ValueError("case_scene_recompile_required")
+    for field, allowed in [("session_prep",_SESSION_PREP),("required_session",_REQUIRED),("device_need",_DEVICE_NEED)]:
+        if row.get(field) not in allowed: raise ValueError("case_scene_invalid:"+field)
+    if row["session_prep"]=="relogin" and row["required_session"]=="guest":
+        raise ValueError("case_scene_session_conflict")
+    row["platform"]=target_platform(row.get("platform"))
+    row["prep_items"]=clamp_prep_items(row.get("prep_items"))
+    if "template_id" in row: raise ValueError("obsolete_scene_template_id")
+    if "lease_requirements" in row and not isinstance(row["lease_requirements"],dict): raise ValueError("scene_lease_requirements_invalid")
+    policy=row.get("foreign_foreground_llm_image","deny")
+    if policy not in {"deny","allow_always"}: raise ValueError("foreign_foreground_policy_invalid")
+    row["foreign_foreground_llm_image"]=policy
+    row["auth_under_test"]=row["session_prep"]!="relogin"
+    row["how"]="validated"
+    row["parse_warnings"]=[]
     return row
+
+
+
 
 
 def session_prep_intent(
@@ -272,61 +180,17 @@ def is_login_module_case(
     return bool(_LOGIN_TEST_STEP_RE.search(_case_text_blob(case)))
 
 
-def ensure_case_scene(
-    case: dict[str, Any],
-    ctx_scene: Optional[dict[str, Any]] = None,
-    *,
-    env_doc: Optional[dict[str, Any]] = None,
-    target_package: str = "",
-    env_profile: str = "test",
-) -> dict[str, Any]:
-    """合并 CaseScene JSON；登录模块缺省时补 guest + logout prep。"""
-    raw = case.get("case_scene") if isinstance(case.get("case_scene"), dict) else None
-    if raw is None and isinstance(case.get("scene"), dict):
-        raw = case.get("scene")
-    merged: dict[str, Any] = {**(ctx_scene or {}), **(raw or {})}
-    from mino_nexus.services.case_resource_claim import apply_claim_to_merged_scene
-
-    merged = apply_claim_to_merged_scene(
-        case,
-        merged,
-        env_doc=env_doc,
-        env=str(env_profile or "test"),
-        package=str(target_package or ""),
-    )
-    pre = str(case.get("precondition") or merged.get("precondition") or "").strip()
-    if pre and re.search(r"登录成功|已登录", pre):
-        if str(merged.get("required_session") or "any") in ("", "any"):
-            merged["required_session"] = "logged_in"
-        # 前置「已登录」= 核验机态/inspect，不在 prep 内走登录流；relogin 会触发资源门槛 defer。
-        merged["session_prep"] = "skip"
-    if pre and re.search(r"未登录|游客", pre):
-        if str(merged.get("required_session") or "any") in ("", "any"):
-            merged["required_session"] = "guest"
-        if str(merged.get("session_prep") or "skip") == "skip":
-            merged["session_prep"] = "logout"
-    if (
-        str(merged.get("required_session") or "") == "logged_in"
-        and str(merged.get("session_prep") or "skip") == "skip"
-        and pre
-        and re.search(r"退出.*(再)?登录|重新登录", pre)
-    ):
-        merged["session_prep"] = "relogin"
-    if (
-        str(merged.get("required_session") or "") in _REQUIRED
-        and str(merged.get("session_prep") or "") in _SESSION_PREP
-    ):
-        return clamp_case_scene({**merged, **({"precondition": pre} if pre else {})})
-    if is_login_module_case(case, merged):
-        return clamp_case_scene({
-            **merged,
-            "session_prep": "logout",
-            "required_session": "guest",
-            "device_need": merged.get("device_need") or "app",
-        })
-    if merged:
-        return clamp_case_scene({**merged, "precondition": pre} if pre else merged)
-    return fallback_case_scene(precondition=pre)
+def ensure_case_scene(case: dict[str, Any], ctx_scene: Optional[dict[str, Any]] = None, *,
+                      env_doc: Optional[dict[str, Any]] = None, target_package: str = "",
+                      env_profile: str = "test") -> dict[str, Any]:
+    """Only explicit current scene fields can control execution."""
+    if "scene" in case: raise ValueError("obsolete_case_scene_field")
+    raw=case.get("case_scene")
+    if raw is not None and not isinstance(raw,dict): raise ValueError("case_scene_invalid")
+    merged={**(ctx_scene or {}),**(raw or {})}
+    if merged.get("platform") is None and case.get("platform") is not None:
+        merged["platform"]=target_platform(case["platform"])
+    return clamp_case_scene(merged)
 
 
 def compile_otp_prep_hint(

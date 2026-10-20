@@ -52,6 +52,11 @@ class Capability(BaseModel):
     ui_coverable: bool = True
     observe: str = ""
 
+    @property
+    def parameters(self) -> dict[str, Any]:
+        from mino_nexus.catalog.tool_schema import params_schema_for
+        return params_schema_for(self.id, self.params)
+
 
 class RecoveryMatch(BaseModel):
     model_config = ConfigDict(extra="allow")

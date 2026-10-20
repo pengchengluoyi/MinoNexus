@@ -27,14 +27,14 @@ def current_session(authorization: str = Header(default="")) -> dict[str, Any]:
 
 
 def require_project_write(project_id: str, sess: dict[str, Any]) -> dict[str, Any]:
-    from mino_nexus.services.project_members import require_maintainer
+    from mino_nexus.services.project_members import require_project_access
     try:
-        require_maintainer(project_id, sess)
+        require_project_access(project_id, sess)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail={"reason_code": "project_maintainer_required",
-                                                     "message": "需要该项目维护者或管理员才能修改"}) from exc
+        raise HTTPException(status_code=401, detail={"reason_code": "login_required",
+                                                     "message": "请先登录"}) from exc
     return sess
 
 

@@ -211,8 +211,17 @@ class NodeConnection:
                 return
             try:
                 await asyncio.to_thread(reg.heartbeat, env.payload, send=self.request)
-            except (ValueError, TypeError, AttributeError):
-                await self.ws.close(code=1008, reason="心跳平台或嵌套能力合同无效，请升级 Scout")
+            except (ValueError, TypeError, AttributeError) as exc:
+                from mino_nexus.core.platform_contract import PlatformContractError
+                if isinstance(exc, PlatformContractError):
+                    reason_code = exc.code
+                elif str(exc) in {"executor_snapshot_version_required", "host_os_changed_requires_registration"}:
+                    reason_code = str(exc)
+                else:
+                    reason_code = "heartbeat_contract_invalid"
+                # Only bounded contract codes; never echo payloads or credentials.
+                SLog.w(TAG, f"[{self.node_id}] 心跳被拒绝: {reason_code}")
+                await self.ws.close(code=1008, reason=f"心跳合同无效: {reason_code}")
                 self.close()
                 return
             _kick_im_hold()

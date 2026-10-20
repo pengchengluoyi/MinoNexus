@@ -623,6 +623,9 @@ def run_one(worker_id: str) -> bool:
             .all()
         )
         for wi in rows:
+            # Preserve withdrawn workspace schedules without ever dispatching them.
+            if wi.origin == "device_online":
+                continue
             if wi.topic_id in paused:
                 continue
             topic = topics.get(wi.topic_id) or db.get(CollabTopic, wi.topic_id)

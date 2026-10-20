@@ -1,7 +1,7 @@
 id: case.retry_failed
-version: 1
+version: 2
 title: 重跑失败项
-description: 把一次任务里失败的用例再跑一遍。
+description: 复跑已验证尚未发生写入的失败执行单元，保持原设备、快照及剩余预算。省略执行单元时由服务读取合格项；无合格项则停止。
 route: POST /case-runner/tasks/{task_id}/retry-failed
 risk: write
 async: true
@@ -10,13 +10,13 @@ params_schema:
   properties:
     task_id:
       type: string
-    sn:
-      type: string
-      description: 设备序列号或别名
+    execution_unit_ids:
+      type: array
+      items:
+        type: string
+      description: 原运行中具备安全重试证据的执行单元 ID；省略时选择当前合格项。
   required:
   - task_id
-param_resolvers:
-  sn: device.by_alias
 result_pick:
 - data.task_id
 - data.run_id

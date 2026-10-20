@@ -3,18 +3,29 @@ from __future__ import annotations
 from typing import Any
 import io
 import json
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
-from mino_nexus.routers.deps import project_maintainer
+from mino_nexus.routers.deps import project_maintainer, current_session
 from mino_nexus.core.http_util import ok
 from mino_nexus.core.database import session_scope
 from mino_nexus.services import collab_workspace as ws
 from mino_nexus.models.mino_bots import CollabMessage, CollabActivity, CollabTopicMember
 from mino_nexus.models.collab_read import CollabWorkspaceRead
 
-router = APIRouter(prefix='/project/{project_id}/collab/workspaces', tags=['MinoBots workspaces'])
+def require_workspace_owner(request: Request, sess: dict = Depends(current_session)):
+    topic_id = request.path_params.get('topic_id')
+    if topic_id:
+        with session_scope() as db:
+            try:
+                ws.owned(db, request.path_params['project_id'], topic_id)
+            except KeyError as exc:
+                raise HTTPException(404, '工作区不存在') from exc
+
+
+router = APIRouter(prefix='/project/{project_id}/collab/workspaces', tags=['MinoBots workspaces'],
+                   dependencies=[Depends(require_workspace_owner)])
 
 
 class WorkspaceCreate(BaseModel):
@@ -35,7 +46,6 @@ class WorkspacePatch(BaseModel):
     env_profile: str | None = None
     env_surface: str | None = None
     platform: str | None = None
-    expected_build: str | None = None
     paused: bool | None = None
     archived: bool | None = None
 
@@ -70,7 +80,7 @@ def listing(project_id: str, archived: bool = False, sess: dict = Depends(projec
 
 @router.post('')
 def create(project_id: str, body: WorkspaceCreate, sess: dict = Depends(project_maintainer)):
-    return call(ws.create_workspace, project_id, sess, body.model_dump())
+    return call(ws.create_workspace, project_id, sess, body.model_dump(exclude_unset=True))
 
 
 @router.get('/{topic_id}')
@@ -205,3 +215,85 @@ def set_default_members(project_id: str, body: DefaultMembersBody, sess: dict = 
 def restore_default_members(project_id: str, topic_id: str, sess: dict = Depends(project_maintainer)):
     from mino_nexus.services.workspace_members import restore_defaults
     return call(restore_defaults, project_id, topic_id, sess)
+
+
+class PinCasesBody(BaseModel):
+    case_ids: list[str] = Field(min_length=1, max_length=1000)
+
+
+from mino_nexus.services.workspace_automation import Policy
+
+
+class AutomationBody(BaseModel):
+    config: Policy
+    revision: int = Field(ge=0)
+
+
+class ReportBody(BaseModel):
+    run_id: str = ''
+
+
+@router.get('/{topic_id}/scope')
+def scope_get(project_id: str, topic_id: str, sess: dict = Depends(project_maintainer)):
+    ws.authorize(project_id, sess)
+    with session_scope() as db:
+        topic = ws.owned(db, project_id, topic_id)
+        return ok({'topic': ws.public(topic), 'case_ids': ws.scope_ids(db, topic)})
+
+
+@router.post('/{topic_id}/pin-cases')
+def pin_cases(project_id: str, topic_id: str, body: PinCasesBody, sess: dict = Depends(project_maintainer)):
+    return call(ws.pin_cases, project_id, topic_id, sess, body.case_ids)
+
+
+@router.get('/{topic_id}/automation')
+def automation_get(project_id: str, topic_id: str, sess: dict = Depends(project_maintainer)):
+    from mino_nexus.services.workspace_automation import get
+    return call(get, project_id, topic_id, sess)
+
+
+@router.put('/{topic_id}/automation')
+def automation_save(project_id: str, topic_id: str, body: AutomationBody, sess: dict = Depends(project_maintainer)):
+    from mino_nexus.services.workspace_automation import save
+    return call(save, project_id, topic_id, sess, body.config.model_dump(), body.revision)
+
+
+@router.get('/{topic_id}/report')
+def report_get(project_id: str, topic_id: str, run_id: str = '', sess: dict = Depends(project_maintainer)):
+    from mino_nexus.services.workspace_reports import facts, markdown
+    result = call(facts, project_id, topic_id, sess, run_id)
+    result['data']['markdown'] = markdown(result['data'])
+    return result
+
+
+@router.post('/{topic_id}/report')
+def report_create(project_id: str, topic_id: str, body: ReportBody, sess: dict = Depends(project_maintainer)):
+    import time
+    from mino_nexus.services.workspace_assign import assign
+    return call(assign, project_id, topic_id, sess,
+        {'member': 'report-writer', 'job': 'draft_test_report', 'target': {'run_id': body.run_id} if body.run_id else {}},
+        context={}, deadline=time.monotonic() + 60)
+
+
+class DecisionBody(BaseModel):
+    body: str = Field(min_length=1, max_length=4000)
+    run_id: str = ''
+    request_id: str = Field(min_length=1, max_length=160)
+
+
+@router.get('/{topic_id}/review')
+def review(project_id: str, topic_id: str, sess: dict = Depends(project_maintainer)):
+    from mino_nexus.services.workspace_review import overview
+    return call(overview, project_id, topic_id, sess)
+
+
+@router.post('/{topic_id}/decisions')
+def decision(project_id: str, topic_id: str, body: DecisionBody, sess: dict = Depends(project_maintainer)):
+    from mino_nexus.services.workspace_review import decide
+    return call(decide, project_id, topic_id, sess, body.body, body.run_id, body.request_id)
+
+
+@router.get('/{topic_id}/runs')
+def workspace_runs(project_id: str, topic_id: str, offset: int = Query(default=0, ge=0),
+                   limit: int = Query(default=20, ge=1, le=100), sess: dict = Depends(project_maintainer)):
+    return call(ws.list_runs, project_id, topic_id, sess, offset, limit)

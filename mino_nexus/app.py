@@ -127,24 +127,13 @@ async def lifespan(app: FastAPI):
     compile_task = asyncio.create_task(_case_compile_loop())
 
     async def _collab_loop() -> None:
-        import uuid
-        from mino_nexus.services.collab_worker import tick
-
-        worker_id = "collab-" + uuid.uuid4().hex
+        from mino_nexus.services.workspace_automation import tick
         while True:
             try:
-                worked = await asyncio.to_thread(tick, worker_id)
+                await asyncio.to_thread(tick)
             except Exception as exc:
-                SLog.w(TAG, f"collab tick: {type(exc).__name__}")
-                worked = False
-            if worked:
-                await asyncio.sleep(0.2)
-            else:
-                from mino_nexus.services.collab_worker import _WAKE
-
-                # threading.Event.wait must not block the HTTP event loop.
-                await asyncio.to_thread(_WAKE.wait, timeout=2.0)
-                _WAKE.clear()
+                SLog.w(TAG, f"workspace automation: {type(exc).__name__}")
+            await asyncio.sleep(2)
 
     collab_task = asyncio.create_task(_collab_loop())
     from mino_nexus.services.collab_message_queue import recover_interrupted, worker as message_worker

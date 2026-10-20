@@ -76,7 +76,6 @@ def run_guard_foreground(
     target_package: str = "",
     platform: str = "",
     target_scope: dict[str, Any] | None = None,
-    launch_confirmed: bool = False,
 ) -> dict[str, str]:
     """跑批 guard：是否被测 App 前台 / 系统挡屏（权限、相册选择器等）。"""
     from mino_nexus.services.nav_target_scope import (
@@ -105,15 +104,6 @@ def run_guard_foreground(
     )
     kind = str(pkg.get("screen_kind") or "").strip()
     fpkg = str(pkg.get("foreground_package") or pkg.get("foreground_id") or "").strip()
-    if plat == "web" and not list(nodes or []) and tgt and _looks_like_url(tgt):
-        if launch_confirmed or kind == "app":
-            return {
-                "app_foreground": "yes",
-                "system_overlay": "no",
-                "screen_kind": "app",
-                "foreground_package": fpkg or tgt,
-            }
-        return {"app_foreground": "unknown", "system_overlay": "no", "screen_kind": "unknown"}
     if (scope and scope.kind == "url") or (plat == "web" and _looks_like_url(tgt)):
         on_target = bool(
             tgt
@@ -126,7 +116,7 @@ def run_guard_foreground(
             tgt
             and fpkg
             and kind not in ("foreign", "launcher")
-            and (fpkg == tgt or tgt in fpkg)
+            and fpkg == tgt
         )
     overlay = is_overlay_screen(turn)
     if overlay and not on_target:
@@ -140,14 +130,14 @@ def run_guard_foreground(
     if kind == "unknown":
         return {"app_foreground": "unknown", "system_overlay": "no"}
     if on_target:
-        return {"app_foreground": "yes", "system_overlay": "no", "screen_kind": kind or "app"}
+        return {"app_foreground": "yes", "system_overlay": "no", "screen_kind": "app"}
     if tgt and fpkg:
         if (scope and scope.kind == "url") or _looks_like_url(tgt):
             if not web_page_matches_target(tgt, fpkg):
                 return {"app_foreground": "no", "system_overlay": "no", "screen_kind": kind or "foreign"}
-        elif fpkg != tgt and tgt not in fpkg:
+        elif fpkg != tgt:
             return {"app_foreground": "no", "system_overlay": "no", "screen_kind": kind or "foreign"}
-    return {"app_foreground": "yes", "system_overlay": "no", "screen_kind": kind or "app"}
+    return {"app_foreground": "unknown", "system_overlay": "no", "screen_kind": "unknown"}
 
 
 def is_overlay_screen(turn: dict[str, Any]) -> bool:
@@ -176,7 +166,7 @@ def is_overlay_screen(turn: dict[str, Any]) -> bool:
         fg = infer_screen_package(nodes, target_package=tgt, platform=plat)
         kind = str(fg.get("screen_kind") or "").strip()
         fpkg = str(fg.get("foreground_package") or fg.get("foreground_id") or "").strip()
-        if kind == "app" and fpkg and (fpkg == tgt or tgt in fpkg):
+        if kind == "app" and fpkg and fpkg == tgt:
             return False
     return True
 
@@ -322,7 +312,7 @@ def append_turn(
         "localized": dict(localized or {}),
         "layout_hierarchy": dict(layout_hierarchy or {}),
         "layout_vision": dict(layout_vision or {}),
-        "platform": str(screen_pkg.get("platform") or scope.platform if scope else platform or "android"),
+        "platform": screen_pkg["platform"],
         "target_package": screen_pkg["target_package"],
         "foreground_package": screen_pkg["foreground_package"],
         "foreground_id": str(screen_pkg.get("foreground_id") or screen_pkg.get("foreground_package") or ""),

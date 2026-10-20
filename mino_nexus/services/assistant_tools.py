@@ -477,6 +477,24 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         if key in props and target and target.get(key) and args.get(key) != target[key]:
             msg = "工具选择的项目、应用或渠道与本次用户明确指定的目标不一致，请按本次目标重新选择。"
             return ToolOutcome(ok=False, ask=msg, summary=msg, tool_id=str(spec.get("id") or ""))
+    if spec.get("id") == "case.retry_failed" and args.get("task_id"):
+        from mino_nexus.services.run_retry import eligibility
+        from mino_nexus.services import run_store
+        receipt = run_store.request_receipt(str(args.get("client_request_id") or "")) if args.get("client_request_id") else None
+        previous_retry = run_store.get(receipt["run_id"]) if receipt else None
+        if previous_retry:
+            if previous_retry.get("derived_from") != args["task_id"]:
+                return ToolOutcome(ok=False, summary="请求标识已用于另一项执行，请查询原任务。", tool_id=spec["id"])
+            original_units = [c["retry_of_execution_unit_id"] for c in previous_retry.get("cases") or []]
+            assessment = {"eligible_unit_ids": original_units, "reason_code": ""}
+        else:
+            assessment = eligibility(str(args["task_id"]))
+        if args.get("sn"):
+            return ToolOutcome(ok=False, summary="复跑必须保持原设备，不能重新选择执行目标。", tool_id=spec["id"])
+        selected = args.get("execution_unit_ids", assessment["eligible_unit_ids"])
+        if not selected or not set(selected) <= set(assessment["eligible_unit_ids"]):
+            return ToolOutcome(ok=False, summary="没有可安全复跑的执行单元：" + (assessment["reason_code"] or "retry_selection_not_eligible"), tool_id=spec["id"], data={"eligibility": assessment})
+        args["execution_unit_ids"] = selected
     if "sn" in props and spec.get("risk") == "write":
         from mino_nexus.services.assistant_targets import compatible_devices, device_brief
 

@@ -15,7 +15,7 @@ ROLE_JOB_MAP: dict[str, str] = {
     "req-qa-bm": "req-qa-bm",
     "version-qa-bm": "version-qa-bm",
     "test-engineer": "test-engineer-chat",
-    "report-writer": "report-writer",
+    "report-writer": "draft_test_report",
     "doc-keeper": "doc-keeper",
     "im-qa-assistant": "im-dialogue",
     "im-defect-assistant": "im-defect",

@@ -1,9 +1,9 @@
-"""V5 target-platform contract. Pure validation; never accepts runtime aliases.
-
-Legacy conversion belongs to the offline migration planner, not this module.
-Installing these helpers does not advertise or activate the new wire contract.
-"""
+"""Current target-platform contract. No runtime aliases or implicit migration."""
 from __future__ import annotations
+
+from typing import Literal
+
+TargetPlatform = Literal["mac", "win", "android", "web"]
 
 TARGET_PLATFORMS = ("mac", "win", "android", "web")
 NATIVE_PLATFORMS = frozenset({"mac", "win"})
@@ -257,3 +257,17 @@ def validate_platform_announcement(message, *, fallback_host=None):
             raise PlatformContractError("device_identity_duplicate", "sn")
         seen.add(device.sn)
     runtime_capabilities_contract(message.runtime_capabilities, system=system)
+
+
+def covered_platforms(document: dict) -> frozenset[str]:
+    """Current single-target or explicit coverage contract; no aliases or guessing."""
+    if "platform_scope" in document or "platforms" in document:
+        declared = coverage(document)
+        return frozenset(TARGET_PLATFORMS if declared["platform_scope"] == "all" else declared["platforms"])
+    return frozenset({target_platform(document.get("platform"))})
+
+
+def channel_connected(value) -> bool:
+    """Shared interpretation of current Scout channel states."""
+    state = value.get("state", "") if isinstance(value, dict) else value
+    return isinstance(state, str) and state.strip().lower() in {"connected", "online", "available", "authenticated"}

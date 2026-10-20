@@ -66,7 +66,9 @@ PREP_KIND_VALUES = (
     "unknown",
 )
 DEVICE_NEED_VALUES = ("app", "web", "app_web", "ab_pair")
-SCENE_PLATFORM_VALUES = ("android", "ios", "web", "any")
+from mino_nexus.core.platform_contract import TARGET_PLATFORMS, TargetPlatform
+
+SCENE_PLATFORM_VALUES = TARGET_PLATFORMS
 
 
 class CaseScene(BaseModel):
@@ -74,14 +76,14 @@ class CaseScene(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    session_prep: Literal["relogin", "logout", "skip"] = "skip"
-    required_session: Literal["logged_in", "guest", "any"] = "any"
+    session_prep: Literal["relogin", "logout", "skip"]
+    required_session: Literal["logged_in", "guest", "any"]
     auth_under_test: bool = True
-    device_need: Literal["app", "web", "app_web", "ab_pair"] = "app"
-    platform: Literal["android", "ios", "web", "any"] = "android"
-    prep_items: list[dict[str, Any]] = Field(default_factory=list)
+    device_need: Literal["app", "web", "app_web", "ab_pair"]
+    platform: TargetPlatform
+    prep_items: list[dict[str, Any]]
     reason: str = ""
-    how: Literal["llm", "clamp", "fallback"] = "fallback"
+    how: Literal["llm", "validated"] = "llm"
     parse_warnings: list[str] = Field(default_factory=list)
 
 

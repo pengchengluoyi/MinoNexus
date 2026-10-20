@@ -123,33 +123,13 @@ def count_accounts(project_id: str) -> int:
         return db.query(PoolAccount).filter(PoolAccount.project_id == pid).count()
 
 
-def merge_env_test_accounts(project_id: str, env_doc: dict | None) -> int:
-    """把 projects.env.test_accounts 合并进 DB（按 id upsert，不删库里已有行）。"""
-    from mino_nexus.services.project_env import _norm_test_accounts
 
-    pid = str(project_id or "").strip()
-    if not pid:
-        return 0
-    doc = env_doc if isinstance(env_doc, dict) else {}
-    raw = doc.get("test_accounts")
-    if not isinstance(raw, list) or not raw:
-        return 0
-    rows = _norm_test_accounts(raw, env_doc=doc)
-    if not rows:
-        return 0
-    with session_scope() as db:
-        from sqlalchemy import text
-        db.execute(text("BEGIN IMMEDIATE"))
-        for row in rows:
-            _upsert_row(db, pid, row)
-    return len(rows)
 
 
 def list_accounts(project_id: str, env_doc: dict | None = None) -> list[dict[str, Any]]:
     pid = str(project_id or "").strip()
     if not pid:
         return []
-    merge_env_test_accounts(pid, env_doc)
     with session_scope() as db:
         accounts = (
             db.query(PoolAccount)
@@ -370,20 +350,3 @@ def env_without_test_accounts_blob(doc: dict[str, Any]) -> dict[str, Any]:
     out = dict(doc or {})
     out.pop("test_accounts", None)
     return out
-
-
-def env_has_test_accounts_blob(doc: dict[str, Any] | None) -> bool:
-    """project.env 是否仍带 legacy test_accounts 键（含空列表）。"""
-    return "test_accounts" in (doc or {})
-
-
-def persist_env_strip_test_accounts_if_needed(project_id: str, env_doc: dict | None) -> bool:
-    """若 env 仍含 legacy test_accounts，迁入 DB 后从 project.env 去掉；否则不写 env。"""
-    doc = env_doc if isinstance(env_doc, dict) else {}
-    if not env_has_test_accounts_blob(doc):
-        return False
-    merge_env_test_accounts(project_id, doc)
-    from mino_nexus.services import project_store as ps
-
-    ps.save_project_env(project_id, env_without_test_accounts_blob(doc))
-    return True
