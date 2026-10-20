@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import text, or_
 from mino_nexus.core.database import session_scope
-from mino_nexus.models.mino_bots import CollabTopic, CollabMessage, CollabWorkItem, CollabActivity
+from mino_nexus.models.mino_bots import CollabTopic, CollabMessage, CollabActivity
 from mino_nexus.models.collab_read import CollabWorkspaceRead
 from mino_nexus.models.case import ProjectCase
 
@@ -69,14 +68,14 @@ def message(db, topic, body='', *, kind='system', card='', ref='', author='bot',
             query = query.filter_by(ref_id=ref)
         existing = query.first()
         if existing:
-            existing.body, existing.role, existing.thread_id = body, role or ('user' if author=='user' else 'manager'), thread_id
+            existing.body, existing.role, existing.thread_id = body, role or ('user' if author=='user' else 'conductor'), thread_id
             existing.agent_run_id = thread_id
             existing.plan_id = ref if card=='plan' else ''
             topic.updated_at = now()
             return existing
     row = CollabMessage(message_id=uid(), topic_id=topic.topic_id, author_kind=author,
         author_id=owner, body=body, message_kind='card' if card else kind, card_kind=card,
-        ref_id=ref, origin=origin, role=role or ('user' if author=='user' else 'manager'), thread_id=thread_id, agent_run_id=thread_id, plan_id=ref if card=='plan' else '', created_at=now())
+        ref_id=ref, origin=origin, role=role or ('user' if author=='user' else 'conductor'), thread_id=thread_id, agent_run_id=thread_id, plan_id=ref if card=='plan' else '', created_at=now())
     db.add(row)
     topic.updated_at = now()
     return row
@@ -114,7 +113,9 @@ def scope_options(project_id, sess):
     return {'modules': modules, 'cases': cases, 'requirements': list_project_requirements(project_id),
         'apps': [{'id': a['id'], 'name': a.get('name', a['id'])} for a in ps.list_apps(project_id)],
         'environments': [{'key': e['key'], 'label': e.get('label', e['key'])} for e in env.get('environments', [])],
-        'channels': [{'id': c['id'], 'label': c.get('label', c['id'])} for c in env.get('channels', [])],
+        'channels': [{'id': c['id'], 'app_id': c['app_id'], 'platform': c.get('platform', ''),
+                      'label': next((a['name'] for a in ps.list_apps(project_id) if a['id'] == c['app_id']), c['app_id']) + ' · ' + c.get('platform', '')}
+                     for c in env.get('channels', []) if c.get('app_id')],
         'devices': devices, 'nodes': [{'node_id': n.node_id} for n in registry.nodes() if n.node_id in nodes]}
 
 
@@ -129,11 +130,28 @@ def validate_scope(project_id, body, sess):
     return rid, modules
 
 
+def target_selection(opts, body, current=None):
+    current = current or {}
+    surface = str(body.get('env_surface', current.get('env_surface', '')) or '')
+    aid = str(body.get('app_id', current.get('app_id', '')) or '')
+    if 'app_id' in body and 'env_surface' not in body and aid != current.get('app_id'):
+        matches = [c for c in opts['channels'] if c['app_id'] == aid]
+        if aid and len(matches) != 1:
+            raise ValueError('请选择明确的应用·渠道')
+        surface = matches[0]['id'] if matches else ''
+    channel = next((c for c in opts['channels'] if c['id'] == surface), None)
+    if surface and not channel:
+        raise ValueError('测试目标不属于当前项目')
+    if channel and 'app_id' in body and aid and aid != channel['app_id']:
+        raise ValueError('应用与渠道不一致，请重新选择测试目标')
+    return (channel['app_id'], surface, channel['platform']) if channel else ('', '', '')
+
+
 def create_workspace(project_id, sess, body):
     owner = authorize(project_id, sess)
     rid, modules = validate_scope(project_id, body, sess)
     opts = scope_options(project_id, sess)
-    aid = str(body.get('app_id') or '')
+    aid, surface, platform = target_selection(opts, body)
     if aid and aid not in {a['id'] for a in opts['apps']}:
         raise ValueError('应用不属于当前项目')
     env = str(body.get('env_profile') or '')
@@ -148,9 +166,11 @@ def create_workspace(project_id, sess, body):
         title = body.get('title') or next((r['title'] for r in opts['requirements'] if r['id'] == rid), '') or '、'.join(modules) or '新对话'
         row = CollabTopic(topic_id=uid(), project_id=project_id, app_id=aid, title=title,
             requirement_id=rid, modules=modules, scope_case_ids=[], workspace_kind='scope', scope_revision=1,
-            scope_key=key, archived=0, env_profile=env, lead_user_id=owner, created_at=now(), updated_at=now())
+            scope_key=key, archived=0, env_profile=env, env_surface=surface, platform=platform, lead_user_id=owner, created_at=now(), updated_at=now())
         db.add(row)
         db.flush()
+        from mino_nexus.services.workspace_members import add_defaults
+        add_defaults(db, row.topic_id)
         activity(db, row, 'created', '已建立范围工作区')
         message(db, row, '想测什么？可以告诉我模块名称、发来用例，或者先聊聊测试目标。应用和环境等需要时再补充。')
         return public(row)
@@ -204,19 +224,22 @@ def update_workspace(project_id, topic_id, sess, body):
             key = identity([project_id, rid, mods]) if rid or mods else None
             other = db.query(CollabTopic).filter(CollabTopic.scope_key == key, CollabTopic.topic_id != topic_id).first()
             if key and other:
-                return public(other)
+                if other.archived:
+                    return public(other)
+                # Reuse the existing scope, while retaining resource choices supplied this turn.
+                t = other
             t.requirement_id, t.modules, t.scope_key = rid, mods, key
             if t.title == '新对话':
                 t.title = next((r['title'] for r in opts['requirements'] if r['id'] == rid), '') or '、'.join(mods) or t.title
-        for name, allowed in [('app_id', {a['id'] for a in opts['apps']}),
-                              ('env_profile', {e['key'] for e in opts['environments']}),
-                              ('env_surface', {e['id'] for e in opts['channels']})]:
+        if 'env_surface' in body or 'app_id' in body:
+            t.app_id, t.env_surface, t.platform = target_selection(opts, body, public(t))
+        for name, allowed in [('env_profile', {e['key'] for e in opts['environments']})]:
             if name in body:
                 value = str(body[name] or '')
                 if value and value not in allowed:
                     raise ValueError(name + ' 不属于当前项目配置')
                 setattr(t, name, value)
-        for key in ('title', 'expected_build', 'platform'):
+        for key in ('title', 'expected_build'):
             if key in body:
                 setattr(t, key, str(body[key] or '')[:200])
         for key in ('paused', 'archived'):
@@ -273,17 +296,6 @@ def snapshot(project_id, topic, owner):
     _, check = partition_cases(cases)
     res = resources(project_id, topic, owner)
     blocked = {b['case_id']: b for b in check.get('blocked', [])}
-    for c in cases:
-        cid = c['case_id']
-        missing = []
-        if not topic.app_id:
-            missing.append('请在资源页选择项目应用')
-        if not res['online_devices']:
-            missing.append('当前执行账号没有在线 Scout 设备')
-        missing.extend(account_gaps(project_id, c, topic.env_profile or 'test', topic.env_surface or '', topic.platform or c.get('platform') or ''))
-        if missing:
-            b = blocked.setdefault(cid, {'case_id': cid, 'reasons': []})
-            b['reasons'] = list(b.get('reasons', [])) + missing
     return {'total': len(ids), 'case_ids': ids, 'executable': [c for c in ids if c not in blocked],
         'blocked': list(blocked.values()), 'cases': [{'case_id': c['case_id'],
             'title': c.get('name') or c.get('title') or c['case_id'], 'module': c.get('module', ''),
@@ -292,21 +304,6 @@ def snapshot(project_id, topic, owner):
             'reasons': blocked.get(c['case_id'], {}).get('reasons', []), 'updated_at': c.get('updated_at', '')}
             for c in cases], 'resources': {**res, 'compile_ready': len(check.get('runnable', [])),
                 'binding_ready': len(check.get('runnable', []))}}
-
-
-def account_gaps(project_id, case, env, surface='', platform=''):
-    """Use the existing read-only selector; never reserve accounts during a preview."""
-    from mino_nexus.loop.session_ensure import account_need_from_case
-    from mino_nexus.services import project_store as ps
-    from mino_nexus.services.project_env import list_test_accounts, pick_test_accounts
-    need = account_need_from_case(case, case.get('case_scene') or {})
-    if not need.get('need_account'):
-        return []
-    doc = ps.project_env(project_id)
-    rows = pick_test_accounts(list_test_accounts(doc, project_id=project_id), env=env,
-        surface=surface, platform=platform, env_doc=doc, prompt=need.get('prompt', ''),
-        requirements=need.get('requirements') or {}, need_facets=need, project_id=project_id)
-    return [] if any(not r.get('locked') and not r.get('lease') and int(r.get('score') or 0) >= 0 for r in rows) else ['缺少满足当前用例条件且可用的账号']
 
 
 def detail(project_id, topic_id, sess):
@@ -318,7 +315,9 @@ def detail(project_id, topic_id, sess):
             .order_by(CollabMessage.created_at.desc()).limit(200).all())]
         from mino_nexus.models.collab_message_job import CollabMessageJob
         jobs = {j.message_id: j for j in db.query(CollabMessageJob).filter_by(topic_id=topic_id)}
+        from mino_nexus.services.workspace_members import sender_name
         for m in messages:
+            m['sender_name'] = sender_name(m)
             j = jobs.get(m['message_id'])
             m['reply_status'] = j.status if j else ''
             m['reply_error'] = j.error if j else ''
@@ -333,7 +332,8 @@ def detail(project_id, topic_id, sess):
                 'passed': doc.get('passed'), 'failed': doc.get('failed'), 'cases': [
                     {'case_id': c.get('case_id'), 'status': c.get('status'), 'session_id': c.get('session_id')}
                     for c in (doc.get('cases') or []) if isinstance(c, dict)]}
-    return {'topic': topic, 'snapshot': snap, 'messages': messages, 'runs': runs}
+    from mino_nexus.services.workspace_members import list_members
+    return {'topic': topic, 'snapshot': snap, 'messages': messages, 'runs': runs, 'members': list_members(project_id, topic_id, sess)}
 
 
 def reference_run(project_id, topic_id, run_id):

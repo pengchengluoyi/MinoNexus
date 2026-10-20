@@ -111,11 +111,31 @@ def step_keys_summary_for_case(case: dict[str, Any] | None) -> dict[str, Any]:
     fb = sum(1 for w in warnings if isinstance(w, dict) and w.get("fallback"))
     ua = ui_automation_summary(case)
     blocked = ua.get("blocked_by") or []
+    blocking_items = [
+        item for item in blocked if isinstance(item, dict) and str(item.get("severity") or "blocking") == "blocking"
+    ]
+    advisory_items = [
+        item
+        for item in blocked
+        if isinstance(item, dict) and str(item.get("severity") or "") in ("human_only", "advisory")
+    ]
     blocked_by_step: dict[str, list[dict[str, Any]]] = {}
-    for item in blocked:
-        if not isinstance(item, dict):
-            continue
+    for item in blocking_items:
         blocked_by_step.setdefault(str(item.get("case_step") or ""), []).append(item)
+
+    def _light_status(step: dict[str, Any], step_key: str) -> str:
+        key_ref = str(step.get("key_ref") or "")
+        if key_ref in ("operation.author_remark", "expected.human_review"):
+            return "advisory"
+        if str(step.get("kind") or "") == "remark" or str(step.get("run_policy") or "") == "skip":
+            if key_ref != "expected.ui_absent":
+                return "advisory"
+        clause = str(step.get("source_clause") or step.get("source_line") or "")
+        for item in blocked_by_step.get(step_key, []):
+            src = str(item.get("source_clause") or "")
+            if not src or src in clause or clause in src:
+                return "blocking"
+        return "ok"
     steps_out: dict[str, Any] = {}
     for key, bundle in spk.items():
         if not isinstance(bundle, dict):
@@ -134,6 +154,7 @@ def step_keys_summary_for_case(case: dict[str, Any] | None) -> dict[str, Any]:
                     "observe": str(s.get("observe") or "exec"),
                     "key_ref": str(s.get("key_ref") or ""),
                     "source_clause": str(s.get("source_clause") or s.get("source_line") or "")[:200],
+                    "status": _light_status(s, str(key)),
                 }
             )
         for s in checks:
@@ -145,6 +166,7 @@ def step_keys_summary_for_case(case: dict[str, Any] | None) -> dict[str, Any]:
                     "observe": str(s.get("observe") or "exec"),
                     "key_ref": str(s.get("key_ref") or ""),
                     "source_clause": str(s.get("source_clause") or s.get("source_line") or "")[:200],
+                    "status": _light_status(s, str(key)),
                 }
             )
         steps_out[str(key)] = {
@@ -155,13 +177,17 @@ def step_keys_summary_for_case(case: dict[str, Any] | None) -> dict[str, Any]:
             "blocked_by": list(blocked_by_step.get(str(key), [])),
             "lights": lights,
         }
+    coverable = ua.get("coverable") is not False
+    telemetry = "red" if fb or not coverable else ("yellow" if advisory_items else "green")
     return {
-        "telemetry": "red" if fb or not ua.get("coverable", True) else "green",
+        "telemetry": telemetry,
         "warning_count": len(warnings),
         "fallback_count": fb,
+        "blocking_issue_count": len(blocking_items),
+        "advisory_issue_count": len(advisory_items),
         "warnings_preview": warnings[:12],
         "ui_automation": ua,
-        "coverable": ua.get("coverable") is not False,
+        "coverable": coverable,
         "steps": steps_out,
     }
 
@@ -337,6 +363,12 @@ def _rules_zh(rules: dict[str, Any]) -> str:
 
 def _format_plan_line(step: dict[str, Any], *, case_step: int) -> str:
     ref = str(step.get("key_ref") or "").strip()
+    if ref == "operation.author_remark" or str(step.get("kind") or "") == "remark":
+        title = str(step.get("title") or step.get("source_clause") or "").strip()
+        return f"{int(case_step)}. 说明步骤（执行跳过）{title}"[:240]
+    if ref == "expected.human_review":
+        title = str(step.get("title") or step.get("source_clause") or "").strip()
+        return f"{int(case_step)}. 人工复核 {title}"[:240]
     slots = step.get("slots") if isinstance(step.get("slots"), list) else []
     if ref == "operation.login_flow" or (str(step.get("kind") or "") == "flow_block" and slots):
         parts: list[str] = []
@@ -507,10 +539,35 @@ def _import_automation_details(case: dict[str, Any], env_doc: dict[str, Any] | N
     for key, bundle in bundles.items():
         for kind, plan_key, items_key, phase in (("op", "do_program_plan", "steps", "do"), ("ex", "check_program_plan", "checkpoints", "check")):
             plan = bundle.get(plan_key) or {}
-            blockers = [item for item in automation.get("blocked_by") or [] if item.get("phase") == phase and str(item.get("case_step")) == str(key)]
+            blockers = [
+                item
+                for item in automation.get("blocked_by") or []
+                if item.get("phase") == phase
+                and str(item.get("case_step")) == str(key)
+                and str(item.get("severity") or "blocking") == "blocking"
+            ]
             used: set[int] = set()
             for item in plan.get(items_key) or []:
                 text = str(item.get("source_clause") or item.get("source_line") or item.get("title") or "")
+                item_kind = str(item.get("kind") or "")
+                key_ref = str(item.get("key_ref") or "")
+                run_policy = str(item.get("run_policy") or "")
+                assert_payload = item.get("assert") if isinstance(item.get("assert"), dict) else {}
+                if item_kind == "remark" or key_ref == "operation.author_remark":
+                    details[kind].append(
+                        {"step": int(key), "text": text, "coverable": True, "reason": "说明步骤，执行时自动跳过"}
+                    )
+                    continue
+                if key_ref == "expected.human_review" or str(assert_payload.get("mode") or "") == "human_only":
+                    details[kind].append(
+                        {"step": int(key), "text": text, "coverable": True, "reason": "需人工复核，不阻断自动跑批"}
+                    )
+                    continue
+                if run_policy == "skip" and item_kind != "checkpoint":
+                    details[kind].append(
+                        {"step": int(key), "text": text, "coverable": True, "reason": "执行策略为跳过，不阻断跑批"}
+                    )
+                    continue
                 matches = [(index, blocked) for index, blocked in enumerate(blockers) if not blocked.get("source_clause") or blocked.get("source_clause") in text or text in str(blocked.get("source_clause"))]
                 used.update(index for index, _blocked in matches)
                 reason = _format_plan_line(item, case_step=int(key)).split(". ", 1)[-1]
@@ -544,11 +601,18 @@ def import_row_key_summary(row: dict[str, Any], *, project_id: str, app_id: str 
             ua["coverable"] = False
             ua.setdefault("blocked_by", []).append({"phase": "prep", "case_step": 0, "source_clause": item["text"], "reason": "unmapped", "user_message": item["reason"]})
     synced["meta"]["ui_automation"] = ua
+    blocked = [x for x in (ua.get("blocked_by") or []) if isinstance(x, dict)]
+    blocking_count = sum(1 for x in blocked if str(x.get("severity") or "blocking") == "blocking")
+    advisory_count = sum(
+        1 for x in blocked if str(x.get("severity") or "") in ("human_only", "advisory")
+    )
     return {
         "telemetry": "red" if v.get("issues") or not ua.get("coverable", True) else "green",
         "fallback_count": v.get("fallback_count"),
         "unknown_block_count": v.get("unknown_block_count"),
         "unknown_screen_count": v.get("unknown_screen_count"),
+        "blocking_issue_count": blocking_count,
+        "advisory_issue_count": advisory_count,
         "issues": (v.get("issues") or [])[:24],
         "ui_automation": ua,
         "coverable": ua.get("coverable") is not False,

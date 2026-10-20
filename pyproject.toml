@@ -49,6 +49,8 @@ version = {file = "mino_nexus/VERSION"}
 [tool.setuptools.package-data]
 mino_nexus = [
   "VERSION",
+  "BUILD.json",
+  "web/**",
   "catalog/*",
   "prompts/*",
   "prompts/*/*",

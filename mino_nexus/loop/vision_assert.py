@@ -350,12 +350,15 @@ def checkpoints_from_milestones(cursor: Any) -> list[dict[str, Any]]:
         assert_payload = row.get("assert") if isinstance(row.get("assert"), dict) else {}
         element = assert_payload.get("element") if isinstance(assert_payload.get("element"), dict) else {}
         rules = assert_payload.get("rules") if isinstance(assert_payload.get("rules"), dict) else {}
+        mode = str(assert_payload.get("mode") or row.get("checkpoint_kind") or "element_exists")
+        if mode == "ui_absent":
+            mode = "element_absent"
         item: dict[str, Any] = {
             "point_id": str(row.get("id") or ""),
             "required": not bool(row.get("optional")),
             "title": str(row.get("title") or ""),
             "key_ref": str(row.get("key_ref") or ""),
-            "checkpoint_kind": str(assert_payload.get("mode") or row.get("checkpoint_kind") or "element_exists"),
+            "checkpoint_kind": mode,
         }
         item["verification_policy"] = str(rules.get("verification_policy") or (
             "visible_content" if item["checkpoint_kind"] == "input_value" else "exact_value"

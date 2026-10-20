@@ -11,6 +11,8 @@ def enqueue(project_id, topic_id, sess, content, thread_id=''):
         raise ValueError('请填写消息，最长 8000 字符')
     with session_scope() as db:
         t = ws.owned(db, project_id, topic_id, write=True)
+        if t.title == '新对话':
+            t.title = ' '.join(content.split())[:60]
         m = ws.message(db, t, content, kind='text', author='user', owner=owner)
         db.flush()
         db.add(CollabMessageJob(message_id=m.message_id, project_id=project_id, topic_id=topic_id,

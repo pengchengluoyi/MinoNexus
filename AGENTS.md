@@ -141,6 +141,8 @@ mino_nexus/
 
 ## 6. 不要做的事
 
+- **PyCharm MCP 与进程归属硬约束**：直接复用用户已打开的 PyCharm MCP 服务和 IDE 管理的运行配置。不得杀死用户的 PyCharm、MCP 或 IDE 启动的业务进程，也不得另起工具托管进程替代。连接失败或缺少重载工具时报告并由用户在 IDE 操作；历史 SIGTERM 实测不是授权。详见 [开发手册 §0](docs/开发手册.md#0-pycharm-mcp-与进程归属2026-10-19优先约束)。
+
 - 不要为了"快一点"在 Nexus 里直接 `subprocess adb ...` —— 那是拆分失败的第一步
 - 不要把设备连通性当成本地可查的状态 —— 它只来自 Scout 的 `REGISTER` / `HEARTBEAT`
 - 不要在循环代码里感知网络（见 §2.2）

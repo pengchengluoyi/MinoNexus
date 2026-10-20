@@ -126,7 +126,7 @@ def register_routes(app: Any) -> None:
     @app.websocket("/ws")
     async def ui_endpoint(websocket: WebSocket, token: str = Query(default="")) -> None:
         from mino_nexus.core.browser_origins import browser_origin_allowed
-        if not browser_origin_allowed(websocket.headers.get("origin"), (websocket.scope.get("server") or ("",))[0]):
+        if not browser_origin_allowed(websocket.headers.get("origin"), (websocket.scope.get("server") or ("",))[0], str(websocket.url.replace(scheme="https" if websocket.url.scheme == "wss" else "http", path="", query=""))):
             await websocket.close(code=1008, reason="工作台来源未获允许")
             return
         await websocket.accept()

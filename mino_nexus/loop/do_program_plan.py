@@ -50,6 +50,21 @@ def milestones_from_do_program(plan: dict[str, Any], *, app_id: str = "", ctx: A
             continue
         kind = str(step.get("kind") or "visual_action").strip().lower()
         sid = str(step.get("id") or "").strip() or f"do_{len(rows)}"
+        if kind == "remark" or str(step.get("run_policy") or "") == "skip":
+            rows.append(
+                {
+                    "id": sid,
+                    "title": str(step.get("title") or sid)[:240],
+                    "kind": "remark",
+                    "status": "skipped",
+                    "optional": True,
+                    "source": "do_program",
+                    "key_ref": str(step.get("key_ref") or "operation.author_remark"),
+                    "skip_reason": "author_remark",
+                    "observe": str(step.get("observe") or "author_only"),
+                }
+            )
+            continue
         if kind == "flow_block":
             bid = str(step.get("block_id") or "").strip()
             if bid:

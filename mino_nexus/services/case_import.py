@@ -552,6 +552,11 @@ def commit_import(
             break
     if any(not isinstance(item, dict) for item in work_rows):
         raise ValueError("导入来源行重复或格式错误")
+    if block_on_step_key_issues:
+        snap = {"block_on_step_key_issues": True}
+        blocked = [item for item in work_rows if _preview_row_blocks_import(item, snap)]
+        if blocked:
+            raise ValueError(f"有 {len(blocked)} 条用例存在阻断项，无法导入（可取消勾选或关闭导入策略中的「密钥问题默认阻止提交」）")
     work_rows = copy.deepcopy(work_rows)
     for ordinal, item in enumerate(work_rows):
         if not preview_token and item.get("row_index") is None:
@@ -567,11 +572,37 @@ def commit_import(
     return receipts.resume(pid, receipt_id)
 
 
+def _preview_row_blocks_import(item: dict[str, Any], snapshot: dict[str, Any]) -> str:
+    if not snapshot.get("block_on_step_key_issues"):
+        return ""
+    if item.get("selected") is False:
+        return ""
+    validation = item.get("step_key_validation") if isinstance(item.get("step_key_validation"), dict) else {}
+    if int(validation.get("blocking_issue_count") or 0) > 0:
+        return "step_key_issues"
+    flags = [str(flag) for flag in (item.get("flags") or [])]
+    if "ui_not_coverable" in flags:
+        return "ui_not_coverable"
+    if "step_key_issues" in flags:
+        return "step_key_issues"
+    ua = item.get("ui_automation") if isinstance(item.get("ui_automation"), dict) else {}
+    if ua.get("coverable") is False:
+        return "ui_not_coverable"
+    return ""
+
+
 def prepare_receipt_line(snapshot, item):
     from mino_nexus.services.case_store import prepare_import_row
 
     if item.get("selected") is False:
         return {"status": "excluded"}
+    block_reason = _preview_row_blocks_import(item, snapshot)
+    if block_reason:
+        return {
+            "status": "blocked",
+            "reason": block_reason,
+            "case_id": str((item.get("payload") or {}).get("case_id") or item.get("case_id") or ""),
+        }
     payload = dict(item.get("payload") if isinstance(item.get("payload"), dict) else item)
     if snapshot["default_platform"] and not str(payload.get("platform") or "").strip():
         payload["platform"] = snapshot["default_platform"]

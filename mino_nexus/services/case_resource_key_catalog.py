@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CATALOG_VERSION = 12
+CATALOG_VERSION = 13
 
 # Claim 落库：case.meta.resource_key（v1）；与 case_scene 合并时 case_scene 优先同名字段。
 CLAIM_STORAGE = {
@@ -328,15 +328,55 @@ def _entries() -> list[dict[str, Any]]:
         ),
         _entry(
             section="operation",
+            write_category="说明步骤",
+            write_examples=["（仅对齐预期，跑批不执行）"],
+            claim_path="case.meta.step_program_keys.{n}.operations[]",
+            resource="—",
+            config_keys=[],
+            dsl="author_remark",
+            runtime="无设备副作用；作者观察/阅读/对照用，不改变界面；跑批跳过",
+            key_layer="operation",
+            key_ref="operation.author_remark",
+            kind="remark",
+            event_name="说明步骤",
+        ),
+        _entry(
+            section="operation",
+            write_category="应用生命周期",
+            write_examples=["（系统级启停应用，非点击控件）"],
+            claim_path="case.meta.step_program_keys.{n}.operations[]",
+            resource="close_app / kill_app / launch_app",
+            config_keys=["hook_cap"],
+            dsl="hook lifecycle",
+            runtime="系统级关闭、强停或启动被测应用；不得映射为 tap_element",
+            key_layer="operation",
+            key_ref="operation.system_app",
+            kind="hook",
+            event_name="应用生命周期",
+            param_slots=[
+                {
+                    "id": "hook_cap",
+                    "required": True,
+                    "enum": ["close_app", "kill_app", "launch_app", "open_app"],
+                },
+            ],
+        ),
+        _entry(
+            section="operation",
             write_category="导航目标",
             write_examples=["【导航:screen_cart】", "进入购物车页"],
             claim_path="case.meta.step_program_keys.{n}.operations[]",
             resource="NavFSM screen_id",
             config_keys=["nav_target"],
             dsl="【导航:{screen_id}】",
-            runtime="hook fsm_navigate + nav_target",
+            runtime="将界面带到目标业务屏（fsm_navigate）；不是预期栏的到达断言",
             key_layer="operation",
             key_ref="operation.nav_target",
+            kind="nav",
+            event_name="导航",
+            param_slots=[
+                {"id": "nav_target", "required": True, "description": "口语目标屏/页面名，由 Nav 别名解析"},
+            ],
         ),
         _entry(
             section="operation",
@@ -887,15 +927,33 @@ def _entries() -> list[dict[str, Any]]:
             write_category="不应出现",
             write_examples=["不应出现", "不包含", "没有", "未展示"],
             claim_path="case.meta.step_program_keys.{n}.expected[]",
-            resource="agent-vision-assert",
-            config_keys=["assert.mode=vlm"],
+            resource="DOM 不存在优先；agent-vision-assert 兜底",
+            config_keys=["assert.mode=ui_absent"],
             dsl="ui_absent",
-            runtime="checkpoint negation",
+            runtime="目标元素/模块不应出现；DOM 优先，截图 element_absent 兜底",
             key_layer="expected",
             key_ref="expected.ui_absent",
+            event_name="不应出现",
+            schemes=["dom", "visual"],
             param_slots=[
-                {"id": "target.name", "required": False},
+                {"id": "target.name", "required": True, "description": "作者指名的对象，非事件名本身"},
                 {"id": "target.role", "required": False},
+            ],
+        ),
+        _entry(
+            section="expected",
+            write_category="人工复核",
+            write_examples=["（时序/动画/流畅度等单帧无法可靠自动判定）"],
+            claim_path="case.meta.step_program_keys.{n}.expected[]",
+            resource="—",
+            config_keys=["assert.mode=human_only"],
+            dsl="human_only",
+            runtime="识别并保留原文；跑批跳过，标需人工；不拉低整案可自动化",
+            key_layer="expected",
+            key_ref="expected.human_review",
+            event_name="人工复核",
+            param_slots=[
+                {"id": "meaning", "required": True, "description": "完整预期含义，保留时间与过程描述"},
             ],
         ),
         _entry(

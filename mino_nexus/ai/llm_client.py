@@ -749,7 +749,8 @@ def call_chat_plain(
     meta.update(parse_meta)
     from mino_nexus.ai.model_sdk import record_decoded_response_trace
     record_decoded_response_trace(meta, parse_meta)
-    if not content:
+    # A tool-only assistant turn is a valid response, even without prose.
+    if not content and not meta.get("tool_calls"):
         meta["error"] = meta.get("error") or meta.get("reason") or "empty assistant content"
     _safe_record_llm(messages=messages, raw_text=content, meta=meta)
     return content, meta

@@ -1,6 +1,5 @@
 """Application development preparation; no IDE/device I/O on Nexus."""
 from __future__ import annotations
-from mino_nexus.core.maintenance_gate import admitted
 
 import re
 import hashlib
@@ -137,7 +136,6 @@ def list_operations(app_id, sess):
     return [get_operation(app_id, opid, sess) for opid in ids]
 
 
-@admitted
 def create_operation(app_id, sess, opid, action, revision, connection=None):
     uid = authorize(app_id, sess)
     if action == "install" and not is_android_app(app_id):
@@ -222,17 +220,9 @@ def create_operation(app_id, sess, opid, action, revision, connection=None):
 
 
 async def dispatch(opid, sess):
-    from mino_nexus.core.maintenance_gate import admission
-    try:
-        # Claim atomically with the hold, then release control before awaiting Scout.
-        with admission():
-            pending = _claim_dispatch(opid, sess)
-        if pending is not None:
-            return await _execute_dispatch(opid, sess, pending)
-    except HTTPException as exc:
-        if exc.status_code != 409 or not isinstance(exc.detail, dict) or exc.detail.get("status") != "blocked_by_update":
-            raise
-        return  # Queued operation remains queued, not dispatched during hold.
+    pending = _claim_dispatch(opid, sess)
+    if pending is not None:
+        return await _execute_dispatch(opid, sess, pending)
 
 
 def _claim_dispatch(opid, sess):

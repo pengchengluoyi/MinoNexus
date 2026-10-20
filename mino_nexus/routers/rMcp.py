@@ -15,7 +15,6 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse, Response
 
 from mino_nexus.core.http_util import bearer
-from mino_nexus.core.maintenance_gate import tracked
 from mino_nexus.services import assistant_store as store
 from mino_nexus.services.assistant_tools import all_tools, run_tool, tool_by_function_name
 
@@ -102,21 +101,12 @@ def _handle(uid: str, msg: dict[str, Any]) -> dict[str, Any] | None:
     if method == "tools/list":
         return {"jsonrpc": "2.0", "id": rid, "result": {"tools": _tools_payload()}}
     if method == "tools/call":
-        from mino_nexus.core.deployment import Deployment, deployment_root
-        root = deployment_root()
-        held = Deployment(root).held() if root else {}
-        allowed = {"nexus_update_status", "nexus_update_cancel"}
-        if held and held["state"] not in {"requested", "waiting_idle"} and (msg.get("params") or {}).get("name") not in allowed:
-            return _rpc_error(rid, -32000, "Nexus 正在更新；请查询原 operation_id")
         params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
         return {"jsonrpc": "2.0", "id": rid, "result": _call(uid, str(params.get("name") or ""), params.get("arguments") or {})}
     return _rpc_error(rid, -32601, f"不支持的方法 {method}")
 
 
-@tracked(maintenance=True)
 def _handle_owned(uid: str, msg: dict, token_scope: str):
-    # asyncio.to_thread outlives a cancelled/disconnected HTTP request. Track the
-    # actual worker; _handle still limits maintenance access to status/cancel.
     from mino_nexus.core.execution_user import execution_user
     from mino_nexus.ai import dispatch_log
     with execution_user(uid):

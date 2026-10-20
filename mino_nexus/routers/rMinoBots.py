@@ -18,7 +18,7 @@ from mino_nexus.routers.rCollabWorkspace import router as workspace_router
 
 def _legacy_read_only(request: Request):
     if request.method not in ('GET', 'HEAD', 'OPTIONS'):
-        raise HTTPException(410, '工作区已升级，请刷新 Workbench 使用工作区入口')
+        raise HTTPException(410, '旧协作写入接口已停用，请通过测试工作区发起操作')
 
 router = APIRouter()
 router.include_router(workspace_router)

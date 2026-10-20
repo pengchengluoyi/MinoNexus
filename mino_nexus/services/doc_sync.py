@@ -1,7 +1,6 @@
 """飞书文档定时增量同步（按 content_hash 跳过无变化）。"""
 from __future__ import annotations
 
-from mino_nexus.core.maintenance_gate import background
 
 import time
 from typing import Any
@@ -49,7 +48,6 @@ def sync_source_now(source_id: str) -> dict[str, Any]:
     )
 
 
-@background
 def doc_sync_tick(*, limit: int = _TICK_LIMIT) -> int:
     """后台轮询：返回本轮成功同步条数。"""
     done = 0

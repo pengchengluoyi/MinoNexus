@@ -1,9 +1,18 @@
-# macOS 本地部署目录
+# Nexus + Workbench 部署目录
 
-新正式安装使用 `~/Library/Application Support/Mino/`，下设独立的 `nexus/`、`scout/`、`workbench/`。Nexus 的业务数据放 `nexus/data/`；Workbench 自己管理 releases/config/logs/updates；Scout 自己管理配置、插件、进程锁和 logs。禁止组件共用配置文件、数据库或进程状态。开发源码实例继续使用 `~/.mino-dev/`，不读取正式目录或正式变量。
+macOS 的完整产品由一个 Python wheel 提供，一个 launchd 服务监听 50104。Workbench 是包内 `mino_nexus/web/` 的静态文件，没有独立 60104 服务。
 
-Nexus 和 Workbench 都是本地后台 Web 服务，Scout 是执行进程；不会生成 `.app`。Workbench 在浏览器访问。GitHub Actions 构建发布包，本地安装器负责部署，两者不是相互替代的路线。
+- 业务数据：`~/Library/Application Support/Mino/nexus/data/`。
+- 服务定义：`~/Library/LaunchAgents/com.mino.nexus.plist`。
+- 日志：`~/Library/Logs/Mino/nexus/nexus.log` 与 `nexus-error.log`。
+- Python 运行环境：由 pipx 管理，服务引用安装时的解释器路径。
+- 开发环境：`~/.mino-dev/nexus`、Nexus 50101、Vite 60101；禁止与生产数据根重叠。
+- Docker：同一 wheel，非 root UID 10001，数据目录 `/data` 挂 named volume，宿主发布 50104；默认关闭 mDNS。
 
-旧安装兼容：已有 `~/Mino/nexus`、`~/Mino/workbench`、`Application Support/MinoScout` 或显式指定目录继续原地运行升级。不会在旁边自动创建第二套服务，也不自动搬动运行中的数据库。新旧目录同时存在时必须明确选择，不猜测、不合并。新默认目录不表示本机已完成迁移。
+`mino-nexus service install/start/stop/restart/status` 只支持 macOS。重复 install 若配置相同可复用；配置不同则拒绝覆盖并要求人工审阅。生产启动必须显式使用 `--prod`，普通源码启动保持开发默认值。
 
-既有安装迁移必须停写、备份、复制到不存在的新目录、同步服务定义/命令入口/配置内的绝对路径，再启动并验收；原目录保留供回滚。严禁直接移动目录或对运行中的 SQLite 主文件做普通复制。
+Scout 仍在设备所在机器独立安装，数据、配置和进程归 Scout 管理，不放进 Nexus 容器。
+
+旧 `~/Mino/…` 或独立 Workbench 安装目录不自动移动、删除或合并。迁移必须先停止写入、备份、复制到新目录并显式指定新路径，原目录留作回滚。B4 自动备份暂缓，当前版本不会替代人工备份。
+
+详见 [发布与升级](github-updates.md) 及 [合并部署方案](架构/V7/Nexus-Workbench合并部署方案.md)。

@@ -1,0 +1,45 @@
+name: Build product
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: pengchengluoyi/MinoWorkbench
+          ref: main
+          path: _workbench
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: _workbench/package-lock.json
+      - name: Build Workbench
+        working-directory: _workbench
+        run: |
+          npm ci
+          npm run build -- --base ./
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Build complete wheel
+        run: |
+          python scripts/prepare_web.py --dist _workbench/dist
+          python -m pip install build
+          python -m build --wheel --outdir dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: product-wheel
+          path: dist/*.whl

@@ -1,5 +1,13 @@
 # HTTP — Console / Studio 怎么连本仓
 
+## 合并部署接口（2026-10-19）
+
+正式 Workbench 与 Nexus 同源，HTTP 使用 `location.origin`，WebSocket 使用同源 `/ws`。`/node` 仍供 Scout 使用，协议不变。浏览器同源来源允许进入 WS 握手，未登录仍以 1008 拒绝；反向代理来源可用 `MINO_WORKBENCH_ORIGINS` 显式允许，CORS 默认只允许开发来源。
+
+`/health`、`/packs`、`/flow-blocks` 保留为 API。对应 UI 页面为 `/admin/health`、`/admin/packs`、`/admin/flow-blocks`，防止浏览器刷新误取 API。`/static` 为上传资源，不被 SPA 覆盖；静态资源缺失返回 404。
+
+正式地址 `http://服务器:50104/`；开发 Nexus 50101、Workbench Vite 60101。Nexus/Workbench 在线更新 HTTP/MCP 工具已移除，改为安装 wheel 或更新容器 tag；`/releases/scout/*` 与 Scout 安装能力保留。
+
 ## 会话执行版本证据（2026-10-18）
 
 `GET /case-runner/sessions/{session_id}/execution-evidence` 只读取当前账号的历史会话。
@@ -141,6 +149,7 @@ HITL 问人界面、排期 cron、基线库、从设计稿/定位抽登录图标
 | GET | `/project/{project_id}/cases` | 项目用例列表。每条含 `step_keys_summary`（含 `ui_automation.coverable` / `blocked_by` / 逐步 `lights`） |
 | GET | `/project/{project_id}/cases/{case_id}` | 单条用例 + `step_keys_summary`。`coverable=false` 时 Studio 选用例应禁用开跑 |
 | GET | `/project/{project_id}/requirements` | 导入可选需求（项目内各 App 聚合） |
+| POST | `/project/{project_id}/cases/preflight` | 开跑前只读检查：`runnable` / `blocked`（按 `meta.ui_automation` 阻断项，不含 advisory） |
 | POST | `/project/{project_id}/cases/import/preview` | 解析表格。每行：`steps_parsed` / `expected_parsed`（编译出的事件）、`remark`（不可覆盖的人话）、`ui_automation`。`flags` 仍是机器码。**不拦入库** |
 | POST | `/project/{project_id}/cases/import/commit` | 写入；body 含稳定 `client_request_id`、`preview_token`、各行 `on_conflict`；同身份同输入复用回执，输入变化 409。`block_on_step_key_issues` 省略时用设置默认；旧预览调用可回退到 token 身份，直接 rows 提交必须提供身份 |
 | GET | `/project/{project_id}/cases/import/receipts/by-request/{client_request_id}` | 按本账号/项目的提交身份只读查询；预览删除或过期不影响回执 |
@@ -153,7 +162,7 @@ HITL 问人界面、排期 cron、基线库、从设计稿/定位抽登录图标
 | POST | `/project/{project_id}/cases/step-keys/validate` | 校验用例文案密钥（未知块/屏、fallback） |
 | GET | `/settings/case-resource-key` | 词汇表；含 `console.entries_by_layer`（operation/expected 分组） |
 | GET | `/settings/case-resource-key/registry` | 聚合 catalog + 逻辑块 + Nav 屏 `key_ref`（`?app_id=`） |
-| GET / PUT | `/settings/case-import` | 导入策略：`block_on_step_key_issues_default` |
+| GET / PUT | `/settings/case-import` | 导入策略：`block_on_step_key_issues_default`、`preview_batch_size`、`compile_regex_fallback`（默认 false，关闭后未命中 LLM 的语句不再走目录正则兜底） |
 | GET/PUT | `/nav-fsm/{app_id}/screen-key-refs` | Nav 屏幕 `meta.key_ref` |
 
 ## 设备输入法（Android）
@@ -502,35 +511,11 @@ Workbench 的“预检所选用例”按当前完整选择逐条调用；选择�
 
 多语言 intent 检查要求完整含义一致：泛化欢迎/入门标题不能替代具体问题，单个示例尝试不能替代兴趣收集与多选推荐；主题接近不能当成等义。agent-vision-assert/assert-vision v9、agent-text-assert v4；inspect-session v6。实际不符保留 fail，不把不同语言本身当成失败原因。
 
-## V6 Nexus 安装维护（D2 首轮实现）
+## 旧安装更新接口已移除
 
-仅已登记且完成健康验证的独立安装 Nexus 接受更新。所有维护接口要求管理员；普通用户 403，源码部署 409。
+原 `/sys/updates/*`、`/sys/workbench/*` 及对应 MCP 更新工具随 B5 移除。Nexus/Workbench 改由 wheel 或 Docker 统一升级，不在服务进程内下载、停写、切换和回滚。历史 D2/D3 资料仅供旧安装迁移参考，不能用来调用新版本接口。
 
-| 方法 | 路径 | 合同 |
-| --- | --- | --- |
-| GET | `/sys/updates/status?operation_id=...` | 原操作持久状态；省略 ID 查看本部署当前操作 |
-| POST | `/sys/updates/request` | `{operation_id,build_id,wait_seconds?,rollback?}`；稳定 ID 幂等，参数冲突拒绝；目标已暂存且具有确切版本兼容记录 |
-| POST | `/sys/updates/{operation_id}/cancel` | 仅取消该操作尚未开始的等待；不强停安装 |
-
-`/sys/server_info` 返回 instance_id、build_id、health_contract_version=1、deployment_managed。专用 probe token 仅可向 `/mcp` 调 initialize/ping/tools/list，不能调 tools/call 或普通 API。更新 hold 下新执行返回 blocked_by_update 与 operation_id；安装阶段保留健康和更新查询入口。详细部署步骤及未验收边界见 [D2 开发记录](../架构/V6/实施/mino-D2-开发记录-20261017.md)。
-
-## Workbench 本机安装升级（D3）
-
-`/sys/workbench/installation`、`/sys/workbench/updates/{check,status}` 为 GET；`/sys/workbench/updates/{request,cancel,recover}` 为 POST。均要求管理员；除安装身份查询外必须携带 installation_id，写操作绑定稳定 operation_id。只调用部署环境显式登记的同机原生助手，不接收命令/路径/URL 或 dirty 包绕过。完整参数、暂存目录及验收范围见 [Workbench MCP 更新入口](../架构/V6/实施/mino-D3-Workbench-MCP更新入口-20261017.md)。
-
-
-### D2 本地人工恢复模式（2026-10-17）
-
-`mino-maintain d2 recover --root <安装根> --mode <模式>` 只处理当前 needs_operator 操作，不提供远程强制解除门禁。
-
-- `prestart-backup`：尚未重开写入，且有完整备份；确认进程退出后恢复备份，失败数据另存保留。
-- `code-only`：曾开始正常启动；仅回退兼容旧代码，保留当前数据。
-- `restart-previous`：仅 stopping/backing_up、writes_reopened=false、current 仍指向 previous_build；确认退出后重启旧版，保留原数据/部分备份。已进入迁移及后续阶段拒绝此模式。
-
-显式恢复在启动前持久写入 state=restarting、phase=operator_recovery。恢复进程中断后，本地 helper 只探测原 previous_build 并完成同一 operation；无法核实则保留 needs_operator，不重放迁移或自动倒库。
-
-Scout 已派发更新与待人工处理状态纳入 Nexus 忙闲检查；维护等待期间不新派发排队 Scout 更新，原操作查询/对账继续。MCP 线程按实际执行生命周期持有写者锁，连接/协程取消不等于写者已退出。
-
+`/sys/server_info` 保留实例与版本信息，`deployment_managed=false` 表示没有内置维护助手；专用 probe token 仍仅允许 MCP 的 initialize/ping/tools/list。Scout 下载和安装入口保持原合同。
 
 ## 协作消息快速接收（2026-10-19）
 

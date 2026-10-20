@@ -44,13 +44,16 @@ def milestones_from_check_program(plan: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         cid = str(cp.get("id") or "").strip() or f"ck{len(rows)}"
         assert_payload = cp.get("assert") if isinstance(cp.get("assert"), dict) else {}
+        mode = str(assert_payload.get("mode") or "vlm")
+        skipped = mode == "human_only" or str(cp.get("run_policy") or "") == "skip"
         rows.append(
             {
                 "id": cid,
                 "title": str(cp.get("title") or cid)[:240],
                 "kind": "checkpoint",
-                "status": "pending",
-                "optional": bool(cp.get("optional")),
+                "status": "skipped" if skipped else "pending",
+                "optional": bool(cp.get("optional")) or skipped,
+                "skip_reason": "human_review" if skipped else "",
                 "source": str(cp.get("source") or "check_program"),
                 "key_ref": str(cp.get("key_ref") or ""),
                 "source_clause": str(cp.get("source_clause") or cp.get("source_line") or "")[:240],

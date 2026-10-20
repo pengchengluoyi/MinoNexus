@@ -1,5 +1,5 @@
 id: product-expert
-version: 2
+version: 3
 sort_order: 130
 label: 产品专家
 group: product
@@ -21,3 +21,5 @@ editable: false
 jobs:
 - product-expert
 - brief_knowledge
+chat_jobs:
+- product-expert

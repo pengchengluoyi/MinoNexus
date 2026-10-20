@@ -6,7 +6,7 @@ from typing import Any
 from mino_nexus.ai.schemas import AssertResult
 from mino_nexus.loop.hierarchy_slots import node_flag
 
-_STRUCTURED_MODES = frozenset({"copy", "language_intent", "style", "dialog", "input_value", "spatial"})
+_STRUCTURED_MODES = frozenset({"copy", "language_intent", "style", "dialog", "input_value", "spatial", "ui_absent"})
 
 
 class CheckUnavailable(ValueError):
@@ -24,10 +24,15 @@ def checkpoints_need_structured(checkpoints: list[dict[str, Any]] | None) -> boo
     rows = [c for c in (checkpoints or []) if isinstance(c, dict)]
     if not rows:
         return False
-    return all(
-        str(c.get("checkpoint_kind") or "") in _STRUCTURED_MODES or c.get("element") or c.get("rules")
-        for c in rows
-    )
+
+    def _row_ok(c: dict[str, Any]) -> bool:
+        kind = str(c.get("checkpoint_kind") or "")
+        if kind == "ui_absent":
+            element = c.get("element") if isinstance(c.get("element"), dict) else {}
+            return bool(str(element.get("name") or "").strip())
+        return kind in _STRUCTURED_MODES or bool(c.get("element") or c.get("rules"))
+
+    return all(_row_ok(c) for c in rows)
 
 
 def hydrate_bound_text(cursor: Any, checkpoints: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -83,10 +88,14 @@ def run_dom_structured_check(
         try:
             if not nodes:
                 raise CheckUnavailable("当前层级为空，无法验证")
-            if incomplete and (rules.get("exclusive") or (row.get("checkpoint_kind") == "dialog" and rules.get("present") is False)):
+            if incomplete and (
+                rules.get("exclusive")
+                or (row.get("checkpoint_kind") == "dialog" and rules.get("present") is False)
+                or row.get("checkpoint_kind") == "ui_absent"
+            ):
                 raise CheckUnavailable("观察范围不完整，无法证明弹窗不存在或唯一")
             ok, reason = _eval_one(row, nodes)
-            if not ok and incomplete and str(row.get("checkpoint_kind") or "") in {"copy", "dialog"}:
+            if not ok and incomplete and str(row.get("checkpoint_kind") or "") in {"copy", "dialog", "ui_absent"}:
                 raise CheckUnavailable("结构采集存在截断或缺口，未命中目标不能证明不存在")
         except CheckUnavailable as exc:
             ok, reason, error_kind = False, str(exc), "dom_check_unavailable"
@@ -227,6 +236,8 @@ def _eval_one(row: dict[str, Any], nodes: list[dict[str, Any]]) -> tuple[bool, s
         return _eval_input(title, rules, nodes)
     if mode == "spatial":
         return _eval_spatial(title, rules, nodes)
+    if mode == "ui_absent":
+        return _eval_absent(title, role, element, rules, nodes)
     raise CheckUnavailable(f"{title}无法验证：DOM 没有该检查的实现")
 
 
@@ -264,6 +275,25 @@ def _eval_style(title: str, role: str, rules: dict[str, Any], nodes: list[dict[s
     if style in ("disabled", "enabled"):
         return True, ""
     raise CheckUnavailable(f"{title}无法验证：未知样式 {style}")
+
+
+def _eval_absent(
+    title: str,
+    role: str,
+    element: dict[str, Any],
+    rules: dict[str, Any],
+    nodes: list[dict[str, Any]],
+) -> tuple[bool, str]:
+    which = str(
+        element.get("name") or rules.get("which") or rules.get("title") or rules.get("label") or ""
+    ).strip()
+    if not which:
+        raise CheckUnavailable(f"{title}无法验证：不可见检查缺少目标名称")
+    pool = _pool(nodes, role) if role and role != "page" else list(nodes)
+    named = [n for n in pool if which in _blob(n)]
+    if named:
+        return False, f"{title}未通过：DOM 仍包含「{which[:40]}」"
+    return True, f"DOM 未发现「{which[:40]}」"
 
 
 def _eval_dialog(title: str, rules: dict[str, Any], nodes: list[dict[str, Any]]) -> tuple[bool, str]:

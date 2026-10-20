@@ -37,7 +37,7 @@ def assert_no_delete(route: str) -> None:
 def all_tools() -> list[dict[str, Any]]:
     rows = []
     for spec in list_assistant_tools():
-        if spec.get("enabled") is False or str(spec.get("id") or "").startswith(("scout.update", "nexus.update", "workbench.update")):
+        if spec.get("workspace_only") or spec.get("enabled") is False or str(spec.get("id") or "").startswith(("scout.update", "nexus.update", "workbench.update")):
             continue
         route = str(spec.get("route") or "")
         assert_no_delete(route)

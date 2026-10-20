@@ -99,11 +99,31 @@ def list_case_page(project_id: str, *, limit: int, offset: int = 0, search: str 
             query = query.filter(ProjectCase.case_id.not_in(list(results)))
         total = query.count()
         rows = query.order_by(ProjectCase.sort_index, ProjectCase.pk).limit(limit).offset(offset).all()
-        cases = [{"case_id": row.case_id, "title": row.name or row.case_id, "name": row.name or row.case_id,
-                  "module": row.module or "", "platform": row.platform or "", "precondition": (row.precondition or "")[:300],
-                  "steps": [str(value)[:300] for value in (row.steps or [])[:3]],
-                  "expected": [str(value)[:300] for value in (row.expected or [])[:3]],
-                  **{key: (row.extra or {}).get(key) for key in ("source_revision", "source_revision_id", "compile_state", "compile_job", "effective_artifact")}} for row in rows]
+        from mino_nexus.services.case_key_registry import step_keys_summary_for_case
+
+        cases = []
+        for row in rows:
+            public = _public(row)
+            cases.append(
+                {
+                    "case_id": row.case_id,
+                    "title": row.name or row.case_id,
+                    "name": row.name or row.case_id,
+                    "module": row.module or "",
+                    "platform": row.platform or "",
+                    "precondition": (row.precondition or "")[:300],
+                    "steps": [str(value)[:300] for value in (row.steps or [])[:3]],
+                    "expected": [str(value)[:300] for value in (row.expected or [])[:3]],
+                    "steps_parsed": list(public.get("steps_parsed") or [])[:12],
+                    "expected_parsed": list(public.get("expected_parsed") or [])[:12],
+                    "meta": dict(public.get("meta") or {}),
+                    "step_keys_summary": step_keys_summary_for_case(public),
+                    **{
+                        key: (row.extra or {}).get(key)
+                        for key in ("source_revision", "source_revision_id", "compile_state", "compile_job", "effective_artifact")
+                    },
+                }
+            )
         return {"cases": cases, "total": total, "limit": limit, "offset": offset, "project_id": project_id}
 
 

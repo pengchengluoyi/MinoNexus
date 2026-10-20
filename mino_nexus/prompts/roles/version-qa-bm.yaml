@@ -1,5 +1,5 @@
 id: version-qa-bm
-version: 2
+version: 3
 sort_order: 60
 label: 版本QA BM
 group: product
@@ -21,3 +21,11 @@ editable: false
 jobs:
 - version-qa-bm
 - draft_gate
+chat_jobs:
+- version-qa-bm
+- pick_regression
+- draft_gate
+- classify_fail
+tools:
+- task.list
+- task.get

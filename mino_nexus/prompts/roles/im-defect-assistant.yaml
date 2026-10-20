@@ -1,5 +1,5 @@
 id: im-defect-assistant
-version: 2
+version: 3
 sort_order: 110
 label: IM 缺陷助手
 group: product
@@ -18,4 +18,6 @@ triggers: []
 output: json
 editable: true
 jobs:
+- im-defect
+chat_jobs:
 - im-defect

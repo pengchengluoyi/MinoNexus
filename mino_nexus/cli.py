@@ -322,9 +322,9 @@ def _migrate_cli(argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] == "maintenance":
-        from mino_nexus.core.deployment_cli import main as maintenance_main
-        return maintenance_main(argv[1:])
+    if argv and argv[0] == "service":
+        from mino_nexus.core.service_cli import main as service_main
+        return service_main(argv[1:])
     if argv and argv[0] == "probe":
         from mino_nexus.core.maintenance_probe import main as probe_main
         return probe_main(argv[1:])
@@ -341,9 +341,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--host", default=None, help="监听地址；局域网要 0.0.0.0 才能解析 mino.local")
     ap.add_argument("--port", type=int, default=None, help="监听端口（正式默认 50104）")
     ap.add_argument("--data-dir", help="Set data root before loading the application")
-    ap.set_defaults(dev=not getattr(sys, "frozen", False))
-    if not getattr(sys, "frozen", False):
-        ap.add_argument("--dev", action="store_true", help="Source/PyCharm development on port 50101; requires an isolated data root")
+    from mino_nexus.core.runtime_mode import is_development
+    ap.set_defaults(dev=is_development())
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--dev", dest="dev", action="store_true", help="Local development: 50101 and isolated data")
+    mode.add_argument("--prod", dest="dev", action="store_false", help="Production: 50104 and production data")
     ap.add_argument("--no-mdns", action="store_true", help="Disable mDNS advertisement")
     args = ap.parse_args(argv)
     if args.host is None:
@@ -356,6 +358,9 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("source development uses port 50101")
 
     import os
+    os.environ["MINO_NEXUS_MODE"] = "development" if args.dev else "production"
+    if not 1 <= args.port <= 65535:
+        ap.error("port must be between 1 and 65535")
     raw_dir = args.data_dir or os.environ.get("MINO_NEXUS_DEV_DATA_DIR" if args.dev else "MINO_NEXUS_DATA_DIR", "")
     if args.dev and not raw_dir.strip():
         raw_dir = str(Path.home() / ".mino-dev" / "nexus")
@@ -368,10 +373,24 @@ def main(argv: list[str] | None = None) -> int:
         production_roots = [default, (Path.home() / "Mino" / "nexus").resolve()]
         if args.dev and any(target == root or root in target.parents or target in root.parents for root in production_roots):
             ap.error("development data root must not overlap the default production root")
-        os.environ["MINO_NEXUS_DEV_DATA_DIR" if not getattr(sys, "frozen", False) else "MINO_NEXUS_DATA_DIR"] = str(target)
+        os.environ["MINO_NEXUS_DEV_DATA_DIR" if args.dev else "MINO_NEXUS_DATA_DIR"] = str(target)
     if args.dev or args.no_mdns:
         os.environ["MINO_NEXUS_MDNS"] = "0"
 
+    # Validate environment markers and overlap before importing application/ORM.
+    from mino_nexus.core.paths import get_app_data_dir
+    get_app_data_dir()
+
+    from mino_nexus.core.platform_runtime import file_lock
+    try:
+        with file_lock(get_app_data_dir() / ".nexus-server.lock", blocking=False):
+            return _serve(args)
+    except BlockingIOError:
+        SLog.e(TAG, "另一个 Nexus 进程正在使用此数据目录，拒绝并发启动")
+        return 1
+
+
+def _serve(args) -> int:
     import uvicorn
 
     from mino_nexus.catalog import registry as catalog
@@ -395,9 +414,7 @@ def main(argv: list[str] | None = None) -> int:
 
     SLog.i(TAG, f"MinoNexus 对外 {http_origin(args.port)}")
     SLog.i(TAG, f"  UI  → HTTP + WS /ws    Scout → {node_ws_url(args.port)}")
-    from mino_nexus.core.platform_runtime import watch_stop
     server = uvicorn.Server(uvicorn.Config("mino_nexus.app:app", host=args.host, port=args.port, log_level="warning"))
-    watch_stop(lambda: setattr(server, "should_exit", True))
     server.run()
     return 0
 

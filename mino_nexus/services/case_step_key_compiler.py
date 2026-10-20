@@ -13,7 +13,7 @@ _BLOCK_RE = re.compile(r"【块[:：]\s*([^】]+)】")
 _NAV_RE = re.compile(r"【导航[:：]\s*([^】]+)】")
 _CAP_RE = re.compile(r"【cap[:：]\s*([^】]+)】", re.I)
 _KEY_REF_RE = re.compile(r"\b((?:operation|expected)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*)\b", re.I)
-_COMPILE_CONTRACT_REVISION = 13
+_COMPILE_CONTRACT_REVISION = 15
 _SLUG_BAD = re.compile(r"[^\w]+", re.UNICODE)
 _SPATIAL_HINTS: tuple[tuple[str, str], ...] = (
     ("右上", "top_right"),
@@ -175,13 +175,17 @@ def _blocked_item(
     user_message: str = "",
     event_name: str = "",
     detail: str = "",
+    severity: str = "",
 ) -> dict[str, Any]:
+    from mino_nexus.services.case_step_intent import blocked_severity
+
     row = {
         "phase": phase,
         "case_step": int(case_step),
         "source_clause": str(clause or "")[:240],
         "reason": reason,
         "event_id": str(event_id or ""),
+        "severity": blocked_severity(severity or reason, key_ref=str(event_id or "")),
     }
     if event_name:
         row["event_name"] = event_name
@@ -376,21 +380,34 @@ def _step_from_hit(hit: dict[str, Any], *, case_step: int, sub_idx: int) -> dict
         if clause:
             # 结构参数只能提炼信息，完整原句始终保留逻辑关系与视觉约束。
             assert_payload["expectation"] = clause
+        key_ref = str(hit.get("key_ref") or "")
+        if key_ref == "expected.human_review":
+            assert_payload = {
+                "mode": "human_only",
+                "rules": rules,
+                "expectation": clause,
+            }
+        elif key_ref == "expected.ui_absent":
+            assert_payload["mode"] = "ui_absent"
         row = {
             "id": f"ck_s{case_step}_{sub_idx}"[:64],
-            "key_ref": str(hit.get("key_ref") or ""),
-            "title": str(hit.get("event_name") or hit.get("key_ref") or clause)[:240],
+            "key_ref": key_ref,
+            "title": str(hit.get("event_name") or key_ref or clause)[:240],
             "kind": "checkpoint",
             "assert": assert_payload,
             "schemes": schemes,
-            "optional": False,
+            "optional": key_ref == "expected.human_review",
+            "run_policy": "skip" if key_ref == "expected.human_review" else "",
             "source_line": clause[:240],
             "source_clause": clause[:240],
             "source_clauses": list(hit.get("source_clauses") or [clause]),
             "subclause_index": sub_idx,
-            "observe": "exec",
-            "ui_status": "pending",
+            "observe": "human_only" if key_ref == "expected.human_review" else "exec",
+            "ui_status": "skipped" if key_ref == "expected.human_review" else "pending",
+            "temporal_scope": "instant_only",
         }
+        if hit.get("intent_role"):
+            row["intent_role"] = str(hit.get("intent_role"))
         if "start" in hit and "end" in hit:
             row["start"] = int(hit["start"])
             row["end"] = int(hit["end"])
@@ -415,15 +432,39 @@ def _step_from_hit(hit: dict[str, Any], *, case_step: int, sub_idx: int) -> dict
     hint = _spatial_hint(clause)
     if hint:
         params["spatial_hint"] = hint
+    key_ref = str(hit.get("key_ref") or "")
+    if key_ref == "operation.author_remark":
+        return {
+            "id": f"do_s{case_step}_{sub_idx}_remark"[:64],
+            "key_ref": key_ref,
+            "title": clause[:240],
+            "kind": "remark",
+            "optional": False,
+            "run_policy": "skip",
+            "source_line": clause[:240],
+            "source_clause": clause[:240],
+            "subclause_index": sub_idx,
+            "observe": "author_only",
+            "ui_status": "skipped",
+            "intent_role": str(hit.get("intent_role") or "read_only"),
+        }
     kind = str(hit.get("kind") or "hook")
-    if kind not in ("hook", "flow_block", "checkpoint"):
+    if key_ref == "operation.nav_target":
+        kind = "nav"
+    if key_ref == "operation.system_app":
         kind = "hook"
+    if kind not in ("hook", "flow_block", "checkpoint", "nav", "remark"):
+        kind = "hook"
+    hook_cap = "" if kind == "flow_block" else str(hit.get("hook_cap") or "tap_element")
+    if key_ref == "operation.system_app":
+        rules = hit.get("rules") if isinstance(hit.get("rules"), dict) else {}
+        hook_cap = str(rules.get("hook_cap") or hit.get("hook_cap") or "kill_app")
     row = {
         "id": f"do_s{case_step}_{sub_idx}_{kind}"[:64],
-        "key_ref": str(hit.get("key_ref") or ""),
+        "key_ref": key_ref,
         "title": clause[:240],
         "kind": kind,
-        "hook_cap": "" if kind == "flow_block" else str(hit.get("hook_cap") or "tap_element"),
+        "hook_cap": hook_cap,
         "schemes": schemes,
         "optional": False,
         "source_line": clause[:240],
@@ -441,8 +482,16 @@ def _step_from_hit(hit: dict[str, Any], *, case_step: int, sub_idx: int) -> dict
         row["block_id"] = str(hit["block_id"])
     if params:
         row["params"] = params
-    if kind != "flow_block":
-        reason = _cap_block_reason(str(row["hook_cap"]))
+    if kind == "nav":
+        rules = hit.get("rules") if isinstance(hit.get("rules"), dict) else {}
+        target = hit.get("target") if isinstance(hit.get("target"), dict) else {}
+        nav = str(hit.get("nav_target") or rules.get("nav_target") or target.get("name") or "").strip()
+        if nav:
+            row["nav_target"] = nav
+    if hit.get("intent_role"):
+        row["intent_role"] = str(hit.get("intent_role"))
+    if kind not in ("flow_block", "remark") and kind != "nav":
+        reason = _cap_block_reason(str(row.get("hook_cap") or ""))
         if reason:
             row["_block_reason"] = reason
     return row
@@ -458,8 +507,15 @@ def _classify_block(
     """命中了句式但本层不能执行时，返回 blocked 警告。"""
     from mino_nexus.services.case_clause_events import platform_block, user_message
 
+    from mino_nexus.services.case_step_intent import reconcile_hit_layer
+
+    hit = reconcile_hit_layer(hit, author_layer=author_layer)
     clause = str(hit.get("clause") or "")
     phase = "do" if author_layer == "operation" else "check"
+    if str(hit.get("key_ref") or "") == "operation.author_remark":
+        return None
+    if str(hit.get("key_ref") or "") == "expected.human_review":
+        return None
     if hit.get("ambiguous"):
         msg = user_message(case_step=case_step, layer=author_layer, clause=clause, reason="ambiguous_clause")
         return {
@@ -616,6 +672,40 @@ def compile_operation_text(
                 continue
             plan_steps.append(_drop_coords(ps))
             key_refs.append(str(ps.get("key_ref") or ""))
+            continue
+        from mino_nexus.services.settings_store import compile_regex_fallback_enabled
+
+        if not compile_regex_fallback_enabled():
+            sug = _slug(clause)
+            warnings.append(
+                {
+                    "case_step": case_step,
+                    "layer": "operation",
+                    "line": clause,
+                    "raw_text": clause,
+                    "unmapped": True,
+                    "suggested_key_refs": [
+                        {
+                            "key_ref": sug,
+                            "write_examples": [clause[:120]],
+                            "note": "编译未识别到事件（正则兜底已关闭）",
+                        }
+                    ],
+                    "blocked": _blocked_item(
+                        phase="do",
+                        case_step=case_step,
+                        clause=clause,
+                        reason="unmapped",
+                        user_message=user_message(
+                            case_step=case_step,
+                            layer="operation",
+                            clause=clause,
+                            reason="unmapped",
+                            detail="未识别到可执行事件，请配置导入编译 AI 或开启正则兜底",
+                        ),
+                    ),
+                }
+            )
             continue
         ent, ref = _match_catalog_clause(clause, "operation")
         if ent is None:
@@ -814,7 +904,41 @@ def compile_expected_text(
         ps = _step_from_hit(hit, case_step=case_step, sub_idx=int(hit.get("_idx") or 0))
         checkpoints.append(ps)
         key_refs.append(str(ps.get("key_ref") or ""))
+    from mino_nexus.services.settings_store import compile_regex_fallback_enabled
+
     for idx, clause in catalog_left:
+        if not compile_regex_fallback_enabled():
+            sug = _slug(clause, prefix="expected")
+            warnings.append(
+                {
+                    "case_step": case_step,
+                    "layer": "expected",
+                    "line": clause,
+                    "raw_text": clause,
+                    "unmapped": True,
+                    "suggested_key_refs": [
+                        {
+                            "key_ref": sug,
+                            "write_examples": [clause[:120]],
+                            "note": "编译未识别到检查点（正则兜底已关闭）",
+                        }
+                    ],
+                    "blocked": _blocked_item(
+                        phase="check",
+                        case_step=case_step,
+                        clause=clause,
+                        reason="unmapped",
+                        user_message=user_message(
+                            case_step=case_step,
+                            layer="expected",
+                            clause=clause,
+                            reason="unmapped",
+                            detail="未识别到可验收检查点，请配置导入编译 AI 或开启正则兜底",
+                        ),
+                    ),
+                }
+            )
+            continue
         ent, ref = _match_catalog_clause(clause, "expected")
         if ent is None or (ref == "expected.ui_text" and "不展示" in clause):
             sug = _slug(clause, prefix="expected")
@@ -1116,12 +1240,13 @@ def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
         item = w.get("blocked") if isinstance(w, dict) else None
         if isinstance(item, dict):
             blocked.append(item)
+    blocking = [b for b in blocked if str(b.get("severity") or "blocking") == "blocking"]
     return {
         "step_program_keys": step_keys,
         "key_compile_warnings": all_warnings,
         "ui_automation": {
             "schema": "mino.ui_automation.v1",
-            "coverable": not blocked,
+            "coverable": not blocking,
             "blocked_by": blocked,
         },
     }

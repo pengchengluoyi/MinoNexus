@@ -330,10 +330,18 @@ def assess_spans(
     hits: list[dict[str, Any]] = []
     errors: list[str] = []
     occupied: list[tuple[int, int]] = []
+    from mino_nexus.services.case_step_intent import (
+        apply_span_intent,
+        intent_role_errors,
+        normalize_intent_role,
+        reconcile_hit_layer,
+    )
+
     for span in spans:
         if not isinstance(span, dict):
             errors.append("有一条跨度不是对象")
             continue
+        span = apply_span_intent(span, layer)
         ref = str(span.get("key_ref") or "").strip()
         spec = index.get(ref)
         if spec is None:
@@ -342,6 +350,7 @@ def assess_spans(
             else:
                 errors.append(f"{ref or '空'} 不在这一层目录")
             continue
+        errors.extend(intent_role_errors(span, spec, layer))
         quote = str(span.get("quote") or "")
         placed = _find_quote(source, quote, occupied)
         if placed is None:
@@ -355,6 +364,8 @@ def assess_spans(
         if slot_errors or hit is None:
             errors.extend(slot_errors or ["跨度无效"])
             continue
+        hit["intent_role"] = normalize_intent_role(span.get("intent_role"))
+        hit = reconcile_hit_layer(hit, author_layer=layer)
         hit["start"], hit["end"] = placed
         occupied.append(placed)
         hits.append(hit)

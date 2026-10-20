@@ -1,5 +1,5 @@
 id: collab.pipeline_run
-version: 1
+version: 2
 title: 跑协作交付流水线
 description: 对协作议题跑交付流水线（LangGraph 或 AgentScope，分析、评审、用例候选）。用户说提测、出用例、走交付流程时用。
 route: POST /project/{project_id}/collab/topics/{topic_id}/pipeline/run
@@ -38,4 +38,4 @@ card: answer
 surfaces:
 - im
 - mcp
-enabled: true
+enabled: false

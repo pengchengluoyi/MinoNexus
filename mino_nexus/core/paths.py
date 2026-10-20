@@ -12,7 +12,8 @@ from pathlib import Path
 
 
 def get_app_data_dir() -> Path:
-    development = not getattr(sys, "frozen", False)
+    from mino_nexus.core.runtime_mode import is_development
+    development = is_development()
     prod_default = (Path(os.environ.get("APPDATA", Path.home())) / "MinoNexus" if os.name == "nt"
                     else Path.home() / "Library/Application Support/Mino/nexus/data" if sys.platform == "darwin"
                     else Path.home() / ".mino-nexus")

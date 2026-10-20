@@ -1,7 +1,6 @@
 """创建回归任务并落库。逐条执行在 case_exec。"""
 from __future__ import annotations
 
-from mino_nexus.core.maintenance_gate import admitted
 
 from mino_nexus.action_space.scheme import normalize_action_scheme
 from mino_nexus.core.execution_user import user_thread, owned_job, require_user_id
@@ -102,7 +101,6 @@ def _worker_sns_for_cases(cases: list[dict[str, Any]], doc: dict[str, Any]) -> l
     return order
 
 
-@admitted
 def run_cases(
     app: dict[str, Any],
     *,
@@ -375,7 +373,6 @@ def _run_in_background(**kwargs):
 
 
 
-@admitted
 def run_explore(
     app: dict[str, Any],
     *,
@@ -504,7 +501,6 @@ def run_explore(
     return run_store.to_task_json(doc)
 
 
-@admitted
 def retry_failed(task_id: str, *, sn: str = "", execution_unit_ids=None, client_request_id="") -> dict[str, Any]:
     from mino_nexus.services.run_retry import create, eligibility
     if sn:

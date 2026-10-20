@@ -696,6 +696,7 @@ def get_case_import_settings() -> dict[str, Any]:
     return {
         "block_on_step_key_issues_default": bool(ci.get("block_on_step_key_issues_default")),
         "preview_batch_size": batch,
+        "compile_regex_fallback": bool(ci.get("compile_regex_fallback")),
     }
 
 
@@ -713,8 +714,14 @@ def save_case_import_settings(payload: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             batch = 5
         ci["preview_batch_size"] = min(20, max(1, batch))
+    if "compile_regex_fallback" in payload:
+        ci["compile_regex_fallback"] = bool(payload.get("compile_regex_fallback"))
     _save(root)
     return get_case_import_settings()
+
+
+def compile_regex_fallback_enabled() -> bool:
+    return bool(get_case_import_settings().get("compile_regex_fallback"))
 
 
 def resolve_block_on_step_key_issues(explicit: bool | None) -> bool:

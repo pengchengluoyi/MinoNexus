@@ -11,8 +11,6 @@ from sqlalchemy import text
 from mino_nexus.core.database import session_scope
 from mino_nexus.core import protocol as P
 from mino_nexus.models.scout_update import ScoutUpdate
-from mino_nexus.core.maintenance_gate import admitted, async_tracked
-from mino_nexus.core.deployment import Deployment, deployment_root
 
 
 TERMINAL = {"succeeded", "failed", "rolled_back", "cancelled", "expired"}
@@ -57,7 +55,6 @@ def request(node_id, owner, opid, params):
     raise RuntimeError("upgrade_and_rollback_removed")
 
 
-@admitted
 def _request_new(node_id, owner, opid, params):
     from mino_nexus.services.node_registry import get_registry
     # Registry registration persists to SQLite while holding its own lock. Read
@@ -141,7 +138,6 @@ async def _send(live, action, opid, params=None):
     return (getattr(result, "extra", {}) or {}).get("update")
 
 
-@async_tracked
 async def tick(opid):
     from mino_nexus.services.node_registry import get_registry
     with session_scope() as db:
@@ -159,9 +155,6 @@ async def tick(opid):
             return
         op_params = dict(row.params)
         if row.state == "waiting_idle":
-            root = deployment_root()
-            if root and Deployment(root).held():
-                return  # Pause new installs, but keep reconciling dispatched ones.
             if live.draining or busy(db, row.node_id):
                 return
             # This persisted handoff is written BEFORE sending. After a crash only

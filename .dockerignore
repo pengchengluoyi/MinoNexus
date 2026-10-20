@@ -1,0 +1,14 @@
+**
+!Dockerfile
+!pyproject.toml
+!mino_nexus/
+!mino_nexus/**
+!scripts/
+!scripts/prepare_web.py
+!dist/
+!dist/*.whl
+**/__pycache__
+**/*.pyc
+**/*.db
+**/*.sqlite*
+**/.env

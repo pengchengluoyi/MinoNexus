@@ -1,0 +1,20 @@
+services:
+  nexus:
+    image: ghcr.io/pengchengluoyi/mino-nexus:${MINO_NEXUS_VERSION:?Set an explicit released version, such as 0.1.53}
+    build:
+      context: .
+    ports:
+      - "${MINO_BIND_ADDRESS:-0.0.0.0}:50104:50104"
+    volumes:
+      - mino-data:/data
+    environment:
+      MINO_WORKBENCH_ORIGINS: ${MINO_WORKBENCH_ORIGINS:-}
+      # Trust forwarded scheme only from explicitly configured reverse-proxy IPs.
+      FORWARDED_ALLOW_IPS: ${MINO_PROXY_IPS:-127.0.0.1}
+    restart: unless-stopped
+    stop_grace_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+volumes:
+  mino-data:

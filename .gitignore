@@ -269,3 +269,7 @@ coverage/
 *.sqlite3-wal
 *.sqlite3-shm
 *.sqlite3-journal
+
+# Generated merged-product package data; fetched from the pinned static release.
+/mino_nexus/web/
+/mino_nexus/BUILD.json

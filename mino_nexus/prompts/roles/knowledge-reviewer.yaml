@@ -1,5 +1,5 @@
 id: knowledge-reviewer
-version: 2
+version: 3
 sort_order: 120
 label: 知识审核员
 group: product
@@ -20,3 +20,5 @@ editable: false
 jobs:
 - knowledge-reviewer
 - review_knowledge
+chat_jobs:
+- knowledge-reviewer

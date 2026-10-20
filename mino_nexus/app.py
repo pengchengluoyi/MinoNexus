@@ -222,16 +222,15 @@ def create_app() -> FastAPI:
     app.add_middleware(ExecutionUserMiddleware)
     app.add_middleware(ClientGateMiddleware)
 
+    from mino_nexus.core.browser_origins import browser_origins
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=browser_origins(),
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    from mino_nexus.core.maintenance_gate import MaintenanceMiddleware
-    app.add_middleware(MaintenanceMiddleware)
     from mino_nexus.core.request_timing import RequestTimingMiddleware
     app.add_middleware(RequestTimingMiddleware)
     from mino_nexus.routers import rCaseSources
@@ -404,6 +403,8 @@ def create_app() -> FastAPI:
             "raw": res.raw_response,
         }
 
+    from mino_nexus.core.workbench_web import mount_workbench
+    mount_workbench(app)
     return app
 
 

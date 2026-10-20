@@ -1,7 +1,6 @@
 """跑批结束后，把结果推回登记过订阅的 IM 会话。"""
 from __future__ import annotations
 
-from mino_nexus.core.maintenance_gate import background
 
 import threading
 from typing import Any
@@ -277,7 +276,6 @@ def on_run_finished(run_doc: dict[str, Any]) -> None:
                     SLog.w(TAG, f"通知已记录重试：{type(exc).__name__}")
 
 
-@background
 def retry_pending_notifications() -> None:
     """启动后和定时恢复；包括完成事件发出前进程崩溃而尚未建立 delivery 的订阅。"""
     from mino_nexus.core.database import session_scope

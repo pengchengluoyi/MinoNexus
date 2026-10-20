@@ -5,7 +5,6 @@ an explicit new request. A cancelled model call may still finish remotely.
 """
 from __future__ import annotations
 
-from mino_nexus.core.maintenance_gate import background
 
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -443,7 +442,6 @@ def readiness(case):
     return None
 
 
-@background
 def run_one(worker_id):
     job = claim(worker_id)
     if job is None:

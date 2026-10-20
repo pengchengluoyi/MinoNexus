@@ -483,6 +483,7 @@ OBSERVE 的 screenshot 与 RESULT 的执行诊断通过 capture_id、session_gen
 消息 envelope 和 protocol dataclass 不变；以下元数据经既有 screenshot `remote_detail` 与 RESULT `extra` 传输。
 
 - Nexus 在 PC 首张截图前派发 `launch_app`，Scout 用 Cua 启动应用、确认目标 pid 并绑定 `target={kind:window,pid,window_id}`；macOS 和 Windows 均不在启动阶段调用 bring_to_front 或要求持续前台。`launch_app.params.window_id` 或 `device_hint.window_id` 可明确选窗；目标窗口不存在或不可唯一选择时 blocked。每个 run 保存独立绑定，取消、超时与代际变化清理绑定。
+- 桌面 `close_app` / `kill_app`：Scout 将 `kill_app` 归一为 `close_app`，经 Cua `terminate_app` 结束与 `package` / `target_package` 匹配的前台进程并清理窗口绑定；目标未在前台时 completed 并说明未命中，不强制先截图。
 - 截图使用 SDK 通用 `get_window_state`，指定 pid/window_id，关闭 AX 树并注册动作捕获（display_only=false）。typed WindowStateOutput 未暴露 capture_id，因此不能拿 snapshot_id 冒充捕获引用。不调用整屏截图，也不在窗口截图失败后改截桌面。
 - screenshot 元数据含 capture_scope=window、target、pid/window_id、snapshot_id、capture_id、session_generation、capture_width/capture_height、native_width/native_height、window_bounds、screenshot_scale、compress_ratio。capture 尺寸始终对应返回给模型的最终图像。PC 压缩默认 1，较大压缩比通过 Cua 原尺寸校准后设置 max_image_dimension；项目不再自行缩图。
 - 点击使用 ActionTarget.WINDOW 与 ClickPosition.CAPTURED_COORDINATES，Cua 原子校验捕获、所有者、窗口几何与有效期，处理 Retina/压缩映射并消费捕获。输入和按键也绑定窗口，显式 delivery_mode=foreground；项目不向整个桌面投递坐标或键盘事件。

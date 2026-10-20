@@ -71,6 +71,12 @@ class CaseStepKeysValidateBody(BaseModel):
     app_id: str = ""
 
 
+class CasePreflightBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    app_id: str = Field(min_length=1, max_length=200)
+    case_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
 class CaseDeleteBody(BaseModel):
     case_ids: list[str] = Field(default_factory=list)
 
@@ -508,6 +514,23 @@ def list_case_modules(project_id: str, _sess: dict = Depends(current_session)):
     from mino_nexus.services.case_store import case_modules
 
     return ok(case_modules(project_id))
+
+
+@router.post("/{project_id}/cases/preflight")
+def post_case_preflight(project_id: str, body: CasePreflightBody, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    try:
+        app = ps.require_app(body.app_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="App not found") from exc
+    if str(app.get("project_id") or "") != str(project_id):
+        raise HTTPException(status_code=400, detail="app 与项目不匹配")
+    from mino_nexus.services.case_preflight import preflight
+
+    try:
+        return ok(preflight(app, body.case_ids))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{project_id}/cases/{case_id}")

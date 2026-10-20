@@ -109,6 +109,7 @@ def _roles_from_files(group: str) -> list[dict[str, Any]]:
             "live": spec.get("live", True) is not False,
             "owner": spec.get("owner") or "",
             "job": spec.get("job") or "",
+            "chat_jobs": list(spec.get("chat_jobs") or []),
             "called": spec.get("called") or "",
             "triggers": list(spec.get("triggers") or []),
             "output": spec.get("output") or "",
@@ -244,10 +245,15 @@ def _sanitize_messages(raw: Any) -> list[dict[str, str]]:
     return out[-_MAX_HISTORY:]
 
 
-def chat_with_role(*, role_id: str, messages: Any, explain_mode: bool = False) -> dict[str, Any]:
+def chat_with_role(*, role_id: str, messages: Any, explain_mode: bool = False, job_id: str = "", timeout_sec: float = 90) -> dict[str, Any]:
     role = get_role(role_id)
     if not role:
         raise ValueError(f"未知角色：{role_id}")
+    if job_id:
+        from mino_nexus.ai.prompt_repo import get_job
+        spec = get_job(job_id)
+        if job_id not in role.get("chat_jobs", []) or not spec or spec.get("engine") not in ("text_chat", "chat_reply"):
+            raise ValueError("该角色不允许调用此对话 job")
     history = _sanitize_messages(messages)
     if not history or history[-1]["role"] != "user":
         raise ValueError("请先发送一条用户消息")
@@ -261,7 +267,7 @@ def chat_with_role(*, role_id: str, messages: Any, explain_mode: bool = False) -
             "还没有配置可用的大模型。请到 Studio → 密钥 → 大模型 Key，打开「可用」并勾选用例。"
             + (f"（{gate.get('reason')}）" if gate.get("reason") else "")
         )
-    jid = ROLE_JOB_MAP.get(role_id) or resolve_job_id(role_id)
+    jid = job_id or ROLE_JOB_MAP.get(role_id) or resolve_job_id(role_id)
     system = job_system_text(jid, explain_mode=explain_mode)
     if not system:
         system = str(role.get("system_prompt") or "").strip()
@@ -271,7 +277,7 @@ def chat_with_role(*, role_id: str, messages: Any, explain_mode: bool = False) -
         messages=payload,
         temperature=0.4 if explain_mode or role.get("kind") == "conversational" else 0.15,
         max_tokens=2048,
-        timeout_sec=90,
+        timeout_sec=min(90, timeout_sec),
     )
     if not reply:
         raise RuntimeError(meta.get("error") or "模型没有返回内容")

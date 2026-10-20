@@ -1,30 +1,16 @@
-## 安装正式版本
+## 正式部署
 
-**[打开下载与安装页面 →](https://pengchengluoyi.github.io/MinoNexus/)**
+Nexus 已内置 Workbench：一个 wheel、一个服务、一个 50104 端口。macOS 使用 wheel + launchd；Linux 使用 AMD64/ARM64 Docker 镜像。旧原生安装器与在线自更新链路已移除，Scout 继续独立安装。
 
-选择系统与组件，下载安装器，或一键复制下载链接和安装命令。
+从 [Release](https://github.com/pengchengluoyi/MinoNexus/releases) 获取完整 wheel / 离线镜像并核对 SHA256。安装、Compose、升级、回滚及源码打包步骤见 [部署手册](docs/github-updates.md)。Nexus 打包直接构建 Workbench main，无需等待独立静态 Release 或维护 web.lock。
 
-GitHub 下载和安装仅提供正式版本，没有测试环境选项。安装菜单只选择 Nexus、Workbench 或两者；包由 GitHub Actions 原生编译并发布到 Releases，用户电脑不编译源码。
-
-支持 Linux x64、Windows x64、macOS Apple Silicon 与 Intel。以下入口可直接安装最新正式版本：
-
-```bash
-curl -fsSL https://github.com/pengchengluoyi/MinoWorkbench/releases/latest/download/install.sh | bash
+```sh
+pipx install ./mino_nexus-X.Y.Z-py3-none-any.whl
+mino-nexus service install
+mino-nexus service status
 ```
 
-Windows 在 [统一安装器 Releases](https://github.com/pengchengluoyi/MinoWorkbench/releases/latest) 下载 `MinoInstaller-win32-x64.exe` 运行，或在 PowerShell 执行：
-
-```powershell
-irm https://github.com/pengchengluoyi/MinoWorkbench/releases/latest/download/install.ps1 | iex
-```
-
-默认安装目录是 `~/Mino/nexus`、`~/Mino/workbench`。Nexus 地址为 `http://127.0.0.1:50104`，Workbench 地址为 `http://127.0.0.1:60104`。Workbench 安装完成后默认打开浏览器；以后可运行 `mino-workbench open`，安装时添加 `--no-open` 可关闭自动打开。Workbench 默认连接本机 Nexus，可用 `--nexus-url` 指定远程地址。无需安装 Python 或 GitHub CLI。安装器验证下载大小和 SHA256；已有目录或端口占用时停止并保留数据。
-
-`bootstrap.sh` / `bootstrap.ps1` 默认只安装本仓库组件；`install.sh` / `install.ps1` 提供组件选择。原生安装器还支持 `--components nexus|workbench|both`、`--download-only` 和 `--package-dir` 离线安装。Linux/Windows 当前以用户后台进程运行，不注册开机自启；可使用安装目录内 `launcher/mino-maintain`（Windows 加 `.exe`）管理启动和停止，Nexus 命令前加 `d2`。
-
-正式安装后打开新终端，可运行 `mino-nexus start|stop|status`、`mino-workbench start|stop|status|open`；不带参数时启动服务。命令注册到用户目录，不依赖全局 Python。已激活的开发虚拟环境仍使用自己的源码入口。
-
-测试环境只从源码／PyCharm 启动，Nexus 使用 `--dev`（50101），Workbench 使用 `npm run dev`（60101）。Scout 不监听独立业务端口，只连接对应 Nexus。
+浏览器访问 `http://127.0.0.1:50104/`。B4 自动迁移前备份暂缓，升级前应另行备份。旧安装先停写，复制到新目录验收，保留旧目录。
 
 # MinoNexus
 
@@ -48,12 +34,12 @@ MinoNexus 是 [MiniOrangeServer](../MiniOrangeServer) 拆分出的「大脑」�
 
 ```bash
 uv sync                  # 或 pip install -e .
-mino-nexus               # :50104，并注册 mino.local
+mino-nexus --dev         # localhost:50101，隔离开发数据
 ```
 
 文档库上传 PDF 依赖 `pypdf`（已写在 `pyproject.toml`）。若报「PDF 解析需要 pypdf」，在当前 Python 环境重新执行 `pip install -e .` 后重启 Nexus。
 
-Console / Studio / Scout 打 `http://mino.local:50104`（Nexus 启动后 mDNS 注册）。首次启动写入本地账号 `admin` / `Mino@local`（可用 `MINO_BOOTSTRAP_PASSWORD` 覆盖）。契约见 [docs/HTTP.md](docs/基础框架/HTTP.md)。
+Workbench / Scout 打 `http://mino.local:50104`（Nexus 启动后 mDNS 注册）。首次启动写入本地账号 `admin` / `Mino@local`（可用 `MINO_BOOTSTRAP_PASSWORD` 覆盖）。契约见 [docs/HTTP.md](docs/基础框架/HTTP.md)。
 
 Scout 安装包不在本仓：`GET /releases/scout/latest` 只在设置了 `MINO_SCOUT_MANIFEST_URL` 时代理 GitHub 的 `manifest.json`，数据目录里不要放 zip。凭证仍走 `POST /runtime/nodes/install-token`。
 
@@ -69,7 +55,7 @@ mino-scout --nexus ws://mino.local:50104/node --token <tok>     # 终端 2
 ## 架构一句话
 
 ```
-Electron UI ──HTTP :50104──► MinoNexus ──WS /node──◄ MinoScout ──► 设备
+Workbench ──HTTP :50104──► MinoNexus ──WS /node──◄ MinoScout ──► 设备
                              循环 / LLM /             (Scout 主动连)
                              能力目录 / DB
 ```
@@ -103,15 +89,13 @@ Electron UI ──HTTP :50104──► MinoNexus ──WS /node──◄ MinoSco
 | 组件 | 测试 | 正式 |
 |---|---|---|
 | Nexus | 50101 | 50104 |
-| Workbench | 60101 | 60104 |
+| Workbench | 60101 | 与 Nexus 同源 50104 |
 | Scout | 主动连接测试 Nexus 的 50101 | 主动连接正式 Nexus 的 50104 |
 
 Scout 不分配独立业务监听端口。测试与正式使用独立的数据目录、凭据和节点身份。已安装实例的配置不会因更新默认值而自动迁移。
 
 开发与正式部署隔离及启动方式见 [环境说明](docs/ENVIRONMENTS.md)。
 
-### 已有安装升级
+### 已有安装迁移
 
-从 0.1.45 起，重新运行 GitHub Release 的安装器会识别已有安装，先下载校验再停服升级；支持 Nexus 0.1.43 / 0.1.44 基线。使用原安装目录和原 Windows 登录用户，勿删除 `Mino` 目录。`--components both` 依次更新 Nexus 和 Workbench，每个组件独立保留恢复记录；并非跨组件原子事务。
-
-升级保留账号、数据目录、配置、旧应用与启动器；Nexus 在停止写入后备份全部数据，在副本上重复验证迁移。活动任务或未完成维护会阻止升级。离线迁移失败时恢复停服前数据；开始启动新版后不自动回滚数据库，防止丢失新写入。启动检查中断可重新运行同一目标安装器；其他中断保留 `updates` 下的日志和备份，禁止删除账本绕过。Windows 原有权限错误不会通过修改 ACL 或改用另一个用户自动修复。
+迁移前停止旧 Nexus 与 Workbench、备份并复制数据到新目录，再用新 wheel 指向新目录验收。保留原目录与原安装版本；不直接覆盖业务库。详见 [部署手册](docs/github-updates.md)。

@@ -1,5 +1,5 @@
 id: version-qa-bm
-version: 1
+version: 2
 label: 版本发版 BM
 summary: 发版评审
 engine: text_chat
@@ -19,6 +19,8 @@ call:
   json_mode: false
 image: {}
 system:
+- id: factual-grounding
+  text: 使用提供的业务事实和规则结果作为依据；数字不得猜测或补算。没有规则结果或证据时明确说明无法确认，不能声称已执行、已覆盖或已验收；提供已有目标的补充选项。
 - id: main
   file: system/10-main.md
   enabled: true

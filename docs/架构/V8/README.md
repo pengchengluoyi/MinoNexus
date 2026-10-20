@@ -14,7 +14,7 @@ V8 原先按「交付流水线 / 多角色评审 / 用例草稿落库」组织�
 | 多角色评审（`req-qa-bm`、`knowledge-reviewer`） | 现有 job | **冻结**；测试工作区不发起评审 |
 | IM 群同步（飞书/微信入站镜像） | 经 `assistant_gateway` 镜像到绑定议题 | 改为**仅出站通知**，入站默认关（工作区「资源」页签的通知渠道） |
 | 议题记忆（LLM 摘要） | 写 `collab_topics.memory` | **移除**；由代码生成的 `digest` 与主动播报替代 |
-| Bot 市场（`collab_marketplace.yaml`） | 安装只插 `project_bots` 一行 | **冻结**；一个项目只有一个管家身份，不需要市场 |
+| Bot 市场（`collab_marketplace.yaml`） | 安装只插 `project_bots` 一行 | **冻结**；工作区成员直接取后台已有角色，不需要市场 |
 | 开发代理（OpenHands） | `OPENHANDS_API_URL` | **保持下架** |
 | 用例草稿落库（`apply_drafts` → `upsert_cases`） | LLM 生成草稿的落库通道 | **移出主线**；用例只来自导入 |
 

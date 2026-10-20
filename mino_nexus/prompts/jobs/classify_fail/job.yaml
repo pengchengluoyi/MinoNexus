@@ -1,0 +1,18 @@
+id: classify_fail
+version: 2
+label: 失败归类
+summary: 代码读取业务数据并执行规则，不调用模型
+engine: rule
+role: req-qa-bm
+output_schema: qa_artifact
+enabled: true
+system:
+- id: contract
+  text: 此任务仅由 qa_process_assist.run_job 执行；输入由代码从业务库读取。
+slots:
+- name: user_payload
+  kind: text
+  required: false
+user:
+- id: input
+  slot: user_payload

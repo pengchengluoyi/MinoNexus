@@ -313,6 +313,22 @@ def _check_refs(repo: Repo) -> None:
             raise PromptRepoError(f"技能 {spec.get('id')} 引用了不存在的角色 {role}")
     job_ids = set(repo.jobs)
     for row in repo.roles:
+        chat_jobs = row.get("chat_jobs", [])
+        if not isinstance(chat_jobs, list) or any(not isinstance(j, str) for j in chat_jobs):
+            raise PromptRepoError(f"角色 {row.get('id')} chat_jobs 必须是 job id 列表")
+        for jid in chat_jobs:
+            job = repo.jobs.get(jid)
+            if not job or not job.get("enabled"):
+                raise PromptRepoError(f"角色 {row.get('id')} chat_jobs 引用了不存在或停用的 job {jid}")
+            if job.get("engine") not in ("text_chat", "chat_reply", "rule"):
+                raise PromptRepoError(f"角色 {row.get('id')} chat_jobs 不允许设备或结构化 job {jid}")
+        tools = row.get("tools", [])
+        if not isinstance(tools, list) or any(not isinstance(t, str) for t in tools):
+            raise PromptRepoError(f"角色 {row.get('id')} tools 必须是工具 id 列表")
+        for tid in tools:
+            tool = repo.tools.get(tid)
+            if not tool or tool.get("enabled") is False or tool.get("workspace_only"):
+                raise PromptRepoError(f"角色 {row.get('id')} tools 引用了不存在、停用或仅限管家的工具 {tid}")
         workflow = str(row.get("job") or "")
         for jid in row.get("jobs") or []:
             if jid == workflow or jid in job_ids:

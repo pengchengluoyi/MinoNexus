@@ -1,0 +1,129 @@
+name: Release wheel
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: pengchengluoyi/MinoWorkbench
+          ref: main
+          path: _workbench
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: _workbench/package-lock.json
+      - name: Build Workbench
+        working-directory: _workbench
+        run: |
+          npm ci
+          npm run build -- --base ./
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Build wheel and sdist using tag version
+        run: |
+          python scripts/prepare_web.py --dist _workbench/dist --version "${GITHUB_REF_NAME#v}"
+          python -m pip install build
+          python -m build --outdir dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: product-wheel
+          path: dist/*.whl
+      - name: Checksums
+        run: cd dist && sha256sum *.whl *.tar.gz > SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+  image:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: product-wheel
+          path: dist
+      - uses: docker/setup-buildx-action@v3
+      - name: Image identity
+        run: |
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mino-nexus" >> "$GITHUB_ENV"
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          platforms: linux/${{ matrix.arch }}
+          build-args: WHEEL_STAGE=release-wheel
+          tags: ${{ env.IMAGE }}:${{ env.VERSION }}-${{ matrix.arch }}
+      - name: Offline image
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p offline
+          docker save "$IMAGE:$VERSION-$ARCH" | gzip > "offline/mino-nexus-$VERSION-linux-$ARCH.tar.gz"
+          cd offline
+          sha256sum *.tar.gz > "SHA256SUMS-linux-$ARCH.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.arch }}
+          path: offline/*
+
+  publish-image:
+    needs: image
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-*
+          path: offline
+          merge-multiple: true
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish both architecture images
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mino-nexus"
+          version="${GITHUB_REF_NAME#v}"
+          for arch in amd64 arm64; do
+            gunzip -c "offline/mino-nexus-$version-linux-$arch.tar.gz" | docker load
+            docker push "$image:$version-$arch"
+          done
+          docker manifest create "$image:$version" "$image:$version-amd64" "$image:$version-arm64"
+          docker manifest push "$image:$version"
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: offline/*
+          fail_on_unmatched_files: true

@@ -23,6 +23,7 @@ class WorkspaceCreate(BaseModel):
     requirement_id: str = ''
     modules: list[str] = Field(default_factory=list)
     env_profile: str = ''
+    env_surface: str = ''
 
 
 class WorkspacePatch(BaseModel):
@@ -158,3 +159,49 @@ def read_attachment(project_id: str, topic_id: str, ref: str, sess: dict = Depen
 @router.post('/{topic_id}/read')
 def read_workspace(project_id: str, topic_id: str, sess: dict = Depends(project_maintainer)):
     return call(ws.mark_read, project_id, topic_id, sess)
+
+
+class MemberBody(BaseModel):
+    member: str
+
+
+class DefaultMembersBody(BaseModel):
+    members: list[str]
+
+
+@router.get('/{topic_id}/members')
+def members(project_id: str, topic_id: str, sess: dict = Depends(project_maintainer)):
+    from mino_nexus.services.workspace_members import list_members, catalog, role_directory
+    return call(lambda: {'members': list_members(project_id, topic_id, sess), 'available': list(catalog().values()), 'roles': role_directory()})
+
+
+@router.post('/{topic_id}/members')
+def add_member(project_id: str, topic_id: str, body: MemberBody, sess: dict = Depends(project_maintainer)):
+    from mino_nexus.services.workspace_members import change_member
+    return call(change_member, project_id, topic_id, sess, body.member)
+
+
+@router.delete('/{topic_id}/members/{member}')
+def remove_member(project_id: str, topic_id: str, member: str, sess: dict = Depends(project_maintainer)):
+    from mino_nexus.services.workspace_members import change_member
+    return call(change_member, project_id, topic_id, sess, member, True)
+
+
+@router.get('/settings/default-members')
+def get_default_members(project_id: str, sess: dict = Depends(project_maintainer)):
+    from mino_nexus.services.workspace_members import default_settings
+    return call(default_settings)
+
+
+@router.put('/settings/default-members')
+def set_default_members(project_id: str, body: DefaultMembersBody, sess: dict = Depends(project_maintainer)):
+    from mino_nexus.routers.deps import require_packs_writer
+    from mino_nexus.services.workspace_members import default_settings
+    require_packs_writer(sess)
+    return call(default_settings, body.members)
+
+
+@router.post('/{topic_id}/members/defaults')
+def restore_default_members(project_id: str, topic_id: str, sess: dict = Depends(project_maintainer)):
+    from mino_nexus.services.workspace_members import restore_defaults
+    return call(restore_defaults, project_id, topic_id, sess)

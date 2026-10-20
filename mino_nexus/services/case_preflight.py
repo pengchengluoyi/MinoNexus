@@ -30,13 +30,16 @@ def partition_cases(cases: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], 
                 "reasons": list(dict.fromkeys(item["user_message"] for item in binding_issues)),
                 "blocked_by": binding_issues})
             continue
-        if automation.get("coverable") is True:
+        blocking_items = [
+            item
+            for item in (automation.get("blocked_by") or [])
+            if isinstance(item, dict) and str(item.get("severity") or "blocking") == "blocking"
+        ]
+        if automation.get("coverable") is not False and not blocking_items:
             runnable.append(case)
             continue
         reasons, diagnostics = [], []
-        for item in automation.get("blocked_by") or []:
-            if not isinstance(item, dict):
-                continue
+        for item in blocking_items:
             phase = str(item.get("phase") or "")
             reason = str(item.get("reason") or "unmapped")
             message = user_message(

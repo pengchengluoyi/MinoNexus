@@ -1,5 +1,5 @@
 id: im-qa-assistant
-version: 2
+version: 3
 sort_order: 100
 label: IM 总指挥
 group: product
@@ -18,4 +18,6 @@ triggers: []
 output: text
 editable: true
 jobs:
+- im-dialogue
+chat_jobs:
 - im-dialogue
