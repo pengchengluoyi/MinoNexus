@@ -52,8 +52,5 @@ mino_nexus = [
   "BUILD.json",
   "web/**",
   "catalog/*",
-  "prompts/*",
-  "prompts/*/*",
-  "prompts/*/*/*",
-  "prompts/*/*/*/*",
+  "prompts/**",
 ]

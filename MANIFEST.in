@@ -1,0 +1,2 @@
+# Architecture and development documentation is not runtime package data.
+prune docs
