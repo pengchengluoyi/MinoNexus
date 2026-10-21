@@ -1,4 +1,4 @@
-"""提交前只读检查用例可覆盖性；不编译、不租资源、不创建任务。"""
+"""只读资格检查，以及执行意图下的失效产物重编；不租资源、不创建执行任务。"""
 from __future__ import annotations
 
 from typing import Any
@@ -72,13 +72,38 @@ def partition_cases(cases: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], 
                       "blocked": blocked, "requested_total": len(cases)}
 
 
-def preflight(app: dict[str, Any], case_ids: list[str]) -> dict[str, Any]:
+def prepare_cases_for_execution(project_id: str, case_ids: list[str]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    from mino_nexus.services.case_compilation import ensure_execution_compilation
+
+    cases, jobs = ensure_execution_compilation(project_id, case_ids)
+    runnable, report = partition_cases(cases)
+    report["compilation_jobs"] = jobs
+    pending = {job["case_id"]: job for job in jobs}
+    for blocked in report["blocked"]:
+        job = pending.get(blocked["case_id"])
+        if job:
+            blocked["reasons"] = ["编译产物尚未就绪，已排队重编或复用在途任务；请编译完成后重新执行。"]
+            blocked["compilation_job"] = job
+    return runnable, report
+
+
+def preflight(app: dict[str, Any], case_ids: list[str], *, recompile_stale: bool = False) -> dict[str, Any]:
+    if recompile_stale:
+        return prepare_cases_for_execution(str(app.get("project_id") or ""), case_ids)[1]
     from mino_nexus.services.case_store import list_cases
 
     available = {str(case.get("case_id")): case for case in list_cases(str(app.get("project_id") or ""))}
     if not case_ids or any(str(case_id) not in available for case_id in case_ids):
         raise ValueError("所选用例为空、已删除或不属于当前项目；本次未创建任务。")
     return partition_cases([available[str(case_id)] for case_id in dict.fromkeys(case_ids)])[1]
+
+
+def rejection_message(report: dict[str, Any]) -> str:
+    pending = report.get("compilation_jobs") or []
+    if pending:
+        return (f"{len(pending)} 条用例正在编译或已排队重编，请编译完成后重新执行；本次未创建执行任务。\n"
+                + blocked_message(report["blocked"]))
+    return "所选用例均未通过执行预检，本次未创建任务。\n" + blocked_message(report["blocked"])
 
 
 def blocked_message(blocked: list[dict[str, Any]]) -> str:

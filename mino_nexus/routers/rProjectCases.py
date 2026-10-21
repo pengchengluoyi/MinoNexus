@@ -75,6 +75,7 @@ class CasePreflightBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     app_id: str = Field(min_length=1, max_length=200)
     case_ids: list[str] = Field(default_factory=list, max_length=200)
+    recompile_stale: bool = False
 
 
 class CaseDeleteBody(BaseModel):
@@ -499,10 +500,12 @@ def post_case_preflight(project_id: str, body: CasePreflightBody, _sess: dict = 
         raise HTTPException(status_code=404, detail="App not found") from exc
     if str(app.get("project_id") or "") != str(project_id):
         raise HTTPException(status_code=400, detail="app 与项目不匹配")
+    if body.recompile_stale:
+        project_maintainer(project_id, _sess)
     from mino_nexus.services.case_preflight import preflight
 
     try:
-        return ok(preflight(app, body.case_ids))
+        return ok(preflight(app, body.case_ids, recompile_stale=body.recompile_stale))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

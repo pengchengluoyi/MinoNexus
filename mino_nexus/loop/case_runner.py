@@ -188,12 +188,13 @@ def run_cases(
     requested_total = len(cases)
     skipped_cases: list[dict[str, Any]] = []
     if not instruction:
-        from mino_nexus.services.case_preflight import partition_cases
+        from mino_nexus.services.case_preflight import prepare_cases_for_execution
 
-        cases, preflight = partition_cases(cases)
+        cases, preflight = prepare_cases_for_execution(str(app.get("project_id") or ""),
+            [str(case["case_id"]) for case in cases])
         skipped_cases = preflight["blocked"]
         if not cases:
-            raise UiNotCoverable(skipped_cases)
+            raise UiNotCoverable(skipped_cases, compilation_jobs=preflight.get("compilation_jobs"))
     mark("cases")
 
     from mino_nexus.services.device_targets import select
@@ -524,11 +525,12 @@ def _ensure_web_parallel_capacity(sn: str) -> None:
 
 
 class UiNotCoverable(Exception):
-    def __init__(self, blocked: list[dict[str, Any]]):
-        from mino_nexus.services.case_preflight import blocked_message
+    def __init__(self, blocked: list[dict[str, Any]], *, compilation_jobs: list[dict[str, Any]] | None = None):
+        from mino_nexus.services.case_preflight import rejection_message
 
         self.blocked = list(blocked or [])
-        super().__init__("所选用例均无法 UI 自动化，本次未创建任务。\n" + blocked_message(self.blocked))
+        self.compilation_jobs = list(compilation_jobs or [])
+        super().__init__(rejection_message({"blocked": self.blocked, "compilation_jobs": self.compilation_jobs}))
 
 
 class DeviceBusy(Exception):

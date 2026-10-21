@@ -404,7 +404,7 @@ class NodeRegistry:
                 owner_user_id=owner,
                 host=dict(getattr(reg, "host", {}) or {}),
                 plugins=sanitize_plugins(getattr(reg, "plugins", None)),
-                tool_tasks_version=1 if getattr(reg, "tool_tasks_version", 0) == 1 else 0,
+                tool_tasks_version=getattr(reg, "tool_tasks_version", 0) if getattr(reg, "tool_tasks_version", 0) in (1, 2) else 0,
                 plugins_ready=getattr(reg, "plugins_ready", None) if type(getattr(reg, "plugins_ready", None)) is bool else None,
                 plugin_warning=str(getattr(reg, "plugin_warning", "") or "")[:200] if getattr(reg, "plugins_ready", None) is False else "",
                 runtime_environment=getattr(reg, "runtime_environment", "") if getattr(reg, "runtime_environment", "") in {"development", "production"} else "",
@@ -523,7 +523,7 @@ class NodeRegistry:
             host = getattr(hb, "host", None)
             if isinstance(host, dict) and host:
                 node.host = dict(host)
-            node.tool_tasks_version = 1 if getattr(hb, "tool_tasks_version", 0) == 1 else 0
+            node.tool_tasks_version = getattr(hb, "tool_tasks_version", 0) if getattr(hb, "tool_tasks_version", 0) in (1, 2) else 0
             ready = getattr(hb, "plugins_ready", None)
             node.plugins_ready = ready if type(ready) is bool else None
             warning = getattr(hb, "plugin_warning", "")

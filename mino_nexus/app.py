@@ -141,6 +141,8 @@ async def lifespan(app: FastAPI):
     message_task = asyncio.create_task(message_worker())
     from mino_nexus.services.development import worker as development_worker
     development_task = asyncio.create_task(development_worker())
+    from mino_nexus.services.scout_updates import worker as scout_update_worker
+    scout_update_task = asyncio.create_task(scout_update_worker())
     from mino_nexus.core.execution_user import execution_user, user_thread
     from mino_nexus.services import run_store
     from mino_nexus.loop.case_exec import _run_in_background
@@ -167,6 +169,8 @@ async def lifespan(app: FastAPI):
     collab_task.cancel()
     policy_task.cancel()
     await asyncio.gather(collab_task, policy_task, return_exceptions=True)
+    scout_update_task.cancel()
+    await asyncio.gather(scout_update_task, return_exceptions=True)
     development_task.cancel()
     await asyncio.gather(development_task, return_exceptions=True)
     compile_task.cancel()

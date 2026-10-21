@@ -36,7 +36,7 @@ def _live(node_id, user_id):
     live = _owner(node_id, user_id)
     if not live or not live.alive or live.draining or live.send is None:
         raise HTTPException(409, '节点离线，不能安装')
-    if live.tool_tasks_version != 1 or live.plugins_ready is not True:
+    if live.tool_tasks_version not in (1, 2) or live.plugins_ready is not True:
         raise HTTPException(409, '节点尚未上报下载中心合同，请手动升级 Scout 或等待账号确认')
     return live
 
@@ -71,7 +71,7 @@ async def _rpc(live, capability, params):
 
 
 def _save(task, raw):
-    if not isinstance(raw, dict) or raw.get('task_id') != task['task_id'] or raw.get('tool_id') != task['tool_id'] or raw.get('action') != 'install':
+    if not isinstance(raw, dict) or raw.get('task_id') != task['task_id'] or raw.get('tool_id') != task['tool_id'] or raw.get('action') != task['action']:
         raise RuntimeError('task_receipt_mismatch')
     state = raw.get('state')
     if state not in ACTIVE | TERMINAL:
@@ -108,7 +108,7 @@ async def refresh_task(node_id, user_id, task_id):
     if task['state'] not in ACTIVE:
         return task
     live = _owner(node_id, user_id)
-    if not live or not live.alive or live.send is None or live.tool_tasks_version != 1:
+    if not live or not live.alive or live.send is None or live.tool_tasks_version not in (1, 2):
         return task
     try:
         raw = await _rpc(live, 'node.tool_task_get', {'task_id': task_id})
@@ -124,6 +124,8 @@ async def refresh_task(node_id, user_id, task_id):
 
 async def submit(node_id, user_id, operation_id, tool_id, action):
     live = _owner(node_id, user_id)
+    if action not in {'install', 'update'} or tool_id not in {'cli.feishu', 'cli.meego', 'langbot', 'chromium', 'adb.keyboard'}:
+        raise HTTPException(422, 'unsupported_tool_action')
     with session_scope() as db:
         db.execute(text('BEGIN IMMEDIATE'))
         row = db.query(NodeToolTask).filter_by(owner_user_id=user_id, operation_id=operation_id).first()
@@ -131,10 +133,14 @@ async def submit(node_id, user_id, operation_id, tool_id, action):
         if row:
             if (row.node_id, row.tool_id, row.action) != (node_id, tool_id, action):
                 raise HTTPException(409, 'operation_parameters_conflict')
-            if row.state in TERMINAL or not live or not live.alive or live.draining or live.send is None or live.tool_tasks_version != 1 or live.plugins_ready is not True:
+            if row.state in TERMINAL or not live or not live.alive or live.draining or live.send is None or live.tool_tasks_version not in (1, 2) or live.plugins_ready is not True:
                 return _public(row)
         else:
             live = _live(node_id, user_id)
+            if live.tool_tasks_version < 2 and (action == 'update' or tool_id in {'chromium', 'adb.keyboard'}):
+                raise HTTPException(409, '当前 Scout 仅支持旧版插件安装，请先升级到下载中心合同 v2')
+            from mino_nexus.services.scout_updates import check_admission
+            check_admission(db, [node_id])
             slot = f'{user_id}:{node_id}:{tool_id}'
             if db.query(NodeToolTask).filter_by(active_slot=slot).first():
                 raise HTTPException(409, 'tool_busy')
@@ -183,7 +189,7 @@ def note_progress(node_id, user_id, progress):
         row = db.get(NodeToolTask, task_id)
         if not row or row.owner_user_id != user_id or row.node_id != node_id or row.state not in ACTIVE:
             return
-        progress_tool = 'langbot' if (progress.get('class'), progress.get('id')) == ('im', 'langbot') else f"{progress.get('class')}.{progress.get('id')}"
+        progress_tool = progress.get('id') if progress.get('class') == 'tool' else 'langbot' if (progress.get('class'), progress.get('id')) == ('im', 'langbot') else f"{progress.get('class')}.{progress.get('id')}"
         if row.tool_id != progress_tool:
             return
         # Progress is not an authoritative final receipt, even at 100%.
@@ -193,14 +199,14 @@ def note_progress(node_id, user_id, progress):
 
 async def tools(node_id, user_id):
     live = _owner(node_id, user_id)
-    supported = bool(live and live.tool_tasks_version == 1)
+    supported = bool(live and live.tool_tasks_version in (1, 2))
     online = bool(live and live.alive and not live.draining and live.send)
     stale = True
     if online and supported:
         try:
             raw = await _rpc(live, 'node.tools', {})
             snapshot = raw.get('tools')
-            if isinstance(snapshot, dict) and snapshot.get('version') == 1 and isinstance(snapshot.get('items'), list):
+            if isinstance(snapshot, dict) and snapshot.get('version') in (1, 2) and isinstance(snapshot.get('items'), list):
                 with session_scope() as db:
                     db.execute(text("BEGIN IMMEDIATE"))
                     node = db.get(Node, node_id)
@@ -226,4 +232,4 @@ async def tools(node_id, user_id):
     items = snapshot.get('items') or [dict(tool_id=k, label=label, purpose=purpose, state='unknown', detail='节点尚未上报此状态，需要支持下载中心的新版本 Scout') for k, label, purpose in TOOLS]
     if online and not supported:
         items = [dict(tool_id=k, label=label, purpose=purpose, state='unknown', detail='当前 Scout 未上报下载中心合同，请手动升级') for k, label, purpose in TOOLS]
-    return dict(node_id=node_id, online=online, supported=supported, stale=stale, reported_at=snapshot.get('reported_at'), items=items, tasks=tasks)
+    return dict(node_id=node_id, online=online, supported=supported, contract_version=live.tool_tasks_version if live else 0, stale=stale, reported_at=snapshot.get('reported_at'), items=items, tasks=tasks)

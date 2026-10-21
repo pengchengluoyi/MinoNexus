@@ -213,8 +213,8 @@ def run_cases(body: RunRequest, sess: dict = Depends(current_session)):
         ) from exc
     except cr.UiNotCoverable as exc:
         raise HTTPException(
-            status_code=400,
-            detail={"message": str(exc), "blocked": exc.blocked},
+            status_code=409 if exc.compilation_jobs else 400,
+            detail={"message": str(exc), "blocked": exc.blocked, "compilation_jobs": exc.compilation_jobs},
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

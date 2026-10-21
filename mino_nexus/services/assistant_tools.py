@@ -435,12 +435,13 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         if scope_problem:
             return ToolOutcome(ok=False, summary=scope_problem, ask=scope_problem if scope_candidates else "",
                 tool_id="case.run", args=args, field="module" if scope_candidates else "", candidates=scope_candidates)
-        from mino_nexus.services.case_preflight import preflight
+        from mino_nexus.services.case_preflight import preflight, rejection_message
         from mino_nexus.services.project_store import require_app
 
-        preflight_data = preflight(require_app(str(args["app_id"])), args["case_ids"])
+        preflight_data = preflight(require_app(str(args["app_id"])), args["case_ids"], recompile_stale=True)
         if not preflight_data["runnable"]:
-            return ToolOutcome(ok=False, status=400, summary="所选用例均无法 UI 自动化，本次未创建任务。",
+            return ToolOutcome(ok=False, status=409 if preflight_data.get("compilation_jobs") else 400,
+                summary=rejection_message(preflight_data),
                 tool_id="case.run", args=args, data={"preflight": preflight_data})
     question_field = str(args.pop("_clarification_field", ""))
     if ask:

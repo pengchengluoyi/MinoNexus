@@ -601,7 +601,13 @@ def scout_update_status(node_id: str, operation_id: str = "", sess: dict = Depen
 @router.post("/nodes/{node_id}/update")
 async def update_scout(node_id: str, body: ScoutUpdateBody, sess: dict = Depends(current_session)):
     _node_row_for_session(node_id, studio_id="", sess=sess)
-    raise HTTPException(410, {"reason_code": "component_updates_removed"})
+    from mino_nexus.services.scout_updates import request
+    if body.build_id.lower() == "latest" or body.release_tag.lower() == "latest":
+        raise HTTPException(422, "必须指定固定 release tag/build_id")
+    if (body.action == "rollback") != bool(body.rollback_of):
+        raise HTTPException(422, "rollback 动作必须指定原成功 operation_id")
+    params = body.model_dump(exclude={"operation_id"})
+    return ok(request(node_id, str(sess["user_id"]), body.operation_id, params))
 
 
 @router.post("/nodes/{node_id}/updates/{operation_id}/cancel")
@@ -614,8 +620,8 @@ def cancel_scout_update(node_id: str, operation_id: str, sess: dict = Depends(cu
 class NodeToolTaskBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,100}$")
-    tool_id: str = Field(pattern=r"^(cli\.(feishu|meego)|langbot)$")
-    action: str = Field(pattern=r"^install$")
+    tool_id: str = Field(pattern=r"^(cli\.(feishu|meego)|langbot|chromium|adb\.keyboard)$")
+    action: str = Field(pattern=r"^(install|update)$")
 
 
 @router.get("/nodes/{node_id}/tools")

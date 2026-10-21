@@ -161,7 +161,7 @@ HITL 问人界面、排期 cron、基线库、从设计稿/定位抽登录图标
 | GET | `/project/{project_id}/cases` | 项目用例列表。每条含 `step_keys_summary`（含 `ui_automation.coverable` / `blocked_by` / 逐步 `lights`） |
 | GET | `/project/{project_id}/cases/{case_id}` | 单条用例 + `step_keys_summary`。`coverable=false` 时 Studio 选用例应禁用开跑 |
 | GET | `/project/{project_id}/requirements` | 导入可选需求（项目内各 App 聚合） |
-| POST | `/project/{project_id}/cases/preflight` | 开跑前只读检查：`runnable` / `blocked`（按 `meta.ui_automation` 阻断项，不含 advisory） |
+| POST | `/project/{project_id}/cases/preflight` | `{app_id,case_ids,recompile_stale?:false}`；默认只读，返回 `runnable` / `blocked`（不含 advisory）；启动入口传 true，以当前用例排队修复失效产物并返回 `compilation_jobs`，需项目维护权限 |
 | POST | `/project/{project_id}/cases/import/preview` | 解析表格。每行：`steps_parsed` / `expected_parsed`（编译出的事件）、`remark`（不可覆盖的人话）、`ui_automation`。`flags` 仍是机器码。**不拦入库** |
 | POST | `/project/{project_id}/cases/import/commit` | 写入；body 含稳定 `client_request_id`、`preview_token`、各行 `on_conflict`；同身份同输入复用回执，输入变化 409。`block_on_step_key_issues` 省略时用设置默认；旧预览调用可回退到 token 身份，直接 rows 提交必须提供身份 |
 | GET | `/project/{project_id}/cases/import/receipts/by-request/{client_request_id}` | 按本账号/项目的提交身份只读查询；预览删除或过期不影响回执 |
@@ -493,6 +493,8 @@ Workbench 的“预检所选用例”按当前完整选择逐条调用；选择�
 | `POST .../review-requirements/recheck` | `{expected_revision,expected_job_id,reason,context?,evidence_session_id?}`；context 为当前项目应用及 owned 设备 `{app_id,sn,env_profile,env_surface,execution_mode?,action_scheme?,provider_id?}`。实际重算静态资格、目标绑定和资源登记检查，不租设备、不调用执行器。目标诊断按上下文保存，省略目标不能清除原目标问题；观察超过 60 秒或版本改变标过时 |
 
 原有 `POST .../v5/compile`、`.../step-keys/compile`、`.../resource-key/compile` 统一进入队列，仍返回 `{case,job,preview}`。新客户端发送上述稳定请求身份；兼容无 body 的旧入口可复用在途工作，不能把 HTTP 返回当编译已完成。保存/导入不再被模型时延阻塞；预览的解析仍是可丢弃候选，确认导入保留原文并以持久任务报告编译缺口。
+
+执行入口（助手、Workbench 启动及 Case Runner）重新读取用例，再校验原文摘要、编译/资源目录合同及执行绑定合同。产物缺失或失效时复用 queued/running 或按原文版本与当前构建依赖生成幂等重编任务；不把旧预检结果作为执行许可。真实语义阻塞不触发重编，failed/interrupted/cancelled 不自动重放；仅模型调用前检测到 `compile_input_or_build_changed` 的失败可按新的构建身份排队，重复请求不重复调用。全部等待编译时不创建执行任务，Runner 返回 409，detail 含 `message/blocked/compilation_jobs`；部分就绪时仍只执行就绪子集，其余的重编回执进入 `skipped_cases`。编译完成后需再次发起执行，不在后台延迟操作设备。列表、详情及默认 preflight 不触发编译；无关 Nexus 发布版本变化不会单独使成功产物失效。
 
 来源/任务变化或恢复父任务不一致返回 409；无项目维护权限返回 403，不存在或非本账号的完整 job/设备/session 资源返回 404 或证据不匹配；复核理由/分类/证据不合约返回 400。queued/running/failed/interrupted/cancelled 最新版本均不能悄悄使用旧 artifact 或旧 publication 执行。发布快照保存 source_revision_id/source_revision/compile_job_id/effective_artifact，并在提交时再次比较引用。
 

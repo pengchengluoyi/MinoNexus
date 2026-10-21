@@ -435,12 +435,73 @@ def complete(job_id, token, output=None, diagnostics=None):
 def readiness(case):
     if not case.get("source_revision_id"):
         return None  # Historical records remain readable; no invented provenance.
+    from mino_nexus.services.v5_publication import source_view
+    if case.get("source_digest") != digest(source_view(case)):
+        return "compile_source_changed"
     job, artifact = case.get("compile_job") or {}, case.get("effective_artifact") or {}
     if (job.get("status") != "succeeded" or job.get("job_id") != artifact.get("job_id")
             or artifact.get("revision_id") != case.get("source_revision_id")
             or job.get("job_id") != case.get("latest_compile_job_id")):
         return "compile_artifact_unavailable" if job.get("status") == "succeeded" else "compile_" + str(job.get("status") or "required")
+    current = build_identity()
+    if any((job.get("build") or {}).get(key) != current[key]
+            for key in ("compiler_contract", "resource_catalog_version")):
+        return "compile_contract_changed"
     return None
+
+
+def ensure_execution_compilation(project_id, case_ids):
+    from mino_nexus.services.case_preflight import partition_cases
+    from mino_nexus.services.case_store import _public
+
+    repairable = {"compile_required", "compile_source_changed", "compile_contract_changed",
+        "compile_artifact_unavailable", "requirements_need_compile", "precondition_coverage_missing",
+        "precondition_scene_mismatch", "case_scene_required", "case_scene_recompile_required"}
+    with session_scope() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        actor = owned(db, project_id, write=False)
+        rows = {row.case_id: row for row in db.query(ProjectCase).filter(
+            ProjectCase.project_id == project_id, ProjectCase.case_id.in_(case_ids)).all()}
+        if not case_ids or any(case_id not in rows for case_id in case_ids):
+            raise ValueError("所选用例为空、已删除或不属于当前项目；本次未创建任务。")
+        cases, jobs, build = [], [], None
+        for case_id in dict.fromkeys(case_ids):
+            row = rows[case_id]
+            latest_id = (row.extra or {}).get("latest_compile_job_id")
+            latest = db.get(CaseCompileJob, latest_id) if latest_id else None
+            if latest and latest.project_id == project_id and latest.case_id == case_id:
+                if (row.extra or {}).get("compile_job") != job_view(latest):
+                    _project_status(db, latest)
+            else:
+                latest = None
+            case = _public(row)
+            _, report = partition_cases([case])
+            reasons = {item.get("reason") for blocked in report["blocked"] for item in blocked.get("blocked_by", [])}
+            revision = db.get(CaseRevision, case["source_revision_id"]) if case.get("source_revision_id") else None
+            same_input = bool(revision and revision.project_id == project_id and revision.case_id == case_id
+                and revision.input_digest == digest(input_view(case)))
+            active = latest and latest.status in {"queued", "running"} and same_input and latest.revision_id == revision.revision_id
+            changed_before_call = latest and latest.status == "failed" and latest.diagnostics and all(
+                item.get("reason_code") == "compile_input_or_build_changed" for item in latest.diagnostics)
+            needs_repair = bool(reasons & repairable) or bool(changed_before_call)
+            if active:
+                jobs.append({"case_id": case_id, "job_id": latest.job_id, "status": latest.status})
+            elif needs_repair and (not latest or latest.status == "succeeded" or not same_input or changed_before_call):
+                owned(db, project_id)
+                if not same_input:
+                    latest = record_change(db, row, origin={"kind": "execution_preflight"})
+                else:
+                    if build is None:
+                        build = {**build_identity(), "dependency_digest": dependency_digest(db, project_id, actor)}
+                    request_id = "execution:" + digest([revision.revision_id, build])
+                    existing = db.query(CaseCompileJob).filter_by(owner_user_id=actor, project_id=project_id,
+                        case_id=case_id, request_id=request_id).one_or_none()
+                    latest = existing or _queue(db, row, revision, request_id=request_id)
+                if latest.status in {"queued", "running"}:
+                    jobs.append({"case_id": case_id, "job_id": latest.job_id, "status": latest.status})
+                case = _public(row)
+            cases.append(case)
+        return cases, jobs
 
 
 def run_one(worker_id):
