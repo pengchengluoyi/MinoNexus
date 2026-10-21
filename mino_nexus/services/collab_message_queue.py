@@ -18,7 +18,7 @@ def wake():
 
 def recover_interrupted():
     # On restart no unfinished utterance is replayed, including queued messages.
-    from mino_nexus.services.mino_bots import _now
+    from mino_nexus.services.collab_workspace import now as _now
     with session_scope() as db:
         db.query(CollabMessageJob).filter(CollabMessageJob.status.in_(("queued", "running"))).update({
             "status": "interrupted", "updated_at": _now(),
@@ -37,7 +37,7 @@ def _notify(project_id, topic_id, message_id):
 
 
 def run_one():
-    from mino_nexus.services.mino_bots import _now, _require_access
+    from mino_nexus.services.collab_workspace import now as _now, authorize as _require_access
     from mino_nexus.services.auth_store import api_session_for
     from mino_nexus.services.collab_conductor import process as orchestrate_after_user_message
     with session_scope() as db:

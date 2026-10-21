@@ -1,6 +1,8 @@
 """当前屏正向证据确认登录；凭据与旧登记仅作线索。"""
 from __future__ import annotations
 
+from mino_nexus.loop.login_transition import update_auth_state
+
 import json
 from typing import Any
 from urllib.parse import urlparse
@@ -67,13 +69,13 @@ def remember_session(ctx: Any, session: str, source: str) -> None:
         if not can_commit(ctx):
             sess = "unknown"
     if sess != "logged_in":
-        ctx.login_evidence = {}
+        update_auth_state(ctx, login_evidence={})
     src = str(source or "")[:32]
     if src in {"tool_api", "screen", "flow_block", "inspect_session", "logout"}:
-        ctx.session_fact = {"session": sess, "source": src}
+        update_auth_state(ctx, session_fact={"session": sess, "source": src})
         ctx.session_dirty = sess not in {"logged_in", "logged_out", "guest"}
-    setattr(ctx, "device_session", sess)
-    setattr(ctx, "device_session_source", src)
+    update_auth_state(ctx, device_session=sess)
+    update_auth_state(ctx, device_session_source=src)
     scene = getattr(ctx, "case_scene", None)
     if isinstance(scene, dict):
         scene["observed_session"] = sess
@@ -274,12 +276,32 @@ def ensure_read_web_auth_capability() -> int:
     return 1
 
 
+def _log_probe_diagnostic(ctx: Any, event_type: str, payload: dict[str, Any]) -> None:
+    """Only attach probe diagnostics to the current case's session."""
+    from mino_nexus.core.log import SLog
+    from mino_nexus.loop.observe.session_log import active_writer
+
+    writer = active_writer()
+    sid = str(getattr(ctx, "session_id", "") or "").strip()
+    if not sid or writer is None or writer.session_id != sid:
+        SLog.w("LoginStateProbe", f"{event_type}: 缺少匹配的会话 writer，诊断未落盘")
+        return
+    writer.append(event_type, payload)
+
+
 def observe_login_state(ctx: Any, router: Any, shot: Any) -> tuple[str, str]:
     """当前接口或界面证明登录态；缺少证据时保留 unknown。"""
+    ctx.web_auth_hint = None
+    ctx.session_contradiction = None
     if _is_web_ctx(ctx):
         api = probe_web_auth(ctx, router) or {}
         # Storage is only a hint. Never return early or update account state.
         ctx.web_auth_hint = bool(api.get("credential_present"))
+        _log_probe_diagnostic(ctx, "login/web_auth_hint", {
+            "credential_present": ctx.web_auth_hint,
+            "authentication_verified": False,
+            "source": "web_storage",
+        })
 
     from mino_nexus.ai.planner import inspect_session
     from mino_nexus.runtime.session_gate import format_required_session_brief
@@ -307,21 +329,26 @@ def observe_login_state(ctx: Any, router: Any, shot: Any) -> tuple[str, str]:
     if screen_proves_session(row):
         from mino_nexus.services.session_match import normalize_device_session
 
-        session = normalize_device_session(row.get("session") or "")
+        observed_session = normalize_device_session(row.get("session") or "")
         stored, _stored_note = stored_session(ctx)
         from mino_nexus.loop.observe.session_persist import stamp_session_observation
         effective = stamp_session_observation(ctx, row) or row
         session = str(effective.get("session") or "unknown")
-        ctx.device_session = session
-        ctx.device_session_source = "screen"
+        update_auth_state(ctx, device_session=session)
+        update_auth_state(ctx, device_session_source="screen")
         reason = str(row.get("reason") or "").strip() or f"当前屏证明 session={session}"
-        if stored in {"logged_in", "logged_out", "guest"} and stored != session:
-            setattr(ctx, "session_contradiction", {"stored": stored, "screen": session})
-            reason = f"同任务登录态矛盾：已记录 {stored}，当前屏 {session}。{reason}"
+        if stored in {"logged_in", "logged_out", "guest"} and stored != observed_session:
+            ctx.session_contradiction = {"stored": stored, "screen": observed_session}
+            _log_probe_diagnostic(ctx, "login/session_contradiction", {
+                **ctx.session_contradiction,
+                "effective_session": session,
+                "source": "screen",
+            })
+            reason = f"同任务登录态矛盾：已记录 {stored}，当前屏 {observed_session}。{reason}"
         return session, reason
 
     from mino_nexus.loop.observe.session_persist import stamp_session_observation
     stamp_session_observation(ctx, {**row, "ok": True, "session": "unknown", "identity": "unknown"})
-    ctx.device_session = "unknown"
-    ctx.device_session_source = "screen"
+    update_auth_state(ctx, device_session="unknown")
+    update_auth_state(ctx, device_session_source="screen")
     return "unknown", "当前观察未证明登录态，不能沿用凭据或旧会话宣称成功"

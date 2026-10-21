@@ -8,6 +8,11 @@ def explain(summary: str, data: Any = None) -> tuple[str, list[str]]:
     if isinstance(data, dict):
         preflight = data.get('preflight') or {}
         detail = data.get('detail') if isinstance(data.get('detail'), dict) else {}
+        reason = detail if str(detail.get('reason_code') or '').startswith('meego_') else data if str(data.get('reason_code') or '').startswith('meego_') else {}
+        if reason:
+            advice = [str(value) for value in reason.get('next_steps') or [] if isinstance(value, str)]
+            if advice:
+                return str(reason.get('summary') or reason.get('message') or text), advice
         blocked = preflight.get('blocked') or data.get('blocked') or detail.get('blocked')
         if blocked and not preflight.get('runnable'):
             return ('所选用例均未通过执行预检，本次没有创建任务。',
@@ -15,6 +20,10 @@ def explain(summary: str, data: Any = None) -> tuple[str, list[str]]:
         message = data.get('user_message')
         if message:
             text = str(message)
+    if 'check token perm failed' in text.lower():
+        return ('Meego 拒绝了当前插件的接口权限；插件换票成功不代表有目标空间的业务权限。',
+                ['检查飞书项目插件对应 OpenAPI 权限，并发布和启用包含该权限的版本。',
+                 '核对目标空间的真实 project_key，以及 Scout → 配置 → Meego 中 User Key 对应用户的空间权限。'])
     text = re.sub(r'步骤\s*(\d+)\s*操作', r'操作步骤 \1', text)
     if 'credential' in text and ('缺少' in text or 'missing' in text):
         if any(word in text for word in ('一键', '点击', '按钮')):

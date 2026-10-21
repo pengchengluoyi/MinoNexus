@@ -6,7 +6,7 @@ from copy import deepcopy
 
 from mino_nexus.loop.llm_step_context import step_scope_key
 from mino_nexus.loop.milestone_orchestrator import ensure_single_in_progress, in_progress_milestone
-from mino_nexus.loop.milestones import _normalize_milestone_row, milestone_v1_enabled, read_state, write_state, _sync_scope
+from mino_nexus.loop.milestones import _normalize_milestone_row, read_state, write_state, _sync_scope
 
 SCHEMA = "mino.interrupt_stack.v1"
 MAX_DEPTH = 2
@@ -72,8 +72,6 @@ def note_in_progress_tool_fail(
     reason: str = "",
 ) -> bool:
     """连续失败达阈值 → push interrupt（若未超深度）。"""
-    if not milestone_v1_enabled():
-        return False
     if stack_depth(cursor) >= MAX_DEPTH:
         return False
     state = read_state(cursor)
@@ -111,8 +109,6 @@ def push_interrupt(
     steps: list[dict[str, Any]],
     writer: Any = None,
 ) -> bool:
-    if not milestone_v1_enabled():
-        return False
     pid = str(parent_step_id or "").strip()
     if not pid:
         return False

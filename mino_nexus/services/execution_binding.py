@@ -116,6 +116,11 @@ def _resolve_execution_binding(requirements, target, capability_snapshot, policy
         return BindingResolution("blocked", diagnostics=[_diagnostic("binding_input_invalid", recheck=False)])
     if execution_contract != CONTRACT:
         return BindingResolution("blocked", diagnostics=[_diagnostic("execution_contract_unsupported", recheck=False)])
+    from mino_nexus.core.protocol import execution_mode as require_execution_mode
+    try:
+        mode = require_execution_mode(requirements.get("execution_mode"))
+    except ValueError:
+        return BindingResolution("blocked", diagnostics=[_diagnostic("execution_mode_unsupported", recheck=False)])
     if requirements.get("applicable") is False:
         return BindingResolution("not_applicable")
     if requirements.get("applicable") is not True:
@@ -274,7 +279,7 @@ def _resolve_execution_binding(requirements, target, capability_snapshot, policy
         **{key: deepcopy(requirements[key]) for key in _IDENTITY},
         "target": {key: deepcopy(target[key]) for key in _TARGET},
         **{key: capability_snapshot[key] for key in _GENERATIONS},
-        "execution_mode": str(requirements.get("execution_mode") or "legacy"),
+        "execution_mode": mode,
         "execution_contract_version": CONTRACT, "action_scheme": scheme,
         "policy_ref": policy_snapshot["policy_ref"], "caller": policy_snapshot["caller"],
         "target_scope": deepcopy(scope), "operations": bound, "implementations": implementations,
@@ -307,6 +312,8 @@ def validate_binding(binding):
         raise ValueError("binding_fields_invalid")
     if not isinstance(binding["target"], dict) or any(not isinstance(binding["target"].get(key), str) or not binding["target"][key] for key in _TARGET):
         raise ValueError("binding_target_invalid")
+    from mino_nexus.core.protocol import execution_mode as require_execution_mode
+    require_execution_mode(binding["execution_mode"])
     if binding["action_scheme"] not in {"dom_preferred", "visual"}:
         raise ValueError("binding_action_scheme_invalid")
     if type(binding["binding_revision"]) is not int or binding["binding_revision"] < 1:

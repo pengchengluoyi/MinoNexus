@@ -97,7 +97,7 @@ class NodeConnection:
         """发一条 N→S 请求并等它的 RESULT。超时返回 None。
 
         协议 §6：调用方（RouterProxy）负责按同一 `(run_id, step_idx)` 重发一次；
-        legacy 可重取；V5 正编号写请求禁止网络重发，丢结果按 effect_unknown 终结。
+        agent 可重取；V5 正编号写请求禁止网络重发，丢结果按 effect_unknown 终结。
         """
         if self._closed:
             return None

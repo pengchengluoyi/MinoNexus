@@ -1,15 +1,12 @@
 """check 阶段：step_program_keys → checkpoint 里程碑 + check_program_plan。"""
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from mino_nexus.loop.llm_step_context import step_scope_key
 from mino_nexus.loop.milestones import (
     _log_milestones_snapshot,
-    milestone_v1_enabled,
     milestones_empty,
-    milestones_from_check_plan,
     read_state,
     write_state,
     _sync_scope,
@@ -71,8 +68,6 @@ def seed_check_milestones_from_plan(
     *,
     writer: Any = None,
 ) -> dict[str, Any] | None:
-    if not milestone_v1_enabled():
-        return None
     _, phase = step_scope_key(cursor)
     if phase != "check":
         return None
@@ -111,30 +106,3 @@ def _only_generic_check_seed(state: dict[str, Any]) -> bool:
     if not ms:
         return True
     return not any(isinstance(m, dict) and m.get("source") == "check_program" for m in ms)
-
-
-def seed_check_milestones_after_enter(
-    cursor: Any,
-    case: dict[str, Any] | None,
-    *,
-    expected: str = "",
-    instruction: str = "",
-    writer: Any = None,
-) -> None:
-    """替代/增强 on_enter_check_phase 的纯 build_check_plan 种子。"""
-    plan = resolve_check_program_plan(case, cursor)
-    if plan.get("checkpoints"):
-        seed_check_milestones_from_plan(cursor, case, writer=writer)
-        return
-    if not milestone_v1_enabled():
-        return
-    state = _sync_scope(cursor, read_state(cursor))
-    if milestones_empty(state):
-        state["milestones"] = milestones_from_check_plan(expected, instruction=instruction)
-        state["status"] = "in_progress"
-        write_state(cursor, state)
-
-
-def check_program_plan_json(case: dict[str, Any] | None, cursor: Any) -> str:
-    plan = resolve_check_program_plan(case, cursor)
-    return json.dumps(plan or {}, ensure_ascii=False, indent=2, default=str)

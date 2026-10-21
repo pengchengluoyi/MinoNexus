@@ -7,7 +7,6 @@ from typing import Any
 from mino_nexus.loop.llm_step_context import step_scope_key
 from mino_nexus.loop.milestones import (
     _log_milestones_snapshot,
-    milestone_v1_enabled,
     milestones_empty,
     milestones_from_flow_steps,
     read_state,
@@ -51,6 +50,10 @@ def milestones_from_do_program(plan: dict[str, Any], *, app_id: str = "", ctx: A
         kind = str(step.get("kind") or "visual_action").strip().lower()
         sid = str(step.get("id") or "").strip() or f"do_{len(rows)}"
         if kind == "remark" or str(step.get("run_policy") or "") == "skip":
+            from mino_nexus.services.case_semantic_integrity import explicit_remark
+            if not explicit_remark(step.get("source_clause") or step.get("title")):
+                from mino_nexus.loop.resolved_case import ContractError
+                raise ContractError("required_operation_skipped")
             rows.append(
                 {
                     "id": sid,
@@ -132,8 +135,6 @@ def seed_do_milestones_from_plan(
     writer: Any = None,
     app_id: str = "",
 ) -> dict[str, Any] | None:
-    if not milestone_v1_enabled():
-        return None
     _, phase = step_scope_key(cursor)
     if phase != "do":
         return None

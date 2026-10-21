@@ -4,11 +4,10 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from mino_nexus.loop.llm_step_context import step_scope_key
-from mino_nexus.loop.vision_flags import step_phase_fsm_v1_enabled
+from mino_nexus.loop.vision_flags import milestone_phase_active
 from mino_nexus.loop.milestones import (
     MilestoneVerdict,
     evaluate_milestones,
-    milestone_v1_enabled,
     read_state,
     write_state,
     _sync_scope,
@@ -69,8 +68,6 @@ def mark_milestone_program_fail(
     cap_id: str = "",
     writer: Any = None,
 ) -> None:
-    if not milestone_v1_enabled():
-        return
     mid = str(milestone_id or "").strip()
     state = _sync_scope(cursor, read_state(cursor))
     ms = state.get("milestones") if isinstance(state.get("milestones"), list) else []
@@ -191,8 +188,6 @@ def apply_phase_transition(
     if not verdict.phase_complete:
         return None
     phase = str(getattr(cursor, "phase", "") or "").strip().lower()
-    if (in_check or phase == "check") and str(getattr(cursor, "check_oracle_status", "") or "") == "fail":
-        return None
     name = ""
     if in_prep or phase == "prep":
         if hasattr(cursor, "finish_prep"):
@@ -210,10 +205,19 @@ def apply_phase_transition(
 
         if evaluate_login_block_exit_shadow(cursor, ctx, writer=writer):
             return None
+        # enter_check may refuse an unreviewed action. Do not emit a successful
+        # transition unless phase or step actually advanced (no-expected steps
+        # may advance directly to the next do step).
+        before_scope = step_scope_key(cursor)
+        previous_goal = getattr(cursor, "step_goal_met", False)
         if hasattr(cursor, "step_goal_met"):
             cursor.step_goal_met = True
         if hasattr(cursor, "enter_check"):
             cursor.enter_check()
+        if step_scope_key(cursor) == before_scope:
+            if hasattr(cursor, "step_goal_met"):
+                cursor.step_goal_met = previous_goal
+            return None
         name = "do_to_check"
     if writer and name:
         writer.append(
@@ -245,7 +249,7 @@ def handle_model_signal_done_blocked(
         tr = apply_phase_transition(
             cursor, ctx, mv, writer=writer, in_prep=in_prep, in_check=in_check
         )
-        return ("transition", tr)
+        return ("transition", tr) if tr is not None else ("pending", None)
     return ("pending", None)
 
 
@@ -257,7 +261,7 @@ def try_transition_after_tool_pass(
     in_prep: bool = False,
     in_check: bool = False,
 ) -> Optional[str]:
-    if not step_phase_fsm_v1_enabled() or not milestone_v1_enabled():
+    if not milestone_phase_active():
         return None
     from mino_nexus.loop.milestone_orchestrator import program_exit_allowed
 

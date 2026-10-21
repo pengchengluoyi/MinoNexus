@@ -1,4 +1,3 @@
-version: 1
 drivers:
 - id: adb
   label: 真机 ADB

@@ -1,5 +1,4 @@
 id: nav-atlas-morph
-version: 1
 label: Atlas 多态判定
 summary: 同一逻辑页内容多态 vs 应拆页（仅建议 pin/split）
 engine: text_chat

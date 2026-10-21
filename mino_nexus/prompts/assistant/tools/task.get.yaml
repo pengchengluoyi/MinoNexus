@@ -1,5 +1,4 @@
 id: task.get
-version: 1
 title: 任务详情
 description: 查看一次跑批任务的结果和失败原因。
 route: GET /case-runner/tasks/{task_id}

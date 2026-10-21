@@ -1,5 +1,4 @@
 id: analyze_req
-version: 1
 label: 拆验收标准
 summary: 读需求原文拆测试点
 engine: json_chat

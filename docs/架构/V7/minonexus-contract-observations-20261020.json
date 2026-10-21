@@ -1,0 +1,179 @@
+{
+  "repository": "/Users/changpengcheng/code/MinoNexus",
+  "scanned_file_counts": {
+    ".py": 504,
+    ".yaml": 118,
+    ".md": 222
+  },
+  "candidate_rows": 1081,
+  "candidate_counts": {
+    "compatibility_candidate": 899,
+    "platform_contract_candidate": 99,
+    "directory_candidate": 83
+  },
+  "method": "Exact selected pure definitions, no repository module import, no pytest, no database/service execution",
+  "observations": [
+    {
+      "id": "nav_platform",
+      "input": "mac",
+      "observed": "android"
+    },
+    {
+      "id": "nav_platform",
+      "input": "win",
+      "observed": "android"
+    },
+    {
+      "id": "nav_platform",
+      "input": "android",
+      "observed": "android"
+    },
+    {
+      "id": "nav_platform",
+      "input": "web",
+      "observed": "web"
+    },
+    {
+      "id": "nav_platform",
+      "input": "invalid-platform",
+      "observed": "android"
+    },
+    {
+      "id": "web_origin_prefix",
+      "input": [
+        "https://example.com",
+        "https://example.com.invalid/path"
+      ],
+      "observed": true
+    },
+    {
+      "id": "stored_device_kind",
+      "input": "mac",
+      "observed": "adb"
+    },
+    {
+      "id": "stored_device_kind",
+      "input": "win",
+      "observed": "adb"
+    },
+    {
+      "id": "locator_cell",
+      "input": [
+        "dom_preferred",
+        "mac"
+      ],
+      "observed": "playwright"
+    },
+    {
+      "id": "locator_cell",
+      "input": [
+        "dom_preferred",
+        "win"
+      ],
+      "observed": "playwright"
+    },
+    {
+      "id": "locator_cell",
+      "input": [
+        "dom_preferred",
+        "android"
+      ],
+      "observed": "uiautomator"
+    },
+    {
+      "id": "locator_cell",
+      "input": [
+        "dom_preferred",
+        "web"
+      ],
+      "observed": "playwright"
+    },
+    {
+      "id": "bot_pc_scope",
+      "input": [
+        "mac",
+        [
+          "pc"
+        ]
+      ],
+      "observed": true
+    },
+    {
+      "id": "bot_missing_surface",
+      "input": {
+        "execute_surfaces": [
+          "web-test"
+        ],
+        "surface": ""
+      },
+      "observed": true
+    },
+    {
+      "id": "surface_mismatched_platform",
+      "input": {
+        "platform": "win",
+        "channels": [
+          {
+            "id": "android-main",
+            "platform": "android",
+            "kind": "app"
+          }
+        ]
+      },
+      "observed": "android-main"
+    },
+    {
+      "id": "surface_invalid_explicit",
+      "input": {
+        "surface": "missing",
+        "platform": "android",
+        "channels": [
+          {
+            "id": "android-main",
+            "platform": "android",
+            "kind": "app"
+          }
+        ]
+      },
+      "observed": "android-main"
+    },
+    {
+      "id": "surface_valid_dotted_id",
+      "input": {
+        "surface": "web.shop",
+        "platform": "web",
+        "channels": [
+          {
+            "id": "web-first",
+            "platform": "web",
+            "kind": "web"
+          },
+          {
+            "id": "web.shop",
+            "platform": "web",
+            "kind": "web"
+          }
+        ]
+      },
+      "observed": "web-first"
+    },
+    {
+      "id": "web_only_case_on_android",
+      "input": {
+        "platform_scope": "explicit",
+        "platforms": [
+          "web"
+        ]
+      },
+      "observed": null
+    },
+    {
+      "id": "explicit_empty_on_web",
+      "input": {
+        "platform_scope": "explicit",
+        "platforms": []
+      },
+      "observed": null
+    }
+  ]
+}

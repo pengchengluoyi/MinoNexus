@@ -1,6 +1,8 @@
 """通用逻辑块宏：确定性 dispatch 子 cap（登录 / 系统弹窗）。"""
 from __future__ import annotations
 
+from mino_nexus.loop.login_transition import update_auth_state
+
 from typing import Any, Optional
 
 from mino_nexus.catalog.flow_block_seed import LOGIN_BLOCK_ID, SYSTEM_DIALOG_BLOCK_ID
@@ -12,8 +14,8 @@ def _macro_done(ctx: Any) -> set[str]:
     raw = getattr(ctx, "login_flow_macro_done", None)
     if not isinstance(raw, set):
         raw = set()
-        setattr(ctx, "login_flow_macro_done", raw)
-    return raw
+        update_auth_state(ctx, login_flow_macro_done=raw)
+    return set(getattr(ctx, "login_flow_macro_done", None) or set())
 
 
 def _history_passed(history: list[str], cap: str) -> bool:
@@ -85,75 +87,24 @@ def try_run_login_flow_macro(
     history_lines: list[str],
     interrupt: bool = False,
 ) -> Optional[dict[str, Any]]:
-    """执行登录宏的下一步；无就绪步骤则返回 None。"""
-    steps = resolve_effective_steps(app_id=app_id, block_id=LOGIN_BLOCK_ID)
-    if not steps:
+    """Route login through the current milestone executor, including interrupts."""
+    from mino_nexus.loop.milestones import read_state, write_state, prepend_login_block_milestones
+    from mino_nexus.loop.milestone_orchestrator import ensure_single_in_progress
+    from mino_nexus.loop.flow_block_executor import try_dispatch_block_hook
+    from mino_nexus.loop.observe.session_log import active_writer
+    cursor = getattr(ctx, "_step_cursor", None)
+    if cursor is None:
         return None
-    from mino_nexus.services.business_event_contract import references
-    if references(steps) or any(step.get('kind') for step in steps):
-        return {'ok': False, 'status': 'blocked', 'case_fail': True,
-                'summary': '登录逻辑块需要通过当前编译计划执行，请重新编译用例。',
-                'error_kind': 'login_block_requires_compiled_plan',
-                'block_id': LOGIN_BLOCK_ID, 'interrupt': bool(interrupt)}
-    for step in steps:
-        if not _step_ready(
-            step,
-            ctx=ctx,
-            hierarchy_nodes=hierarchy_nodes,
-            history=history_lines,
-        ):
-            continue
-        cap = str(step.get("cap") or "")
-        sid = str(step.get("id") or cap)
-        params = dict(step.get("params") or {})
-        if _web_point_missing(ctx, cap, params):
-            from mino_nexus.loop.program_device_fallback import vision_fallback_result
-
-            yielded = getattr(ctx, "login_macro_yielded", None)
-            if isinstance(yielded, dict) and str(yielded.get("id") or "") == sid:
-                newer = list(history_lines or [])[int(yielded.get("hist_len") or 0):]
-                if _history_passed(newer, cap):
-                    _macro_done(ctx).add(sid)
-                    continue
-            setattr(ctx, "login_macro_yielded", {"id": sid, "hist_len": len(history_lines or [])})
-            return vision_fallback_result(
-                capability_id=cap,
-                params=params,
-                reason="no_web_coords",
-                milestone_id=sid,
-                block_id=LOGIN_BLOCK_ID,
-                step_id=sid,
-            )
-        setattr(ctx, "login_flow_macro_active", True)
-        event = PlanEvent(
-            seq=int(turn_seq),
-            capability_id=cap,
-            event_kind=cap,
-            params=params,
-            ai_reasoning=f"登录逻辑块 {LOGIN_BLOCK_ID} · {sid}",
-            label=f"宏·{sid}",
-        )
-        from mino_nexus.core.protocol import EventStatus
-        from mino_nexus.loop.local_executors import _dispatch_device
-        res = _dispatch_device(proxy, ctx=ctx, seq=int(turn_seq), cap=cap,
-                               params=params, label=f"宏·{sid}")
-        st = res.status.value if hasattr(res.status, "value") else str(res.status)
-        ok = str(st) in ("pass", EventStatus.PASS.value)
-        if ok:
-            _macro_done(ctx).add(sid)
-            maybe_emit_login_flow_complete(ctx, app_id=app_id, history_lines=history_lines)
-        return {
-            "ok": ok,
-            "status": st,
-            "summary": str(res.summary or res.error or cap),
-            "capability_id": cap,
-            "block_id": LOGIN_BLOCK_ID,
-            "step_id": sid,
-            "interrupt": bool(interrupt),
-        }
-    setattr(ctx, "login_flow_macro_active", False)
-    maybe_emit_login_flow_complete(ctx, app_id=app_id, history_lines=history_lines)
-    return None
+    writer = active_writer()
+    state = read_state(cursor)
+    seeded = prepend_login_block_milestones(state, ctx=ctx, app_id=app_id)
+    if seeded is not state:
+        write_state(cursor, seeded)
+        ensure_single_in_progress(cursor, writer=writer)
+        if writer:
+            writer.append("login/plan", {"source": "current_executor", "interrupt": bool(interrupt)})
+    return try_dispatch_block_hook(proxy, ctx, cursor, run_id=run_id, turn_seq=turn_seq,
+        app_id=app_id, history_lines=history_lines, writer=writer)
 
 
 def login_block_required_steps_done(
@@ -203,7 +154,7 @@ def maybe_emit_login_flow_complete(
     if not fire_transition(ctx, "login_flow_complete", source="flow_block"):
         return False
     setattr(ctx, "_login_flow_transition_emitted", True)
-    setattr(ctx, "login_flow_macro_active", False)
+    update_auth_state(ctx, login_flow_macro_active=False)
     return True
 
 

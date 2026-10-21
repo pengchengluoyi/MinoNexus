@@ -470,7 +470,9 @@ def user_message(
     if reason == "unmapped":
         return f"{head}无法执行：当前目录没有对应事件。"
     if reason in ("unavailable_cap", "capability_disabled"):
-        return f"{head}无法执行：事件 {event_name or detail or '该能力'} 已停用。"
+        name = event_name or detail or "该能力"
+        capability = f"（{detail}）" if detail and detail != name else ""
+        return f"{head}无法执行：事件 {name}{capability} 当前不可用（未注册或已停用）。"
     if reason == "uncoverable_event":
         return f"{head}无法执行：事件 {event_name or '该能力'} 当前不能做。"
     return f"{head}无法执行：{detail or reason or '无法覆盖'}。"

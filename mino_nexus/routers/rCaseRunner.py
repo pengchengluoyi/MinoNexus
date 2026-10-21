@@ -73,7 +73,6 @@ class RunRequest(BaseModel):
     async_exec: bool = True
     use_persisted_baseline: bool = True
     use_cache: bool = True
-    execution_mode: str = "agent"
     instruction: str = ""
     run_type: str = "manual"
     slot_id: str = ""
@@ -94,7 +93,6 @@ class PromoteBaselineRequest(BaseModel):
 
 class RetryFailedRequest(BaseModel):
     sn: str = ""
-    execution_mode: str = "agent"
     client_request_id: str = Field(default="", max_length=160)
     execution_unit_ids: list[str] = Field(default_factory=list, max_length=1000)
 
@@ -194,7 +192,7 @@ def run_cases(body: RunRequest, sess: dict = Depends(current_session)):
             env_surface=str(body.env_surface or "").strip(),
             action_scheme=normalize_action_scheme(body.action_scheme),
             plugin_user_id=_plugin_user(sess),
-            execution_mode=str(body.execution_mode or "legacy"),
+            execution_mode="agent",
             client_request_id=body.client_request_id,
         )
         return ok(snapshot, msg="AI-led 回归任务已启动")

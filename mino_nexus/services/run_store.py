@@ -20,6 +20,7 @@ _CANCEL = set()
 _CASE_TERMINAL = {
     "pass", "fail", "blocked", "declined", "skipped", "skip", "cancelled",
     "untestable", "unverifiable", "unexecutable",
+    "product_fail", "tool_blocked", "env_blocked", "unverified",
 }
 
 _TASK_LIVE = frozenset({"running", "queued"})
@@ -380,6 +381,7 @@ def seed_case(run_id: str, raw: dict[str, Any], index: int, *, sn: str = "", cov
         "error": "",
         "project_id": raw.get("project_id", ""),
         "resource_key": copy.deepcopy(raw.get("resource_key")),
+        "case_scene": copy.deepcopy(raw.get("case_scene")),
         "v5_publication": copy.deepcopy(raw.get("v5_publication")),
         "v5_plan_state": raw.get("v5_plan_state", "draft"),
         "wall_budget_sec": raw.get("wall_budget_sec", 0),
@@ -393,8 +395,8 @@ def _recompute(doc: dict[str, Any]) -> dict[str, Any]:
     cases = [c for c in (doc.get("cases") or []) if isinstance(c, dict)]
     completed = sum(1 for c in cases if str(c.get("status") or "") in _CASE_TERMINAL)
     passed = sum(1 for c in cases if c.get("status") == "pass")
-    failed = sum(1 for c in cases if c.get("status") == "fail")
-    blocked = sum(1 for c in cases if c.get("status") == "blocked")
+    failed = sum(1 for c in cases if c.get("status") in {"fail", "product_fail"})
+    blocked = sum(1 for c in cases if c.get("status") in {"blocked", "tool_blocked", "env_blocked"})
     declined = sum(1 for c in cases if c.get("status") == "declined")
     cancelled = sum(1 for c in cases if c.get("status") == "cancelled")
     skipped = sum(1 for c in cases if c.get("status") == "skip")
@@ -403,6 +405,8 @@ def _recompute(doc: dict[str, Any]) -> dict[str, Any]:
     doc["passed"] = passed
     doc["failed"] = failed
     doc["blocked"] = blocked
+    for terminal in ("product_fail", "tool_blocked", "env_blocked", "unverified"):
+        doc[terminal] = sum(1 for c in cases if c.get("status") == terminal)
     doc["declined"] = declined
     doc["cancelled"] = cancelled
     doc["skipped"] = skipped
@@ -470,7 +474,7 @@ def to_task_json(doc: dict[str, Any] | None, *, include_cases: bool = True) -> d
         "current_case_id": doc.get("current_case_id") or "",
         "title": doc.get("title") or "",
         "engine": doc.get("engine") or "agent",
-        "execution_mode": doc.get("execution_mode") or "legacy",
+        "execution_mode": doc.get("execution_mode") or "",
         "boot_ms": int(doc.get("boot_ms") or 0),
         "boot_phases": list(doc.get("boot_phases") or []),
     }

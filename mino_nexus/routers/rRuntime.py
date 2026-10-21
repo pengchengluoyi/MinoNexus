@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import inspect
 import threading
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -58,6 +58,12 @@ class NodePluginConfigBody(BaseModel):
     clear: list[str] = []
 
 
+class NodeConfigImportBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    archive: str = Field(min_length=1, max_length=2796208)
+    overwrite: bool = False
+
+
 class NodePluginActionBody(BaseModel):
     kind: str
     plugin_id: str
@@ -66,6 +72,47 @@ class NodePluginActionBody(BaseModel):
 class NodePluginCallBody(BaseModel):
     capability_id: str
     params: dict[str, Any] = {}
+
+
+class CliCommandBody(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    plugin: Literal['feishu', 'meego']
+    node_id: str = Field(default='', max_length=128)
+    command: list[str] = Field(min_length=1, max_length=8)
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+async def _cli_command(body: CliCommandBody, sess: dict, mode: str):
+    from mino_nexus.core.execution_user import execution_user
+    from mino_nexus.services.node_plugin_call import PluginCallError, call_plugin
+    import asyncio
+
+    def execute():
+        with execution_user(str(sess.get('user_id') or '')):
+            return call_plugin(kind='cli', plugin_id=body.plugin, node_id=body.node_id,
+                               capability_id='plugin.cli.' + body.plugin,
+                               params={'action': 'command', 'mode': mode, 'command': body.command, 'options': body.options}, timeout=110)
+    try:
+        data = await asyncio.to_thread(execute)
+        data = {key: value for key, value in data.items() if key != 'plugins'}
+        if data.get('ok') is False and not data.get('needs_input'):
+            status = data.get('status')
+            raise HTTPException(status_code=status if status in (403, 422, 503) else 503,
+                                detail={**data, 'message': str(data.get('summary') or 'CLI 操作未完成')})
+        return ok(data, msg=str(data.get('summary') or ''))
+    except PluginCallError as exc:
+        # 写入可能已抵达第三方（含超时、CLI 部分成功），保留 uncertain 回执，禁止自动重放。
+        raise HTTPException(status_code=503 if mode == 'write' else 409, detail=str(exc)) from exc
+
+
+@router.post('/cli/query')
+async def query_cli(body: CliCommandBody, sess: dict = Depends(current_session)):
+    return await _cli_command(body, sess, 'read')
+
+
+@router.post('/cli/execute')
+async def execute_cli(body: CliCommandBody, sess: dict = Depends(current_session)):
+    return await _cli_command(body, sess, 'write')
 
 
 @router.get("/nodes")
@@ -336,6 +383,35 @@ async def _relay_plugin(
     }
 
 
+def _config_transfer_node(node_id: str, sess: dict):
+    live = _require_live_node(node_id, sess, "")
+    if not sess.get("user_id") or live.owner_user_id != sess["user_id"]:
+        raise HTTPException(status_code=404, detail="没有这个节点")
+    if live.plugins_ready is not True:
+        raise HTTPException(status_code=409, detail="节点尚未就绪，无法迁移配置")
+    return live
+
+
+@router.post("/nodes/{node_id}/configuration/export")
+async def export_node_configuration(node_id: str, response: Response, sess: dict = Depends(current_session)):
+    live = _config_transfer_node(node_id, sess)
+    out = await _relay_plugin(node_id, live, capability_id="node.config_export", params={}, timeout=60.0)
+    if not isinstance(out["data"].get("archive"), str):
+        raise HTTPException(status_code=502, detail="Scout 未返回配置文件，请升级 Scout")
+    response.headers["Cache-Control"] = "no-store"
+    return ok(out["data"])
+
+
+@router.post("/nodes/{node_id}/configuration/import")
+async def import_node_configuration(node_id: str, body: NodeConfigImportBody, response: Response, sess: dict = Depends(current_session)):
+    live = _config_transfer_node(node_id, sess)
+    if not body.overwrite:
+        raise HTTPException(status_code=400, detail="请明确确认覆盖目标节点配置")
+    out = await _relay_plugin(node_id, live, capability_id="node.config_import", params={"archive": body.archive}, timeout=60.0)
+    response.headers["Cache-Control"] = "no-store"
+    return ok(out["data"])
+
+
 @router.post("/nodes/{node_id}/plugins/config")
 async def config_node_plugin(
     node_id: str,
@@ -533,3 +609,38 @@ def cancel_scout_update(node_id: str, operation_id: str, sess: dict = Depends(cu
     _node_row_for_session(node_id, studio_id="", sess=sess)
     from mino_nexus.services.scout_updates import cancel
     return ok(cancel(node_id, operation_id))
+
+
+class NodeToolTaskBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,100}$")
+    tool_id: str = Field(pattern=r"^(cli\.(feishu|meego)|langbot)$")
+    action: str = Field(pattern=r"^install$")
+
+
+@router.get("/nodes/{node_id}/tools")
+async def node_tools(node_id: str, sess: dict = Depends(current_session)):
+    from mino_nexus.services import node_tools as service
+    return ok(await service.tools(node_id, str(sess.get("user_id") or "")))
+
+
+@router.post("/nodes/{node_id}/tool-tasks", status_code=202)
+async def create_node_tool_task(node_id: str, body: NodeToolTaskBody, sess: dict = Depends(current_session)):
+    from mino_nexus.services import node_tools as service
+    return ok(await service.submit(node_id, str(sess.get("user_id") or ""), body.operation_id, body.tool_id, body.action))
+
+
+@router.get("/nodes/{node_id}/tool-tasks/{task_id}")
+async def read_node_tool_task(node_id: str, task_id: str, sess: dict = Depends(current_session)):
+    from mino_nexus.services import node_tools as service
+    return ok(await service.refresh_task(node_id, str(sess.get("user_id") or ""), task_id))
+
+
+@router.get("/execution-version")
+def execution_version(_session=Depends(current_session)):
+    """Report only an actually imported execution module, never a disk VERSION."""
+    import sys
+    module = sys.modules.get("mino_nexus.loop.agent_loop")
+    revision = getattr(module, "EXECUTION_REVISION", "") if module else ""
+    return ok({"execution_module_loaded": module is not None, "execution_revision": revision,
+               "resolved_contract_loaded": bool(module and "resolved_case" in module._run_loop.__code__.co_varnames)})

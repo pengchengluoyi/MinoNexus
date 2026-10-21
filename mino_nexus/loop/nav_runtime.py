@@ -7,7 +7,7 @@
 守卫判定、遥测七件事 —— 全铺进主循环会把它彻底冲垮。所以主循环只出现几个调用点：
 
     nav = NavRuntime.for_run(ctx=..., case=..., run_type=...)   # 关着就是 None
-    nav.observe(proxy, turn_id=seq, slot_sink=inspect_slots, session_block=..., screenshot=shot)
+    nav.observe(proxy, ctx=ctx, turn_id=seq, slot_sink=inspect_slots, session_block=..., screenshot=shot)
     blocked = nav.preflight_block()   # 跑前租号初态（§11.2），mismatch 时主循环应 blocked 退出
     verdict = nav.check(cap_id=..., params=...)
     nav.after_execute(cap_id=..., params=..., status=...)
@@ -78,6 +78,7 @@ class NavRuntime:
         self.snapshot = HierarchySnapshot()
         self.plan: Optional[F.NavPlan] = None
         self.localized: dict[str, Any] = {}
+        self.foreground: dict[str, Any] = {}
         self._pending_edge: dict[str, Any] | None = None
         self._last_edge_to: str = ""
         self._last_edge_passed: bool = False
@@ -165,6 +166,7 @@ class NavRuntime:
         self,
         proxy: Any,
         *,
+        ctx: Any,
         turn_id: int,
         slot_sink: dict[str, str],
         session_block: str = "",
@@ -186,18 +188,12 @@ class NavRuntime:
         nodes = snap.nodes if snap.usable() else []
         hierarchy_weak = bool(snap.ok and nodes and hierarchy_is_weak(nodes))
 
-        from mino_nexus.services.nav_capture_store import run_guard_foreground
-
-        fg_obs = (
-            run_guard_foreground(
-                nodes,
-                target_package=self.target_package,
-                platform=self.platform,
-            )
-            if nodes
-            else {}
-        )
-        if nodes and str(fg_obs.get("app_foreground") or "") != "yes":
+        from mino_nexus.loop.recovery import resolve_app_foreground_guard
+        ctx.nav_hierarchy_nodes = nodes
+        ctx.observation_contract = dict(snap.observation or {})
+        fg_obs = resolve_app_foreground_guard(ctx, proxy, nodes=nodes, target_package=self.target_package)
+        self.foreground = dict(fg_obs)
+        if str(fg_obs.get("app_foreground") or "unknown") == "no":
             fpkg = str(
                 fg_obs.get("foreground_package") or fg_obs.get("foreground_id") or ""
             ).strip()
@@ -209,9 +205,10 @@ class NavRuntime:
                 "degraded": True,
                 "evidence_tier": "foreign_screen",
                 "foreign_package": fpkg,
+                **fg_obs,
             }
             slot_sink["nav_assist"] = (
-                "【导航】当前 hierarchy 判定前台非被测 App"
+                "【导航】当前前台观察明确不是被测 App"
                 f"{('（' + fpkg + '）') if fpkg else ''}，暂停 FSM 页定位；"
                 "请先 launch_app 或 BACK 回到被测 App，勿按 App 内页做 fsm/recover。"
             )
@@ -227,6 +224,7 @@ class NavRuntime:
                 band="recover",
                 ambiguous=False,
                 degraded=True,
+                **fg_obs,
             )
             if not self.active or not isinstance(self.fsm, dict):
                 self._record_capture(
@@ -250,8 +248,12 @@ class NavRuntime:
             return snap
 
         if not self.active:
-            slot_sink["nav_assist"] = ""
-            self._record_capture(snap, writer=writer, localized={}, screenshot=screenshot)
+            self.localized = {"chosen": "", "confidence": 0.0, "navigation_match": "not_configured", **fg_obs}
+            slot_sink["nav_assist"] = "【导航】未配置导航图；按当前画面执行。导航图缺失不代表目标应用不在前台。"
+            nav_telemetry.localize(turn_id=turn_id, run_id=self._run_id,
+                case_id=str(self.case.get("case_id") or ""), result="not_configured", state_id="",
+                confidence=0.0, hierarchy_stale=snap.stale, observe_hierarchy=True, **fg_obs)
+            self._record_capture(snap, writer=writer, localized=self.localized, screenshot=screenshot)
             return snap
 
         meta = self.fsm.get("meta") if isinstance(self.fsm.get("meta"), dict) else {}
@@ -347,10 +349,11 @@ class NavRuntime:
             confidence=self.localized.get("confidence") or 0.0,
             hierarchy_stale=snap.stale,
             observe_hierarchy=True,
-            result="pass" if self.localized.get("chosen") else "fail",
+            result="pass" if self.localized.get("chosen") else "unmapped",
             band=self.localized.get("band"),
             ambiguous=self.localized.get("ambiguous"),
             degraded=self.localized.get("degraded"),
+            **fg_obs,
         )
 
         self._settle_pending_edge(nodes)

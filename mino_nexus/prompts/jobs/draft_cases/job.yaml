@@ -1,5 +1,4 @@
 id: draft_cases
-version: 1
 label: 写用例草稿
 summary: 展开步骤与预期
 engine: json_chat

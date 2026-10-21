@@ -3,9 +3,33 @@ from copy import deepcopy
 import hashlib
 import json
 import re
-import time
 
-from mino_nexus.services.login_evidence import scope
+def scope(ctx):
+    from mino_nexus.services.login_evidence import scope as evidence_scope
+    return evidence_scope(ctx)
+
+
+AUTH_FIELDS = frozenset({
+    'login_evidence', 'session_fact', 'task_session', 'device_session',
+    'device_session_source', 'login_flow_macro_active', 'login_flow_macro_done',
+    'login_auto_submit_attempts',
+})
+
+
+def update_auth_state(ctx, **changes):
+    """The Auth state writer. Copy mutable values; never log identity or secrets."""
+    unknown = set(changes) - AUTH_FIELDS
+    if unknown:
+        raise ValueError(f'Undeclared Auth fields: {sorted(unknown)}')
+    values = {key: deepcopy(value) for key, value in changes.items()}
+    from mino_nexus.loop.observe.session_log import active_writer
+    writer = active_writer()
+    if writer:
+        writer.append('login/evidence', {
+            'source': 'auth_state_writer', 'changed_fields': sorted(values),
+        })
+    for key, value in values.items():
+        setattr(ctx, key, value)
 
 
 def _nodes(rows):
@@ -40,6 +64,10 @@ def remember_submit_frame(cursor, ctx, shot, *, writer=None):
 
 
 def bind_submit_frame(cursor, ctx, *, attempt_ref, writer=None):
+    # Invalidate the prior account fact when binding the actual submitted action.
+    # The later comparison must not overwrite a separate identity observation.
+    from mino_nexus.loop.observe.session_persist import mark_session_dirty
+    mark_session_dirty(ctx, reason="login_submission_transition")
     candidate = getattr(cursor, 'login_submit_frame_candidate', None) or {}
     if (not attempt_ref or candidate.get('context_id') != id(ctx)
             or candidate.get('scope') != scope(ctx)
@@ -57,15 +85,15 @@ def _hash(value):
 def confirm_submission_transition(proxy, ctx, cursor, *, shot=None, writer=None):
     """DOM first, screenshot fallback. Each submitted attempt is compared once."""
     ref = getattr(cursor, 'login_submit_reference', None) or {}
-    fail = {'ok': False, 'status': 'blocked', 'error_kind': 'login_transition_observation_error'}
+    fail = {'ok': False, 'status': 'unverified', 'error_kind': 'login_transition_observation_error'}
     if (ref.get('context_id') != id(ctx) or ref.get('scope') != scope(ctx)
             or not ref.get('attempt_ref')):
-        return {**fail, 'summary': '缺少本次实际提交前的登录界面，无法比较；已停止确认'}
+        return _finish(cursor, ctx, ref, {**fail, 'summary': '缺少本次实际提交前的登录界面，无法比较；已停止确认'}, writer=writer)
     cached = getattr(cursor, 'login_transition_result', None) or {}
     if cached.get('attempt_ref') == ref['attempt_ref']:
         return dict(cached['result'])
     if writer is not None and int(getattr(writer, 'turn', 0) or 0) <= ref['turn']:
-        return {**fail, 'summary': '提交后尚无独立的新观察，已停止确认'}
+        return _finish(cursor, ctx, ref, {**fail, 'summary': '提交后尚无独立的新观察，已停止确认'}, writer=writer)
     current = getattr(cursor, 'login_submit_frame_candidate', None) or {}
     fresh = (current.get('context_id') == id(ctx) and current.get('scope') == scope(ctx)
              and current.get('turn', 0) > ref.get('turn', 0))
@@ -109,34 +137,21 @@ def confirm_submission_transition(proxy, ctx, cursor, *, shot=None, writer=None)
         result = {'ok': bool(comparison.passed)}
         method, before_hash, after_hash = 'screenshot', _hash(ref['image_base64']), _hash(image)
     if result['ok']:
-        # User-approved temporary login criterion. Do not claim visible identity.
-        evidence = {'version': 1, 'scope': scope(ctx), 'observation_ref': after_hash,
-            'observed_at_monotonic': time.monotonic(), 'form_left': True,
-            'authentication': 'logged_in', 'identity': 'unknown', 'identity_required': False,
-            'verification_method': 'login_page_transition', 'comparison_source': method,
-            'submit_observation_ref': before_hash, 'submit_attempt_ref': ref['attempt_ref'],
-            'account_binding_source': 'login_submission', 'login_state_verified': True,
-            'business_context': 'unverified', 'business_context_owner': 'check', 'full_login_complete': False}
-        ctx.login_evidence = evidence
-        ctx.session_dirty = False
-        fact = {'session': 'logged_in', 'source': 'login_page_transition',
-                'login_state_verified': True, 'account_binding_source': 'login_submission',
-                'business_context': 'unverified', 'reason': '本次登录提交后页面已切换'}
-        ctx.session_fact = dict(fact)
-        ctx.task_session = dict(fact)
-        ctx.device_session = 'logged_in'
-        ctx.device_session_source = 'flow_block'
-        result.update(status='pass', error_kind='', summary='登录提交后页面已切换，结束本次确认')
+        # A page transition completes the submission observation only.
+        # Authentication and identity must come from a separate current observation.
+        result.update(status='completed', error_kind='',
+                      summary='登录提交后页面已切换；账号身份及业务预期尚未核验')
     else:
-        result.update(status='fail', error_kind='login_page_unchanged', summary='提交登录后仍是原登录界面，登录未完成')
+        result.update(status='product_fail', error_kind='login_page_unchanged',
+                      summary='提交登录后仍是原登录界面，登录未完成')
     return _finish(cursor, ctx, ref, result, writer=writer, method=method,
                    before_ref=before_hash, after_ref=after_hash)
 
 
 def _finish(cursor, ctx, ref, result, *, writer=None, method='', before_ref='', after_ref=''):
-    cursor.login_transition_result = {'attempt_ref': ref['attempt_ref'], 'result': dict(result)}
+    cursor.login_transition_result = {'attempt_ref': ref.get('attempt_ref', ''), 'result': dict(result)}
     if writer:
-        writer.append('login/submission_transition', {'attempt_ref': ref['attempt_ref'],
+        writer.append('login/submission_transition', {'attempt_ref': ref.get('attempt_ref', ''),
             'comparison_source': method, 'passed': result['ok'], 'status': result['status'],
             'error_kind': result['error_kind'], 'before_ref': before_ref, 'after_ref': after_ref,
             'business_context_verified': False})

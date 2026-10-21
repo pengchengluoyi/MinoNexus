@@ -96,6 +96,10 @@ def _plugin_status(raw: Any) -> dict[str, Any]:
         "last_message_at": last,
         "error": str(raw.get("error") or "")[:200],
     }
+    # CLI message channels carry enabled in status (LangBot uses platforms).
+    # Preserve the typed fact used by assistant_gateway source validation.
+    if isinstance(raw.get("enabled"), bool):
+        out["enabled"] = raw["enabled"]
     if isinstance(raw.get("connected"), bool):
         out["connected"] = raw["connected"]
     if isinstance(raw.get("connection_verified"), bool):
@@ -104,6 +108,8 @@ def _plugin_status(raw: Any) -> dict[str, Any]:
         out["connection_source"] = raw["connection_source"]
     if raw.get("instance_id"):
         out["instance_id"] = str(raw["instance_id"])[:128]
+    if isinstance(raw.get("authorized_sender_id"), str) and raw["authorized_sender_id"].startswith("ou_"):
+        out["authorized_sender_id"] = raw["authorized_sender_id"][:128]
     if raw.get("account_id"):
         out["account_id"] = str(raw["account_id"])[:128]
     if "holding" in raw:
@@ -200,6 +206,7 @@ def sanitize_plugins(raw: Any) -> list[dict[str, Any]] | None:
 
 def _public_plugin_job(raw: dict[str, Any]) -> dict[str, Any]:
     return {
+        "task_id": str(raw.get("task_id") or ""),
         "active": bool(raw.get("active")),
         "stage": str(raw.get("stage") or ""),
         "label": str(raw.get("label") or ""),
@@ -233,6 +240,7 @@ class NodeSession:
     # None：这台 Scout 还没报插件状态。列表只含 class/id/installed/configured。
     plugins: Optional[list[dict[str, Any]]] = None
     plugins_ready: Optional[bool] = None
+    tool_tasks_version: int = 0
     plugin_warning: str = ""
     runtime_environment: str = ""
     plugins_reported: threading.Event = field(default_factory=threading.Event, repr=False, compare=False)
@@ -309,6 +317,7 @@ class NodeSession:
             "host": dict(self.host or {}),
             "plugins": None if self.plugins is None else [dict(row) for row in self.plugins],
             "plugins_ready": self.plugins_ready,
+            "tool_tasks_version": self.tool_tasks_version,
             "plugin_warning": self.plugin_warning,
             "runtime_environment": self.runtime_environment,
             "plugin_job": dict(self.plugin_job or {}),
@@ -395,6 +404,7 @@ class NodeRegistry:
                 owner_user_id=owner,
                 host=dict(getattr(reg, "host", {}) or {}),
                 plugins=sanitize_plugins(getattr(reg, "plugins", None)),
+                tool_tasks_version=1 if getattr(reg, "tool_tasks_version", 0) == 1 else 0,
                 plugins_ready=getattr(reg, "plugins_ready", None) if type(getattr(reg, "plugins_ready", None)) is bool else None,
                 plugin_warning=str(getattr(reg, "plugin_warning", "") or "")[:200] if getattr(reg, "plugins_ready", None) is False else "",
                 runtime_environment=getattr(reg, "runtime_environment", "") if getattr(reg, "runtime_environment", "") in {"development", "production"} else "",
@@ -513,6 +523,7 @@ class NodeRegistry:
             host = getattr(hb, "host", None)
             if isinstance(host, dict) and host:
                 node.host = dict(host)
+            node.tool_tasks_version = 1 if getattr(hb, "tool_tasks_version", 0) == 1 else 0
             ready = getattr(hb, "plugins_ready", None)
             node.plugins_ready = ready if type(ready) is bool else None
             warning = getattr(hb, "plugin_warning", "")
@@ -661,6 +672,8 @@ class NodeRegistry:
                 raw = params.get("progress")
                 if isinstance(raw, dict):
                     node.plugin_job = _public_plugin_job(raw)
+                    from mino_nexus.services.node_tools import note_progress
+                    note_progress(nid, node.owner_user_id, node.plugin_job)
             elif event in ("plugin_im_message", "plugin_wechat_message"):
                 im = params.get("im") if isinstance(params.get("im"), dict) else {}
                 if event == "plugin_wechat_message" and not im:

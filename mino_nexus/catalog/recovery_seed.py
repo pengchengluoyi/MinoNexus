@@ -396,6 +396,14 @@ def register_current_local_capabilities() -> None:
     from mino_nexus.models.catalog import CatalogEntry
     from mino_nexus.catalog.tool_schema import PARAM_DEFAULTS, schema_to_param_rows
     from mino_nexus.catalog.system_registration import sync_system_capability
+    with session_scope() as db:
+        for cid, title in (("wait_ms", "等待"), ("wait_screen_ready", "等待屏幕就绪")):
+            sync_system_capability(db, cid=cid, kind="generic", title=title,
+                description="普通执行的本地等待与屏幕就绪检查；不代替业务结果回看。",
+                platforms=["mac", "win", "android", "web"],
+                fields={"event_kind": cid, "caller": "case", "phases": ["prep", "do"],
+                    "observe": "program", "implementations": [], "channel_contract_version": 1,
+                    "params": schema_to_param_rows(PARAM_DEFAULTS[cid])})
     specs = [("get_otp", "generic", "取验证码", GET_OTP_DESCRIPTION, ["mac", "win", "android", "web"]),
              ("dismiss_ime", "recovery", "收起输入法", DISMISS_IME_DESCRIPTION, ["android"])]
     with session_scope() as db:

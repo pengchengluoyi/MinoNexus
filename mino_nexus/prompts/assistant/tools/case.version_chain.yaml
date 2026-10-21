@@ -1,5 +1,4 @@
 id: case.version_chain
-version: 1
 title: 查询用例版本链
 description: 读取用例的当前原文 revision、最新编译 job、有效产物、发布快照和历史摘要。用 source_revision 与 latest_compile_job_id 绑定后续编译和审阅；最新版本未就绪时不能借旧产物运行。此查询不触发模型调用，不改变版本或任务状态。
 route: GET /project/{project_id}/cases/{case_id}/version-chain

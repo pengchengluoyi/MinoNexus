@@ -325,33 +325,6 @@ def _expects_full_page_navigation(expected: str) -> bool:
     return "页面" in exp and len(exp) >= 8
 
 
-def should_auto_enter_check(
-    *,
-    loc_hit: bool,
-    probe_hit: bool,
-    expected: str = "",
-    keywords: list[str] | None = None,
-    hit_streak: int = 0,
-    defer_expected_to_check: bool = False,
-) -> bool:
-    """已在目标逻辑页或强达成探针命中时，直接进 check，不再等模型 signal_done。
-
-    仅底栏短文案命中（弱）时仍要连续两轮，避免详情页看见 Tab 字就收工。
-    """
-    if defer_expected_to_check:
-        return False
-    if loc_hit:
-        return True
-    if not probe_hit:
-        return False
-    kws = [str(k).strip() for k in (keywords or []) if str(k).strip()]
-    if _expects_full_page_navigation(expected) and kws and all(len(k) <= 4 for k in kws):
-        return int(hit_streak or 0) >= 2
-    if probe_hit and kws and all(len(str(k)) <= 4 for k in kws):
-        return int(hit_streak or 0) >= 2
-    return True
-
-
 def maybe_mark_deferred_nav_tab(
     cursor: Any,
     *,
@@ -390,9 +363,6 @@ def maybe_mark_deferred_nav_tab(
     if not isinstance(done, set):
         return False
     done.add("nav_tab")
-    refresh = getattr(cursor, "refresh_do_subphase", None)
-    if callable(refresh):
-        refresh()
     return True
 
 

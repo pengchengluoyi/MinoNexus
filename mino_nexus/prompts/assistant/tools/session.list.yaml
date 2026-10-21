@@ -1,5 +1,4 @@
 id: session.list
-version: 1
 title: 任务会话列表
 description: 按 run_id 查询跑批任务对应的会话。先从这里获得完整 session_id，再用 session_llm_list 查模型调用、session_events 查工具与守卫事件。不会执行或重跑用例。
 route: GET /case-runner/sessions

@@ -1,5 +1,4 @@
 id: version-qa-bm
-version: 2
 label: 版本发版 BM
 summary: 发版评审
 engine: text_chat

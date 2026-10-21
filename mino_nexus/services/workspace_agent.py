@@ -55,11 +55,11 @@ def facts(project_id, topic_id, sess, content):
         if doc:
             runs.append({k: doc.get(k) for k in ('run_id', 'status', 'total', 'passed', 'failed')})
     from mino_nexus.services.workspace_members import list_members
-    selected = next((c for c in opts['channels'] if c['id'] == view['env_surface'] and c['app_id'] == view['app_id']), None)
-    target_status = {'valid': bool(selected), 'requires_selection': not bool(selected),
-                     'saved_channel': view['env_surface'], 'available_channels': opts['channels']}
-    if not selected:
-        target_status['reason'] = 'saved_channel_unavailable' if view['env_surface'] else 'channel_not_selected'
+    try:
+        resolved = ws.resolve_target(opts, view)
+        target_status = {'resolved': resolved, 'available_channels': opts['channels']}
+    except ValueError as exc:
+        target_status = {'resolved': None, 'ask': str(exc), 'available_channels': opts['channels']}
     return {
         'members': list_members(project_id, topic_id, sess),
         'project_id': project_id, 'topic_id': topic_id,
@@ -89,9 +89,9 @@ def execution_args(project_id, topic_id, sess, spec, args):
         raise ValueError('工作区已暂停，请在菜单中恢复后再提交操作。')
     if args.get('project_id', project_id) != project_id:
         raise ValueError('请使用当前工作区所属项目。')
-    if spec['id'] in ('collab.scope_update', 'collab.scope_get', 'collab.pin_cases'):
+    if spec['id'].startswith('collab.'):
         if args.get('topic_id', topic_id) != topic_id:
-            raise ValueError('请修改当前工作区的范围。')
+            raise ValueError('请使用当前工作区。')
         return {**args, 'project_id': project_id, 'topic_id': topic_id}
     if spec['id'] not in ('case.run', 'case.retry_failed'):
         return args
@@ -111,18 +111,8 @@ def execution_args(project_id, topic_id, sess, spec, args):
         if not doc.get('env_surface') or not doc.get('env_profile'):
             raise ValueError('原运行缺少应用·渠道或环境，请明确测试目标后重新执行。')
         return args
-    for key in ('env_profile', 'env_surface'):
-        if not args.get(key) and view.get(key):
-            args[key] = view[key]
-    if not args.get('env_surface'):
-        raise ValueError('执行前请选择应用·渠道')
-    opts = ws.scope_options(project_id, sess)
-    target_app, _, _ = ws.target_selection(opts, args)
-    args['app_id'] = target_app
-    if args.get('env_profile') and args['env_profile'] not in {e['key'] for e in opts['environments']}:
-        raise ValueError('执行环境已失效，请从当前项目环境中重新选择。')
-    if not args.get('app_id') or not args.get('env_profile'):
-        raise ValueError('执行前请明确应用与环境；可以先保存到工作区范围与资源。')
+    resolved = ws.resolve_target(ws.scope_options(project_id, sess), view, args)
+    args.update(app_id=resolved['app_id'], env_surface=resolved['env_surface'], env_profile=resolved['env_profile'])
     if args.get('all_cases'):
         raise ValueError('工作区只执行已绑定的范围，请明确模块、需求或用例。')
     if 'case_ids' not in args:
@@ -157,6 +147,8 @@ def run_one_tool(project_id, topic_id, sess, owner, spec, args, state, target):
         return {'stop': '本条消息已提交过写操作，不会重复提交。' + state['summary']}
     try:
         args = execution_args(project_id, topic_id, sess, spec, args)
+        if spec['id'] == 'collab.decision':
+            args['request_id'] = state['source']
     except ValueError as exc:
         return {'stop': str(exc)}
     if spec.get('risk') == 'write':
@@ -182,6 +174,9 @@ def run_one_tool(project_id, topic_id, sess, owner, spec, args, state, target):
             return {'stop': '已找到同范围工作区，可点击卡片继续。'}
         state['summary'] = '工作区测试目标已保存。'
         out.data['workspace_facts'] = facts(project_id, topic_id, sess, '')
+    if spec['id'] == 'collab.pin_cases' and out.ok:
+        state['summary'] = state['summary'] or '已更新工作区用例范围。'
+        out.data = {**(out.data if isinstance(out.data, dict) else {}), 'workspace_facts': facts(project_id, topic_id, sess, '')}
     return {'tool': bounded_json({'ok': out.ok, 'summary': state['summary'], 'data': out.data}, 4000)}
 
 
@@ -232,8 +227,8 @@ def member_loop(project_id, topic_id, sess, member, job, question, target, conte
             args = _parse_args(fn.get('arguments'))
             if name == 'reply':
                 body = str(args.get('text') or reply or '成员未返回结论，本轮已停止。')
-                needs_input = args.get('needs_input')
-                return member_result(body, needs_input=needs_input is True, stopped=not isinstance(needs_input, bool))
+                needs_input = bool(args.get('needs_input'))
+                return member_result(body, needs_input=needs_input, stopped=needs_input)
             spec = tool_by_function_name(name)
             if not spec or spec['id'] not in allowed:
                 return member_result('成员请求了未授权的工具，本轮已停止。', stopped=True)
@@ -303,19 +298,24 @@ def process(project_id, topic_id, sess, content, *, source_message_id, read_only
                         {'member': role['id'], 'job': ROLE_JOB_MAP[role['id']], 'question': question},
                         context={'facts': facts(project_id, topic_id, sess, content), 'prior_results': prior}, deadline=deadline, state=state)
                     prior.append(json.loads(bounded_json(result, 4000)))
-                    if result.get('stopped') or result.get('needs_input'):
-                        return  # The member's explanation is already visible in the workspace.
+                    if result.get('needs_input'):
+                        return
+                    if result.get('stopped'):
+                        return
             except (ValueError, RuntimeError) as exc:
                 _say(project_id, topic_id, str(exc))
                 return
-            # Members reply, then the conductor decides what happens next.
+            # Successful mentions return to the same conductor loop and write budget.
+            # A member asking for input or stopping above still ends the whole turn.
             assignments = len(prior)
             assignment_results = prior
-            fact = facts(project_id, topic_id, sess, content)
-            fact['mentioned_member_results'] = prior
-            fact['write_submitted_this_turn'] = state['wrote']
-            messages, meta = render('workspace-route', {'persona_block': _persona({}),
-                'workspace_facts': bounded_json(fact), 'recent_turns': history, 'utterance': question})
+            if prior:
+                messages.append({'role': 'user', 'content': bounded_json({
+                    'mentioned_member_results': prior,
+                    'write_submitted_this_turn': state['wrote'],
+                    'workspace_facts': facts(project_id, topic_id, sess, content),
+                    'instruction': '成员已完成以上步骤，请承接原请求继续；不要重复成员原文。',
+                }, 10000)})
         if content.startswith('@') and not mentioned:
             _say(project_id, topic_id, '未找到可指派的成员，请输入 @ 后从成员列表选择。')
             return
@@ -363,8 +363,8 @@ def process(project_id, topic_id, sess, content, *, source_message_id, read_only
                         answer = str(exc)
                         break
                     assignment_results.append(json.loads(bounded_json(result, 4000)))
-                    if result.get('stopped') or result.get('needs_input'):
-                        return  # assign() already published the member's explanation; do not echo it.
+                    if result.get('needs_input') or result.get('stopped'):
+                        return
                     if not state['summary']:
                         state['summary'] = '成员已回复，分析结果见上方消息。'
                     result['write_submitted_this_turn'] = state['wrote']

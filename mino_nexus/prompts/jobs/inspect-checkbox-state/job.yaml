@@ -1,5 +1,4 @@
 id: inspect-checkbox-state
-version: 1
 label: 复选框状态观察
 summary: 只读核对显式目标的复选框状态，不从缺失推断不适用
 engine: observe

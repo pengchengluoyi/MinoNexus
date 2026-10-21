@@ -1,5 +1,4 @@
 id: session.llm.list
-version: 1
 title: 会话模型调用列表
 description: 按会话和可选 turn 分页查询 LLM 调用，返回事件 seq、dispatch_id、job、model、error 及原始响应可用性。用 dispatch_id 调 llm_get 获取正文；has_more=true 时以 next_from_seq 继续。
 route: GET /case-runner/sessions/{session_id}/llm-calls

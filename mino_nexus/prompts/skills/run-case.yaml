@@ -1,5 +1,4 @@
 id: run-case
-version: 1
 label: 执行测试用例
 summary: 看图按前置 / 操作 / 预期推进，调用能力目录里的 function。
 category: device
@@ -61,7 +60,6 @@ sop:
   - check
   - recovery
   max_steps: 30
-  run_case_sop_vision_v1: true
 input:
   type: case
   map:

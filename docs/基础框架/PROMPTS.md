@@ -33,16 +33,16 @@ mino_nexus/
 
 ## 3. 改 prompt 的流程
 
-1. 改 `mino_nexus/prompts/` 里的文件。改了正文就把该文件的 `version` 加 1。
+1. 直接修改 `mino_nexus/prompts/` 中的当前文件；不维护数字版本、不审批、不发布、不切换 A/B。
 2. 重启 Nexus。启动时会解析所有 prompt 文件，格式错、引用断了会直接拒绝启动并说明原因。
 3. 提交。生产环境重启 Nexus 后生效。开发时可设 `MINO_PROMPTS_RELOAD=1`，改文件不用重启。
 4. **禁止**在 `mino_nexus/**/*.py` 里写 system prompt 字面量（`scripts/verify_no_prompt_literals.py`，中英文都拦）。
 
-`dispatch_log` 同时记下 `prompt_version` 和 `prompt_sha`。查问题时用 sha 对回当时的文件内容。
+Git 保存提示词修改历史；`dispatch_log` 记录实际使用内容的 `prompt_sha`。兼容历史记录的数字字段不参与选择或准入。
 
-Workbench 的 Jobs / 技能 / 角色 / 编排页只读，展示版本、sha 和文件路径。
+Workbench 的 Jobs / 技能 / 角色 / 编排页只读，展示当前内容、sha 和文件路径。
 
-下面各节是历史版本当时改了什么。正文已经在 `prompts/jobs/` 里，启动时不再打补丁。
+历史修改通过 Git 回溯。运行时只加载当前文件，不应用历史升级补丁。
 
 ## 4. 铁律
 
@@ -65,64 +65,4 @@ Workbench 的 Jobs / 技能 / 角色 / 编排页只读，展示版本、sha 和�
 ```bash
 python scripts/verify_no_prompt_literals.py
 ```
-
-## 6. `nav_assist` 槽（agent-decide v7）
-
-NavFSM 每轮把「你在哪、下一步走哪条边、本步允许/禁止什么」编译成一段文本注入
-`agent-decide`。正文由 `services/nav_compiler.py` 按 `nav_fsm*` 表现编，
-**模板里只有一个空槽**，一个 App 字样都不该出现在 job 正文里。
-
-| 项 | 值 |
-|---|---|
-| 槽名 | `nav_assist`（`kind: text`） |
-| 生产者 | `loop/nav_runtime.NavRuntime.observe` → `ai/job_slots.assemble_agent_decide_slots` |
-| 块配置 | `user_blocks` 末尾一块，`skip_if_empty: true`，`max_chars: 2400` |
-| 空值行为 | **整块跳过** —— 没配导航图或开关关着时，prompt 与 v6 逐字相同 |
-| 升级入口 | `ai/job_upgrades.upgrade_agent_decide_to_v7()`，启动时由 `core/bootstrap` 调用；幂等 |
-
-v7 同时往 system 块插了一节「导航 assist」，讲**怎么读这段**（照建议边走、只从允许集里选、
-被拦了换路径而不是重试）。规则是框架措辞，具体文案仍来自 DB。
-
-升级会把 v6 正文存进 `overrides_json.revisions`，Console 可以 `{"activate_version": 6}` 回退。
-
-## 7. `doc_context` 槽（agent-decide v9）
-
-文档库每步 FTS 检索结果注入跑批 prompt。见 [DOC_LIBRARY.md](DOC_LIBRARY.md)。
-
-| 项 | 值 |
-|---|---|
-| 槽名 | `doc_context` |
-| 生产者 | `loop/inspections.match_step_docs` → `assemble_agent_decide_slots` |
-| 块配置 | `skip_if_empty: true`，`max_chars: 1400` |
-| 升级 | `upgrade_agent_decide_to_v9()`，启动时 bootstrap 幂等调用 |
-
-## 8. 去掉每轮 `screen_layout` / `vlm_hierarchy`（v13 / inspect v3 / assert v3）
-
-跑批主耗时是模型每轮生成这两段 JSON（10–18s），不是传图。Scout hierarchy 已经注入 prompt。
-
-| job | 版本 | 改动 |
-|-----|------|------|
-| `agent-decide` | 13 | 删掉必填布局章节；tool schema 不再带这两字段；`max_tokens` 2048→768 |
-| `inspect-session` | 3 | 同上；`max_tokens` 512→320 |
-| `assert-vision` | 3 | 去掉 `screen_layout`；`max_tokens` 512→320 |
-
-升级入口：`upgrade_agent_decide_to_v13` / `upgrade_inspect_session_to_v3` / `upgrade_assert_vision_to_v3`，启动时 bootstrap 幂等。旧模型若仍吐这两字段，解析侧忽略，不进 `action.params`。
-
-## 9. 低置信导航不要冻住（v14）
-
-`【导航】` 置信低时页名只是结构猜测。v14 改掉「先 recover / 问人，勿乱点」：以截图和用例步骤为准；达成信号已在屏上则 `signal_done`，禁止连续空等 `wait_ms`。`wait_ms` 同时计入 `ProgressGate` 里程碑（见 `loop/action_fuse.py`）。
-
-升级入口：`upgrade_agent_decide_to_v14`，启动时 bootstrap 幂等。
-
-## 10. 横滑须带起止点（v16）
-
-底部风格条、横向列表等局部滚动：`swipe_direction` 应带 **`from_x/from_y/to_x/to_y`（0–1000 千分比）**，不要只靠 `direction` 在屏中心滑；可见目标名优先 `tap_element`。
-
-升级入口：`upgrade_agent_decide_to_v16`；v15 全文存 `revisions`（见 [prompts/agent-decide-v15-snapshot.md](../prompts/agent-decide-v15-snapshot.md)）。启动 bootstrap 幂等。
-
-## 11. 前置只做三件事（v18）
-
-前置阶段不再 `check_run_env` / 切换测试环境。只保留：**筛选账号**、**筛选设备**、**环境清理**。设备登录态与账号登录态分写，避免「手机未登录」去卡号池 session。
-
-升级入口：`upgrade_agent_decide_to_v18`，启动 bootstrap 幂等。
 

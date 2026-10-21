@@ -1,5 +1,4 @@
 id: scout.update_status
-version: 2
 title: 查询 Scout 更新操作
 description: 查询原 operation_id 的最后确认状态、持久门禁和运行版本核验。离线或断线不等于失败，不自动重发安装。
 route: GET /runtime/nodes/{node_id}/update-status

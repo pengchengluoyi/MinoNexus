@@ -15,15 +15,9 @@ def _now() -> str:
 
 
 def _platform(ctx: Any) -> str:
-    p = str(getattr(ctx, "platform", "") or "").strip().lower()
-    if p in ("android", "ios", "web"):
-        return p
-    lease = getattr(ctx, "resource_lease", None) or {}
-    if isinstance(lease, dict):
-        lp = str(lease.get("platform") or "").strip().lower()
-        if lp in ("android", "ios", "web"):
-            return lp
-    return "android"
+    from mino_nexus.core.platform_contract import target_platform
+
+    return target_platform(getattr(ctx, "platform", None))
 
 
 def _rules_for_trigger(trigger_id: str, platform: str) -> list[dict[str, Any]]:
@@ -108,7 +102,7 @@ def _write_audit(
             ResourceTransitionAudit(
                 run_id=str(getattr(ctx, "run_id", "") or "")[:80],
                 case_id=str(getattr(ctx, "case_id", "") or "")[:64],
-                session_id=str(getattr(ctx, "report_run_id", "") or getattr(ctx, "session_id", "") or "")[:80],
+                session_id=str(getattr(ctx, "session_id", "") or "").strip(),
                 sn=sn[:64],
                 package_id=pkg[:128],
                 trigger_id=str(trigger_id)[:64],
@@ -123,11 +117,12 @@ def _write_audit(
 def _mirror_session_log(ctx: Any, payload: dict[str, Any]) -> None:
     from mino_nexus.loop.observe.session_log import active_writer
 
+    sid = str(getattr(ctx, "session_id", "") or "").strip()
+    if not sid:
+        SLog.w(TAG, "资源变更缺少 session_id，无法关联会话轨迹")
+        return
     writer = active_writer()
-    if writer is None:
-        sid = str(getattr(ctx, "report_run_id", "") or getattr(ctx, "session_id", "") or "").strip()
-        if not sid:
-            return
+    if writer is None or writer.session_id != sid:
         from mino_nexus.services import session_store
 
         try:

@@ -1,5 +1,4 @@
 id: task.cancel
-version: 1
 title: 取消任务
 description: 取消一个正在跑的任务。不删除记录。
 route: POST /case-runner/tasks/{task_id}/cancel

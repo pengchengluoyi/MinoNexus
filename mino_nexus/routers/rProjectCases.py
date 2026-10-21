@@ -151,7 +151,6 @@ class CaseReviewContext(BaseModel):
     sn: str = Field(min_length=1)
     env_profile: str = ""
     env_surface: str = ""
-    execution_mode: str = ""
     action_scheme: str = "dom_preferred"
     provider_id: str = ""
 
@@ -372,7 +371,7 @@ def v5_case_preview(project_id: str, case_id: str, _sess: dict = Depends(current
 @router.get("/{project_id}/cases/{case_id}/v5/execution-preview")
 def v5_execution_preview(project_id: str, case_id: str, sn: str = Query(..., min_length=1),
                          app_id: str = Query(..., min_length=1), env_profile: str = '', env_surface: str = '',
-                         action_scheme: str = 'dom_preferred', provider_id: str = '', execution_mode: str = 'v5',
+                         action_scheme: str = 'dom_preferred', provider_id: str = '',
                          _sess: dict = Depends(current_session)):
     from mino_nexus.services.execution_binding_runtime import binding_target_config
     try:
@@ -380,26 +379,19 @@ def v5_execution_preview(project_id: str, case_id: str, sn: str = Query(..., min
     except ValueError as exc:
         raise HTTPException(status_code=404, detail={"reason_code": str(exc)}) from exc
     from mino_nexus.services.case_store import get_case
-    from mino_nexus.services.execution_binding_runtime import resolve_live, strict_requirements
+    from mino_nexus.services.execution_binding_runtime import resolve_live
     case = get_case(project_id, case_id)
     if not case:
         raise HTTPException(status_code=404, detail='用例不存在')
-    if execution_mode not in {'legacy', 'v5'}:
-        raise HTTPException(status_code=400, detail={'reason_code': 'execution_mode_unsupported'})
-    if execution_mode == 'v5' and (not case.get('v5_publication') or case.get('v5_plan_state') != 'published'):
-        raise HTTPException(status_code=409, detail={'reason_code': 'plan_invalid'})
     try:
-        if execution_mode == 'v5':
-            requirements = strict_requirements(case, app_id)
-        else:
-            from mino_nexus.services.execution_requirements import ordinary_requirements
-            from mino_nexus.services.node_registry import get_registry
-            from mino_nexus.action_space.scheme import normalize_action_scheme
-            snapshot = get_registry().execution_snapshot(sn)
-            if not snapshot:
-                raise ValueError('binding_target_unavailable')
-            requirements = ordinary_requirements(case, app_id, platform=snapshot['device']['platform'],
-                action_scheme=normalize_action_scheme(action_scheme), provider_id=provider_id)
+        from mino_nexus.services.execution_requirements import ordinary_requirements
+        from mino_nexus.services.node_registry import get_registry
+        from mino_nexus.action_space.scheme import normalize_action_scheme
+        snapshot = get_registry().execution_snapshot(sn)
+        if not snapshot:
+            raise ValueError('binding_target_unavailable')
+        requirements = ordinary_requirements(case, app_id, platform=snapshot['device']['platform'],
+            action_scheme=normalize_action_scheme(action_scheme), provider_id=provider_id)
         result = resolve_live(requirements, {'sn': sn, 'env_profile': env_profile, 'env_surface': env_surface})
     except (ValueError, KeyError) as exc:
         return ok({'status': 'needs_input' if str(exc).endswith('need_compile') else 'blocked', 'binding': None,
@@ -410,14 +402,6 @@ def v5_execution_preview(project_id: str, case_id: str, sn: str = Query(..., min
     return ok({**result.model_dump(), 'scope': 'execution_binding_only', 'runnable_now': False})
 
 
-@router.put("/{project_id}/cases/{case_id}/v5/baseline", dependencies=[Depends(project_maintainer)])
-def v5_configure_baseline(project_id: str, case_id: str, body: V5BaselineBody, _sess: dict = Depends(current_session)):
-    _project(project_id)
-    from mino_nexus.services.v5_publication import configure_baseline
-    try:
-        return ok(configure_baseline(project_id, case_id, body.expected_revision, body.control_id))
-    except ValueError as exc:
-        raise HTTPException(status_code=409 if "conflict" in str(exc) else 400, detail={"reason_code": str(exc)}) from exc
 
 
 @router.post("/{project_id}/cases/{case_id}/v5/compile", dependencies=[Depends(project_maintainer)])
@@ -439,16 +423,6 @@ def v5_compile_draft(project_id: str, case_id: str, body: CompileJobBody | None 
         raise _case_error(exc) from exc
 
 
-@router.post("/{project_id}/cases/{case_id}/v5/publish", dependencies=[Depends(project_maintainer)])
-def v5_publish_case(project_id: str, case_id: str, body: V5PublishBody, _sess: dict = Depends(current_session)):
-    _project(project_id)
-    if not body.reviewed_expected_strength:
-        raise HTTPException(status_code=400, detail={"reason_code": "expected_strength_review_required"})
-    from mino_nexus.services.v5_publication import publish
-    try:
-        return ok(publish(project_id, case_id, body.expected_revision, retry_policy=body.retry_policy, reversible=body.reversible, expected_compile_job_id=body.expected_compile_job_id))
-    except ValueError as exc:
-        raise HTTPException(status_code=409 if "conflict" in str(exc) else 400, detail={"reason_code": str(exc)}) from exc
 
 
 @router.get("/{project_id}/v5/metrics")

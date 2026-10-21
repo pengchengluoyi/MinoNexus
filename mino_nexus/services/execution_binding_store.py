@@ -29,6 +29,9 @@ def merge_context(current, patch):
         current = {}
     if not isinstance(current, dict) or not isinstance(patch, dict):
         raise ValueError("runtime_context_invalid")
+    if 'resolved_case' in patch and current.get('resolved_case') is not None:
+        if _json(current['resolved_case']) != _json(patch['resolved_case']):
+            raise ValueError('resolved_case_immutable')
     existing = current.get("execution_binding")
     incoming = patch.get("execution_binding")
     if "execution_binding" in patch:

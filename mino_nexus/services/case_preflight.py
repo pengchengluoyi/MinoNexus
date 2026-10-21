@@ -16,13 +16,22 @@ def partition_cases(cases: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], 
                 "reasons": ["最新原文的编译任务尚未形成有效产物，请在用例详情处理编译状态。"],
                 "blocked_by": [{"reason": compilation_issue, "job_id": case.get("latest_compile_job_id")}]})
             continue
+        from mino_nexus.services.case_semantic_integrity import operation_diagnostics, precondition_diagnostics
+        semantic_issues = operation_diagnostics(case) + precondition_diagnostics(case)
+        if semantic_issues:
+            blocked.append({"case_id": str(case.get("case_id") or ""), "name": str(case.get("name") or ""),
+                "reasons": [item["user_message"] for item in semantic_issues], "blocked_by": semantic_issues})
+            continue
+        from mino_nexus.runtime.session_gate import clamp_case_scene
+        try:
+            clamp_case_scene(case.get("case_scene"))
+        except ValueError as exc:
+            blocked.append({"case_id": str(case.get("case_id") or ""), "name": str(case.get("name") or ""),
+                "reasons": ["用例场景缺失或无效，请重新编译当前用例；本条未创建执行、未占用资源。"],
+                "blocked_by": [{"reason": str(exc), "field": "case_scene"}]})
+            continue
         meta = case.get("meta") if isinstance(case.get("meta"), dict) else {}
         automation = meta.get("ui_automation") if isinstance(meta.get("ui_automation"), dict) else {}
-        if case.get("v5_publication") and case.get("v5_has_unpublished_changes"):
-            blocked.append({"case_id": str(case.get("case_id") or ""), "name": str(case.get("name") or ""),
-                "reasons": ["原文已补充但冻结计划尚未更新，请在用例详情重新核验并发布；未创建本条执行、未占用资源。"],
-                "blocked_by": [{"reason": "draft_requires_republish", "review_status": "needs_revalidate"}]})
-            continue
         from mino_nexus.services.execution_requirements import ordinary_compilation_diagnostics
         binding_issues = ordinary_compilation_diagnostics(case)
         if binding_issues:

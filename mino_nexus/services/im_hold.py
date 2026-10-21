@@ -23,7 +23,9 @@ def _scope(node, channel: str) -> tuple[str, str, str] | None:
     if not node or not node.owner_user_id:
         return None
     for row in node.plugins or []:
-        if channel == "wechat" and row.get("id") == "wechat":
+        if channel == "feishu_cli" and row.get("class") == "cli" and row.get("id") == "feishu":
+            status = row.get("status") or {}
+        elif channel == "wechat" and row.get("id") == "wechat":
             status = row.get("status") or {}
         elif channel.startswith("langbot:") and row.get("id") == "langbot":
             status = (row.get("platforms") or {}).get(channel.split(":", 1)[1]) or {}
@@ -46,6 +48,8 @@ def _holders() -> dict[tuple[str, str, str], list[str]]:
         for row in node.plugins or []:
             channels = {"wechat": row.get("status") or {}} if row.get("id") == "wechat" else {
                 f"langbot:{plat}": st for plat, st in (row.get("platforms") or {}).items()}
+            if row.get("class") == "cli" and row.get("id") == "feishu":
+                channels = {"feishu_cli": row.get("status") or {}}
             for channel, status in channels.items():
                 active = status.get("connected") if channel == "wechat" else status.get("enabled")
                 scope = _scope(node, channel)
@@ -79,7 +83,9 @@ def _push(node_id: str, channel: str, hold: bool) -> None:
     node = get_registry().get_node(node_id)
     if node is None or node.send is None:
         return
-    if channel == "wechat":
+    if channel == "feishu_cli":
+        params = {"class": "cli", "id": "feishu", "im_hold": hold}
+    elif channel == "wechat":
         params = {"class": "bot", "id": "wechat", "im_hold": hold}
     else:
         _, _, plat = channel.partition(":")

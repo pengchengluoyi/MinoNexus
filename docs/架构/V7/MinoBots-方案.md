@@ -1,6 +1,6 @@
 # Mino Bots 方案（V7）：测试工作区
 
-修订：2026-10-19（第五版，收敛重写）。状态：**P0/P1 主线源码已实施；真实模型与设备闭环验收尚未全部完成**。受 [V7 总清单](README.md)、[取消与不恢复事项](取消与不恢复事项.md) 和仓库 `CLAUDE.md` 约束。取代第四版及此前所有 MinoBots-* 文档。
+修订：2026-10-20（第五版，按最新产品收敛要求补齐）。状态：**主线与扩展聊天入口已实施；27 项隔离验证通过，真实模型、设备与 IM 闭环尚待验收**。受 [V7 总清单](README.md)、[取消与不恢复事项](取消与不恢复事项.md) 和仓库 `CLAUDE.md` 约束。取代第四版及此前所有 MinoBots-* 文档。
 
 ---
 
@@ -99,7 +99,7 @@
 | 看证据 | `session.list`、`session.events`、`session.screenshot`、`llm.get` | 已有 |
 | 看版本/编译 | `case.version_chain`、`case.compile_job`、`case.recompile` | 已有 |
 | 指派成员（问一次 / 跑规则） | `member.assign` | **新增**（§3.5），只能指派群成员的 `chat_jobs` |
-| 看工作区范围、钉用例 | `collab.scope_get`、`collab.pin_cases` | **尚未实现**。范围已在事实包里；钉用例走页面「加到工作区」，需要时再补，各一份 yaml |
+| 看工作区范围、钉用例 | `collab.scope_get`、`collab.pin_cases` | **已实现**。完整范围读取和批量钉入均有工具 YAML 与工作区路由；用例页「加到工作区」同时保留 |
 
 写类工具（`case.run`、`case.recompile` 等）沿用现有 `risk: write` 规则，不另建权限层。
 
@@ -257,13 +257,13 @@ run 是异步的，同一轮里等不到结果。现有钩子在 run 结束时�
 | 已删除 | `collab_batches.py`、`collab_roles.py`、`collab_workspace_events.py`、`collab_reports.py`、`collab_bot_orchestrate.py`；模型 `collab_task`、`collab_decision`、`collab_agent_run`；`core/collab_plan_schemas.py`；job `collab_intent` 及 `qa_cover` 中对应分支 |
 | 已改造 | `collab_conductor.py`（只入队，处理交给 `workspace_agent`）；`collab_workspace.py`（去掉任务、决策、策略；`detail` 只返回消息、范围快照和 run 实时数据）；`rCollabWorkspace.py`（去掉任务/重跑/取消/决策/通知/子任务接口）；`collab_events.py`（run 结束只通知被 run 卡引用的工作区） |
 | 已新增 | `services/workspace_agent.py`（工具循环）；`prompts/assistant/jobs/workspace-route/`；`models/collab_read.py`（已读标记，原定义随 `collab_task` 删除后单独保留） |
-| 保留未动，不进主线 | `collab_steward.py`、`mino_bots.py` 与 `rMinoBots.py` 中旧议题接口、`collab_langgraph.py`、`collab_agentscope*.py`、`collab_openhands.py`、`collab_publish.py`、`collab_extended.py`、`collab_apply.py`、`collab_digest.py`、Bot 市场 |
+| 已移除旧源码（2026-10-20） | 旧 `mino_bots`、`collab_steward`、`collab_worker`、LangGraph/AgentScope/OpenHands 及其专用支撑服务，共 16 个模块；旧 IM 入站镜像退出。`rMinoBots` 只保留工作区路由挂载及旧地址 410。历史 ORM 表与数据保留；`collab_apply` 仍被独立 QA 草稿应用使用，保留 |
 
 备份：删除前的未提交 collab 文件已打包到仓库外 `MinoNexus-backup-collab-20261019`。
 
 ### 7.2 前端已收敛
 
-`CollabPanel.tsx` 已改为消息、实时 run 卡、成员/测试目标/用例抽屉、附件、暂停、归档与删除，不再调用旧任务、决策、通知和子线程接口。用例详情已有「加到工作区」入口，只选择已有工作区。
+`CollabPanel.tsx` 已改为消息、实时 run 卡、成员/测试目标/任务抽屉、附件、暂停、归档与删除，不再调用旧任务、决策、通知和子线程接口。用例详情已有「加到工作区」入口，只选择已有工作区。
 
 失效工作区 ID 仍返回正确的资源不存在 404；前端清除已失效的列表缓存、刷新列表并规范化 URL，不再误报服务未挂载。删除成功后先移除缓存，再刷新，避免回退选择到刚删除的工作区。
 
@@ -273,9 +273,9 @@ run 是异步的，同一轮里等不到结果。现有钩子在 run 结束时�
 
 - 群组与成员、`chat_jobs` 启动校验、`member.assign`（§3.5）、`sender_name`（§6）、应用·渠道同步保存与三页签抽屉（§6.1）已实施。默认成员配置在 `settings.id=workspace-default-members`；项目维护者可读，全局默认成员修改需要管理员。已有对话不迁移成员，新对话自动加入默认成员。
 - 成员分配仅在工作区开放，最多 6 次；设备步骤 job 与未入群角色在成员执行前拒绝。对话型：角色声明了 `tools` 的跑成员工具循环（§3.5.1），否则退化为 `chat_with_role` 单次调用；规则型由代码读取业务库并调用 `qa_process_assist.run_job`。缺少测试点时明确无法判断覆盖，并停止后续操作。
-- 署名按 §6 由后端 `sender_name` 决定；前端此前写死的「测试管家」已去掉，库里旧的「【测试管家】」消息保留。后端 `collab_steward.py`、`mino_bots.py` 里的「测试管家」文案随旧议题整体删除时一起清理。
+- 署名按 §6 由后端 `sender_name` 决定；前端此前写死的「测试管家」已去掉，库里旧的「【测试管家】」消息保留。旧议题服务及其中固定署名文案已移除。
 
-- **成员自主（§3.5.1）与「交回管家」（§3.6）为最新改动，只验证了：代码可编译、应用可导入、角色 `tools` 校验生效（不存在的工具会拒绝启动）、成员只看得到自己白名单里的工具。尚未做真实对话验证。** 验证前需重载 Nexus，并先用 `dispatch_log` 确认运行进程加载的是最新源码。
+- **成员自主与交回管家**：已通过真实工具路由集成及受控模型响应验证。成员完成后交回同一管家循环，携带顺序结果、最新事实和共享写操作标志；需要输入或失败时停止。受控响应不等于真实模型验收，仍需在运行环境确认 `dispatch_log`。
 - 观察点：被 `@测试工程师` 后是否自己调用 `case.list` / `case.run`，而不是回「请你补充」；成员回复后管家是否继续推进。若效果不理想，回到 §3.5.1 / §3.6 调整，不要提前加线程或任务表。
 - 旧数据里已有的 `collab_topics.workspace_kind` / `scope_key` 等列保留；迁移脚本里对它们的处理不变。
 - `collab_worker.tick` 现在只剩旧议题的 work item 处理，后续整理旧议题时一并删除。
@@ -313,15 +313,17 @@ run 是异步的，同一轮里等不到结果。现有钩子在 run 结束时�
 
 ---
 
-## 9. 扩展范围（2026-10-20 用户要求全部纳入）
+## 9. 扩展范围（2026-10-20，按用户纠正收敛）
 
-范围变化、用例更新、编译就绪、资源恢复、build 核验变化、定时回归、安全失败复跑、人工决策、已绑定 IM 出站通知、问题聚合、结果过期均纳入本轮实现，不再以 P2/P3 推迟。
+已实现范围变化、用例更新、编译就绪、资源恢复、定时回归、安全失败复跑、人工决策、已绑定 IM 出站通知、问题聚合与结果过期。**build 核验、打包与 IDE 接入不属于产品功能，也不是执行前置条件。**
 
-自动化默认关闭，由工作区测试目标页明确启用，配置与范围变更会拦截尚未消费的执行消息。调度复用持久消息队列及 case.run/case.retry_failed；没有额外执行引擎。自动分析只读；自动报告要求 report-writer 已入群。安全复跑保持原设备、发布快照与剩余预算，仅允许有未发生写入证据的执行单元，工作区上限不能覆盖执行器限制。
+自动化默认关闭。聊天通过 `collab.automation_get` 读取完整配置、revision 与可用通知目标；仅在用户明确要求后用 `collab.automation_update` 保存，保留未要求改变的字段。不把回归间隔、设备 SN 或通知配置表单放回详情抽屉。配置或范围变化会拦截尚未消费的执行消息；暂停和归档停止自动执行。
 
-人工决策追加在原消息表，不更改测试结果；问题按用例及已记录原因聚合并链接 run/Session。提交运行时记录范围指纹，范围、用例或测试目标变化后标注过期；没有历史指纹的运行明确显示无法确认，不冒充当前有效。问题页最多读取最近 100 次运行并提示截断。手动失败运行纳入需单独启用，只接收启用后、同范围/渠道/环境/build 的运行，不回放历史。
+调度复用持久消息队列及 `case.run` / `case.retry_failed`，不新增执行引擎。自动分析只读，不能通过成员工具或策略修改绕过；自动报告要求 report-writer 入群。安全复跑受原执行单元、设备、发布快照及剩余预算约束，未知写入不重放。
 
-build 校验复用 Scout development probe，证据绑定节点、连接代次与配置版本，超过 300 秒或断线重连即失效；复跑同样保留该门禁。旧协作 HTTP 入口返回 410，旧表和数据保留。
+聊天通过 `collab.review` 查看问题聚合、决策与结果有效性，通过 `collab.decision` 记录用户明确提出的人工结论，通过 `collab.report_get` 查看事实报告。决策追加到原消息表，不修改测试结果。新工具限定当前工作区；决策幂等标识由源消息生成。
+
+提交运行时记录范围指纹；范围、用例或测试目标变化后显示 stale；没有历史指纹时为 unknown，不能冒充当前有效。问题聚合最多读取最近 100 次运行并标记截断。手动失败运行需显式开启纳入，只接收启用后同范围、渠道和环境的运行。通知只使用当前账号已绑定的 IM 会话。
 
 ## 10. 不做的事
 
@@ -331,13 +333,13 @@ build 校验复用 Scout development probe，证据绑定节点、连接代次�
 - 不用正则 + 固定话术充当对话。
 - 完成只认 `run_store` 与 session 证据；「已提交」「Bot 已回复」不算完成。
 
-## 11. 待定
+## 11. 已确定的收尾与验收边界
 
-1. 旧议题接口（`rMinoBots.py` 的 topics/steward 等）与 `collab_steward.py`、`collab_worker.py`：何时整体删除。假设：前端调整完、确认没有入口再调用后一起删。
-2. 默认成员放在哪里。假设：`settings` 表一个 key，默认值 `conductor` + `test-engineer`，不按工作区单独设。
-3. 管家能否更换。假设：不能，固定为默认成员里的 `conductor`。
-4. run 结束后的自动后续步骤（§3.7）。假设：默认不开，用过一段时间再定。
-5. 旧数据：按用例建出来的议题保持原样，不迁移。
+1. 旧议题并行执行源码已删除，旧 HTTP 地址返回 410；旧表及数据保留，不迁移、不自动重放。
+2. 默认成员保存在 `settings.id=workspace-default-members`；以当前服务端目录为准，固定保留 conductor。
+3. run 完成后的分析、报告、失败复跑及通知均默认关闭，通过明确用户要求启用。
+4. 本轮 20 项隔离 HTTP/调度检查与 7 项工具/成员控制流检查通过。真实路由已验证；成员模型响应是受控输入，运行记录是隔离 fixture，没有真实设备执行或 IM 发送。
+5. 真实模型、设备、IM 与重启后实际页面验收仍未完成。不得把源码完成、受控响应或隔离运行记录勾选为 §8 的真实闭环通过。
 
 ### 本轮验证记录（2026-10-19）
 

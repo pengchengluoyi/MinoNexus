@@ -1,5 +1,4 @@
 id: task.write_safety_recheck
-version: 1
 title: 重新核验任务写安全隔离
 description: 对已结束且写结果未知的本人任务重新获取节点停止证明。只有停止证据充分才释放隔离，并要求新观察；不重放设备动作，不改原业务结果。缺证据仍保持阻断。仅在用户要求恢复该任务资源时调用。
 route: POST /case-runner/tasks/{task_id}/write-safety/recheck

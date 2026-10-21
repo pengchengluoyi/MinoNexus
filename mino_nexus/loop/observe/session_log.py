@@ -223,7 +223,8 @@ class SessionWriter:
                 SLog.w(TAG, f"append {evt_type} failed session={self.session_id}: {exc!r}")
                 return 0
 
-    def close(self, *, status: str, summary: str = "", step_count: int = 0) -> None:
+    def close(self, *, status: str, summary: str = "", step_count: int = 0, reason_code: str = "",
+              failure_stage: str = "", case_step: int = 0) -> None:
         with self._lock:
             if self._closed:
                 return
@@ -248,7 +249,8 @@ class SessionWriter:
                 self.append("session/attribution", {
                     "first_blocker": self._first_blocker,
                     "latest_error": self._latest_error,
-                    "stop_reason": {"status": status, "kind": stop_kind},
+                    "stop_reason": {"status": status, "kind": reason_code or stop_kind,
+                                    "reason_code": reason_code, "failure_stage": failure_stage, "case_step": case_step},
                 })
             self.append(
                 "perf/summary",
@@ -265,8 +267,15 @@ class SessionWriter:
             if meta and (meta.get("runtime_context") or {}).get("execution_binding") is not None:
                 try:
                     session_store.finalize_bound(session_id=self.session_id, body={
-                        "status": status, "summary": summary, "step_count": step_count, "wall_ms": wall_ms,
+                        "status": status, "summary": summary, "step_count": step_count, "wall_ms": wall_ms, "reason_code": reason_code,
+                        "failure_stage": failure_stage, "case_step": case_step,
                     }, turn=self._turn, phase="done")
+                    if (meta.get("runtime_context") or {}).get("resolved_case"):
+                        finalized = get_meta(self.session_id)
+                        self.final_outcome = {"status": finalized["status"], "summary": finalized["summary"],
+                            "reason_code": (finalized.get("verdict") or {}).get("reason_code", reason_code),
+                            "failure_stage": (finalized.get("verdict") or {}).get("failure_stage", failure_stage),
+                            "case_step": (finalized.get("verdict") or {}).get("case_step", case_step)}
                 except Exception as exc:
                     self._store_failure = "atomic_finalization"
                     raise SessionPersistenceError(self._store_failure) from exc
@@ -279,6 +288,7 @@ class SessionWriter:
                     "summary": summary,
                     "step_count": step_count,
                     "wall_ms": wall_ms,
+                    "reason_code": reason_code, "failure_stage": failure_stage, "case_step": case_step,
                 },
             )
             self.require_persisted()

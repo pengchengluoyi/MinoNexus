@@ -48,6 +48,14 @@ def _target_items(args: dict) -> list[list[str]]:
         pass
     return items
 
+def _input_hint(question: dict) -> str:
+    if question.get('candidates'):
+        return '回复选项序号或名称后继续；回复“取消本次请求”可撤销。'
+    label = {'options.simple-names': '空间链接或别名', 'options.project-key': '空间链接或空间标识',
+             'options.name': '标题'}.get(question.get('field'), '需要补充的信息')
+    return f'直接回复{label}即可继续；回复“取消本次请求”可撤销。'
+
+
 def result_for(*, answer: str, origin: dict, outcome: ToolOutcome | None = None, steps: list | None = None,
                target: dict | None = None, usage: dict | None = None, model_error: str = '', request: dict | None = None, runtime_stop: str = '') -> dict:
     from mino_nexus.services.assistant_errors import explain
@@ -68,10 +76,16 @@ def result_for(*, answer: str, origin: dict, outcome: ToolOutcome | None = None,
                  else '相同查询反复返回相同结果，暂时无法确定下一步。')
         suggestions = ['请明确要操作的应用、模块或任务；已经查询到的结果列在下面。' if outcome and outcome.ok
                        else '请补充要操作的应用、模块或任务，再继续处理。']
+        if outcome and outcome.tool_id in ('cli.query', 'cli.execute'):
+            answer = '本次请求未完成，尚未提交新的 CLI 写入操作。'
+            suggestions = ['请明确飞书或 Meego 的目标空间、文档或工作项；不要重复提交尚未确认结果的写操作。']
     if uncertain:
         answer = '本次操作是否已受理暂时无法确认。'
         issue = '服务未返回可确认的结果，当前不会重复提交。'
         suggestions = ['先到任务页查询是否已经创建任务，确认后再决定下一步。']
+        if outcome and outcome.tool_id == 'cli.execute':
+            title = '写入结果待确认'
+            suggestions = ['先查询飞书或 Meego 中是否已经写入，确认后再决定下一步。']
     if question and not request:
         if outcome.args.get('intent') == 'execute_test' and outcome.tool_id in ('case.list', 'device.list', 'app.list'):
             outcome.tool_id = 'case.run'
@@ -124,8 +138,11 @@ def result_for(*, answer: str, origin: dict, outcome: ToolOutcome | None = None,
     if request:
         card['request'] = {key: request[key] for key in ('id', 'revision', 'state', 'expires_at', 'question')}
         if question:
-            card['blocks'].append({'type': 'choices', 'items': request['question'].get('candidates') or []})
-            card['blocks'].append({'type': 'next_steps', 'items': ['回复选项序号或名称后继续；回复“取消本次请求”可撤销。']})
+            request_question = request.get('question') or {}
+            candidates = request_question.get('candidates') or []
+            if candidates:
+                card['blocks'].append({'type': 'choices', 'items': candidates})
+            card['blocks'].append({'type': 'next_steps', 'items': [_input_hint(request_question)]})
     return {'answer': answer, 'intent': ' → '.join(str(step.get('label') or step.get('tool')) for step in steps or []),
             'text': render_wechat_text(card), 'card': card, 'steps': steps or [], 'usage': usage or {}, 'model_error': model_error,
             'request_id': (request or {}).get('id', ''), 'task_id': task_id, 'runtime_stop': runtime_stop,
@@ -159,7 +176,8 @@ def execute_request(request: dict) -> dict:
     if saved_origin.get('channel'):
         assistant_store.require_im_binding(uid, saved_origin['channel'], saved_origin.get('node_id', ''), saved_origin)
     policy = conversation.group_policy(saved_origin) if saved_origin.get('chat_type') == 'group' else None
-    token = dispatch_log.bind(assistant_mutation_scope=request_id, assistant_group_policy=policy)
+    token = dispatch_log.bind(assistant_mutation_scope=request_id, assistant_group_policy=policy,
+                              assistant_origin=saved_origin)
     try:
         spec = get_tool(request['tool_id'])
         if spec is None:
@@ -222,10 +240,10 @@ def route_control(text: str, origin: dict, inbound: dict) -> dict | None:
     if raw in ('取消本次请求' , '/取消请求'):
         answer = '没有等待补充信息的请求。'
         if pending and conversation.cancel(pending['id'], pending['revision']):
-            answer = '本次待执行请求已取消，未创建测试任务。'
+            answer = '本次待执行请求已取消。'
         return result_for(answer=answer, origin=origin)
     if raw in ('好的', '好', '收到', '谢谢', 'ok', 'OK', '嗯'):
-        return result_for(answer='请回复选项序号或名称，我才能继续本次请求。' if pending else '好的。', origin=origin)
+        return result_for(answer=_input_hint(pending.get('question') or {}) if pending else '好的。', origin=origin)
     if raw in ('/帮助', '/help') or re.search(r'(平台|Mino|Workbench).*(怎么用|如何使用|有什么功能)', raw, re.I):
         return result_for(answer='可以查询项目和任务，也可以按应用与模块发起测试。\n\n例如：测试造好物的登录模块。\n\n缺少应用渠道或设备时，我会只列出当前可用的选项；任务受理后会单独通知结果。\n\nWorkbench 的“我的助手”可以管理待执行请求、展示偏好、账号绑定和群策略。', origin=origin)
     if raw in ('你好', '您好', '早上好', '晚上好', 'hi', 'hello'):
@@ -238,11 +256,11 @@ def route_control(text: str, origin: dict, inbound: dict) -> dict | None:
         if not candidate:
             return result_for(answer='请求不存在或不属于当前账号。', origin=origin)
         request = conversation.transfer(candidate['id'], candidate['revision'], origin)
-        outcome = ToolOutcome(ok=False, ask='已将待补充请求转到当前会话，请选择执行信息。', field=request['question'].get('field', ''))
+        outcome = ToolOutcome(ok=False, ask='已将待补充请求转到当前会话，请补充所需信息。', field=request['question'].get('field', ''))
         return result_for(answer=outcome.ask, origin=origin, outcome=outcome, request=request)
     if raw in ('继续', '继续本次请求', '/继续'):
         if pending:
-            outcome = ToolOutcome(ok=False, ask='请选择本次需要补充的信息。', summary='',
+            outcome = ToolOutcome(ok=False, ask='请补充本次请求所需的信息。', summary='',
                                   field=pending['question'].get('field', ''), candidates=pending['question'].get('candidates', []),
                                   data=pending.get('result') or {}, args=pending.get('args') or {}, tool_id=pending.get('tool_id') or '')
             return result_for(answer=outcome.ask, outcome=outcome, origin=origin, request=pending)

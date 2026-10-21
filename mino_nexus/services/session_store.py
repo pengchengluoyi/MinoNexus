@@ -328,12 +328,15 @@ def finalize_bound(*, session_id, body, turn=0, phase="done"):
         raise ValueError("binding_not_committed")
     body = dict(body)
     target_sn = str(meta['runtime_context']['execution_binding'].get('target', {}).get('sn') or '')
+    v8 = bool(meta["runtime_context"].get("resolved_case"))
     if protected(meta["run_id"], sn=target_sn):
-        body.update(status="blocked", summary="写动作结果未确认，资源仍隔离", reason_code="write_outcome_unknown")
+        body.update(status="unverified" if v8 else "blocked", summary="写动作结果未确认，资源仍隔离", reason_code="write_outcome_unknown")
     records = [{"type": "session/end", "payload": body, "turn": turn, "phase": phase}]
+    verification = "verified_pass" if v8 and body.get("status") == "pass" else "verified_fail" if v8 and body.get("status") == "product_fail" else "unverified"
     patch = {"status": str(body.get("status") or "unknown"), "summary": str(body.get("summary") or "")[:2000],
-             "verdict": {"verification_status": "unverified", "outcome": str(body.get("status") or "unknown"),
+             "verdict": {"verification_status": verification, "outcome": str(body.get("status") or "unknown"),
                          "reason_code": body.get("reason_code") or "ordinary_execution_result",
+                         "failure_stage": body.get("failure_stage") or "", "case_step": int(body.get("case_step") or 0),
                          "evidence_scope": (meta.get("verdict") or {}).get("evidence_scope") or {"session_id": session_id, "through_seq": meta["event_count"]},
                          "binding_id": meta["runtime_context"]["execution_binding"]["binding_id"]}}
     # Stable content identity; identical retries succeed, changed outcomes conflict.
@@ -344,5 +347,5 @@ def finalize_bound(*, session_id, body, turn=0, phase="done"):
         if str(exc) != "task_cancelled" or body.get("status") in {"cancelled", "cancel"}:
             raise
         return finalize_bound(session_id=session_id,
-            body={**body, "status": "cancelled", "reason_code": "task_cancelled", "summary": "任务已取消"},
+            body={**body, "status": "unverified" if v8 else "cancelled", "reason_code": "task_cancelled", "summary": "任务已取消"},
             turn=turn, phase=phase)

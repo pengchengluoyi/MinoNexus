@@ -21,6 +21,11 @@ DISPLAY_PREFERENCES = {'detail': {'brief', 'full'}, 'language': {'zh-CN', 'en-US
 TERMINAL = {'submitted', 'cancelled', 'expired', 'failed', 'uncertain', 'done'}
 
 
+def _request_args(tool_id: str, args: dict) -> dict:
+    keys = ARG_KEYS | {'plugin', 'node_id', 'command', 'options'} if tool_id in {'cli.query', 'cli.execute'} else ARG_KEYS
+    return {key: value for key, value in args.items() if key in keys}
+
+
 def _now() -> int:
     return int(time.time())
 
@@ -32,7 +37,7 @@ def _view(row: Pending) -> dict[str, Any]:
 
 def origin_for(channel: str, chat_id: str, node_id: str, ctx: dict[str, Any]) -> dict[str, str]:
     return {'channel': channel, 'chat_id': chat_id, 'node_id': node_id,
-            **{key: str(ctx.get(key) or '') for key in ('instance_id', 'tenant', 'sender_id', 'thread_id', 'source_message_id', 'binding_key', 'chat_type', 'bot_uuid', 'context_token', 'target_type', 'target_id')}}
+            **{key: str(ctx.get(key) or '') for key in ('instance_id', 'tenant', 'sender_id', 'thread_id', 'source_message_id', 'binding_key', 'chat_type', 'bot_uuid', 'context_token', 'target_type', 'target_id', 'transport')}}
 
 
 def expire(db, uid: str) -> None:
@@ -48,7 +53,7 @@ def create(tool_id: str, args: dict, target: dict, question: dict, origin: dict,
     with session_scope() as db:
         expire(db, uid)
         row = Pending(id='req-' + uuid.uuid4().hex, user_id=uid, lane=lane, tool_id=tool_id,
-                      args={key: value for key, value in args.items() if key in ARG_KEYS},
+                      args=_request_args(tool_id, args),
                       target={key: value for key, value in target.items() if key in ARG_KEYS},
                       question=question, origin=origin, state=state, revision=1,
                       created_at=now, updated_at=now, expires_at=now + 1800)
@@ -97,11 +102,11 @@ def get_focus(origin: dict) -> dict:
         return {'request_id': row.request_id, 'task_id': row.task_id, 'generation': row.generation} if row else {}
 
 
-def list_requests(user_id: str) -> dict:
+def list_requests(user_id: str, *, node_id: str = "") -> dict:
     from mino_nexus.services.assistant_store import mask_id
     with session_scope() as db:
         expire(db, user_id)
-        rows = db.query(Pending).filter_by(user_id=user_id).order_by(Pending.updated_at.desc(), Pending.id.desc()).limit(100).all()
+        rows = db.query(Pending).filter_by(user_id=user_id).filter(Pending.origin["node_id"].as_string() == node_id if node_id else True).order_by(Pending.updated_at.desc(), Pending.id.desc()).limit(100).all()
         focuses = db.query(Focus).filter_by(user_id=user_id).all()
         items = [{**_view(row), 'origin': {'channel': row.origin.get('channel'),
                   'chat_id_masked': mask_id(row.origin.get('chat_id') or '')}} for row in rows]
@@ -120,7 +125,7 @@ def list_requests(user_id: str) -> dict:
                 if item['task_id']:
                     task = get(item['task_id']) or {}
                     item['task_status'] = task.get('status') or 'unknown'
-        return {'items': items, 'focuses': [{'lane': row.lane, 'request_id': row.request_id, 'task_id': row.task_id} for row in focuses]}
+        return {'items': items, 'focuses': [{'lane': row.lane, 'request_id': row.request_id, 'task_id': row.task_id} for row in focuses if not node_id or row.lane in {item['lane'] for item in items}]}
 
 
 def pending_for(origin: dict, request_id: str = '', reply_to: str = '') -> dict | None:
@@ -164,10 +169,16 @@ def claim(request_id: str, revision: int, *, lane: str = '', patch: dict | None 
             if not isinstance(selection, dict) or set(selection) != {'env_surface', 'env_profile', 'sn'}:
                 raise ValueError('执行目标格式已变化，请重新选择')
             patch = selection
+        args_patch = _request_args(row.tool_id, patch)
+        if row.tool_id in {'cli.query', 'cli.execute'} and isinstance(field, str) and field.startswith('options.'):
+            option = field.removeprefix('options.')
+            if not option or '.' in option:
+                raise ValueError('CLI 追问参数格式已变化，请重新发起请求')
+            args_patch = {'options': {**((row.args or {}).get('options') or {}), option: patch[field]}}
         updated = db.query(Pending).filter(Pending.id == request_id, Pending.user_id == uid,
                     Pending.revision == revision, Pending.state == 'need_input', Pending.expires_at > now).update(
             {Pending.state: 'resolving', Pending.updated_at: now,
-             Pending.args: {**(row.args or {}), **{key: value for key, value in patch.items() if key in ARG_KEYS}}}, synchronize_session=False)
+             Pending.args: {**(row.args or {}), **args_patch}}, synchronize_session=False)
         if updated != 1:
             raise ValueError('请求已被另一条回复处理')
         db.refresh(row)
@@ -208,7 +219,7 @@ def finish(request_id: str, revision: int, outcome, *, task_id: str = '') -> dic
         row.state, row.updated_at, row.task_id = state, _now(), task_id
         row.revision += 1
         if outcome.args:
-            row.args = {key: value for key, value in outcome.args.items() if key in ARG_KEYS}
+            row.args = _request_args(row.tool_id, outcome.args)
         row.question = {'field': outcome.field, 'candidates': outcome.candidates} if outcome.ask else {}
         preflight = outcome.data.get('preflight') if isinstance(outcome.data, dict) else None
         if not outcome.ok and not outcome.ask:

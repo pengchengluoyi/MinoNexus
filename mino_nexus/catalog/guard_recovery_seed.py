@@ -47,8 +47,8 @@ GUARD_RECOVERY: dict[str, dict[str, str]] = {
     },
     "block_fsm_off_step_target": {
         "phases": "do",
-        "summary": "导航目标不是本步要去的页。fsm_navigate 只去本步目标。",
-        "next_cap": "fsm_navigate",
+        "summary": "导航目标不是本步要去的页。按当前导航计划通过 tap_element / press_key 前往本步目标。",
+        "next_cap": "",
         "avoid": "",
     },
     "block_back_without_nav_back_semantics": {

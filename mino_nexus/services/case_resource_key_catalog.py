@@ -160,6 +160,8 @@ def _entries() -> list[dict[str, Any]]:
             config_keys=["session"],
             dsl="logged_out | guest | logged_in | any",
             runtime="Preflight 对照机态；不满足 → prep / inspect-session。不写进号池 session",
+            key_ref="precondition.device_session",
+            param_slots=[{"id": "required_session", "required": True, "enum": ["logged_in", "guest"]}],
         ),
         _entry(
             section="account",
@@ -180,6 +182,8 @@ def _entries() -> list[dict[str, Any]]:
             config_keys=["号池模板字段 key 或中文名", "选项 value 或标签"],
             dsl="「字段名-状态」→ 该 facet eq；不扫其它字段的同名标签",
             runtime="租号时 row_satisfies_requirements",
+            key_ref="precondition.account_field",
+            param_slots=[{"id": "facet", "required": True}, {"id": "value", "required": True}],
         ),
         _entry(
             section="account",
@@ -255,6 +259,7 @@ def _entries() -> list[dict[str, Any]]:
             config_keys=["kind: clear_cache"],
             dsl='prep_items: [{ "kind": "clear_cache", "phase": "before_launch" }]',
             runtime="Prep 环境清理：clear_app_cache 仅清缓存；登录态须重新观察，不重置账号业务数据",
+            key_ref="precondition.clear_cache",
         ),
         _entry(
             section="prep",
@@ -341,6 +346,18 @@ def _entries() -> list[dict[str, Any]]:
             event_name="说明步骤",
         ),
         _entry(
+            section="operation", write_category="观察当前应用界面", write_examples=["查看当前页面内容"],
+            claim_path="case.meta.step_program_keys.{n}.operations[]", resource="screenshot",
+            config_keys=["screenshot"], dsl="observe_ui", runtime="采集当前应用画面，交给本步断言；不能用于短信或后台数据读取",
+            key_layer="operation", key_ref="operation.observe", kind="hook", event_name="观察当前应用界面",
+            param_slots=[{"id": "target.name", "required": True}],
+        ),
+        _entry(
+            section="prep", write_category="作者备注", write_examples=["备注：无须执行"],
+            claim_path="resource_key.precondition_coverage", resource="—", config_keys=[], dsl="author_remark",
+            runtime="仅原文明示的作者备注，不代替业务条件", key_ref="precondition.author_remark",
+        ),
+        _entry(
             section="operation",
             write_category="应用生命周期",
             write_examples=["（系统级启停应用，非点击控件）"],
@@ -348,7 +365,7 @@ def _entries() -> list[dict[str, Any]]:
             resource="close_app / kill_app / launch_app",
             config_keys=["hook_cap"],
             dsl="hook lifecycle",
-            runtime="系统级关闭、强停或启动被测应用；不得映射为 tap_element",
+            runtime="系统级关闭、强停或启动被测应用；打开、启动或重新打开应用使用 launch_app，关闭使用 close_app，强停使用 kill_app；不得映射为 tap_element",
             key_layer="operation",
             key_ref="operation.system_app",
             kind="hook",
@@ -357,7 +374,8 @@ def _entries() -> list[dict[str, Any]]:
                 {
                     "id": "hook_cap",
                     "required": True,
-                    "enum": ["close_app", "kill_app", "launch_app", "open_app"],
+                    "enum": ["close_app", "kill_app", "launch_app"],
+                    "description": "启动/打开/重新打开=launch_app；关闭=close_app；强制停止=kill_app。",
                 },
             ],
         ),
@@ -369,7 +387,7 @@ def _entries() -> list[dict[str, Any]]:
             resource="NavFSM screen_id",
             config_keys=["nav_target"],
             dsl="【导航:{screen_id}】",
-            runtime="将界面带到目标业务屏（fsm_navigate）；不是预期栏的到达断言",
+            runtime="将界面带到目标业务屏；由当前导航计划通过 tap_element / press_key 推进，不是预期栏的到达断言",
             key_layer="operation",
             key_ref="operation.nav_target",
             kind="nav",

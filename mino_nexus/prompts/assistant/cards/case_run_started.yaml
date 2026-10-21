@@ -1,5 +1,4 @@
 id: case_run_started
-version: 1
 title: 已开始
 tone: info
 summary: '{summary}'

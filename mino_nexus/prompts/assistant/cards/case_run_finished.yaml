@@ -1,5 +1,4 @@
 id: case_run_finished
-version: 1
 title: 跑批结束
 tone: success
 summary: '{summary}'

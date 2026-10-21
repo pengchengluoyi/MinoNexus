@@ -1,0 +1,40 @@
+id: cli.query
+version: 1
+title: 查询飞书和 Meego CLI
+description: >-
+  在本人已配置的 Scout 上运行飞书或 Meego 查询命令。
+  command 是不含程序名和参数的命令名称数组，options 是 CLI 长参数名到值的映射，不带 --。
+  没有参数时传 options={} 或不传 options；不要添加空字符串参数名，也不要把用户原话填入空参数名。
+  例如飞书 command=[docs,+fetch] options={doc:文档链接,doc-format:markdown}；
+  Meego 未确定空间时先用 command=[project,list] 查询可访问空间；只有一个时继续使用，有多个时用 [project,get] options={project-keys:[KEY]} 查询名称后让用户选择。
+  用户提供空间链接或别名（例如 tvqduc）时，用 [project,get] options={simple-names:[链接中的空间别名]} 查询实际 project_key，不直接把链接别名当成已验证的空间 KEY。
+  空间列表为空时不要重复查询同一列表；已有空间链接或别名可直接查详情，没有目标时询问空间链接或别名。空列表不等于已经证实权限不足。
+  工作项类型使用 command=[workitem,meta-types] options={project-key:实际空间KEY}，
+  [workitem,meta-fields]、[workitem,meta-templates] 可核对字段和模板，
+  [workitem,get] 还需 work-item-type、work-item-id。
+  不清楚命令时先传 [help]、[schema,服务.资源.方法] 或 [inspect,workitem.create]。
+  节点默认来自当前 IM 会话，否则自动选本人唯一已配置节点；多节点须明确 node_id。
+  本工具不能创建、修改或删除，写操作使用 cli.execute。CLI 授权失败时展示工具提供的具体原因和下一步，不重复尝试同一个被拒绝的接口，不声称执行成功。
+route: POST /runtime/cli/query
+risk: read
+async: false
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    plugin:
+      type: string
+      enum: [feishu, meego]
+    command:
+      type: array
+      items: {type: string}
+      minItems: 1
+      maxItems: 8
+    options:
+      type: object
+      description: CLI 参数，例如 project-key、work-item-type、params；JSON 参数可直接传对象。
+    node_id: {type: string}
+  required: [plugin, command]
+result_pick: [data]
+surfaces: [im]
+enabled: true

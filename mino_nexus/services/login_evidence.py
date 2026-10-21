@@ -1,4 +1,6 @@
 """Positive session evidence; credentials and disappearing forms are only hints."""
+
+from mino_nexus.loop.login_transition import update_auth_state
 from copy import deepcopy
 import hashlib
 import time
@@ -47,8 +49,8 @@ def scope(ctx):
 
 def record(ctx, row, *, form_left=None):
     row = normalize_observation(row)
-    # Session observation does not require the identity of an allocated account.
-    identity_required = False
+    # Android requires the leased identity or an explicitly configured observed fact.
+    identity_required = str(getattr(ctx, 'platform', '')).lower() == 'android'
     evidence = {'version': 1, 'scope': scope(ctx), 'observation_ref': row.get('observation_ref', ''),
         'observed_at_monotonic': row.get('observed_at_monotonic', time.monotonic()),
         'form_left': form_left, 'authentication': row.get('session', 'unknown'),
@@ -58,12 +60,22 @@ def record(ctx, row, *, form_left=None):
     from mino_nexus.services.login_evidence_policy import submission_current
     submitted = (evidence['identity'] != 'mismatch' and submission_current(
         ctx, observed_at=evidence['observed_at_monotonic']))
-    evidence['account_binding_source'] = ('ui_identity' if evidence['identity'] == 'match'
-        else 'submitted_account' if submitted else 'none')
+    from mino_nexus.services.login_evidence_policy import policy_for_context, submitted_account_enabled
+    policy = policy_for_context(ctx)
+    proof = row.get('authentication_evidence') or {}
+    configured_fact = (submitted and submitted_account_enabled(ctx)
+        and bool(policy.get('authenticated_content_hint'))
+        and proof.get('kind') == 'authenticated_content'
+        and bool(proof.get('observed')) and bool(scope(ctx)['account_id']))
+    if identity_required and configured_fact and evidence['identity'] == 'unknown':
+        evidence['identity'] = 'configured_fact'
+    identity_match = evidence['identity'] == 'match' and bool(scope(ctx)['account_id'])
+    evidence['account_binding_source'] = ('ui_identity' if identity_match
+        else 'configured_fact' if configured_fact else 'submitted_account' if submitted and not identity_required else 'none')
     evidence['login_state_verified'] = (evidence['authentication'] == 'logged_in'
         and evidence['identity'] != 'mismatch'
-        and (not identity_required or evidence['identity'] == 'match' or submitted))
-    ctx.login_evidence = evidence
+        and (not identity_required or identity_match or configured_fact))
+    update_auth_state(ctx, login_evidence=evidence)
     from mino_nexus.loop.observe.session_log import active_writer
     writer = active_writer()
     if writer:
@@ -75,18 +87,15 @@ def record(ctx, row, *, form_left=None):
 def evidence_current(ctx, evidence):
     if not isinstance(evidence, dict):
         return False
+    if str(getattr(ctx, 'platform', '')).lower() == 'android':
+        if (not scope(ctx)['account_id'] or evidence.get('identity') not in {'match', 'configured_fact'}
+                or evidence.get('identity_required') is not True):
+            return False
     at = evidence.get('observed_at_monotonic')
     age = time.monotonic() - at if isinstance(at, (int, float)) and not isinstance(at, bool) else float('inf')
     deadline = getattr(ctx, 'case_deadline_ts', 0) or 0
     if evidence.get('verification_method') == 'login_page_transition':
-        return (evidence.get('version') == 1 and evidence.get('scope') == scope(ctx)
-                and math.isfinite(age) and age >= 0
-                and (not deadline or time.time() < deadline)
-                and bool(evidence.get('observation_ref')) and bool(evidence.get('submit_observation_ref'))
-                and bool(evidence.get('submit_attempt_ref'))
-                and evidence.get('authentication') == 'logged_in'
-                and evidence.get('identity') != 'mismatch'
-                and evidence.get('login_state_verified') is True)
+        return False
     return (evidence.get('version') == 1 and evidence.get('scope') == scope(ctx)
             and math.isfinite(age) and 0 <= age <= EVIDENCE_MAX_AGE_SEC
             and (not deadline or time.time() < deadline)
@@ -94,7 +103,8 @@ def evidence_current(ctx, evidence):
             and evidence.get('authentication') == 'logged_in'
             and evidence.get('identity') != 'mismatch'
             and (not evidence.get('identity_required') or evidence.get('identity') == 'match'
-                 or (evidence.get('account_binding_source') == 'submitted_account'
+                 or evidence.get('identity') == 'configured_fact'
+                 or (not evidence.get('identity_required') and evidence.get('account_binding_source') == 'submitted_account'
                      and _submission_current(ctx, evidence)))
             and evidence.get('login_state_verified') is True)
 

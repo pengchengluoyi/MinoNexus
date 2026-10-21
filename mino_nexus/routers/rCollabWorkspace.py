@@ -122,28 +122,39 @@ async def attachment(project_id: str, topic_id: str, file: UploadFile = File(...
     owner = ws.authorize(project_id, sess)
     with session_scope() as db:
         ws.owned(db, project_id, topic_id, write=True)
-    raw = await file.read(8 * 1024 * 1024 + 1)
-    if len(raw) > 8 * 1024 * 1024:
-        raise HTTPException(413, '截图最大 8MB')
-    from PIL import Image
-    try:
-        image = Image.open(io.BytesIO(raw))
-        if image.width * image.height > 20_000_000:
-            raise ValueError('图片过大')
-        image.load()
-        image = image.convert('RGB')
-    except Exception as exc:
-        raise HTTPException(400, '请上传有效的截图图片') from exc
+    filename = str(file.filename or '附件').replace('\\', '/').rsplit('/', 1)[-1]
+    filename = ''.join(c for c in filename if ord(c) >= 32 and ord(c) != 127).strip()[:200] or '附件'
+    is_image = file.content_type in ('image/png', 'image/jpeg', 'image/webp') or filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))
+    limit = (8 if is_image else 20) * 1024 * 1024
+    raw = await file.read(limit + 1)
+    if len(raw) > limit:
+        raise HTTPException(413, '截图最大 8MB' if is_image else '附件最大 20MB')
+    if not raw:
+        raise HTTPException(400, '不能发送空文件')
+    image = None
+    if is_image:
+        from PIL import Image
+        try:
+            image = Image.open(io.BytesIO(raw))
+            if image.format not in ('PNG', 'JPEG', 'WEBP') or image.width * image.height > 20_000_000:
+                raise ValueError('图片格式不支持或图片过大')
+            image.load()
+            image = image.convert('RGB')
+        except Exception as exc:
+            raise HTTPException(400, '请上传有效的 PNG、JPEG 或 WebP 截图') from exc
     from mino_nexus.core.paths import data_dir
     ref = ws.uid()
     directory = data_dir() / 'collab-attachments'
     directory.mkdir(exist_ok=True)
-    target = directory / (ref + '.png')
+    target = directory / (ref + ('.png' if is_image else '.bin'))
     with target.open('xb') as handle:
-        image.save(handle, format='PNG')
+        if image is not None:
+            image.save(handle, format='PNG')
+        else:
+            handle.write(raw)
     with session_scope() as db:
         topic = ws.owned(db, project_id, topic_id, write=True)
-        row = ws.message(db, topic, str(file.filename or '截图')[:200], card='attachment', ref=ref, author='user', owner=owner)
+        row = ws.message(db, topic, filename, card='attachment', ref=ref, author='user', owner=owner)
         db.flush()
         result = ws.public(row)
     return ok(result)
@@ -157,13 +168,22 @@ def read_attachment(project_id: str, topic_id: str, ref: str, sess: dict = Depen
         row = db.query(CollabMessage).filter_by(topic_id=topic_id, card_kind='attachment', ref_id=ref).first()
         if row is None:
             raise HTTPException(404, '附件不存在')
+        filename = row.body
     import uuid
     try:
         ref = str(uuid.UUID(ref))
     except ValueError as exc:
         raise HTTPException(404, '附件不存在') from exc
     from mino_nexus.core.paths import data_dir
-    return FileResponse(data_dir() / 'collab-attachments' / (ref + '.png'), media_type='image/png')
+    directory = data_dir() / 'collab-attachments'
+    image = directory / (ref + '.png')
+    if image.is_file():
+        return FileResponse(image, media_type='image/png')
+    target = directory / (ref + '.bin')
+    if not target.is_file():
+        raise HTTPException(404, '附件文件不存在')
+    return FileResponse(target, media_type='application/octet-stream', filename=filename,
+                        headers={'X-Content-Type-Options': 'nosniff'})
 
 
 @router.post('/{topic_id}/read')

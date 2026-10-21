@@ -149,7 +149,7 @@ class RouterProxy:
         target_package: str = "",
         playwright_headless: bool = True,
         run_context: Any = None,
-        execution_mode: str = "legacy",
+        execution_mode: str = "agent",
         execution_control: Any = None,
     ):
         from mino_nexus.services.access_scope import require_owned_device
@@ -160,7 +160,7 @@ class RouterProxy:
         self.target_package = str(target_package or "")
         self.playwright_headless = bool(playwright_headless)
         self.run_context = run_context
-        self.execution_mode = execution_mode
+        self.execution_mode = P.execution_mode(execution_mode)
         self.execution_control = execution_control
         self.execution_binding = None
         self._binding_required = execution_mode == 'v5'
@@ -202,6 +202,8 @@ class RouterProxy:
         from mino_nexus.loop.observe.session_log import active_writer
         writer = active_writer()
         phase = options.get('binding_phase') or self._binding_phase_override or (writer.phase if writer else '')
+        if getattr(self.run_context, 'resolved_case', None) is not None:
+            phase = 'cleanup' if getattr(self.run_context, 'execution_cleanup_active', False) else str(getattr(getattr(self.run_context, '_step_cursor', None), 'phase', '') or 'prep')
         if self.execution_binding is None or not self._binding_session_id:
             raise BindingAdmissionError('binding_not_committed')
         if options.get('binding_run_id', self.run_id) != self.run_id:
@@ -246,7 +248,12 @@ class RouterProxy:
                                     for item in getattr(exc, 'diagnostics', ())],
                     "execution_started": "no"})
             return set()
-        return menu_projection(binding, phase)
+        menu = menu_projection(binding, phase)
+        resolved = getattr(self.run_context, 'resolved_case', None)
+        if resolved is not None:
+            menu &= {row['event_id'] for row in resolved.capability_snapshot
+                     if row['phase'] == phase and (phase != 'check' or row['kind'] == 'check')}
+        return menu
 
     def _task_aborted(self) -> bool:
         tid = self.task_id
@@ -362,6 +369,17 @@ class RouterProxy:
         session_writer = active_writer()
         if session_writer is not None:
             session_writer.require_persisted()
+
+        from mino_nexus.loop.resolved_case import dispatch_gate, ContractError
+        try:
+            dispatch_gate(self.run_context, event.capability_id,
+                          requested_phase=kwargs.get('binding_phase') or self._binding_phase_override)
+        except ContractError as exc:
+            if session_writer:
+                session_writer.append('contract/blocked', {'reason_code': exc.reason_code,
+                    'error_kind': exc.reason_code, 'status': exc.status, 'execution_started': 'no'})
+            # Stop the ordinary loop; a failed dispatch cannot be recovered into Do.
+            raise
 
         if self.execution_mode == "v5":
             return await self._dispatch_v5(event, run_id or self.run_id, started, t0, kwargs)
@@ -958,7 +976,7 @@ class RouterProxy:
         """
         dev = node.devices.get(self.sn)
         plat = _device_platform(self.sn, node)
-        hint: dict[str, Any] = {"platform": plat}
+        hint: dict[str, Any] = {"platform": plat, "execution_mode": self.execution_mode}
         if self.target_package:
             hint["target_package"] = self.target_package
         if plat in {"desktop", "mac", "win"}:
@@ -1207,7 +1225,7 @@ def _dispatch_local_in_runtime(event: PlanEvent, *, ctx: Any, **kwargs: Any) -> 
     from mino_nexus.loop.local_executors import dispatch_local
     from mino_nexus.services.control_registry import registry_runtime
 
-    with registry_runtime(getattr(ctx, "execution_mode", "legacy")):
+    with registry_runtime(getattr(ctx, "execution_mode", "agent")):
         return dispatch_local(event, ctx=ctx, **kwargs)
 
 

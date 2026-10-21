@@ -911,7 +911,7 @@ def build_from_tab_bar(
     meta["recover"] = {
         "default_goal_state_id": home_id,
         "case_goal_field": "nav_goal_state",
-        "note": "迷路/跨 Tab 导航请调 recovery 能力 fsm_navigate（当前屏→目标屏，返回最短路）。",
+        "note": "迷路/跨 Tab 导航按当前导航计划计算路线，通过 tap_element / press_key 推进并核对到达目标屏。",
     }
     entry_x, node_w, h_gap = 48, 220, 88
     row_min_h, row_pad = 420, 56

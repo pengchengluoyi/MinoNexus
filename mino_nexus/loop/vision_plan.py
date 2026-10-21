@@ -8,12 +8,11 @@ from mino_nexus.ai.schemas import VisionPlanDecision
 from mino_nexus.loop.llm_step_context import step_scope_key, success_criteria_for_llm
 from mino_nexus.loop.milestones import (
     _normalize_milestone_row,
-    milestone_v1_enabled,
     read_state,
     write_state,
     _sync_scope,
 )
-from mino_nexus.loop.vision_flags import vision_plan_v1_enabled
+from mino_nexus.loop.vision_flags import planning_phase_active
 
 _PREP_APPEND_MUTATE = frozenset({
     "tap_element",
@@ -277,8 +276,6 @@ def apply_vision_plan_to_cursor(
 ) -> None:
     """合并规划结果：更新状态 + 末尾追加；禁止整表替换。"""
     setattr(cursor, "vision_plan_last", plan)
-    if not milestone_v1_enabled():
-        return
 
     state = _sync_scope(cursor, read_state(cursor))
     ms = [dict(m) for m in (state.get("milestones") or []) if isinstance(m, dict)]
@@ -411,7 +408,7 @@ def run_vision_plan_turn_if_enabled(
     review_program_fail: str = "",
     send_image: bool = True,
 ) -> Optional[VisionPlanDecision]:
-    if not vision_plan_v1_enabled():
+    if not planning_phase_active():
         return None
     from mino_nexus.loop.step_phase_fsm import (
         apply_failure_verdict_from_plan,
@@ -470,7 +467,7 @@ def run_vision_plan_turn_if_enabled(
     if review_expected_overlay(cursor, ctx, shot, writer=writer,
             kind=str(plan.screen_obstacle.get("kind") or "").strip().lower()):
         return VisionPlanDecision()
-    if handle_screen_obstacle(cursor, ctx, plan, writer=writer):
+    if handle_screen_obstacle(cursor, ctx, plan, writer=writer, shot=shot if send_image and callable(getattr(shot, "has_image", None)) and shot.has_image() else None):
         return plan
     apply_vision_plan_to_cursor(cursor, plan, writer=writer, ctx=ctx)
     if review:
@@ -503,7 +500,8 @@ def handle_execution_obstacle(cursor: Any, ctx: Any, decision: Any, *, writer: A
     params = params if isinstance(params, dict) else {}
     kind = str(params.get("kind") or "").strip().lower()
     summary = str(params.get("summary") or "").strip()
-    plan = VisionPlanDecision(screen_obstacle={"kind": kind, "summary": summary})
+    plan = VisionPlanDecision(screen_obstacle={"kind": kind, "summary": summary,
+        "dialog_region": params.get("dialog_region"), "dialog_evidence": params.get("dialog_evidence")})
     if kind not in {"consent", "permission", "overlay", "loading"} or not summary:
         plan.blocked_error = {"source": "screen", "fail_kind": "screen_obstacle_invalid",
                               "error": "挡屏报告缺少有效类别或可见证据，未派发设备动作。"}
@@ -515,17 +513,16 @@ def handle_execution_obstacle(cursor: Any, ctx: Any, decision: Any, *, writer: A
     if review_expected_overlay(cursor, ctx, shot, writer=writer, kind=kind):
         # The actual expected-result proof consumed the pending action; final case checks remain independent.
         return VisionPlanDecision()
-    handle_screen_obstacle(cursor, ctx, plan, writer=writer)
-    if not plan.blocked_error:
+    handle_screen_obstacle(cursor, ctx, plan, writer=writer, shot=shot)
+    if not plan.blocked_error and plan.screen_obstacle:
         setattr(cursor, "milestone_hold_exec", False)  # 报告轮已经结束，不再额外消耗一个仅规划轮。
         setattr(cursor, "correction_hint", "当前挡屏已进入独立恢复。只执行当前恢复目标，确认挡屏关闭后返回原业务目标。")
     return plan
 
 
-def handle_screen_obstacle(cursor: Any, ctx: Any, plan: VisionPlanDecision, *, writer: Any = None) -> bool:
+def handle_screen_obstacle(cursor: Any, ctx: Any, plan: VisionPlanDecision, *, writer: Any = None, shot: Any = None) -> bool:
     """挡屏先进入独立恢复，不能把恢复点击算成业务操作，也不能按已完成前置准出。"""
     from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
-    from mino_nexus.catalog.skill_channel import case_menu_ids, milestone_caps_registered
     from mino_nexus.loop.fuse.interrupt_stack import push_interrupt, stack_depth
     obstacle = plan.screen_obstacle
     kind = str(obstacle.get("kind") or "").strip().lower()
@@ -552,6 +549,30 @@ def handle_screen_obstacle(cursor: Any, ctx: Any, plan: VisionPlanDecision, *, w
         state.pop("screen_obstacle", None)
         write_state(cursor, state)
         return False
+    if kind != 'loading':
+        from mino_nexus.loop.overlay_evidence import dialog_evidence, has_back
+        import hashlib
+        nodes = getattr(ctx, 'nav_hierarchy_nodes', None) or []
+        image = str(getattr(shot, 'image_base64', '') or '')
+        proof = dialog_evidence(nodes, obstacle, frame_ref=hashlib.sha256(image.encode()).hexdigest() if image else '')
+        if not proof:
+            state.pop('screen_obstacle', None)
+            write_state(cursor, state)
+            if nodes or image:
+                plan.screen_obstacle = {}
+                plan.exit_allowed = False
+                plan.step_requirements_complete = False
+                cursor.correction_hint = '当前没有对话框证据，按普通页面继续定位导航目标，不创建挡屏恢复。'
+                if writer:
+                    writer.append('screen/obstacle', {'kind': 'none', 'reason_code': 'ordinary_navigation', 'system_overlay': 'no'})
+                return False
+            plan.blocked_error = {'source': 'screen', 'fail_kind': 'observation_missing',
+                                  'error': '没有当前截图或结构观察，无法确认页面状态。'}
+            if writer:
+                writer.append('screen/obstacle', {'kind': kind, 'system_overlay': 'no',
+                    'reason_code': 'overlay_evidence_missing', 'execution_started': 'no'})
+            return True
+        obstacle['evidence'] = proof
     reason = str(obstacle.get("summary") or "当前画面被弹窗或加载层遮挡")[:300]
     previous_obstacle = state.get("screen_obstacle") or {}
     recovery_ids = list(previous_obstacle.get("recovery_ids") or []) if previous_obstacle.get("kind") == kind else []
@@ -562,26 +583,29 @@ def handle_screen_obstacle(cursor: Any, ctx: Any, plan: VisionPlanDecision, *, w
     plan.step_requirements_complete = False
     focus = in_progress_milestone(state)
     if writer:
-        writer.append("screen/obstacle", {"kind": kind, "summary": reason, "focus_id": (focus or {}).get("id", "")})
+        writer.append("screen/obstacle", {"kind": kind, "summary": reason, "focus_id": (focus or {}).get("id", ""), "evidence": obstacle.get("evidence", {})})
     if kind == "consent" and focus and (
         _row_cap_ids(focus) == {"accept_legal_consent"}
         or str(focus.get("id") or "") in recovery_ids
     ):
         return False
-    steps: list[dict[str, Any]] = []
-    if kind in {"consent", "overlay", "loading"}:
-        from mino_nexus.loop.interrupt_recovery import resolve_interrupt_steps
+    from mino_nexus.loop.interrupt_recovery import (
+        builtin_obstacle_steps, bound_recovery_ids, recovery_step_diagnostics, resolve_interrupt_steps,
+    )
+    # A visible consent/loading obstacle selects its own policy. A stale generic
+    # foreground probe must not replace consent with launch_app.
+    steps = builtin_obstacle_steps(kind)
+    if not steps and kind == "overlay":
         steps = resolve_interrupt_steps(cursor, ctx, router=getattr(ctx, "router", None),
                                         reason=reason, allow_fallback=False)
-        if not steps and kind == "consent" and not stack_depth(cursor):
-            steps = [{"id": "interrupt_accept_consent", "title": "确认当前应用协议弹窗，使弹窗关闭并恢复被遮挡页面",
-                      "kind": "visual_tap", "hook_cap": "tap_element", "optional": False}]
-        if not steps and kind == "loading" and not stack_depth(cursor):
-            steps = [{"id": "interrupt_screen_ready", "title": "等待当前页面加载完成", "kind": "hook",
-                      "hook_cap": "wait_screen_ready", "optional": False}]
     _, phase = step_scope_key(cursor)
-    menu = case_menu_ids(ctx, phase)
-    steps = [step for step in steps if milestone_caps_registered(step, menu)] if menu else []
+    bound = bound_recovery_ids(ctx, phase)
+    issues = recovery_step_diagnostics(steps, bound)
+    if issues:
+        if writer:
+            writer.append("screen/recovery_rejected", {"kind": kind, "phase": phase,
+                "diagnostics": issues, "bound_capability_ids": sorted(bound), "execution_started": "no"})
+        steps = []
     if steps and not stack_depth(cursor):
         if focus:
             inserted = push_interrupt(cursor, ctx, parent_step_id=str(focus["id"]), reason=reason, steps=steps, writer=writer)

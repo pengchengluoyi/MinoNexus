@@ -1,5 +1,4 @@
 id: assistant-route
-version: 7
 label: 助手意图路由
 summary: 把一句话收成工具调用、追问或直接回答
 engine: text_chat

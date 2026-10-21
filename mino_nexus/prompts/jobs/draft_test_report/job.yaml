@@ -1,5 +1,4 @@
 id: draft_test_report
-version: 2
 label: 测试报告建议
 summary: 根据代码汇总的执行事实整理后续建议，不计算数字或决定目标结论
 engine: json_chat

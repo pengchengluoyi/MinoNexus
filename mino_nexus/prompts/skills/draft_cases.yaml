@@ -1,5 +1,4 @@
 id: draft_cases
-version: 1
 label: 写用例草稿
 summary: 按测试点展开步骤和预期。
 category: flow

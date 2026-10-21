@@ -245,6 +245,7 @@ coverage/
 /scripts/test*
 /scripts/mock*
 /scripts/smoke*
+/scripts/*_smoke.py
 /scripts/*-browser-check.py
 /scripts/verify_resource_key_compile.py
 /scripts/verify_prompt_export.py

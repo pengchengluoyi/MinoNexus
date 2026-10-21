@@ -20,20 +20,104 @@ port(nexus): `RunContext` 这个 dataclass 原样搬自 MiniOrangeServer
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from mino_nexus.core.log import SLog
 
 TAG = "RunContext"
 
 
-@dataclass
-class RunContext:
-    """一次 run 的上下文。字段与上游逐字一致。"""
+@dataclass(kw_only=True, slots=True)
+class LoopState:
+    """Per-case runtime state. Slots reject misspelled/undeclared writes.
+
+    Runtime handles/evidence are deliberately excluded from the public context
+    snapshot; their owners emit session events instead of deep-copying handles.
+    """
+    resolved_case: Any = field(default=None, metadata={"runtime_only": True})
+    execution_cleanup_active: bool = field(default=False, metadata={"runtime_only": True})
+    scout_run_id: str = field(default='', metadata={"runtime_only": True})
+    focus_action_ref: str = field(default='', metadata={"runtime_only": True})
+    focus_action_field: str = field(default='', metadata={"runtime_only": True})
+    case: Any = field(default=None, metadata={"runtime_only": True})
+    focus_action_scheme: str = field(default='', metadata={"runtime_only": True})
+    nav_hierarchy_nodes: Any = field(default=None, metadata={"runtime_only": True})
+    allow_model_recovery: bool = field(default=False, metadata={"runtime_only": True})
+    account_probe_facets: Any = field(default=None, metadata={"runtime_only": True})
+    login_flow_macro_active: bool = field(default=False, metadata={"runtime_only": True})
+    prep_clear_done: bool = field(default=False, metadata={"runtime_only": True})
+    _login_flow_transition_emitted: bool = field(default=False, metadata={"runtime_only": True})
+    login_evidence: Any = field(default=None, metadata={"runtime_only": True})
+    case_deadline_ts: float = field(default=0.0, metadata={"runtime_only": True})
+    case_session_scope_id: str = field(default='', metadata={"runtime_only": True})
+    _step_cursor: Any = field(default=None, metadata={"runtime_only": True})
+    login_account_fill_proof: Any = field(default=None, metadata={"runtime_only": True})
+    login_submission_proof: Any = field(default=None, metadata={"runtime_only": True})
+    display_guard_active: bool = field(default=False, metadata={"runtime_only": True})
+    recovery_write_stopped: bool = field(default=False, metadata={"runtime_only": True})
+    decision_screenshot_hash: str = field(default='', metadata={"runtime_only": True})
+    device_session: str = field(default='', metadata={"runtime_only": True})
+    device_session_source: str = field(default='', metadata={"runtime_only": True})
+    _evidence_cache: Any = field(default=None, metadata={"runtime_only": True})
+    app_foreground: str = field(default='', metadata={"runtime_only": True})
+    app_launch_confirmed: bool = field(default=False, metadata={"runtime_only": True})
+    web_focus: Any = field(default=None, metadata={"runtime_only": True})
+    nav_localized: Any = field(default=None, metadata={"runtime_only": True})
+    nav_guest_tab_fork: Any = field(default=None, metadata={"runtime_only": True})
+    nav_localized_confidence: float = field(default=0.0, metadata={"runtime_only": True})
+    case_seq: int = field(default=0, metadata={"runtime_only": True})
+    nav_localized_state: str = field(default='', metadata={"runtime_only": True})
+    nav_project_id: str = field(default='', metadata={"runtime_only": True})
+    _fsm_same_page_hits: Any = field(default=None, metadata={"runtime_only": True})
+    login_flow_macro_done: Any = field(default=None, metadata={"runtime_only": True})
+    system_dialog_macro_done: bool = field(default=False, metadata={"runtime_only": True})
+    login_macro_yielded: Any = field(default=None, metadata={"runtime_only": True})
+    system_overlay: str = field(default='', metadata={"runtime_only": True})
+    nav_vlm_hierarchy: Any = field(default=None, metadata={"runtime_only": True})
+    last_device_execute_params: Any = field(default=None, metadata={"runtime_only": True})
+    otp_fetch_fail_streak: int = field(default=0, metadata={"runtime_only": True})
+    session_knowledge_hint: str = field(default='', metadata={"runtime_only": True})
+    doc_query_vec: Any = field(default=None, metadata={"runtime_only": True})
+    pending_result_step: Any = field(default=None, metadata={"runtime_only": True})
+    prep_lease_account_done: bool = field(default=False, metadata={"runtime_only": True})
+    login_flow_interrupt: bool = field(default=False, metadata={"runtime_only": True})
+    case_budget_credit_sec: float = field(default=0.0, metadata={"runtime_only": True})
+    login_auto_submit_attempts: int = field(default=0, metadata={"runtime_only": True})
+    pending_result_cap: str = field(default='', metadata={"runtime_only": True})
+    prep_signal_done_history: Any = field(default=None, metadata={"runtime_only": True})
+    _run_case_step_n: int = field(default=0, metadata={"runtime_only": True})
+    recovery_allow_back: bool = field(default=False, metadata={"runtime_only": True})
+    nav_open_loop_active: bool = field(default=False, metadata={"runtime_only": True})
+    _last_probe_diag: Any = field(default=None, metadata={"runtime_only": True})
+    nav_open_loop_blocked_target: str = field(default='', metadata={"runtime_only": True})
+    fsm_last_decline_key: str = field(default='', metadata={"runtime_only": True})
+    fsm_decline_repeat_streak: int = field(default=0, metadata={"runtime_only": True})
+    fsm_last_decline_fp: str = field(default='', metadata={"runtime_only": True})
+    web_email_tap_milli: Any = field(default=None, metadata={"runtime_only": True})
+    router: Any = field(default=None, metadata={"runtime_only": True})
+    nav_open_loop_reason: str = field(default='', metadata={"runtime_only": True})
+    launch_grace_until_mono: float = field(default=0.0, metadata={"runtime_only": True})
+    web_sms_code_tap_milli: Any = field(default=None, metadata={"runtime_only": True})
+    web_auth_hint: Any = field(default=None, metadata={"runtime_only": True})
+    session_contradiction: Any = field(default=None, metadata={"runtime_only": True})
+    allow_foreign_foreground_llm_image: bool = field(default=False, metadata={"runtime_only": True})
+    _program_launched_app: bool = field(default=False, metadata={"runtime_only": True})
+
+
+@dataclass(slots=True)
+class RunContext(LoopState):
+    """一次执行的上下文；未知平台保留 None，不能推断为 Android。"""
 
     sn: str
-    platform: str = "android"
+    platform: str | None = None
     run_id: str = ""
+    case_id: str = ""
+    session_id: str = ""
+    target_app_name: str = ""
+    viewport_wh: tuple[int, int] = (0, 0)
+    execution_contract_version: str = ""
+    execution_binding: dict[str, Any] | None = None
+    execution_binding_menu: Callable[[str], set[str]] | None = field(default=None, repr=False, compare=False)
 
     # 任务归属：落到 trace，供按应用/任务查询用例历史
     app_id: str = ""
@@ -99,7 +183,7 @@ class RunContext:
 
     # ---- 拆分新增：这条 run 派给了哪个节点 ----
     node_id: str = ""
-    execution_mode: str = "legacy"
+    execution_mode: str = "agent"
 
     def remember_app_version(self, version: str) -> None:
         v = str(version or "").strip()
@@ -155,9 +239,12 @@ class RunContext:
         }
 
     def to_dict(self) -> dict[str, Any]:
-        from dataclasses import asdict
+        from copy import deepcopy
+        from dataclasses import fields
 
-        return asdict(self)
+        # Never deepcopy router/cursor/callback objects, which may own locks.
+        return {item.name: deepcopy(getattr(self, item.name)) for item in fields(self)
+                if not item.metadata.get("runtime_only") and item.name != "execution_binding_menu"}
 
 
 # ---------------- 工厂：从 Scout 的 manifest 构造 ----------------
@@ -185,11 +272,7 @@ def from_node(
     dev = (session.devices or {}).get(sn)
     channels = dict(getattr(dev, "channels", None) or {})
 
-    platform = str(getattr(dev, "platform", "") or "").strip()
-    if is_web_slot(sn, platform):
-        platform = "web"
-    elif not platform:
-        platform = "unknown"
+    platform = getattr(dev, "platform", None) or None
     ctx = RunContext(
         sn=sn,
         platform=platform,
@@ -247,7 +330,7 @@ def from_node(
 
 
 def build_run_context(sn: str, **kwargs: Any) -> RunContext:
-    """兼容上游签名：按 sn 找节点再构造。
+    """按 sn 找节点再构造，缺失平台保持未知。
 
     找不到节点时返回一个**通道全空**的 RunContext —— `has_control_channel` 为 False，
     上层应据此 decline，而不是拿着空菜单去问 LLM。
@@ -257,7 +340,7 @@ def build_run_context(sn: str, **kwargs: Any) -> RunContext:
     node, why = get_registry().resolve(sn)
     if node is None:
         SLog.w(TAG, f"构造 RunContext 失败：{why}")
-        ctx = RunContext(sn=sn, platform=str(kwargs.get("platform") or "android"),
+        ctx = RunContext(sn=sn, platform=kwargs.get("platform") or None,
                          run_id=str(kwargs.get("run_id") or ""),
                          app_id=str(kwargs.get("app_id") or ""),
                          batch_id=str(kwargs.get("batch_id") or kwargs.get("run_id") or ""))
@@ -291,6 +374,7 @@ def bind_case_project(ctx: RunContext, case: dict[str, Any]) -> str:
     context_project_id = str(ctx.project_id or "").strip()
     if context_project_id and context_project_id != project_id:
         raise ValueError("运行上下文项目与应用所属项目不一致，已停止执行")
+    ctx.target_app_name = str(app.get("name") or "").strip()
     ctx.project_id = project_id
     ctx.case = case
     return project_id

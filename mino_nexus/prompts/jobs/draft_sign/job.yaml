@@ -1,5 +1,4 @@
 id: draft_sign
-version: 2
 label: 验收建议
 summary: 代码读取业务数据并执行规则，不调用模型
 engine: rule

@@ -1,5 +1,4 @@
 id: classify_fail
-version: 2
 label: 失败归类
 summary: 代码读取业务数据并执行规则，不调用模型
 engine: rule

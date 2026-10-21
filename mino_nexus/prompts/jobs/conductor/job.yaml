@@ -1,5 +1,4 @@
 id: conductor
-version: 2
 label: 分析师调度
 summary: 看当前步骤该调用哪个角色
 engine: text_chat

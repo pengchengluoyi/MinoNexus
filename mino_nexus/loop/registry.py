@@ -34,10 +34,10 @@ def _guard_deny_mutate(ctx: dict[str, Any]) -> Optional[str]:
     from mino_nexus.catalog.skill_channel import phase_allows
     from mino_nexus.loop.step_phase_fsm import (
         check_phase_allows_recovery_cap,
-        step_phase_fsm_v1_enabled,
+        milestone_phase_active,
     )
 
-    if step_phase_fsm_v1_enabled() and check_phase_allows_recovery_cap(cap_id):
+    if milestone_phase_active() and check_phase_allows_recovery_cap(cap_id):
         return None
     if phase_allows(cap_id, "check"):
         return None
@@ -280,7 +280,7 @@ def _guard_require_do_work(ctx: dict[str, Any]) -> Optional[str]:
         if hint.startswith("【达成提示·弱】"):
             return (
                 "屏上可能仅出现底栏 Tab 等弱信号，不等于本步操作已完成。"
-                "请继续 fsm_navigate 或 tap_element 进入目标页后再 signal_done。"
+                "请按当前导航计划，用 tap_element 点击可见入口进入目标页后再 signal_done。"
             )
         return None
     if str(getattr(step_cursor, "step_effect_hint", "") or "").startswith("【达成提示】"):
@@ -379,7 +379,7 @@ def _guard_block_back_without_nav_back_semantics(ctx: dict[str, Any]) -> Optiona
     if "【本步导航】" in hint and "降级" not in hint:
         return (
             "本步已有 Nav 路线图，禁止用系统 BACK 代替图上 Tab/入口边。"
-            "请 fsm_navigate 或 tap_element；若 recovery 已提示 BACK 则按提示执行。"
+            "请按当前导航计划用 tap_element 点击入口；若 recovery 已允许 BACK 则用 press_key 按提示执行。"
         )
     return None
 
@@ -552,7 +552,7 @@ def _guard_block_repeat_email_tab(ctx: dict[str, Any]) -> Optional[str]:
         return None
     return (
         "Email 标签已选过；请 input_text(field=email) 填租号邮箱（含 @），"
-        "或点 Send / request_sms_code 发邮箱验证码。禁止重复点 Email 标签。"
+        "或用 tap_element 点击 Send 发邮箱验证码。禁止重复点 Email 标签。"
     )
 
 
@@ -1227,10 +1227,7 @@ def _advancer_assert_pass(ctx: dict[str, Any]) -> bool:
 
 
 def _advancer_milestones(ctx: dict[str, Any]) -> bool:
-    from mino_nexus.loop.milestones import evaluate_milestones, milestone_v1_enabled
-
-    if not milestone_v1_enabled():
-        return True
+    from mino_nexus.loop.milestones import evaluate_milestones
     cursor = ctx.get("step_cursor") or ctx.get("cursor")
     run_ctx = ctx.get("run_ctx")
     if cursor is None:

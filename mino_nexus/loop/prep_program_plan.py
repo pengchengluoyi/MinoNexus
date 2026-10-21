@@ -9,7 +9,6 @@ from typing import Any
 from mino_nexus.loop.llm_step_context import step_scope_key
 from mino_nexus.loop.milestones import (
     _log_milestones_snapshot,
-    milestone_v1_enabled,
     milestones_empty,
     read_state,
     write_state,
@@ -185,7 +184,7 @@ def _claim_needs_lease(case: dict[str, Any] | None, scene: dict[str, Any] | None
     """与 ensure_case_account 近似：仅有设备/环境前置时不种 lease 里程碑。"""
     need = account_need_from_case(case or {}, scene if isinstance(scene, dict) else {})
     req = dict(need.get("requirements") or {})
-    if req.get("all") or req.get("prefer"):
+    if need.get("need_account") or req.get("all") or req.get("prefer"):
         return True
     if str(need.get("session") or "").strip():
         return True
@@ -212,6 +211,9 @@ def build_prep_program_plan(
     steps_out: list[dict[str, Any]] = []
     need_lease = bool(_account_clause(precondition, case, scene))
     device_want, device_label = _device_session_clause(precondition)
+    if not device_want and scene and scene.get("required_session") in {"logged_in", "guest"}:
+        device_want = scene["required_session"]
+        device_label = "确认编译前置要求的应用登录态"
     need_clear = claim_requires_clear_cache(claim, scene, precondition)
     env_label = _env_clear_clause(precondition) if need_clear else ""
     launch_cap = _launch_hook_cap(ctx, claim)
@@ -350,8 +352,6 @@ def milestones_from_prep_program(plan: dict[str, Any]) -> list[dict[str, Any]]:
 
 def sync_prep_internal_milestones(cursor: Any, ctx: Any) -> bool:
     """已满足的 internal / 前置 ctx 标记 → 自动 pass 对应子里程碑。"""
-    if not milestone_v1_enabled():
-        return False
     _, phase = step_scope_key(cursor)
     if phase != "prep":
         return False
@@ -412,8 +412,6 @@ def seed_prep_milestones_from_claim(
     writer: Any = None,
 ) -> dict[str, Any] | None:
     """prep 阶段首轮：用 Claim 种子里程碑并缓存 prep_program_plan。"""
-    if not milestone_v1_enabled():
-        return None
     _, phase = step_scope_key(cursor)
     if phase != "prep":
         return None

@@ -1,5 +1,4 @@
 id: app-intel-ask
-version: 1
 label: 应用信息问答
 summary: 只根据检索上下文回答
 engine: text_chat

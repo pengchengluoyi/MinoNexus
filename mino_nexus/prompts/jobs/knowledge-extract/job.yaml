@@ -1,5 +1,4 @@
 id: knowledge-extract
-version: 1
 label: 知识分类
 summary: 把一条知识归到 facet / situation
 engine: json_chat

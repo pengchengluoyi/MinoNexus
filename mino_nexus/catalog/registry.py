@@ -88,11 +88,46 @@ def reload() -> dict[str, Any]:
     }
 
 
+
+def runtime_contract_diagnostics(capabilities: dict[str, Capability]) -> list[dict[str, Any]]:
+    """Expose runtime-policy gaps separately from syntactic catalog load errors.
+
+    No enablement changes or inferred implementations. A configured disable is
+    explicit, and target-specific connectivity still belongs to live binding.
+    """
+    from mino_nexus.loop.interrupt_recovery import BUILTIN_INTERRUPT_CAPS
+    from mino_nexus.services.execution_requirements import CHILDREN
+    expected = {cid: {"prep", "do"} for cid in BUILTIN_INTERRUPT_CAPS}
+    expected.update({cid: {"prep", "do", "check", "cleanup"}
+                     for cid in ("wake_screen", "dismiss_keyguard", "probe_device_state", "get_foreground_app")})
+    sources = {cid: {"runtime_policy"} for cid in expected}
+    for parent in capabilities.values():
+        if not parent.enabled or parent.lifecycle != "active":
+            continue
+        for child in CHILDREN.get(parent.id, ()):
+            expected.setdefault(child, set()).update(parent.phases)
+            sources.setdefault(child, set()).add(parent.id)
+    issues = []
+    for cid, phases in sorted(expected.items()):
+        cap = capabilities.get(cid)
+        reason = "capability_missing" if cap is None else (
+            "disabled_by_configuration" if not cap.enabled or cap.lifecycle != "active" else
+            "phase_contract_incomplete" if phases - set(cap.phases) else
+            "implementation_missing" if not cap.implementations and cid not in LOCAL_ORCH_IDS else "")
+        if reason:
+            issues.append({"capability_id": cid, "reason_code": reason,
+                "required_by": sorted(sources[cid]), "required_phases": sorted(phases),
+                "declared_phases": list(cap.phases) if cap else [],
+                "target_binding_required": True})
+    return issues
+
+
 def health_summary() -> dict[str, Any]:
     loader = get_loader()
     return {
         "root": str(loader.root),
         "capabilities_count": len(loader.capabilities),
+        "runtime_contract_gaps": runtime_contract_diagnostics(loader.capabilities),
         "recovery_count": len(loader.recovery_rules),
         "errors": [e.model_dump() for e in loader.errors],
     }

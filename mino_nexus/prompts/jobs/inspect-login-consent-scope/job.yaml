@@ -1,5 +1,4 @@
 id: inspect-login-consent-scope
-version: 1
 label: 登录协议范围观察
 summary: 只读核对完整可见登录范围是否存在需操作的协议控件
 engine: observe

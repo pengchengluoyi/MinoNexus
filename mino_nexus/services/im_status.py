@@ -17,7 +17,9 @@ def normalize_im_channels(plugins: Any) -> list[dict[str, Any]]:
         status = plugin.get("status") if isinstance(plugin.get("status"), dict) else {}
         installed = plugin.get("installed") if isinstance(plugin.get("installed"), bool) else None
         running = status.get("state") == "running" if status.get("state") else None
-        if pid == "wechat" and plugin.get("class") == "bot":
+        if pid == "feishu" and plugin.get("class") == "cli":
+            entries = [("feishu_cli", status)]
+        elif pid == "wechat" and plugin.get("class") == "bot":
             entries = [("wechat", status)]
         elif pid == "langbot" and plugin.get("class") == "im":
             platforms = plugin.get("platforms") if isinstance(plugin.get("platforms"), dict) else {}
@@ -28,7 +30,7 @@ def normalize_im_channels(plugins: Any) -> list[dict[str, Any]]:
             continue
         for channel, state in entries:
             reported = isinstance(state.get("connected"), bool)
-            verified = pid != "langbot" or state.get("connection_verified") is True
+            verified = pid not in ("langbot", "feishu") or state.get("connection_verified") is True
             connected = state.get("connected") if reported and verified else None
             holding = state.get("holding") if isinstance(state.get("holding"), bool) else None
             error = str(state.get("error") or status.get("error") or "")[:200]

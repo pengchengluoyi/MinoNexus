@@ -1,5 +1,4 @@
 id: agent-vision-assert
-version: 11
 label: 看图校验
 summary: check 阶段逐项校验必选与选填项，区分页面失败和校验无法完成
 engine: vision_assert

@@ -57,6 +57,8 @@ def _record_case_preflight_fail(
     app_id: str,
     sn: str,
     provider_id: str = "",
+    reason_code: str = "",
+    status: str = "fail",
 ) -> None:
     """开跑前失败（租约/拒跑）也落 session，避免 Studio Session Log 404。"""
     from mino_nexus.loop.observe.session_log import open_session
@@ -77,8 +79,8 @@ def _record_case_preflight_fail(
             sop_id="run-case",
             extra={"goal": str(case.get("name") or cid), "preflight": True},
         )
-        writer.append("preflight/block", {"reason": summary})
-        writer.close(status="fail", summary=summary, step_count=0)
+        writer.append("preflight/block", {"reason": summary, "reason_code": reason_code, "execution_started": "no"})
+        writer.close(status=status, summary=summary, step_count=0)
     except Exception as exc:
         SLog.w(TAG, f"preflight session log failed {stream_id}: {exc!r}")
 
@@ -92,10 +94,6 @@ def _run_case_list(
     cases: list[dict[str, Any]],
     doc: dict[str, Any],
 ) -> None:
-    if doc.get("execution_mode") == "v5":
-        from mino_nexus.loop.v5_case_exec import run_case_list
-        run_case_list(run_id, cases, doc)
-        return
     from mino_nexus.loop.agent_loop import run_case
     from mino_nexus.services.run_write_safety import protected
     from mino_nexus.loop.device_run_continuity import (
@@ -134,9 +132,21 @@ def _run_case_list(
             "sn": sn,
             "app_id": str(doc.get("app_id") or ""),
         })
-        scene = case.get("case_scene") if isinstance(case.get("case_scene"), dict) else None
-        if scene is None and isinstance(case.get("scene"), dict):
-            scene = case.get("scene")
+        from mino_nexus.runtime.session_gate import clamp_case_scene
+        try:
+            scene = clamp_case_scene(case.get("case_scene"))
+        except ValueError as exc:
+            reason_code = str(exc)
+            reason = f"用例场景无效（{reason_code}），请重新编译当前用例；未执行设备动作"
+            _record_case_preflight_fail(run_id=run_id, case=case, reason=reason,
+                app_id=str(doc.get("app_id") or ""), sn=sn,
+                provider_id=provider_id, reason_code=reason_code, status="blocked")
+            run_store.patch_case(run_id, cid, target_sn=sn, status="blocked", summary=reason,
+                error=reason, reason_code=reason_code, execution_started="no",
+                **_case_trace_fields(run_id, case))
+            emit_testing_task({"event": "case_finished", "run_id": run_id, "task_id": run_id,
+                "case_id": cid, "sn": sn, "status": "blocked", "app_id": str(doc.get("app_id") or "")})
+            continue
         from mino_nexus.services import project_store as ps
         from mino_nexus.services.case_resource_claim import (
             ensure_resource_key_on_case,
@@ -226,6 +236,7 @@ def _run_case_list(
         from mino_nexus.services.execution_resources import admission, wait_for_admission, heartbeat, release as release_bundle
 
         device_held = False
+        result = None
         try:
             from mino_nexus.services.account_lease import ensure_case_account_lease
             with admission(doc, case, project_id=project_id, package=package, platform=platform) as resource_attempt:
@@ -296,6 +307,7 @@ def _run_case_list(
             next_case = cases[case_seq + 1] if case_seq + 1 < len(cases) else None
             from mino_nexus.services.execution_policy import start_attempt
             start_attempt(run_id, case)
+            result = None
             with heartbeat(resource_attempt):
                 result = run_case(
                     run_id=run_id, case=case, sn=sn, app_id=app_id,
@@ -303,7 +315,7 @@ def _run_case_list(
                     playbook=playbook if isinstance(playbook, dict) else {},
                     cancel_check=lambda: run_store.task_cancelled(run_id), case_seq=case_seq,
                     playwright_headless=bool(doc.get("playwright_headless", True)),
-                    run_env_brief=env_brief, next_case=next_case if isinstance(next_case, dict) else None)
+                    resource_attempt=resource_attempt, run_env_brief=env_brief, next_case=next_case if isinstance(next_case, dict) else None)
             doc = run_store.get(run_id) or doc
             env_brief = str(doc.get("env_brief") or env_brief)
             run_store.patch_case(
@@ -318,6 +330,8 @@ def _run_case_list(
                 slots=result.get("slots") if isinstance(result.get("slots"), dict) else {},
                 resource_isolated=bool(result.get("resource_isolated")),
                 reason_code=str(result.get("reason_code") or ""),
+                failure_stage=str(result.get("failure_stage") or ""),
+                case_step=int(result.get("case_step") or 0),
                 **_case_trace_fields(run_id, case),
             )
             emit_testing_task({
@@ -326,6 +340,8 @@ def _run_case_list(
                 "task_id": run_id,
                 "case_id": cid,
                 "status": result.get("status"),
+                "reason_code": str(result.get("reason_code") or ""),
+                "failure_stage": str(result.get("failure_stage") or ""),
                 "app_id": str(doc.get("app_id") or ""),
             })
             if not _task_still_running(run_id):
@@ -362,7 +378,7 @@ def _run_case_list(
                 summary=reason,
             )
         finally:
-            if device_held:
+            if device_held and not (result or {}).get("resources_owned_by_exit"):
                 release_bundle(run_id, sn, attempt_id=resource_attempt["attempt_id"])
                 release_device_lease(sn, str(package or ""), run_id, attempt_id=resource_attempt["attempt_id"])
 

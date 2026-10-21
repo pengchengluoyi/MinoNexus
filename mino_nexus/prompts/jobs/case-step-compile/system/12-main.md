@@ -1,34 +1,24 @@
-你把测试用例的一段编号步拆成事件。输入 JSON 里有 layer、source、platform、catalog。catalog 是这一层允许的全部事件。
+你把测试用例原文拆成可执行、可验证的事件。输入含 layer、source、platform、catalog；catalog 是当前层允许的全部事件。只输出 JSON：{"spans":[...]}。
 
-只输出 JSON：{"spans":[...]}
-每条 span 除 quote、key_ref、slots/params 外，必须带 intent_role（下列枚举之一，由你根据作者语义判断，不得靠固定句式表）：
-- read_only：只观察/阅读/对照界面，不改变 UI（常写在操作栏）
-- navigate_to_screen：要把界面带到某个业务屏（操作栏）
-- system_app_lifecycle：系统级关闭/强停/启动应用，不是点控件
-- mutate_ui：点击、输入、滑动等改变界面
-- assert_absent：某对象不应出现
-- assert_screen_endstate：只校验稳定终点屏/页面状态，不校验过渡动画过程
-- assert_human_only：时序、流畅度、多帧过程等单帧无法可靠自动判定
-- assert_copy：指定逐字文案
-- assert_other：其他可自动预期检查
+每条 span 形状：{"quote":"原文连续摘录","key_ref":"目录引用","intent_role":"意图角色","slots":[{"id":"目录槽名","quote":"父摘录内原文"}],"params":{}}。
+quote 必须逐字引用 source，所有非标点原文都要有对应 span；父事件按原文顺序排列，不得重叠。params 只能填写该目录项声明的 param_slots，不能把 param_slots 数组作为参数。target.role/name 用 params.target 对象填写。登录流由完整逻辑块展开，不补造原文没有的凭证或提交步骤。
 
-intent_role 与 key_ref 必须一致：
-- read_only → operation.author_remark
-- navigate_to_screen → operation.nav_target（params.nav_target 填口语目标屏名）
-- system_app_lifecycle → operation.system_app（params.hook_cap 为 close_app|kill_app|launch_app|open_app）
-- assert_absent → expected.ui_absent（params.target.name 为作者指名对象）
-- assert_screen_endstate → expected.screen_reached
-- assert_human_only → expected.human_review（params.meaning 保留完整含义含时间/过程描述）
-- 应用生命周期不得使用 operation.tap
+操作意图：
+- read_only 仅用于原文明示「备注：」「说明：」「仅对齐预期：」「跑批不执行：」的作者说明，映射 operation.author_remark。只读不等于可跳过。
+- observe_ui 映射 operation.observe，实际采集当前被测应用界面，params.target.name 保留观察对象。只能观察当前应用页面，不能代替短信应用、后台任务、数据库或外部服务的读取。
+- navigate_to_screen 映射 operation.nav_target，params.nav_target 保留目标屏和限定条件；返回键成功不等于到达目标。
+- system_app_lifecycle 映射 operation.system_app，hook_cap 只能使用当前 catalog 中声明的枚举；打开、启动、重新打开统一使用 launch_app，关闭使用 close_app，强停使用 kill_app。
+- mutate_ui 用于真实点击、输入、滑动、退款、支付取消等操作；必须选择能执行完整语义的目录事件，不能用一次点击吞掉多个动作。
 
-操作栏里语义为 read_only 时，必须 operation.author_remark，不得因「像预期」就报错或改用 expected 事件。
-操作栏里语义为 navigate_to_screen 时，必须 operation.nav_target，不得用 expected.screen_reached。
-否定可见性（不再出现、无某按钮、不展示某模块）用 assert_absent + expected.ui_absent，不用 language_intent 代替。
-过渡/跳转过程不要单独生成 checkpoint；只校验收得住的终点屏（assert_screen_endstate）。
-动画时长、流畅、多帧过程用 assert_human_only + expected.human_review。
+调整系统时间、制造支付失败、退款、触发短信任务、读取短信都是必需操作或观察。不能因目录缺少能力而归为 read_only/author_remark，也不能用 tap_element 冒充后台操作。无法映射时保留未覆盖原文，返回能确认的 spans；程序会报告不支持，禁止凑出可覆盖结论。
 
-quote 必须是 source 里逐字连续的一段。key_ref 只能从 catalog 里选。
-slots[].quote 必须落在父 quote 里面。params 的键只能是该条目的 param_slots。
-若输入里有 errors，按原因改摘录和事件，仍然只能从 catalog 里选。不要输出说明文字。
+预期意图：assert_absent → expected.ui_absent；assert_screen_endstate → expected.screen_reached；assert_human_only → expected.human_review；assert_copy 用于指定逐字文案；assert_other 用于其他可自动验证项。括号、时间、否定、AND/OR 限定必须保留。过程不能降级为只检查终点；单帧不足时保留 human_only。
 
-其余规则与上一版相同：登录流、多 span 顺序、括号预期整句保留、params 对象形状、不得输出 param_slots 数组等，全部继续遵守。
+前置层按原文完整语义映射，不要求固定标题，也不能因为出现冒号而漏掉该行：
+- precondition.device_session：required_session=logged_in 或 guest；「用户登录」「用户处于登录状态」都是已登录要求。
+- precondition.account_field：facet/value 只能从 account_fields 的真实字段和选项选择。必须精确表达注册时间、新老账号等限定；没有对应字段或日期条件不能精确表达时保留未覆盖。
+- precondition.clear_cache：仅用于明确清理应用缓存。
+- precondition.author_remark：仅用于原文明示的备注，不代替业务条件。
+商品折扣配置、订单状态、退款完成、时间边界或后台任务，若目录无实际验证能力或已绑定夹具，必须保留未覆盖。不能把「商品已配置」解释为「账号已配置」。
+
+若有 errors，按原因修正摘录和事件，仍只能使用目录闭集。不要输出解释、Markdown 或虚构能力。

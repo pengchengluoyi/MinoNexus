@@ -357,7 +357,7 @@ def _ensure_core_execution_rows(db: Any) -> int:
             "runs_on": "nexus" if executor == "internal" else "scout",
             "platforms": list(platforms), "low_level": {},
             "params_contract": {"version": 1}, "result_contract": {"version": 1},
-            "device_hint_template": {"execution_mode": "legacy"},
+            "device_hint_template": {"execution_mode": "agent"},
         }
         if abstract:
             implementation["requires_caps"] = [abstract]
@@ -384,7 +384,7 @@ def _system_device_implementation(eid: str, platforms: list[str], low_level: dic
         "low_level": dict(low_level),
         "params_contract": {"version": 1},
         "result_contract": {"version": 1},
-        "device_hint_template": {"execution_mode": "legacy"},
+        "device_hint_template": {"execution_mode": "agent"},
     }
 
 
@@ -421,13 +421,20 @@ def _ensure_system_device_rows(db: Any) -> int:
                 ],
             },
         ),
+        (
+            "get_foreground_app",
+            "读取前台应用",
+            "程序读取当前前台应用，用于恢复与取证。不进模型菜单。",
+            ["android", "web", "mac", "win"],
+            {"kind": "foreground_app", "summary": "读取前台应用"},
+        ),
     )
     n = 0
     for eid, title, desc, platforms, low_level in specs:
         implementation = _system_device_implementation(eid, platforms, low_level)
         fields = {
             "caller": "system",
-            "phases": [], "params": [], "observe": "program",
+            "phases": ["prep", "do", "check", "cleanup"], "params": [], "observe": "program",
             "event_kind": eid,
             "channel_contract_version": 1,
             "implementations": [implementation],
@@ -492,7 +499,7 @@ def _ensure_program_rows(db: Any) -> int:
             implementation = {"id": "program.v1:" + eid, "executor": executor,
                 "runs_on": "scout", "platforms": list(platforms), "low_level": {},
                 "params_contract": {"version": 1}, "result_contract": {"version": 1},
-                "device_hint_template": {"execution_mode": "legacy"}}
+                "device_hint_template": {"execution_mode": "agent"}}
             if eid == "clear_app_cache":
                 fields["channel_contract_version"] = 4
                 implementation["requires_caps"] = ["system_pkg_clear"]
@@ -555,6 +562,6 @@ def register_program_capabilities() -> dict[str, Any]:
                       for row in db.query(CatalogEntry).filter(CatalogEntry.id.in_(
                           ("confirm_login_state", "operation.check_box", "clear_app_cache", "reload_page", "plugin.gmail.fetch_otp",
                            "tap_element", "press_key", "launch_app", "lease_account",
-                           "wake_screen", "dismiss_keyguard", "probe_device_state"))).order_by(CatalogEntry.id).all()]
+                           "wake_screen", "dismiss_keyguard", "probe_device_state", "get_foreground_app"))).order_by(CatalogEntry.id).all()]
     catalog.reload()
     return {"changed": changed, "registered": registered}

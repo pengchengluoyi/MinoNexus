@@ -1,5 +1,4 @@
 id: doc-learn
-version: 1
 label: 文档事实抽取
 summary: 从文档分片抽取可验证口径
 engine: json_chat

@@ -1,5 +1,4 @@
 id: knowledge-reviewer
-version: 1
 label: 审核知识草稿
 summary: 知识审核
 engine: text_chat

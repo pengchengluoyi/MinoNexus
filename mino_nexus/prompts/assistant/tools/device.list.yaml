@@ -1,5 +1,4 @@
 id: device.list
-version: 5
 title: 兼容设备列表
 description: 实时查询设备。为任务选设备必须传项目、应用和 env_surface，仅返回该渠道的可执行候选；不要复用历史设备列表。status 为 online/offline，ready
   仅表示 desktop_state 桌面就绪。

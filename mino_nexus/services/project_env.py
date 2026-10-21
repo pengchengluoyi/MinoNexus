@@ -813,11 +813,54 @@ def target_id_from_snapshot(snap: dict, platform: str = "android", surface: str 
     return _profile_value(snap.get(surface or plat),field)
 
 
+def _stored_login_contract(raw: Any) -> Any:
+    """Adapt stored login aliases without writing data or relaxing new writes.
+
+    Older releases emitted phone alongside login, even for default profiles.
+    Explicit login takes precedence, matching the historical reader.
+    """
+    doc = copy.deepcopy(raw)
+    if not isinstance(doc, dict):
+        return doc
+
+    def convert(slot: Any) -> None:
+        if not isinstance(slot, dict):
+            return
+        if "phone" not in slot and "login_kind" not in slot:
+            return
+        login = slot.get("login")
+        if not isinstance(login, dict) or not login:
+            phone = slot.get("phone")
+            if phone is not None and not isinstance(phone, dict):
+                raise ValueError("legacy_phone_object_required")
+            login = {"mode": (phone or {}).get("mode"),
+                     "kind": slot.get("login_kind") or "phone"}
+            # adapter was the old name for human-assisted login.
+            if login["mode"] == "adapter":
+                login["mode"] = "hitl"
+            slot["login"] = login
+        slot.pop("phone", None)
+        slot.pop("login_kind", None)
+
+    environments = doc.get("environments")
+    if isinstance(environments, list):
+        for row in environments:
+            if isinstance(row, dict):
+                convert(row.get("secrets"))
+    channels = doc.get("channel_secrets")
+    if isinstance(channels, dict):
+        for per_env in channels.values():
+            if isinstance(per_env, dict):
+                for slot in per_env.values():
+                    convert(slot)
+    return doc
+
+
 def env_from_project_row(project: dict | None, apps: Optional[List[dict]] = None) -> dict:
     """Read this project's environment only; app order cannot select its values."""
     if not isinstance(project, dict):
         return default_project_env()
-    return normalize_project_env(project.get("env"))
+    return normalize_project_env(_stored_login_contract(project.get("env")))
 
 
 

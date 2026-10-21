@@ -67,9 +67,9 @@ def render_text(card: dict, *, markdown: bool = False) -> str:
         if kind in ('summary', 'problem', 'intent') and block.get('text'):
             label = {'problem': '问题', 'intent': '处理目标'}.get(kind)
             sections.append((label + '：\n' if label else '') + str(block['text']))
-        elif kind == 'next_steps':
+        elif kind == 'next_steps' and block.get('items'):
             sections.append('接下来：\n' + '\n'.join(f'{index}. {value}' for index, value in enumerate(block.get('items') or [], 1)))
-        elif kind == 'choices':
+        elif kind == 'choices' and block.get('items'):
             sections.append('可选项：\n' + '\n'.join(f'{index}. {item["label"]}' for index, item in enumerate(block.get('items') or [], 1)))
         elif kind == 'kv':
             sections.append('\n'.join(f'{key}：{value}' for key, value in block.get('items') or []))

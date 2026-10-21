@@ -311,7 +311,7 @@ def build_replay_plan(
         "session_start": start_payload,
         "frozen_turns": frozen_turns,
         "goal": (turns_doc or {}).get("goal") or start_payload.get("goal") or "",
-        "note": "整案 replay 重新 run_case；up_to_turn 用于 A/B 对比该 turn 前的输入快照",
+        "note": "整案 replay 使用当前 run_case；up_to_turn 用于查看该 turn 前的历史输入快照",
     }
 
 

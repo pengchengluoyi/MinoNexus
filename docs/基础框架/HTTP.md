@@ -17,11 +17,23 @@
 `state=verified` 只代表该会话的执行版本与预期一致且用例通过；缺预期、旧回执、源码变化、未结束或读取截断均不能通过。旧 build/节点/进程不符返回 `state=failed`。
 固定 `scope=session_execution`、`web_chain_verified=false`、`mcp_regression_verified=false`，不把局部执行证据升级成正式 Web 闭环或 MCP 回归结论。不建设跨 Nexus 代理或归档库，删除测试库后原引用不可读取。
 
-开发准备绑定可选 `expected_instance_id`；`probe` 同时核对目标实例与 build，401/403 明确失败。实例/版本检查不执行用例。源码 Scout 的 IDE 操作仅允许其独立配置中 `development_ide_projects` 登记的专用样例项目；通过 `mino-scout development-ide-projects --add <绝对路径>` 登记，不允许自身或 MINO 控制链源码目录。
+开发准备绑定可选 `expected_instance_id`；`probe` 同时核对目标实例与 build，401/403 明确失败。实例/版本检查不执行用例。IDE 项目按应用保存的开发电脑、连接、项目路径明确路由，不再要求 `development_ide_projects` 样例登记，也不按 MINO 源码目录名拦截。项目与源码目录须在所选开发电脑上存在，源码须位于项目目录内。失败回执可携带 `reason_code`、`remediation`、`error_field`，供 Workbench 显示具体原因、处理办法并定位配置字段；保存、连通与项目核对是不同状态。
+
+`check` 可带项目级 `runtime` 及 `support.inspect_running/restart/restart_reason`。启动前检测当前 PyCharm 管理的已有项目实例；返回 `reused_existing=true` 时仅复用并验证，不再次执行启动配置。`probe` 检测到运行实例时也返回 `reused_existing=true`，无需额外激活；未配置健康地址仍可使用该实例并返回进程状态，不据此声称 HTTP 或业务功能正常。Workbench 默认显示“已使用现有实例”，刷新操作展示排队/加载、更新时间与完成反馈。开发联动按真实工具选择：`support.restart_mode=run_control_mcp` 时用社区 MCP Run Control 与 PyCharm 原生 MCP 按项目/配置/sessionId 控制普通 Run 和 Debug；`debugger_mcp` 仅用于已确认的调试会话。已有 Debugger 连接可自动复用已保存且属于同一 PyCharm 的原生连接，不重复导入、不猜测端口。`action=stop` 与启动/重启使用同一权限、revision 和互斥。缺少普通 Run 控制工具时返回 `restart=false/run_control_required`；连接成功不能冒充可重启，普通 Run 不再要求手工先切换为 Debug。停止后确认进程实际退出，再启动同一配置；不可调试配置不再被 canDebug 阻断普通 Run 控制。新运行状态可含 `scope=configuration`、`session_id/debug_state`，超时只读恢复原会话，不通过终端停止或自动重发。Workbench 按已保存的当前 revision 检查、配置名与权限恢复配置阶段；全部完成显示详情及三个已完成步骤，运行状态独立显示。
 
 UI **只**打 MinoNexus。没有公网域名时用内网名 `mino.local`：Nexus 进程启动后用 mDNS 注册，客户端不填 IP。
 
 ## 手动导入用例（2026-10-18）
+
+### 工作区聊天附件（2026-10-21）
+
+`POST /project/{project_id}/collab/workspaces/{topic_id}/attachments` 接收 multipart `file`。
+PNG、JPEG、WebP 截图最大 8MB，校验解码后转存 PNG；普通文件最大 20MB，空文件拒绝。
+上传只创建当前工作区的附件消息，不解析或导入用例。归档与历史工作区不可上传。
+`GET .../{topic_id}/attachments/{ref}` 沿用项目与工作区归属校验；截图返回 `image/png`，
+普通文件返回 `application/octet-stream` 和带原文件名的下载响应。旧截图保持可读。
+Workbench 输入框附件按钮用于聊天文件；用例导入通过工作区顶部菜单「导入用例…」进入，
+仍需明确核对并确认才写入用例。
 
 Workbench 的项目用例页只保留「导入」，弹窗选择本地文件、飞书表格或用例接口。
 独立来源配置页、定时读取循环、失败退避调度、自动解析和每日预算调度已删除。
@@ -520,3 +532,32 @@ Workbench 的“预检所选用例”按当前完整选择逐条调用；选择�
 ## 协作消息快速接收（2026-10-19）
 
 POST /project/{project_id}/collab/topics/{topic_id}/messages 保持 200 信封，消息和回复任务在同一事务提交后即返回消息及 reply_status=queued；不等待模型回复或命令编排完成。GET messages 返回 reply_status/reply_error（历史消息为空）。后台按序处理并重新核对账号及维护权限；完成后经当前账号 WebSocket collab_message_updated 通知，前端有待回复项时每秒兜底查询。queued 重启后继续；已开始但因重启中断的处理标 interrupted，不自动重放可能产生副作用的命令。正在处理回复时拒绝删除议题，防止删除与回复写入竞态。
+
+## IM 调用 Scout CLI（2026-10-21）
+
+助手新增 `cli.query`（read）和 `cli.execute`（write）两个通用入口；不逐个登记 CLI 子命令，不新增账号/动作授权设置。复用现有 IM 绑定、节点归属、群聊启用/执行权限；CLI 使用节点的外部服务，不额外要求选择 Mino 项目，原有 Mino 项目工具仍检查项目范围。写操作沿用请求回执去重。默认使用当前 IM 会话的 Scout，没有会话节点时选本人唯一已配置的在线节点；多个候选必须传 `node_id`。
+
+- `POST /runtime/cli/query`：固定以只读模式调用现有 `plugin.cli.feishu` / `plugin.cli.meego` 能力，不允许创建、修改。
+- `POST /runtime/cli/execute`：固定以写模式执行。body 同查询：`{plugin: "feishu"|"meego", node_id?: string, command: string[], options?: object}`；`command` 不含程序名，长参数在 `options` 中不带 `--`。模型无法用请求参数改写读写模式。
+- HTTP 继续要求现有账号认证；IM 的绑定和群策略在助手入口复核。执行只到该账号可用的 Scout，通过插件固定入口和参数数组运行，不启动任意 Shell，不开放删除、CLI 登录/配置、任意本地文件参数。飞书使用该插件的扫码授权，不借用操作系统默认账号；Meego 原生命令使用独立 HOME/profile。
+- 成功回执保留业务 ID，IM 可展示查询内容与创建结果；`dry-run=true` 只预览，不表示已创建。写调用失败/超时保守记为结果未知，不自动重放，先查询第三方业务状态。
+
+飞书原生命令要求该 Scout 已完成飞书 CLI 扫码授权。Meego 现有 Plugin ID / Plugin Secret / User Key 为插件 OpenAPI 认证，不等于官方 CLI OAuth 用户登录：已配置插件凭据时兼容 `workitem meta-types`、`meta-fields`、`meta-templates`、`get`、`create`，其中查询工作项需明确实际类型；创建先查询目标空间的工作项类型、字段和模板，不猜测 `bug` 类型或字段/模板 ID。`workitem create` 使用 `POST /open_api/{project_key}/work_item/create`，仅收到工作项 ID 才报告创建成功。其他 Meego 原生命令仍要求该节点独立 CLI 用户授权，授权缺失时如实返回失败，不使用其他账号兜底。
+
+### Meego 空间发现、追问与错误（2026-10-21）
+
+`cli.query` 的插件凭据模式增加 `project list`（`POST /open_api/projects`）和 `project get`（`POST /open_api/projects/detail`）。用户身份 `user_key` 从当前 Scout 的 Meego 配置读取并放在请求体中；详情支持 `options.project-keys` / `options.simple-names` 字符串数组。空间链接中的别名不直接作为已验证的 `project_key`：先查详情，使用返回的真实 key。缺少 User Key 时提示在 Scout 配置补齐，不在聊天中收集密钥。
+
+缺少必要业务信息返回 `needs_input=true` 与 `field=options.<参数>`，助手以“请补充信息”保存待补充请求；补充时合并 options，保留标题及已选参数。后续模型收到待补充 CLI 请求的规范参数；查询补充成功后可继续原提交意图，不必重新描述 Bug。未确定空间时优先查询可访问空间，不能唯一判断才让用户选择。
+
+Meego 明确返回 `Check Token Perm Failed` 时，保留错误码、鉴权/业务阶段和当前操作，HTTP 返回 403；助手说明需核对对应 OpenAPI 权限、插件发布版本在空间内的启用状态和 User Key 的空间权限。缺少配置或本地参数校验失败为 422。创建请求已发送但超时或缺少工作项 ID 仍为 503/uncertain，不能重放或宣称已创建。Meego 的“测试配置”仅能证明换到插件凭证，不能据此声称具备空间读取或创建权限。
+
+### 飞书 CLI 请求续接与权限诊断（2026-10-21）
+
+助手 origin 与轮次路由保留 `transport=feishu_cli`，供工具执行、待补充请求续接和绑定复核使用。兼容旧版已保存请求缺少的固定路由标记：仅在账号、节点、实例、发送者和 binding_key 均匹配后恢复，再校验当前节点归属与插件状态。真实入站仍须携带正确 transport；解绑重绑、跨账号、实例变化、离线与渠道停用仍拒绝。
+
+网关失败日志与轮次 detail 增加 `error_reason`、`error_stage`、`error_site`，分别标明固定原因码、失败阶段和函数位置。区分绑定变化、执行账号缺失、会话被新消息打断和处理租约失效；不记录任意异常正文、聊天正文或凭据。保留既有写回执和未知结果不重放规则。
+
+Meego 空间发现返回空列表时，助手不重复相同查询，而是询问目标空间链接或别名，将待补充查询保存为 `project get`；补充后继续解析真实空间 key。空的空间详情提示核对目标和访问范围，空的工作项类型或创建模板明确阻断创建，不猜测业务 ID。空结果本身不能证明权限被拒绝。CLI 无进展提示不再要求选择 Mino 应用或测试模块。
+
+追问无候选项时使用直接输入提示，不生成空 choices，也不要求回复序号；确认或继续消息沿用同一输入提示。CLI HTTP 响应排除 Scout 附带的顶层 `plugins` 状态快照，避免无关状态造成长度截断并丢失业务权限错误码及具体处理指引；业务结果和权限拒绝状态仍按原合同返回。

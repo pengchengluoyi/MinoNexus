@@ -1,5 +1,4 @@
 id: pick_regression
-version: 2
 label: 回归范围
 summary: 代码读取业务数据并执行规则，不调用模型
 engine: rule

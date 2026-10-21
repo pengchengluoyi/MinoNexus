@@ -655,6 +655,9 @@ def tools_for_menu(
         {"type": "object", "properties": {
             "kind": {"type": "string", "enum": ["consent", "permission", "overlay", "loading"]},
             "summary": {"type": "string", "description": "可见挡屏及被阻挡的当前目标，不得包含账号或验证码"},
+            "dialog_region": {"type": "array", "items": {"type": "number", "minimum": 0, "maximum": 1},
+                              "minItems": 4, "maxItems": 4, "description": "当前截图对话框区域 [左,上,右,下]，坐标归一到0至1；不能用整页代替弹窗"},
+            "dialog_evidence": {"type": "string", "description": "当前区域中的对话框结构及遮挡证据，不填账号或验证码"},
         }, "required": ["kind", "summary", "thought"], "additionalProperties": False},
         slim=True,
     ))

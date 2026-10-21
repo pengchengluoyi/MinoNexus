@@ -1,5 +1,4 @@
 id: agent-vision-plan
-version: 2
 sort_order: 160
 label: 看图规划
 group: runtime

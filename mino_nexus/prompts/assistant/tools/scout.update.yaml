@@ -1,5 +1,4 @@
 id: scout.update
-version: 2
 title: 更新指定 Scout 版本
 description: 请求固定 release_tag 与 build_id 的节点更新。返回持久 operation_id，默认等待空闲最多30分钟；不打断已有批次。断线后查询原操作，不能换 ID 重试。rollback 必须指定原成功操作 rollback_of。不接受下载 URL。
 route: POST /runtime/nodes/{node_id}/update

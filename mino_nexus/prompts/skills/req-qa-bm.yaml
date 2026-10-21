@@ -1,5 +1,4 @@
 id: req-qa-bm
-version: 1
 label: 需求验收
 summary: 一条需求从覆盖到验收，结论必须人审。
 category: flow

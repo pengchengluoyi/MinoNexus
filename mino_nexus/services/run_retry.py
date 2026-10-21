@@ -5,7 +5,7 @@ import time
 from mino_nexus.core.execution_user import require_user_id
 
 NO_EFFECT_CONTRACT = "execution.no_effect.v1"
-FAILED = {"fail", "blocked", "declined"}
+FAILED = {"fail", "blocked", "declined", "product_fail", "env_blocked", "tool_blocked", "unverified"}
 
 
 def _remaining(value, now):
@@ -29,14 +29,13 @@ def assess(doc, *, resources, now=None, proofs=None, consumed=()):
         block("retry_budget_unavailable", "缺少有效原预算，不能为复跑重新计时")
     elif remaining == 0:
         block("batch_deadline_exceeded", "原批次预算已耗尽")
-    if doc.get("execution_mode") != "v5":
-        block("retry_mode_unsupported", "当前仅支持严格执行模式中有证据证明未开始写入的复跑")
     units = []
     for case in doc.get("cases") or []:
         if case.get("status") not in FAILED:
             continue
         uid, reasons = case.get("execution_unit_id") or "", []
-        policy = (case.get("v5_publication") or {}).get("retry_policy") or {}
+        # Retry admission is evidence-based, not a publication/version entitlement.
+        policy = {"max": 1, "on": ["not_started"]}
         count, maximum = case.get("retry_count", 0), policy.get("max", 0)
         if not uid:
             reasons.append("execution_unit_identity_missing")
@@ -114,7 +113,7 @@ def validate_admission(db, doc):
         raise ValueError(assessment["reason_code"] or "retry_selection_not_eligible")
     if doc.get("execution_policy") != parent.payload.get("execution_policy"):
         raise ValueError("retry_budget_changed")
-    for field in ("execution_mode", "environment_baseline_digest", "package", "env_profile", "env_surface"):
+    for field in ("environment_baseline_digest", "package", "env_profile", "env_surface"):
         if doc.get(field) != parent.payload.get(field):
             raise ValueError("retry_context_changed")
     originals = {c["execution_unit_id"]: c for c in parent.payload["cases"]}
@@ -171,7 +170,7 @@ def create(task_id, unit_ids, request_id):
     from mino_nexus.services import app_automation
     env = project_store.project_env(str(app.get("project_id") or ""))
     package = app_automation.package_for_app(app, env_profile=old.get("env_profile", ""),
-        platform="web", surface=old.get("env_surface", ""))
+        platform=old.get("platform") or targets[sns[0]]["platform"], surface=old.get("env_surface", ""))
     baseline = digest({"profile": old.get("env_profile", ""), "surface": old.get("env_surface", ""),
         "package": package, "environment": (env.get("profiles") or {}).get(old.get("env_profile")),
         "channels": env.get("channels") or []})
@@ -188,7 +187,7 @@ def create(task_id, unit_ids, request_id):
         "environment_baseline_digest", "package", "playbook", "provider_id", "provider_name", "model_name",
         "playwright_headless", "env_profile", "env_surface", "action_scheme", "coverage", "platform", "run_type",
         "requirement_id", "release_id", "slot_id", "engine") if key in old}
-    doc.update(run_id=rid, task_id=rid, owner_user_id=actor, plugin_user_id=actor,
+    doc.update(run_id=rid, task_id=rid, owner_user_id=actor, plugin_user_id=actor, execution_mode="agent", engine="agent",
         client_request_id=request_id, request_digest=request_digest, derived_from=task_id, retry_contract="no_effect.v1",
         sn=sns[0], sns=sns, device_targets=targets, platforms_by_sn={sn: old["platforms_by_sn"][sn] for sn in sns},
         cases=cases, requested_total=len(cases), total=len(cases), skipped_cases=[],

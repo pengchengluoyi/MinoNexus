@@ -18,7 +18,7 @@ class SaveBody(BaseModel):
 class OperationBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{8,100}$")
-    action: Literal["check", "execute", "restart", "build", "install", "logs", "probe"]
+    action: Literal["check", "execute", "stop", "restart", "build", "install", "logs", "probe"]
     revision: int = Field(ge=1)
 
 

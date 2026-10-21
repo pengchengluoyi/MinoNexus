@@ -1,5 +1,4 @@
 id: req-qa-bm
-version: 2
 label: 需求验收 BM
 summary: 需求验收把关
 engine: text_chat

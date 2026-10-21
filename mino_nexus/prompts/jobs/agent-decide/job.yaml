@@ -1,5 +1,4 @@
 id: agent-decide
-version: 28
 label: agent-decide
 summary: ''
 engine: vision_decide

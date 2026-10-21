@@ -197,7 +197,7 @@ def _scan(root: Path) -> Repo:
             spec = load_yaml(spec_path)
             if not isinstance(spec, dict):
                 raise PromptRepoError(f"{spec_path} 不是映射")
-            _require(spec, ("id", "version", "engine"), where=str(spec_path))
+            _require(spec, ("id", "engine"), where=str(spec_path))
             if spec["id"] != directory.name:
                 raise PromptRepoError(f"{spec_path} 的 id 与目录名不一致")
             row = job_to_public(spec, directory)
@@ -209,7 +209,7 @@ def _scan(root: Path) -> Repo:
             row["prompt_sha"] = digest
             row["source_path"] = _rel(spec_path)
             repo.jobs[row["id"]] = row
-            repo.fingerprints[("job", row["id"])] = (int(spec["version"]), digest)
+            repo.fingerprints[("job", row["id"])] = (int(spec.get("version") or 1), digest)
             repo.paths[("job", row["id"])] = row["source_path"]
 
     skills_dir = root / "skills"
@@ -218,11 +218,11 @@ def _scan(root: Path) -> Repo:
             spec = load_yaml(path)
             if not isinstance(spec, dict):
                 raise PromptRepoError(f"{path} 不是映射")
-            _require(spec, ("id", "version"), where=str(path))
+            _require(spec, ("id",), where=str(path))
             digest = content_sha256([path], root=skills_dir)
             key = f"skills/{spec['id']}"
             repo.skills[str(spec["id"])] = spec
-            repo.fingerprints[("skill", str(spec["id"]))] = (int(spec["version"]), digest)
+            repo.fingerprints[("skill", str(spec["id"]))] = (int(spec.get("version") or 1), digest)
             repo.paths[("skill", str(spec["id"]))] = _rel(path)
 
     roles_dir = root / "roles"
@@ -231,14 +231,14 @@ def _scan(root: Path) -> Repo:
             spec = load_yaml(path)
             if not isinstance(spec, dict):
                 raise PromptRepoError(f"{path} 不是映射")
-            _require(spec, ("id", "version", "label"), where=str(path))
+            _require(spec, ("id", "label"), where=str(path))
             digest = content_sha256([path], root=roles_dir)
             key = f"roles/{spec['id']}"
             spec = dict(spec)
             spec["_source_path"] = _rel(path)
             spec["_sha"] = digest
             repo.roles.append(spec)
-            repo.fingerprints[("role", str(spec["id"]))] = (int(spec["version"]), digest)
+            repo.fingerprints[("role", str(spec["id"]))] = (int(spec.get("version") or 1), digest)
             repo.paths[("role", str(spec["id"]))] = spec["_source_path"]
         repo.roles.sort(key=lambda row: (int(row.get("sort_order") or 0), str(row.get("id") or "")))
 
@@ -288,14 +288,14 @@ def _scan_assistant(root: Path, repo: Repo) -> None:
             spec = load_yaml(path)
             if not isinstance(spec, dict):
                 raise PromptRepoError(f"{path} 不是映射")
-            _require(spec, ("id", "version"), where=str(path))
+            _require(spec, ("id",), where=str(path))
             digest = content_sha256([path], root=folder)
             key = f"assistant/{folder.name}/{spec['id']}"
             spec = dict(spec)
             spec["source_path"] = _rel(path)
             spec["sha256"] = digest
             bucket[str(spec["id"])] = spec
-            repo.fingerprints[(kind, str(spec["id"]))] = (int(spec["version"]), digest)
+            repo.fingerprints[(kind, str(spec["id"]))] = (int(spec.get("version") or 1), digest)
             repo.paths[(kind, str(spec["id"]))] = spec["source_path"]
 
 

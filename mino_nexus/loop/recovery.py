@@ -166,16 +166,6 @@ def _enrich_evidence_from_run_context(
     # 当前取证优先；上回合 ctx/hierarchy 仅补未知，不能覆盖刚读到的前台。
     if ev.app_foreground in ("yes", "no"):
         return
-    menu_fg = str(getattr(ctx, "app_foreground", "") or "").strip().lower()
-    if menu_fg == "yes" and pkg:
-        ev.app_foreground = "yes"
-        if not ev.foreground_pkg:
-            ev.foreground_pkg = pkg
-            ev.top_window_pkg = pkg
-    elif menu_fg == "no":
-        ev.app_foreground = "no"
-    if ev.foreground_pkg and ev.app_foreground != "unknown":
-        return
     nodes = getattr(ctx, "nav_hierarchy_nodes", None)
     if not isinstance(nodes, list) or not nodes:
         return
@@ -204,7 +194,7 @@ def _enrich_evidence_from_run_context(
         if _looks_like_url(pkg) or _looks_like_url(fpkg):
             ev.app_foreground = _yes_no(web_page_matches_target(pkg, fpkg))
         else:
-            ev.app_foreground = _yes_no(fpkg == pkg or pkg in fpkg)
+            ev.app_foreground = _yes_no(fpkg == pkg)
     elif kind == "app" and pkg and fpkg == pkg:
         ev.app_foreground = "yes"
         ev.foreground_pkg = pkg
@@ -397,7 +387,7 @@ def resolve_app_foreground_guard(
     *,
     nodes: list[Any] | None,
     target_package: str = "",
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """hierarchy / DOM guard + 原生前台查询，减少 app_foreground=unknown。"""
     pkg = str(target_package or getattr(ctx, "target_package", "") or "").strip()
     plat = str(getattr(ctx, "platform", "") or "")
@@ -420,7 +410,8 @@ def resolve_app_foreground_guard(
     _fill_foreground_from_get_app(ev, router, ctx, target_package=pkg, diagnostic_purpose="foreground_guard")
     probed = str(ev.app_foreground or "").strip().lower()
     if probed in ("yes", "no"):
-        fg = {**fg, "app_foreground": probed}
+        fg = {**fg, "app_foreground": probed, "foreground_package": ev.foreground_pkg,
+              "foreground_source": "get_foreground_app", "hierarchy_app_foreground": af}
     setattr(ctx, "app_foreground", str(fg.get("app_foreground") or ""))
     return fg
 
@@ -557,7 +548,7 @@ def apply_rule(
                 out.error = "evidence_mismatch"
                 out.advice = (
                     f"当前证据不匹配本恢复（{ev.brief()}）。"
-                    f"请改用 tap_element / press_key / fsm_navigate，勿再调用 recover_{rule.id}。"
+                    f"请按当前导航计划使用 tap_element / press_key，勿再调用 recover_{rule.id}。"
                 )
                 return out
         if not out.advice:

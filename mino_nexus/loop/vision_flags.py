@@ -1,4 +1,4 @@
-"""P6 开关：唯一真源为 run-case SOP 当前 phase（Console 编排 job / exec_job / advance_on）。"""
+"""当前 SOP 的阶段职责判定；不是算法版本或实验开关。"""
 from __future__ import annotations
 
 from contextvars import ContextVar, Token
@@ -28,19 +28,19 @@ def _exec_job() -> str:
     return str(cfg.get("exec_job") or cfg.get("job") or "agent-decide").strip() or "agent-decide"
 
 
-def vision_plan_v1_enabled() -> bool:
+def planning_phase_active() -> bool:
     return _plan_job() == "agent-vision-plan"
 
 
-def vision_exec_v1_enabled() -> bool:
+def execution_phase_active() -> bool:
     return _exec_job() == "agent-vision-exec"
 
 
-def step_phase_fsm_v1_enabled() -> bool:
+def milestone_phase_active() -> bool:
     return str(_cfg().get("advance_on") or "signal_done").strip() == "milestones"
 
 
-def vision_assert_v1_enabled() -> bool:
+def assertion_phase_active() -> bool:
     return _exec_job() == "agent-vision-assert"
 
 
@@ -60,10 +60,10 @@ def sop_orchestration_snapshot(phases: list[dict[str, Any]] | None = None) -> di
     return {
         "phases": rows,
         "active": {
-            "plan": vision_plan_v1_enabled(),
-            "exec": vision_exec_v1_enabled(),
-            "step_fsm": step_phase_fsm_v1_enabled(),
-            "assert": vision_assert_v1_enabled(),
+            "plan": planning_phase_active(),
+            "exec": execution_phase_active(),
+            "step_fsm": milestone_phase_active(),
+            "assert": assertion_phase_active(),
             "plan_job": _plan_job(),
             "exec_job": _exec_job(),
             "advance_on": str(_cfg().get("advance_on") or ""),

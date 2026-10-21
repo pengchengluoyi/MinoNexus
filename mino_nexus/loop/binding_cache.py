@@ -370,15 +370,16 @@ def resolve_node_from_params(ctx: Any, params: dict[str, Any] | None) -> Optiona
         y = float(p.get("y"))
     except (TypeError, ValueError):
         return None
-    w = int(getattr(ctx, "last_shot_width", 0) or 0)
-    h = int(getattr(ctx, "last_shot_height", 0) or 0)
-    if w > 0 and h > 0 and x <= 1000 and y <= 1000:
-        from mino_nexus.ai.coords import milli_to_viewport_px
+    from mino_nexus.loop.device_execute_params import _viewport_wh
+    from mino_nexus.ai.coords import milli_to_viewport_px
 
-        pair = milli_to_viewport_px(x, y, w, h)
-        if pair:
-            x, y = float(pair[0]), float(pair[1])
-    return _node_at_point(nodes, x, y)
+    w, h = _viewport_wh(ctx)
+    # No current viewport means no coordinate evidence. Do not compare milli
+    # coordinates with pixel bounds or borrow dimensions from a previous frame.
+    if w <= 0 or h <= 0 or not (0 <= x <= 1000 and 0 <= y <= 1000):
+        return None
+    pair = milli_to_viewport_px(x, y, w, h)
+    return _node_at_point(nodes, *pair) if pair is not None else None
 
 
 def remember_success(

@@ -33,10 +33,9 @@ class ControlRegistryReadOnlyError(RuntimeError):
 
 
 @contextmanager
-def registry_runtime(execution_mode: str = "legacy") -> Iterator[None]:
-    mode = str(execution_mode or "legacy").strip().lower()
-    if mode not in {"legacy", "v5"}:
-        raise ValueError(f"未知控件运行模式：{mode}")
+def registry_runtime(execution_mode: str = "agent") -> Iterator[None]:
+    from mino_nexus.core.protocol import execution_mode as require_execution_mode
+    mode = require_execution_mode(execution_mode)
     if runtime_readonly():
         mode = "v5"
     token = _RUNTIME_MODE.set(mode)

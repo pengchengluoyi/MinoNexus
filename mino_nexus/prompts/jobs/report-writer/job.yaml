@@ -1,5 +1,4 @@
 id: report-writer
-version: 1
 label: 写测试报告
 summary: 写报告草稿
 engine: text_chat

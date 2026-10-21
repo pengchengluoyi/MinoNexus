@@ -1,3 +1,4 @@
+from mino_nexus.models.node_tool_task import NodeToolTask
 from mino_nexus.models.collab_message_job import CollabMessageJob
 from mino_nexus.models.account_fact_candidate import AccountFactCandidate
 from mino_nexus.models.development import DevelopmentBinding, DevelopmentOperation

@@ -1,5 +1,4 @@
 id: draft_mindmap
-version: 1
 label: 写测试脑图
 summary: 按入口铺覆盖脑图
 engine: json_chat

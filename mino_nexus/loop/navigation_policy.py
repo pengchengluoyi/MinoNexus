@@ -287,7 +287,7 @@ def plan_and_dispatch_next(
                             nav_attempt["step_pick"] = "tab_target_system_back"
                             plan_msg = (
                                 f"{plan_msg}；路线图首 hop 为系统返回，"
-                                "本步 press_key BACK 后再 fsm_navigate"
+                                "本步 press_key BACK 后继续当前导航计划"
                             )
                         else:
                             nav_attempt["allow_back"] = False
@@ -447,6 +447,8 @@ def dispatch_pending(proxy, ctx, cursor, *, turn_seq, writer=None):
     pending = first_pending_hook_milestone(state)
     if not pending or pending.get('tier') != 'policy' or not pending.get('nav_target'):
         return None
+    if pending.get('fsm_unavailable'):
+        return None
     attempts = int(pending.get('policy_attempts') or 0)
     if attempts >= 12:
         return {'ok': False, 'case_fail': True, 'status': 'blocked', 'error_kind': 'navigation_policy_exhausted',
@@ -462,12 +464,26 @@ def dispatch_pending(proxy, ctx, cursor, *, turn_seq, writer=None):
         or str(attempt.get("plan_error") or "") == "missing fsm"
     )
     if missing_fsm:
+        pending['fsm_unavailable'] = True
+        if not isinstance(pending.get('exec_caps'), list) or not pending.get('exec_caps'):
+            pending['exec_caps'] = ['tap_element', 'press_key']
+        pending['status'] = 'in_progress'
+        write_state(cursor, state)
+        target = str(pending.get('nav_target') or '')
+        degrade_summary = (
+            f"缺少已发布导航图，已降级：请按操作栏用 DOM/视觉步骤到达「{target}」，不再走项目路线图。"
+        )
+        prev = str(getattr(cursor, 'correction_hint', '') or '').strip()
+        cursor.correction_hint = (
+            f"{prev}\n{degrade_summary}\n{_FSM_DEGRADE_HINT}".strip()
+            if prev else f"{degrade_summary}\n{_FSM_DEGRADE_HINT}"
+        )
         if writer:
             writer.append('policy/navigation', {'milestone_id': pending['id'], 'attempt': attempt,
-                'status': 'blocked', 'reason_code': 'navigation_configuration_required'})
-        return {'ok': False, 'case_fail': True, 'status': 'blocked',
-                'error_kind': 'navigation_configuration_required', 'milestone_id': pending['id'],
-                'summary': '缺少已发布导航图；已停止导航，不自动切换 DOM 或视觉执行'}
+                'status': 'degraded', 'reason_code': 'navigation_degraded_missing_fsm'})
+        return {'ok': False, 'defer': True, 'case_fail': False, 'status': 'defer',
+                'error_kind': 'navigation_degraded', 'milestone_id': pending['id'],
+                'summary': degrade_summary}
     ok = result.status == EventStatus.PASS
     # A planned edge reaching the destination is not observation of arrival.
     arrived = bool(ok and attempt.get('resolved_to') and

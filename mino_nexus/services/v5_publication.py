@@ -28,9 +28,7 @@ def guard_case_row(row):
         out["v5_draft_revision"] = revision + int(changed)
         if publication:
             out["v5_publication"] = copy.deepcopy(publication)
-            resource_changed = out.get("resource_key") != publication.get("resource_key")
-            out["v5_plan_state"] = "needs_revalidate" if resource_changed else old.get("v5_plan_state", "published")
-            out["v5_has_unpublished_changes"] = source_view(out) != publication["source"]
+            # Historical evidence is retained without controlling current execution.
     else:
         out["v5_draft_revision"] = 1
     return out

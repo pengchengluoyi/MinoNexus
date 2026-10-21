@@ -1,5 +1,4 @@
 id: version-qa-bm
-version: 1
 label: 版本发版评审
 summary: 这版带哪些需求出门、历史回归。
 category: flow

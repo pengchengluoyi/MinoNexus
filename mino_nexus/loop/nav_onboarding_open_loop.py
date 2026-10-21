@@ -18,10 +18,10 @@ FSM_OPEN_LOOP_ERRORS = frozenset(
 
 _OPEN_LOOP_HINT = (
     "【导航开环·无底栏 onboarding】当前屏看不见底栏 Tab，路线图 Tab 跳转已拒绝。"
-    "禁止对同一 Tab 目标重复 fsm_navigate。"
+    "禁止对同一 Tab 目标重复发起无效导航。"
     "请用 tap_element 点 hierarchy 中主流程按钮（短文案、可点、靠近内容区底部或主 CTA），"
     "必要时 press_key BACK（仅当 recovery 已允许 BACK）；"
-    "出墙出现底栏后再 fsm_navigate / 点 Tab。"
+    "出墙出现底栏后，按当前导航计划用 tap_element 点 Tab。"
 )
 
 
@@ -156,12 +156,12 @@ def fsm_params_blocked_in_open_loop(ctx: dict[str, Any]) -> Optional[str]:
     blocked = _fold(str(ctx.get("nav_open_loop_blocked_target") or ""))
     if not blocked and not to_state and not oral:
         return (
-            "【导航开环】无底栏 onboarding 墙内禁止 fsm_navigate。"
+            "【导航开环】无底栏 onboarding 墙内禁止直接跳到 Tab 目标。"
             "请 tap_element 沿主流程出墙后再导航。"
         )
     if blocked and (to_state == blocked or oral == blocked or blocked in to_state or blocked in oral):
         return (
-            "【导航开环】已拒绝重复 fsm_navigate：同一 Tab 目标在 onboarding 墙内不可达。"
+            "【导航开环】已拒绝重复导航：同一 Tab 目标在 onboarding 墙内不可达。"
             "请 tap_element 完成屏上主流程，勿再 fsm。"
         )
     return None

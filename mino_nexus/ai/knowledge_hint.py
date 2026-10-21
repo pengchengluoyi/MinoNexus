@@ -84,15 +84,10 @@ def build_step_focus(cursor) -> str:
         if instruction:
             bits.append(f"对应用例操作：{instruction}")
     elif phase == "do":
-        sub = str(getattr(cursor, "do_subphase", "") or "operation")
-        if sub == "achievement":
-            if expected:
-                bits.append(f"收工判断：{expected}")
-        else:
-            if instruction:
-                bits.append(f"操作：{instruction}")
-            if expected:
-                bits.append(f"达成摘要：{_clip(expected, 80)}")
+        if instruction:
+            bits.append(f"操作：{instruction}")
+        if expected:
+            bits.append(f"达成摘要：{_clip(expected, 80)}")
     else:
         if instruction:
             bits.append(f"操作：{instruction}")

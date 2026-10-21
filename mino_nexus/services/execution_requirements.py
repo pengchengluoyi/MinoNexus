@@ -9,6 +9,9 @@ import hashlib
 import json
 
 PHASES = ('prep', 'do', 'check', 'cleanup')
+# Navigation policy names and compile-time markers, not catalog_entries ids.
+NON_CATALOG_EVENT_IDS = frozenset({'nav_target'})
+POLICY_NAV_CAPS = ('tap_element', 'press_key')
 LOCAL_EXECUTORS = {
     'assert_visual': 'vlm', 'persona_subtask': 'ai_persona',
     'human_input_text': 'hitl',
@@ -57,6 +60,22 @@ def case_source_revision(case):
     return digest(source_view(case))
 
 
+def _filter_catalog_caps(cap_ids):
+    from mino_nexus.catalog.skill_channel import canonical_cap
+    return [canonical_cap(cid) for cid in cap_ids if canonical_cap(cid) and canonical_cap(cid) not in NON_CATALOG_EVENT_IDS]
+
+
+def _policy_nav_step(step):
+    if step.get('kind') == 'nav':
+        return True
+    if str(step.get('nav_target') or '').strip():
+        return True
+    if str(step.get('key_ref') or '') == 'operation.nav_target':
+        return True
+    from mino_nexus.catalog.skill_channel import canonical_cap
+    return canonical_cap(str(step.get('hook_cap') or '')) == 'nav_target'
+
+
 def compile_steps(plan, *, app_id):
     """Persist flattened capabilities, retaining source references and rejecting cycles."""
     from mino_nexus.catalog.skill_channel import milestone_cap_ids
@@ -67,7 +86,7 @@ def compile_steps(plan, *, app_id):
             if not isinstance(step, dict):
                 raise ValueError('compiled_step_invalid')
             ref = str(step.get('id') or step.get('point_id') or index)
-            caps = milestone_cap_ids(step)
+            caps = _filter_catalog_caps(milestone_cap_ids(step))
             from mino_nexus.services.business_event_contract import RETIRED
             if set(caps) & RETIRED:
                 raise ValueError('business_event_migration_required')
@@ -78,11 +97,11 @@ def compile_steps(plan, *, app_id):
                 optional = False
             elif inherited_optional:
                 requirement = {'requirement': 'optional'}
-            primary = milestone_cap_ids({k: v for k, v in step.items() if k != 'exec_caps'})
-            if step.get('kind') == 'nav':
-                if not isinstance(step.get('nav_target'), str) or not step['nav_target'].strip():
+            primary = _filter_catalog_caps(milestone_cap_ids({k: v for k, v in step.items() if k != 'exec_caps'}))
+            if _policy_nav_step(step):
+                if not str(step.get('nav_target') or '').strip():
                     raise ValueError('navigation_target_required')
-                primary = ['tap_element', 'press_key']
+                primary = list(POLICY_NAV_CAPS)
                 caps = list(dict.fromkeys([*caps, *primary]))
             rows.append({'clause_ref': '/'.join((*trail, ref)), 'event_ids': primary, 'optional': optional, **requirement})
             auxiliary = [cid for cid in caps if cid not in primary]
@@ -136,18 +155,20 @@ def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferre
         raise BindingAdmissionError('requirements_need_compile', diagnostics)
     operations = {}
     block_revisions = {}
-    def add(cid, phase, *, optional=False, source=None, requirement=None):
+    def add(cid, phase, *, optional=False, source=None, requirement=None, declared_caller=None):
         cid = canonical_cap(cid)
         from mino_nexus.services.business_event_contract import RETIRED
-        if cid in RETIRED:
-            raise BindingAdmissionError("business_event_migration_required")
+        if cid in RETIRED or cid in NON_CATALOG_EVENT_IDS:
+            return
         if not cid:
             return
         cap = registry.get_capability(cid)
-        caller = cap.caller if cap is not None else ''
+        caller = declared_caller or (cap.caller if cap is not None else '')
         if cid in {'screenshot', 'hierarchy', 'probe_device_state'} or (cid == 'close_app' and platform == 'web'):
             caller = 'system'
         if not caller:
+            if optional:
+                return
             raise BindingAdmissionError('catalog_capability_missing:' + cid)
         key = phase + ':' + cid
         row = operations.setdefault(key, {'operation_ref': key, 'event_id': cid, 'phase': phase,
@@ -166,7 +187,7 @@ def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferre
             plan = bundle.get(phase + '_program_plan') or {}
             block_revisions.update(plan.get('block_dependencies') or {})
             for row in plan['binding_steps']:
-                for cid in row['event_ids']:
+                for cid in _filter_catalog_caps(row['event_ids']):
                     add(cid, phase, optional=row['optional'], source={'step_ref': step_ref, 'clause_ref': row['clause_ref']}, requirement={k:row[k] for k in ('requirement','condition') if k in row})
     claim = _case_resource_key(case) or {}
     scene = case.get('case_scene') or case.get('scene') or claim.get('case_scene') or {}
@@ -203,6 +224,10 @@ def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferre
     if platform == 'web':
         for phase in ('prep', 'cleanup'):
             add('close_app', phase)
+    from mino_nexus.loop.interrupt_recovery import BUILTIN_INTERRUPT_CAPS
+    for phase in ('prep', 'do'):
+        for cid in BUILTIN_INTERRUPT_CAPS:
+            add(cid, phase, optional=True, source={'runtime_policy': 'screen_interrupt.v1'})
     recovery_refs = {}
     for rule in registry.list_recovery_rules(enabled_only=True):
         if rule.lifecycle != 'active' or (rule.platforms and platform not in rule.platforms):
@@ -210,7 +235,7 @@ def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferre
         children = [canonical_cap(action.capability) for action in rule.actions]
         recovery_refs[rule.id] = {'revision': digest(rule.model_dump()), 'children': children}
         for phase in ('prep', 'do'):
-            add('recover_' + rule.id, phase, optional=True)
+            add('recover_' + rule.id, phase, optional=True, declared_caller='case')
             for cid in children:
                 add(cid, phase, optional=True)
     # Known local children are flattened here, independent of target connectivity.
@@ -267,7 +292,7 @@ def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferre
         'owner_scope_ref': 'user:' + require_user_id(), 'requirements_ref': 'requirements-' + digest(rows),
         'source_revision': revision, 'created_at': case.get('updated_at') or identity,
         'timeout_profile_ref': 'ordinary.v1', 'evidence_policy_ref': 'ordinary.v1',
-        'execution_mode': 'legacy', 'action_scheme': action_scheme, 'operations': rows,
+        'execution_mode': 'agent', 'action_scheme': action_scheme, 'operations': rows,
         'required_operation_groups': required_groups, 'recovery_refs': recovery_refs,
         'provider_id': provider_id, 'block_revisions': block_revisions, 'resource_claim': deepcopy(claim), 'resource_scene': deepcopy(scene),
         'resource_precondition': precondition,
@@ -292,7 +317,7 @@ def adapt_event(value, *, platform, framework=False):
         impl.setdefault('runs_on', 'scout')
         impl.setdefault('params_contract', {'version': 1})
         impl.setdefault('result_contract', {'version': 1})
-        impl.setdefault('device_hint_template', {'execution_mode': 'legacy'})
+        impl.setdefault('device_hint_template', {'execution_mode': 'agent'})
         required = ABSTRACT.get(cid)
         if impl['executor'] == 'playwright' and cid in {'launch_app', 'open_app', 'get_foreground_app', 'close_app', 'press_key', 'hierarchy'}:
             required = 'ui_native_input'

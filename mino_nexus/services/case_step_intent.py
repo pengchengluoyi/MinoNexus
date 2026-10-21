@@ -7,6 +7,7 @@ from typing import Any
 INTENT_ROLES = frozenset(
     {
         "read_only",
+        "observe_ui",
         "navigate_to_screen",
         "system_app_lifecycle",
         "mutate_ui",
@@ -20,6 +21,7 @@ INTENT_ROLES = frozenset(
 
 _OPERATION_INTENT_DEFAULT_REF: dict[str, str] = {
     "read_only": "operation.author_remark",
+    "observe_ui": "operation.observe",
     "navigate_to_screen": "operation.nav_target",
     "system_app_lifecycle": "operation.system_app",
 }
@@ -120,10 +122,14 @@ def reconcile_hit_layer(hit: dict[str, Any], *, author_layer: str) -> dict[str, 
 def intent_role_errors(span: dict[str, Any], spec: dict[str, Any], layer: str) -> list[str]:
     """intent_role 与所选 key_ref / hook 的结构一致性。"""
     role = normalize_intent_role(span.get("intent_role"))
-    if not role:
-        return []
     ref = str(spec.get("key_ref") or "")
     errors: list[str] = []
+    if layer == "operation" and ref == "operation.author_remark":
+        from mino_nexus.services.case_semantic_integrity import explicit_remark
+        if not explicit_remark(span.get("quote")):
+            errors.append("只有原文明示备注或不执行的说明才可跳过；必需操作和观察必须选择可执行事件，目录不支持时保留未覆盖，不得改为说明")
+    if not role:
+        return errors
     want = canonical_key_ref(role, layer)
     if want and ref != want:
         errors.append(f"intent_role={role} 应使用 {want}，当前为 {ref or '空'}")

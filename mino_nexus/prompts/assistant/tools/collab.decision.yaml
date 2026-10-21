@@ -1,0 +1,41 @@
+{
+  "id": "collab.decision",
+  "version": 1,
+  "title": "记录用户明确提出的人工决策；不改变测试结果",
+  "description": "记录用户明确提出的人工决策；不改变测试结果",
+  "route": "POST /project/{project_id}/collab/workspaces/{topic_id}/decisions",
+  "risk": "write",
+  "enabled": true,
+  "params_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "project_id": {
+        "type": "string"
+      },
+      "topic_id": {
+        "type": "string"
+      },
+      "body": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4000
+      },
+      "run_id": {
+        "type": "string"
+      },
+      "request_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "project_id",
+      "topic_id",
+      "body"
+    ]
+  },
+  "result_pick": [
+    "data"
+  ],
+  "card": "answer"
+}

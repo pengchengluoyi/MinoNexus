@@ -1,5 +1,4 @@
 id: agent-text-assert
-version: 4
 label: 多语言文案校验
 summary: 根据有界 DOM 可见文本逐项核对文案意图与明确语言要求
 engine: json_chat

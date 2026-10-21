@@ -28,9 +28,9 @@ def filter_registry_guards_for_milestones(
     guard_names: list[str],
     cursor: Any,
 ) -> list[str]:
-    from mino_nexus.loop.milestones import login_flow_under_milestones, milestone_v1_enabled
+    from mino_nexus.loop.milestones import login_flow_under_milestones
 
-    if not milestone_v1_enabled() or not login_flow_under_milestones(cursor):
+    if not login_flow_under_milestones(cursor):
         return list(guard_names or [])
     return [g for g in (guard_names or []) if str(g) not in LOGIN_REGISTRY_GUARD_IDS]
 
@@ -295,11 +295,11 @@ def _evaluate_fuse_repeat_tap(
 
 def registry_login_guards_suppressed(ctx: dict[str, Any]) -> bool:
     step_cursor = ctx.get("step_cursor") or ctx.get("cursor")
-    from mino_nexus.loop.milestones import login_flow_under_milestones, milestone_v1_enabled
+    from mino_nexus.loop.milestones import login_flow_under_milestones
 
     return bool(
         step_cursor is not None
-        and milestone_v1_enabled()
+        and True
         and login_flow_under_milestones(step_cursor)
     )
 

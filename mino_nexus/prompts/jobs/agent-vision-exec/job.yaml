@@ -1,5 +1,4 @@
 id: agent-vision-exec
-version: 33
 label: 单步执行
 summary: 按当前结构或截图与 plan_digest 输出单步 capability；里程碑由 agent-vision-plan 维护
 engine: vision_decide

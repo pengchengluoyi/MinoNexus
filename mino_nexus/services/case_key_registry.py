@@ -104,12 +104,25 @@ def ui_automation_summary(case: dict[str, Any] | None) -> dict[str, Any]:
 def step_keys_summary_for_case(case: dict[str, Any] | None) -> dict[str, Any]:
     """Console 用例详情：密钥编译摘要（不重复全文 warnings）。"""
     if not isinstance(case, dict):
-        return {"telemetry": "green", "warning_count": 0, "fallback_count": 0, "steps": {}}
+        return {"telemetry": "muted", "warning_count": 0, "fallback_count": 0, "steps": {}}
     meta = case.get("meta") if isinstance(case.get("meta"), dict) else {}
     warnings = list(meta.get("key_compile_warnings") or [])
     spk = meta.get("step_program_keys") if isinstance(meta.get("step_program_keys"), dict) else {}
     fb = sum(1 for w in warnings if isinstance(w, dict) and w.get("fallback"))
-    ua = ui_automation_summary(case)
+    # Display the same read-only admission verdict used by task submission.
+    # Never invoke compilation or trust an old coverable flag on this read path.
+    from mino_nexus.services.case_preflight import partition_cases
+    runnable, report = partition_cases([case])
+    stored = meta.get("ui_automation") or {}
+    advisory = [item for item in stored.get("blocked_by") or []
+                if isinstance(item, dict) and str(item.get("severity") or "blocking") != "blocking"]
+    rejected = report["blocked"]
+    reasons = rejected[0]["reasons"] if rejected else []
+    blockers = rejected[0]["blocked_by"] if rejected else []
+    if rejected and not blockers:
+        blockers = [{"reason": "compile_required", "user_message": reasons[0]}]
+    ua = {"schema": "mino.ui_automation.v1", "coverable": bool(runnable),
+          "blocked_by": blockers + advisory}
     blocked = ua.get("blocked_by") or []
     blocking_items = [
         item for item in blocked if isinstance(item, dict) and str(item.get("severity") or "blocking") == "blocking"
@@ -124,17 +137,17 @@ def step_keys_summary_for_case(case: dict[str, Any] | None) -> dict[str, Any]:
         blocked_by_step.setdefault(str(item.get("case_step") or ""), []).append(item)
 
     def _light_status(step: dict[str, Any], step_key: str) -> str:
+        clause = str(step.get("source_clause") or step.get("source_line") or "")
+        for item in blocked_by_step.get(step_key, []):
+            src = str(item.get("source_clause") or "")
+            if not src or src in clause or clause in src:
+                return "blocking"
         key_ref = str(step.get("key_ref") or "")
         if key_ref in ("operation.author_remark", "expected.human_review"):
             return "advisory"
         if str(step.get("kind") or "") == "remark" or str(step.get("run_policy") or "") == "skip":
             if key_ref != "expected.ui_absent":
                 return "advisory"
-        clause = str(step.get("source_clause") or step.get("source_line") or "")
-        for item in blocked_by_step.get(step_key, []):
-            src = str(item.get("source_clause") or "")
-            if not src or src in clause or clause in src:
-                return "blocking"
         return "ok"
     steps_out: dict[str, Any] = {}
     for key, bundle in spk.items():
@@ -178,7 +191,7 @@ def step_keys_summary_for_case(case: dict[str, Any] | None) -> dict[str, Any]:
             "lights": lights,
         }
     coverable = ua.get("coverable") is not False
-    telemetry = "red" if fb or not coverable else ("yellow" if advisory_items else "green")
+    telemetry = "red" if not coverable else ("yellow" if advisory_items else "green")
     return {
         "telemetry": telemetry,
         "warning_count": len(warnings),
@@ -188,6 +201,7 @@ def step_keys_summary_for_case(case: dict[str, Any] | None) -> dict[str, Any]:
         "warnings_preview": warnings[:12],
         "ui_automation": ua,
         "coverable": coverable,
+        "reasons": reasons,
         "steps": steps_out,
     }
 
@@ -276,8 +290,6 @@ def validate_case_step_keys(
     synced = compiled_case if compiled_case is not None else sync_case_step_program_keys(dict(case))
     from mino_nexus.services.v5_publication import guard_case_row
     synced = guard_case_row(synced)
-    if synced.get("v5_publication"):
-        synced = sync_case_step_program_keys(synced)
     warnings = list((synced.get("meta") or {}).get("key_compile_warnings") or [])
     block_map = known_blocks if known_blocks is not None else flow_block_key_refs()
     screen_map = known_screens if known_screens is not None else nav_screen_key_refs(app_id)
@@ -477,8 +489,6 @@ def compile_preview_view(case: dict[str, Any] | None, *, compiled_case: dict[str
     synced = compiled_case if compiled_case is not None else sync_case_step_program_keys(dict(case))
     from mino_nexus.services.v5_publication import guard_case_row
     synced = guard_case_row(synced)
-    if synced.get("v5_publication"):
-        synced = sync_case_step_program_keys(synced)
     meta = synced.get("meta") if isinstance(synced.get("meta"), dict) else {}
     ua = ui_automation_summary(synced)
     spk = meta.get("step_program_keys") if isinstance(meta.get("step_program_keys"), dict) else {}

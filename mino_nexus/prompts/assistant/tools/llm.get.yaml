@@ -1,5 +1,4 @@
 id: llm.get
-version: 1
 title: 模型响应与请求详情
 description: 读取 dispatch_id 对应的模型响应、请求或元信息。response 包含解析前 content、原始 tool_calls 及解析后输出，便于判断模型漏字段还是解析丢字段。旧日志可能只有 parsed_output，raw_response_available=false 时不得称其为原始响应。content 按字符分页，按 next_offset 继续并顺序拼接后解析 JSON，不能把单页当完整响应。
 route: GET /case-runner/llm/{dispatch_id}

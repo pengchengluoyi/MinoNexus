@@ -122,7 +122,7 @@ def run_cases(
     env_surface: str = "",
     action_scheme: str = "dom_preferred",
     plugin_user_id: str = "",
-    execution_mode: str = "legacy",
+    execution_mode: str = "agent",
     client_request_id: str = "",
     derived_from: str = "",
     expected_build: str = "",
@@ -133,6 +133,7 @@ def run_cases(
     def mark(name: str) -> None:
         phases.append((name, int((time.perf_counter() - t0) * 1000)))
 
+    execution_mode = "agent"  # One current execution path; old request labels do not select an engine.
     action_scheme = normalize_action_scheme(action_scheme)
     require_user_id(plugin_user_id or None)
     from mino_nexus.services.case_compilation import digest
@@ -155,9 +156,6 @@ def run_cases(
                 if original is None:
                     raise ValueError("run_receipt_target_missing")
                 return run_store.to_task_json(original)
-    execution_mode = "legacy" if execution_mode in {"", "agent"} else execution_mode
-    if execution_mode not in {"legacy", "v5"}:
-        raise ValueError("未知执行模式")
     from mino_nexus.services.access_scope import require_owned_device
     device_sns = _normalize_sns(sn, sns)
     for owned_sn in device_sns:
@@ -189,26 +187,18 @@ def run_cases(
         raise ValueError("没有可执行的用例草稿。请先在流程里生成用例，或指定 case_ids。")
     requested_total = len(cases)
     skipped_cases: list[dict[str, Any]] = []
-    if not instruction and execution_mode != "v5":
+    if not instruction:
         from mino_nexus.services.case_preflight import partition_cases
 
         cases, preflight = partition_cases(cases)
         skipped_cases = preflight["blocked"]
         if not cases:
             raise UiNotCoverable(skipped_cases)
-    if execution_mode == "v5":
-        if instruction or not device_sns or not playwright_headless:
-            raise ValueError("V5 需要已发布文字用例、固定 Web 节点和 headless")
-        if any(not c.get("v5_publication") or c.get("v5_plan_state") != "published" for c in cases):
-            raise ValueError("V5 用例尚未发布或需要重新核验")
     mark("cases")
 
     from mino_nexus.services.device_targets import select
     device_sns, device_targets = select(app, device_sns, surface=env_surface, profile=env_profile,
-                                        headless=playwright_headless, action_scheme=action_scheme, allow_queue=execution_mode == "v5")
-    if execution_mode == "v5" and any(device_targets[s].get("platform") != "web" or
-        s != "web" + str(device_targets[s].get("node_id") or "") for s in device_sns):
-        raise ValueError("V5 必须固定到声明 Web 槽的节点")
+                                        headless=playwright_headless, action_scheme=action_scheme, allow_queue=False)
     platforms_by_sn = {dsn: str(device_targets[dsn]["platform"]) for dsn in device_sns}
     mark("devices")
     task_platform = platform
@@ -266,7 +256,7 @@ def run_cases(
     from mino_nexus.services.access_scope import require_owned_device
     for owned_sn in device_sns:
         require_owned_device(owned_sn)
-    provider, gate = ({}, {}) if execution_mode == "v5" else resolve_regression_provider(str(provider_id or "").strip() or None)
+    provider, gate = resolve_regression_provider(str(provider_id or "").strip() or None)
     from mino_nexus.loop.step_pointer import compute_case_wall_budget_sec
     batch_budget = sum(compute_case_wall_budget_sec(case) + 130 for case in seeded)
     mark("assembled")
@@ -337,7 +327,7 @@ def run_cases(
     fail_reason = ""
     if not device_sns:
         fail_reason = "没有在线设备。请在 Workbench 安装并连接 Scout，再选一台设备下发。"
-    elif not provider and execution_mode != "v5":
+    elif not provider:
         fail_reason = gate.get("reason") or "未配置用例执行大模型（Workbench → 大模型设置 → 可用 + 用例）"
 
     if fail_reason:
@@ -554,3 +544,14 @@ class WebSlotFull(Exception):
         self.sn = sn
         self.active = active
         self.limit = limit
+
+
+def resolve_admitted_case(case, ctx, *, expected_build, started_at, max_steps):
+    """Seal after the per-device binding transaction, before the ordinary loop.
+
+    run_cases only schedules targets; a committed binding does not exist there.
+    The shared factory is invoked at the actual per-case admission boundary.
+    """
+    from mino_nexus.loop.resolved_case import resolve_case
+    return resolve_case(case, ctx, expected_build=expected_build,
+                        started_at=started_at, max_steps=max_steps)

@@ -76,7 +76,7 @@ def run_guard_foreground(
     target_package: str = "",
     platform: str = "",
     target_scope: dict[str, Any] | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """跑批 guard：是否被测 App 前台 / 系统挡屏（权限、相册选择器等）。"""
     from mino_nexus.services.nav_target_scope import (
         TargetScope,
@@ -118,32 +118,34 @@ def run_guard_foreground(
             and kind not in ("foreign", "launcher")
             and fpkg == tgt
         )
-    overlay = is_overlay_screen(turn)
-    if overlay and not on_target:
-        return {"app_foreground": "no", "system_overlay": "yes"}
-    if overlay and on_target:
-        return {"app_foreground": "yes", "system_overlay": "no"}
-    if not list(nodes or []):
-        return {"app_foreground": "unknown", "system_overlay": "no"}
-    if kind in ("foreign", "launcher"):
-        return {"app_foreground": "no", "system_overlay": "no"}
-    if kind == "unknown":
-        return {"app_foreground": "unknown", "system_overlay": "no"}
+    from mino_nexus.loop.overlay_evidence import dialog_evidence
+    proof = dialog_evidence(nodes) if plat == 'android' else {}
+    overlay = bool(proof) if plat == 'android' else is_overlay_screen(turn)
+    foreground = "unknown"
     if on_target:
-        return {"app_foreground": "yes", "system_overlay": "no", "screen_kind": "app"}
-    if tgt and fpkg:
+        foreground = "yes"
+    elif kind in ("foreign", "launcher"):
+        foreground = "no"
+    elif tgt and fpkg:
         if (scope and scope.kind == "url") or _looks_like_url(tgt):
             if not web_page_matches_target(tgt, fpkg):
-                return {"app_foreground": "no", "system_overlay": "no", "screen_kind": kind or "foreign"}
+                foreground = "no"
         elif fpkg != tgt:
-            return {"app_foreground": "no", "system_overlay": "no", "screen_kind": kind or "foreign"}
-    return {"app_foreground": "unknown", "system_overlay": "no", "screen_kind": "unknown"}
+            foreground = "no"
+    return {"app_foreground": foreground,
+            "system_overlay": "yes" if overlay and foreground == "no" else "no",
+            "screen_kind": kind or "unknown", "foreground_package": fpkg,
+            "foreground_source": "hierarchy" if fpkg else "unknown",
+            **({"overlay_evidence": proof} if overlay and foreground == "no" else {})}
 
 
 def is_overlay_screen(turn: dict[str, Any]) -> bool:
     """系统权限弹窗 / 模态层 —— 不进 App 图谱与 Tab 识别。"""
     if not turn:
         return False
+    if str(turn.get('platform') or '').lower() == 'android':
+        from mino_nexus.loop.overlay_evidence import dialog_nodes
+        return bool(dialog_nodes(turn.get('nodes')))
     nodes = turn.get("nodes") or []
     rid_tokens: set[str] = set()
     for node in nodes:

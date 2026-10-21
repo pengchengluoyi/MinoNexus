@@ -129,12 +129,12 @@ def format_run_credential_hint(
     if kind == "email":
         login_line = (
             "登录方式=邮箱：选 Email 标签后 input_text(field=email) 填租号邮箱，"
-            "request_sms_code 发码，get_otp 取验证码（勿反复点 Email tab）。"
+            "用 tap_element 点击发送验证码控件，确认发码后 get_otp 取验证码（勿反复点 Email tab）。"
         )
     else:
         login_line = (
             "登录方式=手机号：input_text(field=phone) 填租号手机号，"
-            "request_sms_code 发码，get_otp 后填验证码。"
+            "用 tap_element 点击发送验证码控件，确认发码后 get_otp 再填验证码。"
         )
     otp_bits: list[str] = []
     if mode == "fixed":

@@ -1,8 +1,12 @@
 """单用例看图闭环。prep / do / check 都由 Agent 看图决策。"""
 from __future__ import annotations
 
+from mino_nexus.loop.login_transition import update_auth_state
+
+import hashlib
 import re
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from mino_nexus.loop.fuse.action_fuse import fuseable_cap
@@ -52,6 +56,8 @@ from mino_nexus.loop.web.web_env import agent_step_idx, cleanup_after_case, fram
 from mino_nexus.loop.android.app_env import reset_native_app_before_case
 from mino_nexus.loop.channel_program_recovery import maybe_recover_foreground
 from mino_nexus.core.schemas import EventResult, PlanEvent
+
+EXECUTION_REVISION = "sha256:" + hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 TAG = "AgentLoop"
 _MAX_STEPS = 24
@@ -112,7 +118,7 @@ def _sync_app_foreground_ctx(
     setattr(ctx, "observation_contract", dict(getattr(getattr(nav, "snapshot", None), "observation", None) or {}))
     from mino_nexus.loop.recovery import resolve_app_foreground_guard
 
-    fg = resolve_app_foreground_guard(
+    fg = dict(getattr(nav, "foreground", None) or {}) or resolve_app_foreground_guard(
         ctx,
         router,
         nodes=nodes,
@@ -184,9 +190,7 @@ def _locator_blocks_action(ctx: Any, cap_id: str, params: dict[str, Any], cursor
     from mino_nexus.services.control_registry import locator_stop_reason, runtime_readonly
 
     platform = str(getattr(ctx, "platform", "") or getattr(ctx, "device_platform", "") or "")
-    case = getattr(ctx, "case", None)
-    published = isinstance(case, dict) and bool(case.get("v5_publication"))
-    ordinary = not published and str(getattr(ctx, "execution_mode", "") or "").lower() != "v5" and not runtime_readonly()
+    ordinary = not runtime_readonly()
     if action_scheme(ctx) == "dom" and ordinary and cap_id in ("tap_element", "input_text"):
         from mino_nexus.action_space.scheme import structure_target_available
         from mino_nexus.services.control_registry import get_control
@@ -194,8 +198,8 @@ def _locator_blocks_action(ctx: Any, cap_id: str, params: dict[str, Any], cursor
         project_id = str(getattr(ctx, "project_id", "") or "")
         control = get_control(project_id, control_id)
         scoped = bool(control) and str(control.get("project_id") or "") == project_id
-        typed_published = bool(control) and control.get("publish_state") == "published" and bool(control.get("locator_spec"))
-        if scoped and not typed_published and structure_target_available(cap_id, params, ctx):
+        typed_locator = bool(control) and bool(control.get("locator_spec"))
+        if scoped and not typed_locator and structure_target_available(cap_id, params, ctx):
             # 普通任务的本轮唯一结构锚点可以执行；不把文本/ref 冒充已保存的 CSS 定位。
             return ""
     dom_locator = str(params.get("selector") or params.get("css") or params.get("xpath") or params.get("resource_id") or "")
@@ -430,6 +434,7 @@ def run_case(
     fork_state: dict[str, Any] | None = None,
     run_env_brief: str = "",
     next_case: dict[str, Any] | None = None,
+    resource_attempt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from mino_nexus.ai import dispatch_log as dispatch
 
@@ -458,6 +463,7 @@ def run_case(
         provider_id=provider_id,
         target_package=package,
     )
+    ctx.session_id = stream_id
     if playbook:
         ctx.playbook = playbook
     scout_run_id = stream_id
@@ -470,11 +476,13 @@ def run_case(
         ctx.env_label = env_brief
         ctx.env_fact = {"brief": env_brief, "confirmed": True}
     run_type = "manual"
+    expected_build = str(case.get("expected_build") or "")
     try:
         from mino_nexus.services import run_store as _rs
 
         _doc = _rs.get(run_id)
         if _doc:
+            expected_build = str(_doc.get("expected_build") or expected_build)
             ctx.env_profile = str(_doc.get("env_profile") or ctx.env_profile or "test")
             ctx.env_surface = str(_doc.get("env_surface") or getattr(ctx, "env_surface", "") or "")
             ctx.action_scheme = (
@@ -558,7 +566,9 @@ def run_case(
         _skill_row = get_skill("run-case") or {}
         _sop = _skill_row.get("sop") if isinstance(_skill_row.get("sop"), dict) else {}
         sop_orchestration = sop_orchestration_snapshot(normalize_phases(_sop.get("phases")))
+    ordinary_contract_enabled = not is_explore_case and ctx.execution_mode == "agent" and ctx.platform in {"android", ""}
     from mino_nexus.loop.observe.session_log import SessionPersistenceError
+    from mino_nexus.loop.resolved_case import ContractError
 
     try:
         writer = open_session(
@@ -589,7 +599,7 @@ def run_case(
 
         release_ctx_lease(ctx)
         dispatch.reset(tok)
-        return {"status": "blocked", "summary": str(exc), "steps": steps,
+        return {"status": "unverified" if ordinary_contract_enabled else "blocked", "summary": str(exc), "steps": steps,
                 "reason_code": exc.reason_code, "failure_stage": exc.failure_stage,
                 "execution_started": "no"}
     storage_failed = False
@@ -602,7 +612,13 @@ def run_case(
         ctx.case_scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
     except ValueError as exc:
         scene_error = str(exc)
-    plat_skip = platform_skip_reason(case, ctx.platform, device_os=ctx.desktop_os)
+    from mino_nexus.core.platform_contract import target_platform
+    platform_error = ""
+    try:
+        target_platform(ctx.platform)
+    except ValueError as exc:
+        platform_error = str(exc)
+    plat_skip = platform_skip_reason(case, ctx.platform, device_os=ctx.desktop_os) if not platform_error else None
     try:
         with bind_writer(writer), registry_runtime(ctx.execution_mode):
             if isinstance(case.get("execution_target"), dict):
@@ -615,10 +631,17 @@ def run_case(
                     "reason_code": "project_scope_mismatch", "reason": project_scope_error,
                     "retryable": False,
                 })
-                outcome = _finish(emit, status="blocked", summary=project_scope_error, steps=steps, t0=t0)
+                outcome = _finish(emit, status="tool_blocked" if ordinary_contract_enabled else "blocked", summary=project_scope_error, steps=steps, t0=t0)
+                outcome["reason_code"] = "project_scope_mismatch"
+            elif platform_error:
+                writer.append("contract/blocked", {"reason_code": "device_platform_invalid",
+                    "reason": platform_error, "execution_started": "no", "retryable": False})
+                outcome = _finish(emit, status="env_blocked" if ordinary_contract_enabled else "blocked", summary="设备平台缺失或无效，请检查节点上报", steps=steps, t0=t0)
+                outcome.update(reason_code="device_platform_invalid", execution_started="no")
             elif scene_error:
                 writer.append("contract/blocked", {"reason_code":"case_scene_invalid","reason":scene_error,"retryable":False})
-                outcome = _finish(emit,status="blocked",summary=f"场景合同无效，需重新编译：{scene_error}",steps=steps,t0=t0)
+                outcome = _finish(emit,status="tool_blocked" if ordinary_contract_enabled else "blocked",summary=f"场景合同无效，需重新编译：{scene_error}",steps=steps,t0=t0)
+                outcome["reason_code"] = "case_scene_invalid"
             elif plat_skip:
                 def _skip_emit(phase: str, **extra: Any) -> None:
                     payload = {
@@ -639,7 +662,8 @@ def run_case(
                      "env_surface": ctx.env_surface},
                 )
                 _skip_emit("start", thought="渠道校验", step=0, goal=overview)
-                outcome = _finish(_skip_emit, status="skip", summary=plat_skip, steps=steps, t0=t0)
+                outcome = _finish(_skip_emit, status="env_blocked" if ordinary_contract_enabled else "skip", summary=plat_skip, steps=steps, t0=t0)
+                outcome["reason_code"] = "platform_not_applicable"
             else:
                 writer.append("scope/bind", {
                     "app_id": ctx.app_id, "project_id": ctx.project_id,
@@ -655,20 +679,30 @@ def run_case(
                             action_scheme=ctx.action_scheme, provider_id=provider_id)
                         proxy.bind_execution(requirements, session_id=stream_id,
                             env_profile=ctx.env_profile, env_surface=ctx.env_surface)
+                    if ctx.execution_contract_version != "execution_binding.v1" or not ctx.execution_binding:
+                        raise BindingAdmissionError("binding_not_committed")
+                    if ordinary_contract_enabled:
+                        from mino_nexus.loop.case_runner import resolve_admitted_case
+                        from mino_nexus.loop.resolved_case import persist_contract
+                        ctx.resolved_case = resolve_admitted_case(case, ctx, expected_build=expected_build,
+                            started_at=t0, max_steps=_TURN_SAFETY_CAP)
+                        persist_contract(ctx.resolved_case, writer)
+                        writer.append("execution/runtime", {"revision": EXECUTION_REVISION})
                     writer.set_phase("prep")
                     execution_admitted = True
                 except BindingAdmissionError as exc:
                     writer.append("execution/blocked", {"reason_code": exc.reason_code,
                         "diagnostics": exc.diagnostics, "execution_started": "no"})
                     writer.require_persisted()
-                    outcome = _finish(emit, status="blocked", summary=exc.reason_code, steps=steps, t0=t0)
+                    outcome = _finish(emit, status="tool_blocked" if ordinary_contract_enabled else "blocked", summary=exc.reason_code, steps=steps, t0=t0)
                     outcome.update(reason_code=exc.reason_code, failure_stage="execution_binding", execution_started="no")
                     return outcome
                 outcome = _run_loop(
                     emit=emit,
                     ctx=ctx,
                     proxy=proxy,
-                    case=case,
+                    case=None if ctx.resolved_case else case,
+                    resolved_case=ctx.resolved_case,
                     cid=cid,
                     overview=overview,
                     provider_id=provider_id,
@@ -684,6 +718,15 @@ def run_case(
                     run_type=run_type,
                 )
             return outcome
+    except ContractError as exc:
+        failed_cursor = getattr(ctx, "_step_cursor", None)
+        failed_node = failed_cursor.current() if failed_cursor is not None else None
+        outcome = {"status": exc.status, "summary": exc.reason_code, "reason_code": exc.reason_code,
+                   "steps": steps, "execution_started": "no" if not execution_admitted else "unknown",
+                   "failure_stage": getattr(failed_cursor, "phase", "admission"),
+                   "case_step": 0 if getattr(failed_cursor, "phase", "") == "prep" else getattr(failed_node, "n", 0)}
+        writer.append("contract/blocked", {"reason_code": exc.reason_code, "error_kind": exc.reason_code})
+        return outcome
     except SessionPersistenceError as exc:
         storage_failed = True
         outcome = {"status": "blocked", "summary": str(exc), "steps": steps,
@@ -711,15 +754,21 @@ def run_case(
             outcome.update(status="blocked", summary="写动作结果未核验，设备与账号资源仍隔离", resource_isolated=True)
         if execution_admitted and not project_scope_error and not storage_failed and not isolated:
             proxy._binding_phase_override = "cleanup"
-            with bind_writer(writer):
-                cleanup_after_case(
-                    proxy,
-                    ctx,
-                    run_id=scout_run_id,
-                    case_seq=case_seq,
-                    case=case,
-                    next_case=next_case,
-                )
+            ctx.execution_cleanup_active = True
+            try:
+                with bind_writer(writer):
+                    cleanup_after_case(
+                        proxy,
+                        ctx,
+                        run_id=scout_run_id,
+                        case_seq=case_seq,
+                        case=case,
+                        next_case=next_case,
+                    )
+            except Exception as exc:
+                outcome.update(status="unverified" if ordinary_contract_enabled else "blocked",
+                               reason_code="cleanup_failed", summary=f"清理未完成：{type(exc).__name__}")
+                writer.append("execution/cleanup_failed", {"reason_code": "cleanup_failed", "error_type": type(exc).__name__})
         isolated = protected(run_id, sn=sn)
         if isolated:
             outcome.update(status="blocked", summary="写动作结果未核验，设备与账号资源仍隔离", resource_isolated=True,
@@ -727,6 +776,17 @@ def run_case(
         if storage_failed:
             outcome.update(status="blocked", summary="会话记录未能持久化，已阻止后续界面写动作",
                            reason_code="session_store_unavailable")
+        if ordinary_contract_enabled:
+            from mino_nexus.loop.execution_outcome import TERMINALS, terminal_for_reason
+            if cancel_check and cancel_check():
+                outcome.update(status='unverified', reason_code='task_cancelled', summary='任务已取消，业务结果未核验')
+            reason = str(outcome.get("reason_code") or "execution_exception")
+            if outcome.get("resource_isolated"):
+                reason = "write_outcome_unknown"
+            if storage_failed:
+                reason = "session_store_unavailable"
+            if outcome.get("status") not in TERMINALS or outcome.get("resource_isolated") or storage_failed:
+                outcome.update(status=terminal_for_reason(reason), reason_code=reason)
         try:
             if not writer._closed and not storage_failed:
                 step_cursor = getattr(ctx, "_step_cursor", None)
@@ -736,28 +796,59 @@ def run_case(
                     gs = session_end_guard_summary(step_cursor)
                     if gs.get("guard_block_counts") or gs.get("last_guard_block"):
                         writer.append("ops/guard_summary", gs)
+                if ordinary_contract_enabled:
+                    outcome.setdefault("failure_stage", getattr(step_cursor, "phase", "admission") if outcome.get("status") != "pass" else "")
+                    current_node = step_cursor.current() if step_cursor is not None else None
+                    outcome.setdefault("case_step", 0 if getattr(step_cursor, "phase", "") == "prep" else getattr(current_node, "n", 0))
+                    writer.append("execution/exit", {"status": outcome.get("status"),
+                        "reason_code": outcome.get("reason_code", ""),
+                        "exit_path": "finalizer", "phase": getattr(step_cursor, "phase", "admission"),
+                        "failure_stage": outcome.get("failure_stage", ""), "case_step": outcome.get("case_step", 0)})
                 writer.close(
                     status=str(outcome.get("status") or "fail"),
                     summary=str(outcome.get("summary") or ""),
                     step_count=len(outcome.get("steps") or []),
+                    reason_code=str(outcome.get("reason_code") or ""),
+                    failure_stage=str(outcome.get("failure_stage") or ""),
+                    case_step=int(outcome.get("case_step") or 0),
                 )
+                if ordinary_contract_enabled and getattr(writer, 'final_outcome', None):
+                    outcome.update(writer.final_outcome)
         except SessionPersistenceError:
             storage_failed = True
         if writer._store_failure:
             outcome.update(status="blocked", summary="会话终结记录未能持久化，结果未核验",
                            reason_code="session_store_unavailable")
         if execution_admitted and not project_scope_error and not storage_failed and not writer._store_failure and not isolated:
-            commit_case_facet_effects(
-                ctx,
-                case,
-                status=str(outcome.get("status") or ""),
-                outcome=outcome,
-            )
+            try:
+                commit_case_facet_effects(
+                    ctx,
+                    case,
+                    status=str(outcome.get("status") or ""),
+                    outcome=outcome,
+                )
+            except Exception as exc:
+                # Facet projection must not skip the durable-result resource exit.
+                SLog.e(TAG, f"case facet projection failed: {type(exc).__name__}")
         from mino_nexus.services.account_lease import release_ctx_lease
 
-        if not isolated:
-            release_ctx_lease(ctx)
-        dispatch.reset(tok)
+        try:
+            if ordinary_contract_enabled:
+                from mino_nexus.loop.execution_outcome import finish_resources
+                # Mark ownership before release, including a partial release failure.
+                outcome["resources_owned_by_exit"] = True
+                if writer._store_failure:
+                    outcome.update(status="unverified", reason_code="session_store_unavailable")
+                try:
+                    outcome["resources_finalized"] = finish_resources(ctx, attempt=resource_attempt,
+                        storage_failed=storage_failed or bool(writer._store_failure))
+                except Exception as exc:
+                    outcome.update(resources_finalized=False, resource_release_error=type(exc).__name__)
+                    SLog.e(TAG, f"case resource release failed: {type(exc).__name__}")
+            elif not isolated:
+                release_ctx_lease(ctx)
+        finally:
+            dispatch.reset(tok)
 
 
 def _record(
@@ -986,6 +1077,8 @@ def _ensure_desktop_window(proxy: RouterProxy, ctx, *, run_id: str, case_seq: in
 
 
 def _run_action(*, event: PlanEvent, shot, proxy: RouterProxy, ctx, scout_run_id: str, case_seq: int, seq: int) -> Any:
+    from mino_nexus.loop.resolved_case import dispatch_gate
+    dispatch_gate(ctx, event.capability_id)
     cap = event.capability_id
     from mino_nexus.catalog.skill_channel import capability_dispatch_ok
 
@@ -1032,7 +1125,7 @@ def _run_loop(
     emit,
     ctx,
     proxy: RouterProxy,
-    case: dict[str, Any],
+    case: dict[str, Any] | None,
     cid: str,
     overview: str,
     provider_id: str,
@@ -1041,6 +1134,7 @@ def _run_loop(
     steps: list[dict[str, Any]],
     t0: float,
     scout_run_id: str,
+    resolved_case=None,
     case_seq: int = 0,
     writer: SessionWriter | None = None,
     fork_state: dict[str, Any] | None = None,
@@ -1051,6 +1145,8 @@ def _run_loop(
     from mino_nexus.runtime.menu import available_menu_brief
     from mino_nexus.services.skill_store import get_skill
 
+    if resolved_case is not None:
+        case = resolved_case.case
     is_explore = str(run_type).lower() == "explore" or str(case.get("source") or "") == "explore"
     skill_id = "explore-app" if is_explore else "run-case"
     skill = get_skill(skill_id) or get_skill("run-case") or {}
@@ -1069,6 +1165,9 @@ def _run_loop(
         max_steps = 200 if is_explore else _TURN_SAFETY_CAP
         if not is_explore:
             wall_budget_sec = compute_case_wall_budget_sec(case)
+    if resolved_case is not None:
+        wall_budget_sec = resolved_case.wall_budget_sec
+        max_steps = resolved_case.max_steps
     if is_explore:
         from mino_nexus.loop.explore_cursor import ExploreCursor
 
@@ -1084,6 +1183,11 @@ def _run_loop(
             build_seq_nodes(case),
             precondition=str(case.get("precondition") or "").strip(),
         )
+    if resolved_case is not None:
+        cursor.resolved_case = resolved_case
+        cursor.execution_context = ctx
+        cursor.verified_check_points = {}
+        cursor.phase = "prep"
     setattr(ctx, "_step_cursor", cursor)
     from mino_nexus.loop.step_contract import bind_run_cursor
 
@@ -1114,12 +1218,32 @@ def _run_loop(
 
     target_pkg = str(getattr(ctx, "target_package", "") or "")
 
-    def _leave(*, status: str, summary: str, pack=None):
+    def _leave(*, status: str, summary: str, pack=None, reason_code: str = ""):
+        if resolved_case is not None:
+            from mino_nexus.loop.execution_outcome import terminal_for_reason
+            from mino_nexus.loop.resolved_case import case_pass_reason
+            if status == "pass":
+                summary = case_pass_reason(cursor)
+                reason_code = "required_assertions_consumed"
+            else:
+                status = terminal_for_reason(reason_code, status)
+            writer.append("execution/leave", {"status": status, "reason_code": reason_code,
+                "exit_path": "leave", "phase": cursor.phase,
+                "case_step": 0 if cursor.phase == "prep" else getattr(cursor.current(), "n", 0)})
         if nav is not None:
             nav.shutdown(writer=writer, status=status, summary=summary)
-        return _finish(emit, status=status, summary=summary, steps=steps, t0=t0, pack=pack or _pack)
+        result = _finish(emit, status=status, summary=summary, steps=steps, t0=t0, pack=pack or _pack)
+        if reason_code:
+            result["reason_code"] = reason_code
+        result["failure_stage"] = cursor.phase if status != "pass" else ""
+        result["case_step"] = 0 if cursor.phase == "prep" else getattr(cursor.current(), "n", 0)
+        return result
 
     def _leave_case(cursor):
+        if resolved_case is not None:
+            from mino_nexus.loop.resolved_case import case_pass_reason
+            return _leave(status="pass", summary=case_pass_reason(cursor),
+                          reason_code="required_assertions_consumed")
         result = _finish_case(emit, cursor=cursor, steps=steps, t0=t0, pack=_pack)
         if nav is not None:
             nav.shutdown(
@@ -1135,7 +1259,7 @@ def _run_loop(
         ctx.case_scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
     except ValueError as exc:
         writer.append("contract/blocked", {"reason_code":"case_scene_invalid", "reason":str(exc), "retryable":False})
-        return _leave(status="blocked", summary=f"场景合同无效，需重新编译用例：{exc}")
+        return _leave(status="blocked", summary=f"场景合同无效，需重新编译用例：{exc}", reason_code="case_scene_invalid")
     ctx.case = case
     if isinstance(cursor, StepCursor):
         setattr(cursor, "case", case)
@@ -1229,7 +1353,7 @@ def _run_loop(
                 "reason_code": error_kind, "reason": summary, "retryable": False,
             })
         _log_turn_end(writer, cap=cap, status="blocked")
-        return _leave(status="blocked", summary=summary)
+        return _leave(status="blocked", summary=summary, reason_code=error_kind)
 
     def _required_execution_blocker():
         from mino_nexus.loop.milestone_orchestrator import required_milestone_blocker
@@ -1258,11 +1382,11 @@ def _run_loop(
 
     if not ctx.has_control_channel:
         summary = "没有可用设备通道。请确认 Scout 在线并已上报这台设备。"
-        return _leave(status="fail", summary=summary)
+        return _leave(status="fail", summary=summary, reason_code="device_channel_unavailable")
 
     if not cursor.nodes:
         summary = "用例没有可执行的步骤。"
-        return _leave(status="fail", summary=summary)
+        return _leave(status="fail", summary=summary, reason_code="case_steps_missing")
 
     reset_before_case(proxy, ctx, run_id=scout_run_id, case_seq=case_seq, case=case)
     from mino_nexus.services.resource_preflight import claim_requires_clear_cache
@@ -1326,7 +1450,7 @@ def _run_loop(
             summary = opened.get("summary") or "打开被测应用失败"
             opening_status = "blocked" if opened.get("status") == "blocked" else "fail"
             emit("observe", thought=summary, step=0, status=opening_status)
-            return _leave(status=opening_status, summary=summary)
+            return _leave(status=opening_status, summary=summary, reason_code="prepare_launch_unverified")
         if str(opened.get("status") or "") in ("pass", "ok", "success"):
             setattr(ctx, "app_launch_confirmed", True)
             rec(
@@ -1401,7 +1525,7 @@ def _run_loop(
                 "contract/blocked",
                 {"code": "contract_unsupported", "reason": _focus_block[:300], "retryable": False},
             )
-        return _leave(status="blocked", summary=_focus_block)
+        return _leave(status="blocked", summary=_focus_block, reason_code="focus_contract_unsupported")
 
     def _log_preflight_recovery(out, *, source: str) -> None:
         cap_id = str(getattr(out, "rule_id", "") or "recovery")
@@ -1447,9 +1571,9 @@ def _run_loop(
         _log_preflight_recovery(recovery_out, source="preflight")
         missing = _screen_unregistered(recovery_out)
         if missing:
-            return _leave(status="blocked", summary=missing)
+            return _leave(status="blocked", summary=missing, reason_code="execution_contract_blocked")
         if recovery_out.stop_run:
-            return _leave(status="blocked", summary=recovery_out.summary())
+            return _leave(status="blocked", summary=recovery_out.summary(), reason_code="environment_precondition_unmet")
 
     fg_out = ensure_target_app_foreground(
         ctx,
@@ -1462,7 +1586,7 @@ def _run_loop(
     if fg_out:
         _log_preflight_recovery(fg_out, source="preflight_fg")
         if fg_out.stop_run:
-            return _leave(status="blocked", summary=fg_out.summary())
+            return _leave(status="blocked", summary=fg_out.summary(), reason_code="environment_precondition_unmet")
 
     from mino_nexus.loop.channel_program_recovery import channel_supports_capability
 
@@ -1529,7 +1653,7 @@ def _run_loop(
                     pass
 
     if cancel_check and cancel_check():
-        return _leave(status="cancelled", summary="任务已取消")
+        return _leave(status="cancelled", summary="任务已取消", reason_code="task_cancelled")
 
     if login_module_case:
         pre_hint = compile_login_session_hint(
@@ -1541,22 +1665,22 @@ def _run_loop(
 
     if wall_budget_sec > 0:
         setattr(ctx, "case_deadline_ts", t0 + float(wall_budget_sec))
-    fixed_deadline = float(case.get("attempt_deadline_at") or 0)
+    fixed_deadline = resolved_case.deadline_at if resolved_case else float(case.get("attempt_deadline_at") or 0)
     if fixed_deadline:
-        ctx.case_deadline_ts = min(getattr(ctx, "case_deadline_ts", fixed_deadline), fixed_deadline)
+        ctx.case_deadline_ts = min(ctx.case_deadline_ts or fixed_deadline, fixed_deadline)
     for seq in range(1, max_steps + 1):
         if cancel_check and cancel_check():
-            return _leave(status="cancelled", summary="任务已取消")
-        credit_sec = min(float(getattr(ctx, "case_budget_credit_sec", 0) or 0), _BUDGET_CREDIT_CAP_SEC)
+            return _leave(status="cancelled", summary="任务已取消", reason_code="task_cancelled")
+        credit_sec = 0.0 if resolved_case else min(float(getattr(ctx, "case_budget_credit_sec", 0) or 0), _BUDGET_CREDIT_CAP_SEC)
         if wall_budget_sec > 0:
             setattr(ctx, "case_deadline_ts", min(t0 + float(wall_budget_sec) + credit_sec, fixed_deadline or float("inf")))
         if fixed_deadline and time.time() >= fixed_deadline:
-            return _leave(status="blocked", summary="持久执行期限已到，未派发后续动作")
+            return _leave(status="blocked", summary="持久执行期限已到，未派发后续动作", reason_code="case_budget_exhausted")
         if not is_explore and wall_budget_sec > 0 and (time.time() - t0 - credit_sec) >= wall_budget_sec:
             summary = f"超过 {wall_budget_sec} 秒仍未完成" + (
                 f"（已抵扣模型空工具调用重试 {credit_sec:.0f} 秒）" if credit_sec else ""
             )
-            return _leave(status="fail", summary=summary)
+            return _leave(status="fail", summary=summary, reason_code="case_budget_exhausted")
         turn_mark["t0"] = time.time()
         turn_decision_cap = ""
         turn_decision_status = ""
@@ -1583,7 +1707,7 @@ def _run_loop(
             return _leave(
                 status="blocked",
                 summary="验证码邮件超时，环境未返回验证码，本步已停止。",
-            )
+             reason_code="otp_environment_unavailable")
 
         if cursor.done:
             return _leave_case(cursor)
@@ -1592,6 +1716,7 @@ def _run_loop(
         from mino_nexus.loop.observe.session_log import set_screenshot_hash
 
         set_screenshot_hash("")
+        ctx.viewport_wh = (0, 0)
         shot = proxy.observe("screenshot", force_fresh=True)
         err = str(getattr(shot, "error", "") or "")
         # 「EXECUTE screenshot」是等 RESULT 超时：Scout 线程可能还占着通道，立刻再截会叠成下一次超时。
@@ -1654,12 +1779,12 @@ def _run_loop(
             summary = shot.error or "Scout 截图失败"
             if "任务已取消" in summary:
                 _log_turn_end(writer, cap="", status="cancelled")
-                return _leave(status="cancelled", summary=summary)
+                return _leave(status="cancelled", summary=summary, reason_code="task_cancelled")
             if "没有打开的页面" in summary:
                 summary = "浏览器还没有打开页面。请确认应用填了 Web 地址，或在前置里先打开网址。"
             emit("observe", thought=summary, step=seq, status="fail")
             _log_turn_end(writer, cap="", status="fail")
-            return _leave(status="fail", summary=summary)
+            return _leave(status="fail", summary=summary, reason_code="observation_missing")
 
         from mino_nexus.loop.device_display_guard import platform_needs_display_guard
         from mino_nexus.loop.screen_capture import analyze_shot
@@ -1673,7 +1798,7 @@ def _run_loop(
                 missing = _screen_unregistered(screen_out)
                 if missing:
                     _log_turn_end(writer, cap="wake_screen", status="blocked")
-                    return _leave(status="blocked", summary=missing)
+                    return _leave(status="blocked", summary=missing, reason_code="execution_contract_blocked")
                 if screen_out is not None and (screen_out.applied or screen_out.recovered):
                     shot = proxy.observe("screenshot", force_fresh=True)
 
@@ -1691,6 +1816,7 @@ def _run_loop(
         elif nav is not None:
             nav.observe(
                 proxy,
+                ctx=ctx,
                 turn_id=seq,
                 slot_sink=inspect_slots,
                 session_block=inspect_slots.get("session_block") or "",
@@ -1731,7 +1857,6 @@ def _run_loop(
                 continue
 
         if isinstance(cursor, StepCursor):
-            from mino_nexus.loop.milestones import milestone_v1_enabled
             from mino_nexus.loop.visual_review import settle_pending_review
 
             from mino_nexus.loop.login_evidence_navigation import observe_navigation_step
@@ -1742,7 +1867,7 @@ def _run_loop(
             # 持久策略 dom_preferred 不代表本轮仍是 DOM；截图待回看必须交给视觉裁定。
             from mino_nexus.action_space.scheme import execution_scheme as _review_scheme
 
-            if milestone_v1_enabled() and _review_scheme(ctx) != "visual":
+            if _review_scheme(ctx) != 'visual':
                 review = settle_pending_review(
                     cursor,
                     ctx,
@@ -1752,7 +1877,7 @@ def _run_loop(
                 )
                 stop = str(getattr(cursor, "semantic_stop", "") or "").strip()
                 if review == "stop" or stop:
-                    return _leave(status="fail", summary=(stop or "回看未通过")[:500])
+                    return _leave(status="fail", summary=(stop or "回看未通过")[:500], reason_code="action_result_unverified")
 
         if login_module_case and cursor.phase in ("prep", "do"):
             inspect_slots["session_block"] = ""
@@ -1811,6 +1936,16 @@ def _run_loop(
 
         record_session_probe(ctx, str(inspect_slots.get("session_block") or ""))
 
+        if not is_explore and str(ctx.platform).lower() == "android" and cursor.phase == "do":
+            from mino_nexus.runtime.session_gate import required_session
+            from mino_nexus.services.login_evidence import can_commit
+            if required_session(scene=ctx.case_scene) == "logged_in" and not can_commit(ctx):
+                writer.append("login/completion_blocked", {
+                    "reason_code": "login_identity_unverified", "status": "env_blocked",
+                })
+                return _leave(status="env_blocked", reason_code="login_identity_unverified",
+                              summary="业务前置要求已登录，但当前租约账号身份尚未核实")
+
         cursor.login_session_hint = compile_login_session_hint(
             getattr(ctx, "case_scene", None),
             inspect_slots.get("session_block") or "",
@@ -1823,17 +1958,17 @@ def _run_loop(
                 else:
                     cursor.note_observation([])
                 if cursor.done:
-                    return _leave(status="pass", summary=cursor.summary(), pack=_pack())
+                    return _leave(status="pass", summary=cursor.summary(), pack=_pack(), reason_code="required_assertions_consumed")
             blocked = nav.preflight_block()
             if blocked:
                 reason = str(blocked.get("reason") or "租号初态与用例要求不一致")
                 if writer:
                     writer.append("turn/end", {"decision_cap": "nav_precondition", "decision_status": "blocked"})
-                return _leave(status="blocked", summary=reason)
+                return _leave(status="blocked", summary=reason, reason_code="execution_contract_blocked")
         elif is_explore:
             cursor.note_observation([])
             if cursor.done:
-                return _leave(status="pass", summary=cursor.summary(), pack=_pack())
+                return _leave(status="pass", summary=cursor.summary(), pack=_pack(), reason_code="required_assertions_consumed")
 
         if not is_explore and cursor.phase in ("prep", "do"):
             hier_nodes: list[Any] = []
@@ -1905,7 +2040,7 @@ def _run_loop(
             ):
                 fg_turn = None
             if fg_turn and fg_turn.stop_run:
-                return _leave(status="blocked", summary=fg_turn.summary())
+                return _leave(status="blocked", summary=fg_turn.summary(), reason_code="environment_precondition_unmet")
             if fg_turn and fg_turn.applied:
                 from mino_nexus.loop.launch_grace import stamp_launch_grace
 
@@ -2002,51 +2137,8 @@ def _run_loop(
                         need_int_probe = instruction_required_intents(
                             str(cur_probe.instruction or "")
                         )
-                        if "nav_tab" in need_int_probe and (hit or loc_hit) and defer_chk:
+                        if "nav_tab" in need_int_probe and defer_chk:
                             cursor.step_intents_done.add("nav_tab")
-                            cursor.refresh_do_subphase()
-                        if (
-                            cursor.phase == "do"
-                            and step_effect_mod.should_auto_enter_check(
-                                loc_hit=bool(loc_hit),
-                                probe_hit=bool(hit),
-                                expected=str(cur_probe.expected or ""),
-                                keywords=keywords,
-                                hit_streak=cursor.step_effect_hit_streak,
-                                defer_expected_to_check=defer_chk,
-                            )
-                        ):
-                            from mino_nexus.loop.step_contract import step_actions_satisfied
-                            from mino_nexus.loop.step_intent import (
-                                instruction_required_intents,
-                                step_intents_satisfied,
-                            )
-
-                            need_int = instruction_required_intents(str(cur_probe.instruction or ""))
-                            int_ok, _ = step_intents_satisfied(
-                                instruction=str(cur_probe.instruction or ""),
-                                intents_done=cursor.step_intents_done,
-                            )
-                            fam_ok, _fam_msg = step_actions_satisfied(
-                                instruction=str(cur_probe.instruction or ""),
-                                families_done=cursor.step_action_families,
-                                family_counts=cursor.step_family_counts,
-                            )
-                            work_ok = int_ok if need_int else fam_ok
-                            if need_int and "nav_tab" in need_int:
-                                if "nav_tab" not in cursor.step_intents_done:
-                                    work_ok = False
-                            if work_ok and step_effect_mod.should_auto_enter_check(
-                                loc_hit=bool(loc_hit),
-                                probe_hit=bool(hit),
-                                expected=str(cur_probe.expected or ""),
-                                keywords=keywords,
-                                hit_streak=cursor.step_effect_hit_streak,
-                                defer_expected_to_check=defer_chk,
-                            ):
-                                cursor.step_goal_met = True
-                                cursor.enter_check()
-                                cursor.correction_hint = ""
                     else:
                         cursor.reset_step_effect_streak()
                     if probe_nodes and step_effect_mod.expected_profile_shape_config(
@@ -2064,14 +2156,15 @@ def _run_loop(
         cur = cursor.current()
         if cur is None:
             if is_explore:
-                return _leave(status="pass", summary=cursor.summary(), pack=_pack())
+                return _leave(status="pass", summary=cursor.summary(), pack=_pack(), reason_code="required_assertions_consumed")
             return _leave_case(cursor)
 
         if not is_explore and cur is not None:
             prev_step_n = int(getattr(ctx, "_run_case_step_n", 0) or 0)
             if int(cur.n) != prev_step_n:
                 setattr(ctx, "_run_case_step_n", int(cur.n))
-                setattr(ctx, "login_flow_macro_done", set())
+                update_auth_state(ctx, login_flow_macro_done=set())
+                ctx.login_macro_yielded = None
                 setattr(cursor, "vision_assert_done", False)
 
         phase_cfg = _phase_cfg()
@@ -2153,10 +2246,10 @@ def _run_loop(
 
             if int(cur.n) != int(cursor.step_nav_plan_step_n or 0):
                 cursor.step_nav_plan_step_n = int(cur.n)
-                setattr(ctx, "_login_flow_step_n", int(cur.n))
-                setattr(ctx, "login_flow_macro_done", set())
+                update_auth_state(ctx, login_flow_macro_done=set())
+                ctx.login_macro_yielded = None
                 setattr(ctx, "login_flow_interrupt", False)
-                setattr(ctx, "login_flow_macro_active", False)
+                update_auth_state(ctx, login_flow_macro_active=False)
                 setattr(ctx, "system_dialog_macro_done", False)
                 setattr(ctx, "recovery_allow_back", False)
                 instr_nav = str(cur.instruction or "")
@@ -2231,12 +2324,10 @@ def _run_loop(
             _macro_hide = {"request_sms_code", "accept_legal_consent"}
             from mino_nexus.loop.milestones import (
                 exclusive_hook_caps_from_state,
-                milestone_v1_enabled,
                 read_state,
             )
 
-            if milestone_v1_enabled():
-                _macro_hide |= exclusive_hook_caps_from_state(read_state(cursor))
+            _macro_hide |= exclusive_hook_caps_from_state(read_state(cursor))
             menu = [c for c in menu if str(c.get("id") or "") not in _macro_hide]
         if writer:
             writer.append(
@@ -2267,7 +2358,7 @@ def _run_loop(
                 ctx=ctx,
                 accounts_brief=str(getattr(ctx, "accounts_brief", "") or ""),
                 hierarchy_nodes=list(getattr(ctx, "nav_hierarchy_nodes", None) or []),
-                has_request_sms_code=any(str(c.get("id") or "") == "request_sms_code" for c in menu),
+                has_tap_element=any(str(c.get("id") or "") == "tap_element" for c in menu),
                 ui_channel=ui_channel_label(ui_channel_from_ctx(ctx)),
             )
             if sms_line:
@@ -2300,7 +2391,6 @@ def _run_loop(
             from mino_nexus.loop.milestones import (
                 ensure_milestones_before_decide,
                 login_flow_under_milestones,
-                milestone_v1_enabled,
             )
 
             ensure_milestones_before_decide(
@@ -2428,7 +2518,7 @@ def _run_loop(
                             chain = []
                     if chain:
                         if cancel_check and cancel_check():
-                            return _leave(status="cancelled", summary="任务已取消")
+                            return _leave(status="cancelled", summary="任务已取消", reason_code="task_cancelled")
                         lc, ls = _consume_login_chain(
                             chain,
                             seq=seq,
@@ -2459,7 +2549,7 @@ def _run_loop(
                         else:
                             fail_msg = _login_chain_guard(chain, cursor=cursor)
                             if fail_msg:
-                                return _leave(status="fail", summary=fail_msg)
+                                return _leave(status="fail", summary=fail_msg, reason_code="login_program_incomplete")
                         if any(
                             str(x.get("step_id") or "") == "send_code"
                             and x.get("ok")
@@ -2509,10 +2599,9 @@ def _run_loop(
             macro = None
             from mino_nexus.loop.recovery_permission import permission_choice_dialog_present
 
-            if milestone_v1_enabled():
-                from mino_nexus.loop.flow_block_runner_v2 import try_review_login_submission
+            from mino_nexus.loop.flow_block_executor import try_review_login_submission
 
-                macro = try_review_login_submission(proxy, ctx, cursor, shot=shot, writer=writer)
+            macro = try_review_login_submission(proxy, ctx, cursor, shot=shot, writer=writer)
             if not macro and permission_choice_dialog_present(nodes):
                 macro = try_run_system_dialog_macro(
                     proxy,
@@ -2520,8 +2609,8 @@ def _run_loop(
                     turn_seq=seq,
                     target_package=str(getattr(ctx, "target_package", "") or target_pkg),
                 )
-            if not macro and milestone_v1_enabled():
-                from mino_nexus.loop.flow_block_runner_v2 import try_dispatch_block_hook
+            if not macro:
+                from mino_nexus.loop.flow_block_executor import try_dispatch_block_hook
                 from mino_nexus.loop.milestones import first_pending_hook_milestone, read_state
 
                 if first_pending_hook_milestone(read_state(cursor)):
@@ -2645,10 +2734,14 @@ def _run_loop(
                         summary=fb_sum,
                         thumb=thumb,
                     )
-                    return _leave(status="fail", summary=fb_sum)
+                    return _leave(status="fail", summary=fb_sum, reason_code="program_vision_fallback_exhausted")
             if macro and macro.get("thumb"):
                 thumb = str(macro.get("thumb") or thumb)
             if macro and macro.get("case_fail"):
+                if macro.get("status") in {"product_fail", "unverified", "env_blocked"}:
+                    reason = str(macro.get("error_kind") or "login_transition_observation_error")
+                    writer.append("login/completion_blocked", {"reason_code": reason, "status": macro["status"]})
+                    return _leave(status=macro["status"], summary=str(macro.get("summary") or reason), reason_code=reason)
                 fail_summary = str(macro.get("summary") or "登录未成功")
                 if macro.get("status") == "blocked":
                     return _leave_execution_blocked(
@@ -2673,7 +2766,7 @@ def _run_loop(
                     summary=fail_summary[:400],
                     thumb=thumb,
                 )
-                return _leave(status="fail", summary=fail_summary)
+                return _leave(status="fail", summary=fail_summary, reason_code=str(macro.get("error_kind") or "program_hook_failed"))
             if macro and macro.get("defer"):
                 wait_summary = str(macro.get("summary") or "下一回合再看")
                 rec(
@@ -2714,23 +2807,22 @@ def _run_loop(
                     if macro and macro.get("ok"):
                         if cap_auto != "input_text" or otp_fill_device_complete(cursor, hist_lines):
                             cursor.record_step_op(cap_auto)
-                        if milestone_v1_enabled():
-                            from mino_nexus.loop.channel_observation import bind_fresh_observation
-                            from mino_nexus.loop.milestones import note_tool_pass_milestone
-                            from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+                        from mino_nexus.loop.channel_observation import bind_fresh_observation
+                        from mino_nexus.loop.milestones import note_tool_pass_milestone
+                        from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
 
-                            if cap_auto == "input_text" and ui_channel_from_ctx(ctx) == UiChannel.WEB:
-                                bind_fresh_observation(ctx, proxy)
-                            note_tool_pass_milestone(
-                                cursor,
-                                capability_id=cap_auto,
-                                milestone_id=str(
-                                    macro.get("milestone_id") or macro.get("step_id") or ""
-                                ),
-                                writer=writer,
-                                tool_summary=sum_auto,
-                                ctx=ctx,
-                            )
+                        if cap_auto == "input_text" and ui_channel_from_ctx(ctx) == UiChannel.WEB:
+                            bind_fresh_observation(ctx, proxy)
+                        note_tool_pass_milestone(
+                            cursor,
+                            capability_id=cap_auto,
+                            milestone_id=str(
+                                macro.get("milestone_id") or macro.get("step_id") or ""
+                            ),
+                            writer=writer,
+                            tool_summary=sum_auto,
+                            ctx=ctx,
+                        )
                         if login_block:
                             from mino_nexus.loop.flow_block_runner import maybe_emit_login_flow_complete
 
@@ -2816,7 +2908,7 @@ def _run_loop(
                             intents_done=set(getattr(cursor, "step_intents_done", None) or set()),
                         )
                         if fuse_reason:
-                            return _leave(status="fail", summary=str(fuse_reason)[:400])
+                            return _leave(status="fail", summary=str(fuse_reason)[:400], reason_code="action_fuse_exhausted")
                     if _email_hook_fail and "焦点未确认" in sum_auto:
                         setattr(ctx, "web_email_tap_milli", None)
                     if _email_hook_fail:
@@ -2856,17 +2948,14 @@ def _run_loop(
             apply_step_outcome,
             ensure_milestones_before_decide,
             evaluate_milestones,
-            milestone_v1_enabled,
         )
 
-        check_programmatic_pass = False
         check_needs_visual = False
-        verdict = None
         if in_check and cur and str(cur.expected or "").strip() and not cursor.step_checked:
             # 校验只看图。层级节点用来在前置/操作里点控件，不拿预期原文做终裁。
             check_needs_visual = True
         use_milestone_check = bool(
-            milestone_v1_enabled()
+            True
             and in_check
             and cur
             and str(cur.expected or "").strip()
@@ -2959,14 +3048,8 @@ def _run_loop(
             ctx=ctx,
         )
         if cancel_check and cancel_check():
-            return _leave(status="cancelled", summary="任务已取消")
-        if check_programmatic_pass:
-            decision = AgentDecision(
-                status="continue",
-                thought=f"程序校验通过：{verdict.summary}",
-                action=AgentAction(capability_id="signal_done", params={}),
-            )
-        elif scripted_check or (
+            return _leave(status="cancelled", summary="任务已取消", reason_code="task_cancelled")
+        if scripted_check or (
             use_milestone_check
             and check_needs_visual
             and not cursor.step_checked
@@ -2986,7 +3069,7 @@ def _run_loop(
                 assert_params["knowledge_context"] = merged_ctx
             from mino_nexus.loop.vision_assert import (
                 run_vision_assert_if_enabled,
-                vision_assert_v1_enabled,
+                assertion_phase_active,
             )
 
             vision_assert_handled = False
@@ -2998,13 +3081,20 @@ def _run_loop(
             _cps = _cps_from_ms(cursor)
             dom_assert = checkpoints_need_structured(_cps) and _assert_scheme(ctx) == "dom"
             if dom_assert:
-                va = run_dom_structured_check(cursor, ctx, _cps, writer=writer, provider_id=str(provider_id or ""))
+                from mino_nexus.loop.check_scope import verify_dom_scope
+                scope_result = verify_dom_scope(cursor, ctx, shot, provider_id=str(provider_id or "")) if resolved_case is not None else None
+                if scope_result is not None and scope_result.error_kind:
+                    va = scope_result
+                else:
+                    va = run_dom_structured_check(cursor, ctx, _cps, writer=writer, provider_id=str(provider_id or ""))
+                    if scope_result is not None:
+                        va.observation_scope = scope_result.observation_scope
                 if va.error_kind == "dom_check_unavailable":
                     from mino_nexus.action_space.scheme import use_visual_fallback
                     use_visual_fallback(ctx, reason="assertion_not_observable_in_structure", writer=writer)
                     dom_assert = False
                     va = None
-            if vision_assert_v1_enabled() or dom_assert:
+            if assertion_phase_active() or dom_assert:
                 from mino_nexus.loop.channel_observation import capture_decision_frame
 
                 seen_frames: set[str] = set()
@@ -3060,7 +3150,13 @@ def _run_loop(
                                 },
                             )
                 if va is not None:
-                    if va.passed and milestone_v1_enabled():
+                    if resolved_case is not None:
+                        from mino_nexus.loop.resolved_case import record_check
+                        writer.append("check/scope", {"case_step": cur.n,
+                            "observation_scope": getattr(va, "observation_scope", {}),
+                            "reason_code": va.error_kind, "business_verdict": "unknown" if va.error_kind else "scoped"})
+                        record_check(cursor, _cps, va, writer=writer)
+                    if va.passed:
                         from mino_nexus.loop.milestones import apply_assert_checkpoint_results
 
                         if not apply_assert_checkpoint_results(cursor, va, writer=writer):
@@ -3084,7 +3180,7 @@ def _run_loop(
                                 "reason": reason[:400], "business_verdict": "unknown",
                             })
                         _log_turn_end(writer, cap="assert_visual", status="blocked")
-                        return _leave(status="blocked", summary=blocked_summary)
+                        return _leave(status="blocked", summary=blocked_summary, reason_code=va.error_kind or "check_evidence_incomplete")
                     if va.passed:
                         pass_summary = (
                             f"{via}通过：{va.ai_reasoning or cur.expected}"
@@ -3108,8 +3204,7 @@ def _run_loop(
                             thumb=thumb,
                         )
                         cursor.mark_checked()
-                        if milestone_v1_enabled():
-                            evaluate_milestones(cursor, ctx)
+                        evaluate_milestones(cursor, ctx)
                         from mino_nexus.loop.step_phase_fsm import try_transition_after_tool_pass
 
                         fsm_tr = try_transition_after_tool_pass(
@@ -3146,7 +3241,7 @@ def _run_loop(
                             summary=fail_summary[:400],
                             thumb=thumb,
                         )
-                        return _leave(status="fail", summary=fail_summary)
+                        return _leave(status="fail", summary=fail_summary, reason_code="required_assertion_failed")
             if not vision_assert_handled:
                 decision = AgentDecision(
                     status="continue",
@@ -3180,7 +3275,7 @@ def _run_loop(
             _cs, _ph = step_scope_key(cursor)
 
             def _decide(*, send_image: bool) -> AgentDecision:
-                from mino_nexus.loop.vision_exec import run_vision_exec_turn, vision_exec_v1_enabled
+                from mino_nexus.loop.vision_exec import run_vision_exec_turn, execution_phase_active
 
                 img_b64 = shot.image_base64 if send_image and shot.has_image() else ""
                 sess_blk = (
@@ -3188,7 +3283,7 @@ def _run_loop(
                     if cursor.phase == "prep"
                     else llm_session_block(ctx, inspect_slots.get("session_block") or "")
                 )
-                if vision_exec_v1_enabled():
+                if execution_phase_active():
                     return run_vision_exec_turn(
                         cursor=cursor,
                         ctx=ctx,
@@ -3234,15 +3329,15 @@ def _run_loop(
                     apply_allow_foreign_flag(ctx, dec)
                 return dec
 
-            from mino_nexus.loop.vision_flags import vision_plan_v1_enabled as _vision_plan_on
-            from mino_nexus.loop.vision_exec import vision_exec_v1_enabled
+            from mino_nexus.loop.vision_flags import planning_phase_active as _vision_plan_on
+            from mino_nexus.loop.vision_exec import execution_phase_active
 
             decision: AgentDecision | None = None
             from mino_nexus.action_space.scheme import execution_scheme as action_scheme
 
             if cursor.phase == "prep" and isinstance(cursor, StepCursor):
                 from mino_nexus.catalog.skill_channel import is_program_caller
-                from mino_nexus.loop.flow_block_runner_v2 import try_dispatch_block_hook
+                from mino_nexus.loop.flow_block_executor import try_dispatch_block_hook
                 from mino_nexus.loop.milestones import first_pending_hook_milestone, read_state
 
                 pending_hook = first_pending_hook_milestone(read_state(cursor))
@@ -3297,12 +3392,16 @@ def _run_loop(
                                 summary=fb_sum,
                                 thumb=thumb,
                             )
-                            return _leave(status="fail", summary=fb_sum)
+                            return _leave(status="fail", summary=fb_sum, reason_code="program_vision_fallback_exhausted")
                         prep_macro = None
                     if prep_macro:
                         prep_cap = str(prep_macro.get("capability_id") or hook_cap)
                         prep_sum = str(prep_macro.get("summary") or "")
                         if prep_macro.get("case_fail"):
+                            if prep_macro.get("status") in {"product_fail", "unverified", "env_blocked"}:
+                                reason = str(prep_macro.get("error_kind") or "login_transition_observation_error")
+                                writer.append("login/completion_blocked", {"reason_code": reason, "status": prep_macro["status"]})
+                                return _leave(status=prep_macro["status"], summary=str(prep_macro.get("summary") or reason), reason_code=reason)
                             if prep_macro.get("status") == "blocked":
                                 return _leave_execution_blocked(
                                     seq, prep_cap, prep_sum,
@@ -3326,7 +3425,7 @@ def _run_loop(
                                 summary=prep_sum[:400],
                                 thumb=str(prep_macro.get("thumb") or thumb),
                             )
-                            return _leave(status="fail", summary=prep_sum or "登录未成功")
+                            return _leave(status="fail", summary=prep_sum or "登录未成功", reason_code=str(prep_macro.get("error_kind") or "program_hook_failed"))
                         if prep_macro.get("defer"):
                             rec(
                                 seq,
@@ -3395,7 +3494,7 @@ def _run_loop(
 
                 plat = str(getattr(ctx, "platform", "") or "").lower()
                 if plat and plat != "web":
-                    return _leave(status="fail", summary="刷新页面只在 Web 执行")
+                    return _leave(status="fail", summary="刷新页面只在 Web 执行", reason_code="capability_platform_mismatch")
                 reloaded = _dispatch_device(
                     proxy,
                     ctx=ctx,
@@ -3415,11 +3514,10 @@ def _run_loop(
                     thumb=thumb,
                 )
                 if not ok:
-                    return _leave(status="fail", summary=summary or "刷新页面失败")
-                if milestone_v1_enabled():
-                    from mino_nexus.loop.milestones import note_tool_pass_milestone
+                    return _leave(status="fail", summary=summary or "刷新页面失败", reason_code="page_refresh_failed")
+                from mino_nexus.loop.milestones import note_tool_pass_milestone
 
-                    note_tool_pass_milestone(cursor, capability_id="reload_page", writer=writer)
+                note_tool_pass_milestone(cursor, capability_id="reload_page", writer=writer)
                 _log_turn_end(writer, cap="reload_page", status="pass")
                 continue
 
@@ -3440,7 +3538,7 @@ def _run_loop(
                     if applicable or cap == "tap_element" or focus.get("kind") == "visual_tap":
                         from mino_nexus.action_space.scheme import use_visual_fallback
                         use_visual_fallback(ctx, reason="target_not_unique_in_structure", writer=writer)
-            if decision is None and (_vision_plan_on() or vision_exec_v1_enabled()):
+            if decision is None and (_vision_plan_on() or execution_phase_active()):
                 from mino_nexus.loop.milestone_orchestrator import run_vision_orchestrated_turn
                 from mino_nexus.loop.program_device_fallback import merge_program_vision_fallback_slots
 
@@ -3473,18 +3571,19 @@ def _run_loop(
                     decision = orch.decision
                     if "visual_observation_unavailable" in decision.parse_warnings:
                         _log_turn_end(writer, cap="", status="blocked")
-                        return _leave(status="blocked", summary=decision.thought)
+                        return _leave(status="unverified", summary=decision.thought,
+                                      reason_code=str(getattr(decision, "error_kind", "") or "observation_missing"))
                     if orch.plan_only and not (decision.action and decision.action.capability_id):
                         if str(decision.status or "") in ("fail", "give_up"):
                             summary = decision.thought or "里程碑失败，已停止空转"
-                            return _leave(status="fail", summary=summary[:500])
+                            return _leave(status="fail", summary=summary[:500], reason_code="milestone_plan_incomplete")
                         streak = int(getattr(cursor, "plan_only_streak", 0) or 0) + 1
                         cursor.plan_only_streak = streak
                         if streak >= 2:
                             return _leave(
                                 status="fail",
                                 summary="连续两回合只有规划、没有可下发的动作，已停止。",
-                            )
+                             reason_code="model_action_missing")
                         thought = decision.thought or "规划轮次，等待下一里程碑"
                         emit("think", thought=thought, step=seq, status="continue")
                         _log_turn_end(writer, cap="", status="continue")
@@ -3553,22 +3652,18 @@ def _run_loop(
                 # 此轮只有观察报告。下一轮执行恢复焦点，不把报告或清障当业务 pass。
                 _log_turn_end(writer, cap=REPORT_SCREEN_OBSTACLE, status="pending")
                 continue
-            from mino_nexus.loop.vision_exec import vision_exec_v1_enabled
+            from mino_nexus.loop.vision_exec import execution_phase_active
 
-            if milestone_v1_enabled():
-                apply_decision_milestones(
-                    cursor,
-                    decision,
-                    writer=writer,
-                    ctx=ctx,
-                    app_id=str(getattr(ctx, "app_id", "") or ""),
-                )
-                apply_step_outcome(cursor, decision, ctx, writer=writer)
+            apply_decision_milestones(
+                cursor,
+                decision,
+                writer=writer,
+                ctx=ctx,
+                app_id=str(getattr(ctx, "app_id", "") or ""),
+            )
+            apply_step_outcome(cursor, decision, ctx, writer=writer)
             if (
-                isinstance(cursor, StepCursor)
-                and cursor.phase == "do"
-                and milestone_v1_enabled()
-                and cursor.try_auto_finish_do_when_milestones_met(ctx, writer=writer)
+                isinstance(cursor, StepCursor) and cursor.phase == 'do' and cursor.try_auto_finish_do_when_milestones_met(ctx, writer=writer)
             ):
                 rec(
                     seq,
@@ -3645,35 +3740,40 @@ def _run_loop(
                 decision.status == "give_up"
                 and not is_explore
                 and isinstance(cursor, StepCursor)
+                and cursor.phase == "do"
             ):
                 cur_give = cursor.current()
-                if (
-                    cursor.phase == "do"
-                    and cur_give
-                    and str(cur_give.expected or "").strip()
-                    and cursor.step_ops > 0
-                    and cursor.step_start_fp
-                    and screen_fp != cursor.step_start_fp
-                    and (
-                        bool(cursor.step_goal_met)
-                        or str(getattr(cursor, "do_subphase", "") or "") == "achievement"
-                    )
+                if cur_give and cursor.try_auto_finish_do_when_milestones_met(
+                    ctx, writer=writer
                 ):
-                    cursor.enter_check()
-                    cursor.correction_hint = (
-                        "【纠偏】你在本步已执行过操作且界面已发生变化。"
-                        "先按本步预期校验一次（assert_visual），再决定是否放弃。"
+                    rec(
+                        seq,
+                        capability_id="signal_done",
+                        status="skipped",
+                        summary="子里程碑已齐，放弃无效，自动进入校验",
+                        thought=thought,
+                        thumb=thumb,
                     )
-                    cursor.reset_step_effect_streak()
+                    emit(
+                        "result",
+                        thought=thought,
+                        step=seq,
+                        capability_id="signal_done",
+                        status="skipped",
+                        summary="子里程碑已齐，放弃无效，自动进入校验",
+                        thumb=thumb,
+                    )
                     if writer:
                         writer.append(
                             "decision/give_up_rejected",
                             {
                                 "thought": thought,
                                 "case_step": cur_give.n,
-                                "phase": cursor.phase,
+                                "phase": "do",
+                                "reason": "milestones_complete",
                             },
                         )
+                    _log_turn_end(writer, cap="signal_done", status="skipped")
                     continue
             if decision.status == "skip":
                 st = "skip"
@@ -3681,7 +3781,7 @@ def _run_loop(
                 if writer:
                     writer.append("decision/skip", {"thought": thought, "phase": cursor.phase})
                     writer.append("turn/end", {"decision_cap": "signal_skip", "decision_status": st})
-                return _leave(status=st, summary=summary)
+                return _leave(status=st, summary=summary, reason_code="model_gave_up")
             st = "blocked" if decision.status == "ask_human" else "fail"
             summary = thought or ("需要人介入" if st == "blocked" else "模型放弃")
             if writer:
@@ -3696,7 +3796,10 @@ def _run_loop(
                     },
                 )
                 writer.append("turn/end", {"decision_cap": "", "decision_status": st})
-            return _leave(status=st, summary=summary)
+            reason = (str(getattr(decision, "error_kind", "") or "observation_missing")
+                      if "visual_observation_unavailable" in decision.parse_warnings
+                      else "model_human_required" if decision.status == "ask_human" else "model_gave_up")
+            return _leave(status=st, summary=summary, reason_code=reason)
 
         action = decision.action
         cap_id = str(action.capability_id) if action and action.capability_id else ""
@@ -3720,7 +3823,7 @@ def _run_loop(
         from mino_nexus.loop.device_execute_params import prepare_device_execute_params
 
         params = prepare_device_execute_params(cap_id, params, ctx)
-        if isinstance(cursor, StepCursor) and milestone_v1_enabled():
+        if isinstance(cursor, StepCursor):
             from mino_nexus.loop.visual_review import apply_same_turn_prior
 
             prior_kind = apply_same_turn_prior(
@@ -3752,9 +3855,9 @@ def _run_loop(
                     execution_status="not_dispatched",
                 )
                 _log_turn_end(writer, cap="", status="blocked")
-                return _leave(status="blocked", summary=summary)
+                return _leave(status="blocked", summary=summary, reason_code="execution_contract_blocked")
             if prior_kind == "stop" or (prior_kind == "redo" and stop_prior):
-                return _leave(status="fail", summary=(stop_prior or "回看未通过")[:500])
+                return _leave(status="fail", summary=(stop_prior or "回看未通过")[:500], reason_code="action_result_unverified")
             if prior_kind == "reask":
                 summary = (
                     str(getattr(cursor, "correction_hint", "") or "").strip()
@@ -3793,7 +3896,7 @@ def _run_loop(
                 next_focus = in_progress_milestone(read_state(cursor))
                 next_hook = program_hook_to_dispatch(next_focus)
                 if next_hook in ("get_otp", "confirm_login_state") and not (cancel_check and cancel_check()):
-                    from mino_nexus.loop.flow_block_runner_v2 import try_dispatch_block_hook
+                    from mino_nexus.loop.flow_block_executor import try_dispatch_block_hook
 
                     hook = try_dispatch_block_hook(
                         proxy, ctx, cursor, run_id=scout_run_id, turn_seq=seq,
@@ -3804,6 +3907,10 @@ def _run_loop(
                         hook_cap = str(hook.get("capability_id") or next_hook)
                         hook_summary = str(hook.get("summary") or "")
                         if hook.get("case_fail"):
+                            if hook.get("status") in {"product_fail", "unverified", "env_blocked"}:
+                                reason = str(hook.get("error_kind") or "login_transition_observation_error")
+                                writer.append("login/completion_blocked", {"reason_code": reason, "status": hook["status"]})
+                                return _leave(status=hook["status"], summary=str(hook.get("summary") or reason), reason_code=reason)
                             if hook.get("status") == "blocked":
                                 return _leave_execution_blocked(
                                     seq, hook_cap, hook_summary,
@@ -3813,7 +3920,7 @@ def _run_loop(
                             emit("result", step=seq, capability_id=hook_cap, status="fail",
                                  result_status="fail", summary=hook_summary, thought=hook_summary)
                             _log_turn_end(writer, cap=hook_cap, status="fail")
-                            return _leave(status="fail", summary=hook_summary)
+                            return _leave(status="fail", summary=hook_summary, reason_code=str(hook.get("error_kind") or "program_hook_failed"))
                         hook_status = "wait" if hook.get("defer") else str(hook.get("status") or "fail")
                         rec(seq, capability_id=hook_cap, status=hook_status, summary=hook_summary, thought=hook_summary)
                         emit("result", step=seq, capability_id=hook_cap, status=hook_status,
@@ -3840,7 +3947,7 @@ def _run_loop(
 
             input_guard = guard_input_focus_action(cursor, ctx, cap_id, writer=writer)
             if input_guard == "stop":
-                return _leave(status="blocked", summary=str(cursor.semantic_stop)[:500])
+                return _leave(status="blocked", summary=str(cursor.semantic_stop)[:500], reason_code="execution_contract_blocked")
             if input_guard == "reask":
                 emit(
                     "think", thought=str(cursor.correction_hint), step=seq, status="pending",
@@ -3881,11 +3988,11 @@ def _run_loop(
                 int(getattr(shot, "width", 0) or 0),
                 int(getattr(shot, "height", 0) or 0),
             )
-        from mino_nexus.loop.step_phase_fsm import step_phase_fsm_v1_enabled
+        from mino_nexus.loop.step_phase_fsm import milestone_phase_active
         from mino_nexus.loop.fuse.thought_done import should_coerce_mutate_to_signal_done
 
         if (
-            not step_phase_fsm_v1_enabled()
+            not milestone_phase_active()
             and should_coerce_mutate_to_signal_done(
                 thought=thought,
                 cap_id=cap_id,
@@ -4010,11 +4117,11 @@ def _run_loop(
         if decision.status == "done" and not pending_mutate:
             from mino_nexus.loop.step_phase_fsm import (
                 handle_model_signal_done_blocked,
-                step_phase_fsm_v1_enabled,
+                milestone_phase_active,
             )
 
             if (
-                step_phase_fsm_v1_enabled()
+                milestone_phase_active()
                 and not is_explore
                 and isinstance(cursor, StepCursor)
             ):
@@ -4111,7 +4218,7 @@ def _run_loop(
                     thumb=thumb,
                 )
                 _log_turn_end(writer, cap="signal_done", status="pass")
-                return _leave(status="pass", summary=cursor.summary(), pack=_pack())
+                return _leave(status="pass", summary=cursor.summary(), pack=_pack(), reason_code="required_assertions_consumed")
             if in_prep:
                 from mino_nexus.services.resource_preflight import prep_resource_gate_issues
 
@@ -4132,7 +4239,7 @@ def _run_loop(
                                     f"{gate_msg} "
                                     "测试资源 Claim 多次未满足，任务已停止。"
                                 ),
-                            )
+                             reason_code="environment_precondition_unmet")
                     rec(
                         seq,
                         capability_id="resource_claim_gate",
@@ -4165,12 +4272,11 @@ def _run_loop(
             if in_check:
                 if not cursor.step_checked:
                     hint = "请先完成校验里程碑后再 signal_done"
-                    if milestone_v1_enabled():
-                        mv = evaluate_milestones(cursor, ctx)
-                        if mv.phase_complete:
-                            cursor.mark_checked()
-                        else:
-                            hint = mv.summary or hint
+                    mv = evaluate_milestones(cursor, ctx)
+                    if mv.phase_complete:
+                        cursor.mark_checked()
+                    else:
+                        hint = mv.summary or hint
                     if not cursor.step_checked:
                         rec(
                             seq,
@@ -4257,7 +4363,7 @@ def _run_loop(
                                     f"步骤 {cur_n} 连续 {streak} 次无法收工："
                                     f"{str(do_work_reason or '')[:160]}"
                                 ),
-                            )
+                             reason_code="required_operation_unverified")
                 if do_work_reason and isinstance(cursor, StepCursor):
                     from mino_nexus.loop.step_intent import format_intent_progress
 
@@ -4348,7 +4454,7 @@ def _run_loop(
 
         if not cap_id:
             summary = thought or "模型没有给出下一步动作"
-            return _leave(status="fail", summary=summary)
+            return _leave(status="fail", summary=summary, reason_code="model_action_missing")
 
         # GuardGate 与 ProgressGate 并行独立计数（§8.2），所以放在 phase guards 之前单独判。
         if nav is not None:
@@ -4367,7 +4473,7 @@ def _run_loop(
                         },
                     )
                     writer.append("turn/end", {"decision_cap": "nav_guard_stop", "decision_status": st})
-                return _leave(status=st, summary=verdict.reason)
+                return _leave(status=st, summary=verdict.reason, reason_code="navigation_guard_blocked")
             if verdict.action in ("steer", "block"):
                 nav_cap = f"nav_guard_{verdict.action}"
                 note = nav.steer_line(verdict) if verdict.action == "steer" else verdict.reason
@@ -4401,7 +4507,7 @@ def _run_loop(
                     if nav_stop:
                         if writer:
                             writer.append("progress/stop", {"reason": nav_stop, "guard_id": verdict.guard_id})
-                        return _leave(status="blocked", summary=nav_stop)
+                        return _leave(status="blocked", summary=nav_stop, reason_code="navigation_guard_blocked")
                 _log_turn_end(writer, cap=nav_cap, status="skipped", guard_id=verdict.guard_id)
                 continue
 
@@ -4514,7 +4620,7 @@ def _run_loop(
                 _bid_fb = str((_st_fb.get("block_ref") or {}).get("block_id") or "")
                 if not _bid_fb:
                     _bid_fb = login_block_id_for_ctx(ctx)
-                from mino_nexus.loop.flow_block_runner_v2 import _dispatch_otp_fill
+                from mino_nexus.loop.flow_block_executor import _dispatch_otp_fill
                 from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
 
                 _fill_otp = None
@@ -4551,9 +4657,9 @@ def _run_loop(
                 if _fill_otp and is_vision_fallback(_fill_otp):
                     activate_program_vision_fallback(cursor, writer, _fill_otp)
                     merge_program_vision_fallback_slots(cursor, inspect_slots)
-                    from mino_nexus.loop.vision_exec import run_vision_exec_turn, vision_exec_v1_enabled
+                    from mino_nexus.loop.vision_exec import run_vision_exec_turn, execution_phase_active
 
-                    if vision_exec_v1_enabled():
+                    if execution_phase_active():
                         guard_vision_remediate = run_vision_exec_turn(
                             cursor=cursor,
                             ctx=ctx,
@@ -4598,9 +4704,9 @@ def _run_loop(
                 from mino_nexus.loop.login_verification import is_web_email_login
 
                 extra = (
-                    "请先点 Send 或 request_sms_code 向邮箱发验证码，再 get_otp。"
+                    "请先用 tap_element 点击 Send 向邮箱发验证码，确认发码成功后再 get_otp。"
                     if is_web_email_login(ctx)
-                    else "请先 tap Send/发送验证码 或 request_sms_code，确认发码成功后再 get_otp。"
+                    else "请先用 tap_element 点击 Send/发送验证码，确认发码成功后再 get_otp。"
                 )
                 cursor.correction_hint = f"{skip_reason} {extra}"
                 cursor.sms_otp_guard_streak = (
@@ -4658,7 +4764,7 @@ def _run_loop(
                     hist_em = list(history[-24:])
                     chain_em: list[dict[str, Any]] = []
                     if login_flow_under_milestones(cursor):
-                        from mino_nexus.loop.flow_block_runner_v2 import try_dispatch_block_hook
+                        from mino_nexus.loop.flow_block_executor import try_dispatch_block_hook
 
                         hook = try_dispatch_block_hook(
                             proxy,
@@ -4687,7 +4793,7 @@ def _run_loop(
                     if chain_em:
                         fail_msg = _login_chain_guard(chain_em, cursor=cursor)
                         if fail_msg:
-                            return _leave(status="fail", summary=fail_msg)
+                            return _leave(status="fail", summary=fail_msg, reason_code="login_program_incomplete")
                         _consume_login_chain(
                             chain_em,
                             seq=seq,
@@ -4812,7 +4918,7 @@ def _run_loop(
                             "guard_id": str(guard_verdict.guard_id or skip_cap),
                             "cause": str(guard_verdict.reason or skip_reason)[:300],
                         })
-                    return _leave(status="fail", summary=guard_stop)
+                    return _leave(status="fail", summary=guard_stop, reason_code="action_guard_exhausted")
             if writer:
                 if stop_msg:
                     writer.append(
@@ -4827,7 +4933,7 @@ def _run_loop(
 
                 if try_push_on_fuse_block(cursor, ctx, writer=writer, message=str(stop_msg)[:240]):
                     continue
-                return _leave(status="fail", summary=stop_msg)
+                return _leave(status="fail", summary=stop_msg, reason_code="target_resolution_failed")
             if guard_vision_remediate is None:
                 continue
 
@@ -4907,7 +5013,7 @@ def _run_loop(
                         "code": code, "failure_stage": "credential_binding",
                         "execution_started": False, "reason": summary,
                     })
-                return _leave(status="blocked", summary=summary)
+                return _leave(status="blocked", summary=summary, reason_code="execution_contract_blocked")
             if cap_id == "input_text" and params.pop("_focus_unresolved", None):
                 from mino_nexus.loop.visual_review import recover_input_focus
 
@@ -4916,14 +5022,14 @@ def _run_loop(
                     _log_turn_end(writer, cap="", status="pending")
                     continue
                 if recovery == "stop":
-                    return _leave(status="blocked", summary=str(cursor.semantic_stop)[:500])
+                    return _leave(status="blocked", summary=str(cursor.semantic_stop)[:500], reason_code="execution_contract_blocked")
                 summary = "当前焦点输入缺少有效的聚焦动作引用，不能静默写入"
                 if writer:
                     writer.append(
                         "contract/blocked",
                         {"code": "parameter_contract_mismatch", "reason": summary, "retryable": False},
                     )
-                return _leave(status="blocked", summary=summary)
+                return _leave(status="blocked", summary=summary, reason_code="execution_contract_blocked")
             from mino_nexus.action_space.assemble import visual_point_missing
             from mino_nexus.action_space.scheme import execution_scheme as _run_scheme
 
@@ -4941,7 +5047,7 @@ def _run_loop(
                         },
                     )
                 if stop_msg:
-                    return _leave(status="fail", summary=stop_msg[:500])
+                    return _leave(status="fail", summary=stop_msg[:500], reason_code="target_resolution_failed")
                 emit("think", thought=hint, step=seq, status="continue")
                 continue
             if gate is not None:
@@ -4950,7 +5056,7 @@ def _run_loop(
         if locator_block:
             if writer:
                 writer.append("control/locator", {"status": "pending", "summary": locator_block, "capability_id": cap_id})
-            return _leave(status="fail", summary=locator_block[:500])
+            return _leave(status="fail", summary=locator_block[:500], reason_code="target_resolution_failed")
         if cap_id:
             from mino_nexus.loop.business_contract import business_contract_block
 
@@ -4965,7 +5071,7 @@ def _run_loop(
                 if writer:
                     writer.append("contract/blocked", business_block)
                 missing = ", ".join(business_block["missing_milestones"])
-                return _leave(status="blocked", summary=f"业务规则前置未满足：{missing}（来源 {business_block['source_id']}）")
+                return _leave(status="blocked", summary=f"业务规则前置未满足：{missing}（来源 {business_block['source_id']}）", reason_code="environment_precondition_unmet")
         emit(
             "step",
             thought=thought, step=seq, status=decision.status, thumb=thumb,
@@ -5143,7 +5249,6 @@ def _run_loop(
                 if "已在目标屏" in corr or "signal_done" in corr:
                     if isinstance(cursor, StepCursor):
                         cursor.step_intents_done.add("nav_tab")
-                        cursor.refresh_do_subphase()
 
         if status_val == "pass" and cap_id == "tap_element" and isinstance(params, dict):
             from mino_nexus.loop.device_execute_params import email_tap_lands_on_otp
@@ -5241,7 +5346,7 @@ def _run_loop(
                         "executor_used": executor_used,
                     },
                 )
-            return _leave(status="blocked", summary=error or summary or "被阻塞")
+            return _leave(status="blocked", summary=error or summary or "被阻塞", reason_code="execution_contract_blocked")
         if hasattr(result, "status") and result.status in (EventStatus.FAIL, EventStatus.DECLINED):
             from mino_nexus.loop.input_contract import contract_reject_summary, focus_reject_summary
 
@@ -5254,7 +5359,7 @@ def _run_loop(
                         cursor, ctx, reason="refocus_click_failed", execution_started=True, writer=writer,
                     )
                     if recovery == "stop":
-                        return _leave(status="blocked", summary=str(cursor.semantic_stop)[:500])
+                        return _leave(status="blocked", summary=str(cursor.semantic_stop)[:500], reason_code="execution_contract_blocked")
             focus_error = focus_reject_summary(str(summary or ""), str(error or ""))
             if cap_id == "input_text" and focus_error and str((params or {}).get("target_mode") or "") == "current_focus":
                 from mino_nexus.loop.visual_review import recover_input_focus
@@ -5269,7 +5374,7 @@ def _run_loop(
                         "code": "focus_target_unavailable", "failure_stage": "focus_validation",
                         "retryable": False, "execution_started": False, "reason": focus_error,
                     })
-                return _leave(status="blocked", summary=msg[:500])
+                return _leave(status="blocked", summary=msg[:500], reason_code="execution_contract_blocked")
 
             rejected = contract_reject_summary(str(summary or ""), str(error or ""))
             if cap_id == "input_text" and rejected and str((params or {}).get("target_mode") or "") == "current_focus":
@@ -5288,23 +5393,21 @@ def _run_loop(
                             "reason": rejected[:300],
                         },
                     )
-                return _leave(status="blocked", summary=msg[:500])
+                return _leave(status="blocked", summary=msg[:500], reason_code="execution_contract_blocked")
             SLog.w(TAG, f"[{scout_run_id[:8]}] step {seq} {event.capability_id} {status_val}: {error or summary}")
             if in_check and cap_id == "assert_visual":
                 fail_summary = f"步骤 {cur.n} 预期未成立：{cur.expected}。{summary}".strip()
-                return _leave(status="fail", summary=fail_summary)
+                return _leave(status="fail", summary=fail_summary, reason_code="check_evidence_incomplete")
             if (
-                not in_check
-                and milestone_v1_enabled()
-                and isinstance(cursor, StepCursor)
+                not in_check and isinstance(cursor, StepCursor)
             ):
                 from mino_nexus.loop.step_phase_fsm import (
                     first_active_milestone_id,
                     mark_milestone_program_fail,
-                    step_phase_fsm_v1_enabled,
+                    milestone_phase_active,
                 )
 
-                if step_phase_fsm_v1_enabled():
+                if milestone_phase_active():
                     mid = first_active_milestone_id(cursor)
                     if mid:
                         mark_milestone_program_fail(
@@ -5316,9 +5419,9 @@ def _run_loop(
                         )
             if not in_check:
                 from mino_nexus.loop.milestones import note_tool_fail_milestone
-                from mino_nexus.loop.vision_flags import vision_exec_v1_enabled
+                from mino_nexus.loop.vision_flags import execution_phase_active
 
-                if vision_exec_v1_enabled():
+                if execution_phase_active():
                     note_tool_fail_milestone(
                         cursor,
                         ctx,
@@ -5350,7 +5453,7 @@ def _run_loop(
                                         f"验证码填入连续失败 {streak} 次："
                                         "input_text 落在邮箱框。请检查 Web 坐标或 signal_ask_human。"
                                     ),
-                                )
+                                 reason_code="input_target_mismatch")
 
         if nav is not None:
             nav.after_execute(cap_id=cap_id, params=params, status=status_val, writer=writer)
@@ -5423,7 +5526,7 @@ def _run_loop(
             setattr(ctx, "focus_action_field", "")
             setattr(ctx, "focus_action_scheme", "")
 
-        if milestone_v1_enabled() and isinstance(cursor, StepCursor):
+        if isinstance(cursor, StepCursor):
             from mino_nexus.loop.milestone_orchestrator import in_progress_milestone_id
             from mino_nexus.services.login_evidence_policy import clear_submission
             binding_focus = in_progress_milestone_id(cursor)
@@ -5433,27 +5536,23 @@ def _run_loop(
                 clear_submission(ctx)
         if status_val == "pass" and cap_id == "clear_app_cache":
             setattr(ctx, "prep_clear_done", True)
-        if status_val == "pass" and milestone_v1_enabled() and isinstance(cursor, StepCursor):
+        if status_val == 'pass' and isinstance(cursor, StepCursor):
             from mino_nexus.action_space.scheme import execution_scheme as _scheme_now
             from mino_nexus.loop.channel_observation import bind_fresh_observation
             from mino_nexus.loop.milestone_orchestrator import in_progress_milestone_id
             from mino_nexus.loop.milestones import note_tool_pass_milestone
-            from mino_nexus.loop.visual_review import defer_input_focus, defer_visual_pass, remember_visual_prior
+            from mino_nexus.loop.visual_review import defer_visual_pass, remember_visual_prior
 
             visual_now = _scheme_now(ctx) == "visual"
             if redo_turn:
-                focus_id = in_progress_milestone_id(cursor)
-                if visual_now and focus_id and cap_id in (
-                    "tap_element", "input_text", "swipe_direction", "reload_page",
-                ):
-                    if not defer_input_focus(cursor, ctx, capability_id=cap_id, writer=writer):
-                        remember_visual_prior(
-                            cursor,
-                            milestone_id=focus_id,
-                            capability_id=cap_id,
-                            params=params if isinstance(params, dict) else None,
-                            summary=summary,
-                        )
+                defer_visual_pass(
+                    cursor,
+                    capability_id=cap_id,
+                    params=params if isinstance(params, dict) else None,
+                    summary=summary,
+                    writer=writer,
+                    ctx=ctx,
+                )
                 setattr(cursor, "visual_turn_pending", False)
             else:
                 focus_before = in_progress_milestone_id(cursor)
@@ -5498,7 +5597,7 @@ def _run_loop(
                         )
                     stop = str(getattr(cursor, "semantic_stop", "") or "").strip()
                     if stop:
-                        return _leave(status="fail", summary=stop[:500])
+                        return _leave(status="fail", summary=stop[:500], reason_code=str(getattr(cursor, "review_contract_reason", "") or "action_result_unverified"))
                     if in_prep:
                         from mino_nexus.loop.prep_program_plan import sync_prep_internal_milestones
 
@@ -5552,29 +5651,8 @@ def _run_loop(
                 hold_visual_do_exit_until_effect(cursor, ctx)
             if (
                 isinstance(cursor, StepCursor)
-                and cursor.phase == "do"
-                and cursor.try_auto_finish_do_when_intents_met()
+                and cursor.try_auto_finish_do_when_milestones_met(ctx, writer=writer)
             ):
-                rec(
-                    seq,
-                    capability_id="signal_done",
-                    status="skipped",
-                    summary="本步意图已达成，自动进入校验",
-                    thought="",
-                    thumb=thumb,
-                )
-                emit(
-                    "result",
-                    thought="",
-                    step=seq,
-                    capability_id="signal_done",
-                    status="skipped",
-                    summary="本步意图已达成，自动进入校验",
-                    thumb=thumb,
-                )
-                _log_turn_end(writer, cap="signal_done", status="skipped")
-                continue
-            if cursor.try_auto_finish_do_when_milestones_met(ctx, writer=writer):
                 rec(
                     seq,
                     capability_id="signal_done",
@@ -5706,7 +5784,7 @@ def _run_loop(
             cursor.login_post_sms_pending = True
             cursor.login_post_sms_stall = 0
             cursor.step_intents_done.add("sms_send")
-            setattr(ctx, "login_auto_submit_attempts", 0)
+            update_auth_state(ctx, login_auto_submit_attempts=0)
             cursor.correction_hint = (
                 "验证码已请求发送；下一轮程序先取码，再点验证码框，点中后按该落点输入。"
                 "本 turn 勿重复发码。"
@@ -5751,7 +5829,7 @@ def _run_loop(
                     cursor.step_intents_done.add("sms_send")
                     cursor.login_post_sms_pending = True
                     cursor.login_post_sms_stall = 0
-                    setattr(ctx, "login_auto_submit_attempts", 0)
+                    update_auth_state(ctx, login_auto_submit_attempts=0)
                 if not pending_send_review and is_web_email_login(ctx):
                     cursor.correction_hint = (
                         "已向邮箱发码（Send）。下一轮程序先取验证码；取到后点验证码输入框，"
@@ -5772,7 +5850,7 @@ def _run_loop(
                         "勿再点 Continue/登录/头像。"
                     )
                     cursor.bind_finish_context(ctx, list(history[-24:]))
-                    cursor.try_auto_finish_do_when_intents_met()
+                    cursor.try_auto_finish_do_when_milestones_met(ctx, writer=writer)
                 else:
                     fp_now = str(post_fp or screen_fp or "")
                     last = str(getattr(cursor, "_last_continue_screen_fp", "") or "")
@@ -5838,7 +5916,7 @@ def _run_loop(
                     if chain_em:
                         fail_msg = _login_chain_guard(chain_em, cursor=cursor)
                         if fail_msg:
-                            return _leave(status="fail", summary=fail_msg)
+                            return _leave(status="fail", summary=fail_msg, reason_code="login_program_incomplete")
                         lc, ls = _consume_login_chain(
                             chain_em,
                             seq=seq,
@@ -5896,10 +5974,10 @@ def _run_loop(
         ):
             from mino_nexus.loop.step_phase_fsm import (
                 handle_model_signal_done_blocked,
-                step_phase_fsm_v1_enabled,
+                milestone_phase_active,
             )
 
-            if step_phase_fsm_v1_enabled():
+            if milestone_phase_active():
                 act, tr = handle_model_signal_done_blocked(
                     cursor,
                     ctx,
@@ -5933,7 +6011,7 @@ def _run_loop(
         if decision.status == "done":
             if is_explore:
                 cursor.mark_explore_done()
-                return _leave(status="pass", summary=cursor.summary(), pack=_pack())
+                return _leave(status="pass", summary=cursor.summary(), pack=_pack(), reason_code="required_assertions_consumed")
             if in_prep:
                 cursor.finish_prep()
             elif in_check:
@@ -5947,12 +6025,14 @@ def _run_loop(
         _log_turn_end(writer, cap=cap_id, status=status_val)
 
     if is_explore:
-        return _leave(status="pass", summary=cursor.summary(), pack=_pack())
-    if not is_explore and wall_budget_sec > 0:
+        return _leave(status="pass", summary=cursor.summary(), pack=_pack(), reason_code="required_assertions_consumed")
+    time_exhausted = wall_budget_sec > 0 and time.time() >= float(getattr(ctx, "case_deadline_ts", 0) or float("inf"))
+    if time_exhausted:
         summary = f"超过 {wall_budget_sec} 秒仍未完成"
     else:
         summary = f"超过 {max_steps} 步仍未完成"
-    return _leave(status="fail", summary=summary)
+    return _leave(status="fail", summary=summary,
+                  reason_code="case_budget_exhausted" if time_exhausted else "case_step_budget_exhausted")
 
 
 def _finish_case(emit, *, cursor: StepCursor, steps: list, t0: float, pack=None) -> dict[str, Any]:

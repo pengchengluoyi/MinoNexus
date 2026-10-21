@@ -430,6 +430,7 @@ class StepCursor:
     def __init__(self, nodes: list[SeqNode], *, precondition: str = ""):
         self.nodes = list(nodes)
         self.precondition = str(precondition or "").strip()
+        self.completed_do_steps: set[int] = set()
         self.index = 0
         self.phase = "prep" if self.precondition else "do"
         self.saw_assert = False
@@ -484,6 +485,10 @@ class StepCursor:
         return bool(self.nodes) and all(not (n.expected or "").strip() for n in self.nodes)
 
     def finish_prep(self) -> None:
+        if getattr(self, 'resolved_case', None) is not None:
+            from mino_nexus.loop.resolved_case import preparation_gate
+            preparation_gate(self.execution_context)
+            self.preparation_verified = True
         self.index = 0
         self.step_checked = False
         self.step_ops = 0
@@ -599,94 +604,15 @@ class StepCursor:
             self.correction_hint = msg[:280]
         return ok
 
-    def try_auto_finish_do_when_intents_met(self) -> bool:
-        """do 阶段业务意图已达成时立即进入 check（或无 expected 时下一步），不等模型 signal_done。"""
-        if self.phase != "do":
-            return False
-        from mino_nexus.loop.milestones import _TERMINAL, read_state
-
-        for row in read_state(self).get("milestones") or []:
-            if not isinstance(row, dict) or row.get("optional"):
-                continue
-            if str(row.get("status") or "pending").strip().lower() not in _TERMINAL:
-                return False
-        self.refresh_do_subphase()
-        if self.do_subphase != "achievement":
-            return False
-        cur = self.current()
-        if not cur:
-            return False
-        from mino_nexus.loop.step_contract import step_actions_satisfied
-        from mino_nexus.loop.step_intent import instruction_required_intents, step_intents_satisfied
-
-        instr = str(cur.instruction or "")
-        need_int = instruction_required_intents(instr)
-        if need_int:
-            ok_int, _ = step_intents_satisfied(
-                instruction=instr,
-                intents_done=self.step_intents_done,
-            )
-            if not ok_int:
-                return False
-        else:
-            fam_ok, _ = step_actions_satisfied(
-                instruction=instr,
-                families_done=self.step_action_families,
-                family_counts=self.step_family_counts,
-            )
-            if not fam_ok:
-                return False
-        if not self._login_completion_allows_do_finish(instr):
-            return False
-        from mino_nexus.loop.milestones import _TERMINAL, login_flow_under_milestones, read_state
-
-        if login_flow_under_milestones(self):
-            for row in read_state(self).get("milestones") or []:
-                if not isinstance(row, dict) or row.get("optional"):
-                    continue
-                if str(row.get("status") or "pending") not in _TERMINAL:
-                    return False
-        expected = str(cur.expected or "").strip()
-        if expected and int(self.step_effect_hit_streak or 0) <= 0:
-            from mino_nexus.loop.vision_plan import _case_from_ctx, _do_plan_locks_append
-
-            case = _case_from_ctx(self._finish_ctx or getattr(self, "run_context", None))
-            if not _do_plan_locks_append(self, case):
-                return False
-        self.step_goal_met = True
-        self.require_do_work_streak = 0
-        self.correction_hint = ""
-        self.enter_check()
-        return True
-
     def try_auto_finish_do_when_milestones_met(self, ctx: Any, *, writer: Any = None) -> bool:
         from mino_nexus.loop.milestones import try_finish_do_if_milestones_complete
 
         return try_finish_do_if_milestones_complete(self, ctx, writer=writer)
 
     def refresh_do_subphase(self) -> None:
+        """意图和动作族只记证据，不再单独把本步抬成可收工。"""
         if self.phase != "do":
             self.do_subphase = "operation"
-            return
-        cur = self.current()
-        instr = str(cur.instruction or "") if cur else ""
-        from mino_nexus.loop.step_contract import step_actions_satisfied
-        from mino_nexus.loop.step_intent import instruction_required_intents, step_intents_satisfied
-
-        need_int = instruction_required_intents(instr)
-        int_ok, _ = step_intents_satisfied(
-            instruction=instr,
-            intents_done=self.step_intents_done,
-        )
-        fam_ok, _ = step_actions_satisfied(
-            instruction=instr,
-            families_done=self.step_action_families,
-            family_counts=self.step_family_counts,
-        )
-        op_done = int_ok if need_int else fam_ok
-        if op_done:
-            op_done = self._login_completion_allows_do_finish(instr)
-        self.do_subphase = "achievement" if op_done else "operation"
 
     def bump_advise_recovery(self, rule_id: str) -> int:
         rid = str(rule_id or "").strip()
@@ -720,10 +646,6 @@ class StepCursor:
             self.phase = "done"
             return
         if not cur.instruction and cur.expected:
-            self.phase = "check"
-            self.step_checked = False
-            return
-        if cur.observe_only and cur.expected:
             self.phase = "check"
             self.step_checked = False
             return
@@ -784,10 +706,14 @@ class StepCursor:
         return self.phase
 
     def advance(self) -> bool:
+        if getattr(self, 'resolved_case', None) is not None and self.phase == 'do':
+            current = self.current()
+            if current and current.instruction and current.n not in self.completed_do_steps:
+                from mino_nexus.loop.resolved_case import ContractError
+                raise ContractError('required_operation_unverified', 'unverified')
         self.index += 1
         self.success_criteria_state = {}
         self.step_checked = False
-        self.check_oracle_status = ""
         self.step_ops = 0
         self.step_action_families = set()
         self.step_family_counts = {}
@@ -817,6 +743,18 @@ class StepCursor:
         return True
 
     def enter_check(self) -> None:
+        if getattr(self, 'resolved_case', None) is not None and self.phase == 'do':
+            from mino_nexus.loop.resolved_case import ContractError
+            from mino_nexus.loop.milestones import read_state
+            from mino_nexus.services.step_requirements import condition_complete
+            rows = read_state(self).get('milestones') or []
+            required = [row for row in rows if not row.get('optional')]
+            if not required or any(row.get('status') != 'pass' and not condition_complete(row) for row in required):
+                if not rows or not all(row.get('kind') == 'remark' for row in rows):
+                    raise ContractError('required_operation_unverified', 'unverified')
+            for row in required:
+                if row.get('nav_target') and not row.get('review_observation_ref') and row.get('evidence') != 'current_observed_navigation_target':
+                    raise ContractError('navigation_target_unresolved', 'unverified')
         prior = getattr(self, "visual_prior", None)
         if self.phase == "do" and isinstance(prior, dict) and prior.get("milestone_id"):
             from mino_nexus.loop.milestones import read_state
@@ -842,12 +780,13 @@ class StepCursor:
         if not cur:
             self.phase = "done"
             return
+        if self.phase == 'do':
+            self.completed_do_steps.add(cur.n)
         if not cur.expected:
             self.advance()
             return
         self.phase = "check"
         self.step_checked = False
-        self.check_oracle_status = ""
         self.check_session_refresh = True
         self.progress_gate.reset_milestone("check", cur.n if cur else 0)
         from mino_nexus.loop.vision_plan import reset_plan_context_for_check
@@ -862,6 +801,11 @@ class StepCursor:
         )
 
     def mark_checked(self) -> None:
+        if getattr(self, 'resolved_case', None) is not None:
+            from mino_nexus.loop.resolved_case import ContractError
+            cur = self.current()
+            if self.phase != 'check' or cur is None or not {point for point, required in self.resolved_case.check_points(cur.n).items() if required}.issubset(self.verified_check_points.get(cur.n, set())):
+                raise ContractError('check_evidence_incomplete', 'unverified')
         self.step_checked = True
         self.saw_assert = True
 
@@ -946,15 +890,7 @@ class StepCursor:
                     lines.append(bit)
                     continue
                 if self.phase == "do":
-                    self.refresh_do_subphase()
-                    if self.do_subphase == "achievement":
-                        ach_line = (
-                            _do_phase_achievement_brief(node.instruction, node.expected)
-                            if _expected_defers_to_check(node.expected)
-                            else _achievement_label(node.expected)
-                        )
-                    else:
-                        ach_line = _pt("step_achievement_pending")
+                    ach_line = _pt("step_achievement_pending")
                     bit = _pt(
                         "step_active_do",
                         n=node.n,
@@ -976,31 +912,15 @@ class StepCursor:
             lines.append(_pt("all_done"))
             return "\n".join(lines)
         if self.phase == "do":
-            self.refresh_do_subphase()
-            ach = _achievement_label(cur.expected)
             ach_brief = _do_phase_achievement_brief(cur.instruction, cur.expected)
-            if self.do_subphase == "achievement":
-                ach_show = (
-                    _do_phase_achievement_brief(cur.instruction, cur.expected)
-                    if _expected_defers_to_check(cur.expected)
-                    else ach
+            lines.append(
+                _pt(
+                    "do_operation",
+                    n=cur.n,
+                    instruction=cur.instruction,
+                    achievement_brief=ach_brief,
                 )
-                lines.append(
-                    _pt(
-                        "do_achievement",
-                        n=cur.n,
-                        achievement=ach_show,
-                    )
-                )
-            else:
-                lines.append(
-                    _pt(
-                        "do_operation",
-                        n=cur.n,
-                        instruction=cur.instruction,
-                        achievement_brief=ach_brief,
-                    )
-                )
+            )
             if self.step_nav_plan_hint:
                 lines.append(self.step_nav_plan_hint)
             if not str(cur.expected or "").strip():
@@ -1036,13 +956,12 @@ class StepCursor:
                 lab = swipe_direction_label(swipe_want)
                 if lab:
                     lines.append(f"【滑动方向】用例要求 {lab}（勿与步骤原文相反）")
-            from mino_nexus.loop.milestones import milestone_v1_enabled, milestones_brief_lines, read_state
+            from mino_nexus.loop.milestones import milestones_brief_lines, read_state
 
-            if milestone_v1_enabled():
-                ms_lines = milestones_brief_lines(read_state(self), limit=8)
-                if ms_lines:
-                    lines.append("【子里程碑】")
-                    lines.extend(ms_lines)
+            ms_lines = milestones_brief_lines(read_state(self), limit=8)
+            if ms_lines:
+                lines.append("【子里程碑】")
+                lines.extend(ms_lines)
             tail_key = "do_tail_login_module" if self.login_module_prompt else "do_tail"
             lines.append(_pt(tail_key))
         else:
@@ -1053,13 +972,12 @@ class StepCursor:
             brief = format_check_plan_brief(plan)
             if brief:
                 lines.append(brief)
-            from mino_nexus.loop.milestones import milestone_v1_enabled, milestones_brief_lines, read_state
+            from mino_nexus.loop.milestones import milestones_brief_lines, read_state
 
-            if milestone_v1_enabled():
-                ms_lines = milestones_brief_lines(read_state(self))
-                if ms_lines:
-                    lines.append("【子里程碑】")
-                    lines.extend(ms_lines)
+            ms_lines = milestones_brief_lines(read_state(self))
+            if ms_lines:
+                lines.append("【子里程碑】")
+                lines.extend(ms_lines)
             lines.append(_pt("check_tail"))
         return "\n".join(lines)
 
@@ -1073,11 +991,6 @@ class StepCursor:
             return f"校验步骤 {cur.n} 的预期：{cur.expected}"
         return (cur.instruction or "").strip() or "完成本步操作"
 
-    def decide_success_criteria_for_llm(self) -> str:
-        from mino_nexus.loop.llm_step_context import success_criteria_json_text
-
-        return success_criteria_json_text(self)
-
     def decide_success(self) -> str:
         if self.phase == "prep":
             return (
@@ -1088,29 +1001,27 @@ class StepCursor:
         if not cur:
             return "全部步骤已完成"
         if self.phase == "check":
-            from mino_nexus.loop.milestones import milestone_v1_enabled
 
-            if milestone_v1_enabled():
-                return (
-                    f"步骤 {cur.n} 的预期成立：{cur.expected}。"
-                    "校验 success_criteria.milestones：状态由程序根据工具结果写回；"
-                    "全部必填项通过后 signal_done。不要操作设备除非校验需要。"
-                )
+            return (
+                f"步骤 {cur.n} 的预期成立：{cur.expected}。"
+                "校验 success_criteria.milestones：状态由程序根据工具结果写回；"
+                "全部必填项通过后 signal_done。不要操作设备除非校验需要。"
+            )
             return (
                 f"步骤 {cur.n} 的预期成立：{cur.expected}。"
                 "用 assert_visual 判断当前屏。不要操作设备。"
             )
         exp = str(cur.expected or "").strip()
-        self.refresh_do_subphase()
-        if exp and self.do_subphase == "achievement":
+
+        if exp:
             return (
                 f"完成步骤 {cur.n} 的操作：{cur.instruction}。"
-                f"达成信号：{exp}。以达成信号为准，不以操作对象是否可见为准。"
+                f"达成信号：{exp}。本步是否结束由子里程碑裁决。"
             )
         if exp:
             return (
                 f"完成步骤 {cur.n} 的操作：{cur.instruction}。"
-                "先完成 instruction 中的全部子动作；达成信号将在子动作达标后展示。"
+                f"达成信号：{exp}。子动作做完后 signal_done。"
             )
         return (
             f"完成步骤 {cur.n} 的操作：{cur.instruction}。"

@@ -9,13 +9,12 @@ from mino_nexus.loop.llm_step_context import step_scope_key
 from mino_nexus.loop.milestones import (
     _TERMINAL,
     evaluate_milestones,
-    milestone_v1_enabled,
     milestones_empty,
     read_state,
     write_state,
     _sync_scope,
 )
-from mino_nexus.loop.vision_flags import vision_exec_v1_enabled, vision_plan_v1_enabled
+from mino_nexus.loop.vision_flags import execution_phase_active, planning_phase_active
 
 
 def _milestones_list(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -57,8 +56,6 @@ def _mark_model_recovery(cursor: Any, ctx: Any) -> None:
 
 def ensure_single_in_progress(cursor: Any, *, writer: Any = None) -> bool:
     """至多一条 in_progress；若无则首条 pending → in_progress。"""
-    if not milestone_v1_enabled():
-        return False
     state = _sync_scope(cursor, read_state(cursor))
     ms = _milestones_list(state)
     if not ms:
@@ -521,7 +518,7 @@ def needs_stuck_replan(cursor: Any, ctx: Any, state: dict[str, Any]) -> bool:
 
 
 def may_run_vision_exec(cursor: Any) -> bool:
-    if not vision_exec_v1_enabled() or not milestone_v1_enabled():
+    if not execution_phase_active():
         return True
     state = read_state(cursor)
     if milestones_empty(state):
@@ -645,8 +642,6 @@ def complete_in_progress_on_tool(
     writer: Any = None,
 ) -> bool:
     """仅更新当前 in_progress 里程碑终态，并推进焦点。"""
-    if not milestone_v1_enabled():
-        return False
     state = _sync_scope(cursor, read_state(cursor))
     ms = _milestones_list(state)
     focus = in_progress_milestone(state)
@@ -683,9 +678,9 @@ def apply_step_requirements_complete(
     in_check: bool = False,
 ) -> Optional[str]:
     """plan 声明本步要求已满足且无 open 里程碑 → 阶段流转。"""
-    from mino_nexus.loop.step_phase_fsm import apply_phase_transition, step_phase_fsm_v1_enabled
+    from mino_nexus.loop.step_phase_fsm import apply_phase_transition, milestone_phase_active
 
-    if not step_phase_fsm_v1_enabled():
+    if not milestone_phase_active():
         return None
     complete = bool(getattr(plan, "exit_allowed", False)) or bool(
         getattr(plan, "step_requirements_complete", False)
@@ -732,7 +727,7 @@ def run_vision_orchestrated_turn(
         blocked_visual_decision, run_vision_exec_turn, visual_execution_block_reason,
     )
 
-    if not (vision_plan_v1_enabled() or vision_exec_v1_enabled()):
+    if not (planning_phase_active() or execution_phase_active()):
         return OrchestratedTurn()
 
     if ctx is not None:
@@ -774,7 +769,7 @@ def run_vision_orchestrated_turn(
             ),
             plan_only=True,
         )
-    from mino_nexus.loop.flow_block_runner_v2 import skip_login_entry_if_form_visible
+    from mino_nexus.loop.flow_block_executor import skip_login_entry_if_form_visible
     from mino_nexus.loop.vision_plan import retire_repeat_wait_focus
 
     skip_login_entry_if_form_visible(cursor, ctx, writer=writer)
@@ -803,9 +798,9 @@ def run_vision_orchestrated_turn(
         mv = evaluate_milestones(cursor, ctx)
         transitioned = False
         if mv.phase_complete:
-            from mino_nexus.loop.step_phase_fsm import apply_phase_transition, step_phase_fsm_v1_enabled
+            from mino_nexus.loop.step_phase_fsm import apply_phase_transition, milestone_phase_active
 
-            if step_phase_fsm_v1_enabled():
+            if milestone_phase_active():
                 tr = apply_phase_transition(
                     cursor, ctx, mv, writer=writer, in_prep=in_prep, in_check=in_check
                 )
@@ -837,7 +832,7 @@ def run_vision_orchestrated_turn(
             decision=AgentDecision(status="give_up", thought=summary),
             plan_only=True,
         )
-    plan_gate = vision_plan_v1_enabled() and needs_vision_plan_gate(state)
+    plan_gate = planning_phase_active() and needs_vision_plan_gate(state)
     observation_block = visual_execution_block_reason(shot, inspect_slots, send_image=send_image)
     # 缺少有效观察时不规划猜测页面；已有程序里程碑仍可执行恢复/等待。
     if observation_block:
@@ -944,7 +939,7 @@ def run_vision_orchestrated_turn(
             plan_only=True,
         )
 
-    if not vision_exec_v1_enabled():
+    if not execution_phase_active():
         return OrchestratedTurn()
 
     focus = in_progress_milestone(read_state(cursor))

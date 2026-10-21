@@ -1,5 +1,4 @@
 id: agent-decide
-version: 2
 sort_order: 150
 label: 看图决策
 group: runtime

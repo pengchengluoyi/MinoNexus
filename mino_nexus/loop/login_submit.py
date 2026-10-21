@@ -1,6 +1,8 @@
 """登录链末段：OTP 已齐后程序点「登录」，避免 LLM snap 空烧步数。"""
 from __future__ import annotations
 
+from mino_nexus.loop.login_transition import update_auth_state
+
 import re
 from typing import Any, Optional
 
@@ -409,7 +411,7 @@ def try_auto_login_submit(
         st = res.status.value if hasattr(res.status, "value") else str(res.status)
         ok_st = str(st) in ("pass", EventStatus.PASS.value)
         if ok_st and ctx is not None:
-            setattr(ctx, "login_auto_submit_attempts", attempts + 1)
+            update_auth_state(ctx, login_auto_submit_attempts=attempts + 1)
         return {
             "ok": ok_st,
             "status": st,
@@ -445,7 +447,7 @@ def try_auto_login_submit(
     st = res.status.value if hasattr(res.status, "value") else str(res.status)
     ok_st = str(st) in ("pass", EventStatus.PASS.value)
     if ok_st and ctx is not None:
-        setattr(ctx, "login_auto_submit_attempts", attempts + 1)
+        update_auth_state(ctx, login_auto_submit_attempts=attempts + 1)
     return {
         "ok": ok_st,
         "status": st,

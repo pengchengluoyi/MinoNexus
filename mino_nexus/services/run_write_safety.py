@@ -214,7 +214,7 @@ async def recover_stopped(task_id: str):
         req = P.Execute(run_id=ref["run_id"], step_idx=-(uuid.uuid4().int % (2**48) + 1),
             sn=sn, capability_id="write_stop_status",
             params={"action_ref": ref, "scout_process_generation": generation, "mode": mode,
-                    "execution_mode": str(doc.get("execution_mode") or "legacy")})
+                    "execution_mode": str(doc.get("execution_mode") or "")})
         try:
             result = await node.send(P.MsgType.EXECUTE, req, timeout=5)
         except Exception:

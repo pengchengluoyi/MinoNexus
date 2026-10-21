@@ -1,5 +1,4 @@
 id: case.recompile
-version: 2
 title: 排队编译指定用例
 description: 排队重新编译指定用例，保留原文和 case_id，立即返回持久 job_id；不代表编译已完成。先用 case_version_chain 读取当前 expected_revision，再传 expected_revision 和稳定的 client_request_id；相同请求重试保持同一标识。用 case_compile_job 查询状态，失败或中断不自动重放模型调用。
 route: POST /project/{project_id}/cases/{case_id}/compile-jobs

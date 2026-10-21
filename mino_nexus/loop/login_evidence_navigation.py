@@ -1,6 +1,8 @@
 """登录身份取证的上下文保存与恢复；图像只在本次 cursor 内存中保留。"""
 from __future__ import annotations
 
+from mino_nexus.loop.login_transition import update_auth_state
+
 import hashlib
 import time
 from typing import Any
@@ -117,9 +119,9 @@ def observe_restore(cursor: Any, ctx: Any, shot: Any, *, block_id: str, writer: 
         return {**failure, "summary": "恢复观察期间登录证据失效，不能沿用旧身份结论"}
     if result.passed:
         # 保留身份证据的原 observation_ref；不把旧身份结论冒充为当前图观察。
-        ctx.login_evidence = dict(proof["evidence"])
+        update_auth_state(ctx, login_evidence=dict(proof["evidence"]))
         return {"restored": True}
-    from mino_nexus.loop.flow_block_runner_v2 import _schedule_login_evidence_navigation
+    from mino_nexus.loop.flow_block_executor import _schedule_login_evidence_navigation
     if _schedule_login_evidence_navigation(cursor, ctx=ctx, shot=shot, block_id=block_id, writer=writer, restore=True):
         return {**failure, "case_fail": False, "defer": True, "status": "wait", "error_kind": "",
                 "summary": "身份已核验，业务上下文尚未恢复，继续有界返回导航"}

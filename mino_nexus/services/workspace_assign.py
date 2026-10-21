@@ -119,7 +119,7 @@ def assign(project_id, topic_id, sess, args, *, context, deadline, state=None):
             body = result['reply']
         with session_scope() as db:
             ws.message(db, ws.owned(db, project_id, topic_id, write=True), body, role=member)
-        return {'member': member, 'job': job, 'result': result, 'needs_input': result.get('needs_input', False),
-                'stopped': result.get('stopped', False) or result.get('needs_input', False)}
+        return {'member': member, 'job': job, 'result': result, 'needs_input': bool(result.get('needs_input')),
+                'stopped': bool(result.get('stopped'))}
     finally:
         dispatch_log.reset(trace)

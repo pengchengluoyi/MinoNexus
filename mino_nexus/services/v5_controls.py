@@ -45,20 +45,11 @@ def configure(project_id, control_id, *, expected_revision, locator_spec, sensit
         row.locator_spec = locator_spec
         row.sensitive = int(bool(sensitive))
         row.revision += 1
-        row.publish_state = "published" if publish else "draft"
+        # A valid saved locator is immediately current; no approval/publication stage.
+        row.publish_state = "published"
         row.updated_by, row.updated_at = actor, datetime.now().astimezone().isoformat()
-        if publish:
-            row.published_by, row.published_at = actor, row.updated_at
         db.flush()
         result = _public(row)
-        # Mark only cases referencing this identity. Never rewrite frozen plans.
-        from mino_nexus.models.case import ProjectCase
-        for case in db.query(ProjectCase).filter_by(project_id=project_id):
-            extra = dict(case.extra or {})
-            publication = extra.get("v5_publication") or {}
-            if control_id in (publication.get("controls") or {}):
-                extra["v5_plan_state"] = "needs_revalidate"
-                case.extra = extra
         return result
 
 

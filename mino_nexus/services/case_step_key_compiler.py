@@ -490,7 +490,7 @@ def _step_from_hit(hit: dict[str, Any], *, case_step: int, sub_idx: int) -> dict
             row["nav_target"] = nav
     if hit.get("intent_role"):
         row["intent_role"] = str(hit.get("intent_role"))
-    if kind not in ("flow_block", "remark") and kind != "nav":
+    if kind not in ("flow_block", "remark") and kind != "nav" and key_ref != "operation.observe":
         reason = _cap_block_reason(str(row.get("hook_cap") or ""))
         if reason:
             row["_block_reason"] = reason
@@ -512,8 +512,15 @@ def _classify_block(
     hit = reconcile_hit_layer(hit, author_layer=author_layer)
     clause = str(hit.get("clause") or "")
     phase = "do" if author_layer == "operation" else "check"
-    if str(hit.get("key_ref") or "") == "operation.author_remark":
+    if str(hit.get("key_ref") or "") == "operation.observe":
         return None
+    if str(hit.get("key_ref") or "") == "operation.author_remark":
+        from mino_nexus.services.case_semantic_integrity import explicit_remark
+        if explicit_remark(clause):
+            return None
+        return {"case_step": case_step, "layer": author_layer, "line": clause,
+                "blocked": _blocked_item(phase=phase, case_step=case_step, clause=clause,
+                    reason="required_operation_skipped", user_message="必需操作或观察不能被编译为可跳过说明。")}
     if str(hit.get("key_ref") or "") == "expected.human_review":
         return None
     if hit.get("ambiguous"):
@@ -651,6 +658,7 @@ def compile_operation_text(
                     clause=clause,
                     reason="capability_disabled" if reason == "unavailable_cap" else reason,
                     event_name=str(hit.get("event_name") or ps.get("hook_cap") or ""),
+                    detail=str(ps.get("hook_cap") or ""),
                 )
                 warnings.append(
                     {
@@ -1098,6 +1106,9 @@ def _stored_plan_fresh(plan: Any, source: str, *, platform: str = "", instructio
 
     if not isinstance(plan, dict):
         return False
+    from mino_nexus.services.case_semantic_integrity import operation_diagnostics
+    if operation_diagnostics({"meta": {"step_program_keys": {"current": {"do_program_plan": plan}}}}):
+        return False
     if str(plan.get("compiler") or "") != "case-step-compile":
         return False
     if int(plan.get("catalog_version") or 0) != int(CATALOG_VERSION):
@@ -1199,42 +1210,11 @@ def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
 
         for item in stamp_compiled_plans(case, do_plan, ck_plan):
             all_warnings.append({"case_step": item.get("case_step"), "layer": "operation", "blocked": item})
-    from mino_nexus.services.case_step_span_llm import compile_step_spans, layer_menu
-
-    if layer_menu("precondition"):
-        import re
-
-        from mino_nexus.services.case_clause_events import user_message
-
-        pre = str(case.get("precondition") or case.get("precondition_raw") or "")
-        for line in re.split(r"[\n\r]+", pre):
-            body = re.sub(r"^\s*\d+[.)、．]\s*", "", line.strip())
-            if not body or "：" in body or ":" in body:
-                continue
-            _hits, fail = compile_step_spans(body, "precondition", platform=platform)
-            if not fail:
-                continue
-            all_warnings.append(
-                {
-                    "case_step": 0,
-                    "layer": "precondition",
-                    "line": body,
-                    "raw_text": body,
-                    "blocked": _blocked_item(
-                        phase="prep",
-                        case_step=0,
-                        clause=body,
-                        reason=str(fail.get("reason") or "unmapped"),
-                        user_message=user_message(
-                            case_step=0,
-                            layer="precondition",
-                            clause=body,
-                            reason=str(fail.get("reason") or "unmapped"),
-                            detail=str(fail.get("detail") or ""),
-                        ),
-                    ),
-                }
-            )
+    from mino_nexus.services.case_semantic_integrity import precondition_diagnostics
+    for issue in precondition_diagnostics(case):
+        all_warnings.append({"case_step": 0, "layer": "precondition", "line": issue["source_clause"],
+            "blocked": _blocked_item(phase="prep", case_step=0, clause=issue["source_clause"],
+                reason=issue["reason"], user_message=issue["user_message"])})
     blocked: list[dict[str, Any]] = []
     for w in all_warnings:
         item = w.get("blocked") if isinstance(w, dict) else None
@@ -1255,12 +1235,6 @@ def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
 def sync_case_step_program_keys(row: dict[str, Any]) -> dict[str, Any]:
     from mino_nexus.services.v5_publication import guard_case_row
     out = guard_case_row(row)
-    publication = out.get("v5_publication")
-    if publication:
-        meta = dict(out.get("meta") or {})
-        meta["step_program_keys"] = publication["compiled_keys"]
-        out["meta"] = meta
-        return out
     compiled = compile_case_step_program_keys(out)
     meta = out.get("meta") if isinstance(out.get("meta"), dict) else {}
     if not meta and isinstance(out.get("resource_key"), dict):

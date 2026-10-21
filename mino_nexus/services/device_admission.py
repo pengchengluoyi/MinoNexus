@@ -134,7 +134,7 @@ def admit_in_transaction(db, doc: dict) -> None:
             capacity = next((w for w in (node.device_workload if node else []) if w.sn == sn and w.lanes_total is not None), None)
             same_group = [run for run in live if participates(run, group)
                           and sn in ((run.payload or {}).get("sns") or [(run.payload or {}).get("sn")])]
-            if any((run.payload or {}).get("execution_mode", "legacy") != doc.get("execution_mode", "legacy") for run in same_group):
+            if any((run.payload or {}).get("execution_mode") != doc.get("execution_mode") for run in same_group):
                 raise ResourceBusy(sn, same_group[0].run_id)
             if doc.get("execution_mode") == "v5":
                 if capacity is None or capacity.lanes_total <= (capacity.lanes_quarantined or 0):

@@ -25,11 +25,6 @@ AGENT_MILESTONE_KINDS = frozenset(
 _TERMINAL = frozenset({"pass", "skipped", "failed"})
 
 
-def milestone_v1_enabled() -> bool:
-    raw = str(os.environ.get("MINO_MILESTONE_V1", "1") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
-
-
 def _new_id(prefix: str = "m") -> str:
     return f"{prefix}{uuid.uuid4().hex[:8]}"
 
@@ -262,8 +257,6 @@ def first_pending_hook_milestone(state: dict[str, Any]) -> Optional[dict[str, An
 
 def login_flow_under_milestones(cursor: Any) -> bool:
     """登录逻辑块已展开为 milestones 时，旧 email_login_ui_chain / post_sms 链由 runner+LLM 接管。"""
-    if not milestone_v1_enabled():
-        return False
     state = read_state(cursor)
     ref = state.get("block_ref") if isinstance(state.get("block_ref"), dict) else {}
     if str(ref.get("block_id") or "").strip():
@@ -490,8 +483,6 @@ def note_tool_pass_milestone(
     ctx: Any = None,
 ) -> bool:
     """工具 pass 后推进对应子里程碑（优先 in_progress；hook_cap / id 匹配）。"""
-    if not milestone_v1_enabled():
-        return False
     cap = str(capability_id or "").strip()
     if cap == "wait_screen_ready":
         setattr(cursor, "wait_ready_passes", int(getattr(cursor, "wait_ready_passes", 0) or 0) + 1)
@@ -507,10 +498,10 @@ def note_tool_pass_milestone(
     ms = state.get("milestones") if isinstance(state.get("milestones"), list) else []
     if not ms:
         return False
-    from mino_nexus.loop.vision_flags import vision_exec_v1_enabled
+    from mino_nexus.loop.vision_flags import execution_phase_active
 
     focus_id = ""
-    if vision_exec_v1_enabled() and not mid:
+    if execution_phase_active() and not mid:
         for row in ms:
             if isinstance(row, dict) and str(row.get("status") or "") == "in_progress":
                 focus_id = str(row.get("id") or "").strip()
@@ -523,6 +514,9 @@ def note_tool_pass_milestone(
             continue
         rid = str(row.get("id") or "")
         if focus_id and rid != focus_id:
+            continue
+        if row.get("nav_target") and cap in {"tap_element", "tap_xy", "press_key", "swipe_direction"}:
+            # Only a matching current target observation can complete navigation.
             continue
         hook = str(row.get("hook_cap") or row.get("cap") or "")
         if mid and rid == mid:
@@ -893,11 +887,9 @@ def note_tool_fail_milestone(
     writer: Any = None,
 ) -> bool:
     """vision-exec 工具 fail：累计 fail_streak，必要时 push interrupt。"""
-    if not milestone_v1_enabled():
-        return False
-    from mino_nexus.loop.vision_flags import vision_exec_v1_enabled
+    from mino_nexus.loop.vision_flags import execution_phase_active
 
-    if not vision_exec_v1_enabled():
+    if not execution_phase_active():
         return False
     from mino_nexus.loop.fuse.interrupt_stack import note_in_progress_tool_fail
 
@@ -977,8 +969,6 @@ def prepend_login_block_milestones(
 
 
 def on_enter_check_phase(cursor: Any, *, expected: str = "", instruction: str = "") -> None:
-    if not milestone_v1_enabled():
-        return
     state = _sync_scope(cursor, read_state(cursor))
     state["milestones"] = milestones_from_check_plan(expected, instruction=instruction)
     state["status"] = "in_progress"
@@ -994,8 +984,6 @@ def ensure_milestones_before_decide(
     writer: Any = None,
     case: dict[str, Any] | None = None,
 ) -> None:
-    if not milestone_v1_enabled():
-        return
     from mino_nexus.loop.program_plan_seed import ensure_program_milestone_seeds
 
     state = _sync_scope(cursor, read_state(cursor))
@@ -1061,8 +1049,6 @@ def apply_decision_milestones(
     ctx: Any = None,
     app_id: str = "",
 ) -> None:
-    if not milestone_v1_enabled():
-        return
     raw = getattr(decision, "raw_llm", None)
     payload = raw.get("llm_output") if isinstance(raw, dict) else {}
     if not isinstance(payload, dict):
@@ -1107,8 +1093,6 @@ def apply_step_outcome(
     writer: Any = None,
 ) -> None:
     """§2.7：step_outcome 写入 session 并映射到 decision.status。"""
-    if not milestone_v1_enabled():
-        return
     raw = getattr(decision, "raw_llm", None)
     payload = raw.get("llm_output") if isinstance(raw, dict) else {}
     so = str(getattr(decision, "step_outcome", "") or "").strip().lower()
@@ -1147,7 +1131,7 @@ def apply_check_evidences_to_milestones(
     writer: Any = None,
 ) -> None:
     """§2.9：程序化 check 证据写回 checkpoint 里程碑。"""
-    if not milestone_v1_enabled() or not evidences:
+    if not evidences:
         return
     state = _sync_scope(cursor, read_state(cursor))
     ms = state.get("milestones") if isinstance(state.get("milestones"), list) else []
@@ -1232,9 +1216,7 @@ def try_finish_do_if_milestones_complete(
     *,
     writer: Any = None,
 ) -> bool:
-    """do 阶段必填里程碑齐 → enter_check（与意图自动收工并列）。"""
-    if not milestone_v1_enabled():
-        return False
+    """do 自动收工统一经里程碑裁决及阶段转换，不以意图/探针独立放行。"""
     if str(getattr(cursor, "phase", "") or "").strip().lower() != "do":
         return False
     mv = evaluate_milestones(cursor, ctx)
@@ -1262,14 +1244,14 @@ def try_finish_do_if_milestones_complete(
     allow_finish = getattr(cursor, "_login_completion_allows_do_finish", None)
     if callable(allow_finish) and not allow_finish(instr):
         return False
-    if hasattr(cursor, "step_goal_met"):
-        cursor.step_goal_met = True
+    from mino_nexus.loop.step_phase_fsm import apply_phase_transition
+
+    if apply_phase_transition(cursor, ctx, mv, writer=writer) is None:
+        return False
     if hasattr(cursor, "require_do_work_streak"):
         cursor.require_do_work_streak = 0
     if hasattr(cursor, "correction_hint"):
         cursor.correction_hint = ""
-    if hasattr(cursor, "enter_check"):
-        cursor.enter_check()
     if writer:
         writer.append(
             "decision/milestones_auto_finish",
@@ -1307,13 +1289,6 @@ def evaluate_milestones(
     programmatic_pass: bool = False,
 ) -> MilestoneVerdict:
     state = read_state(cursor)
-    if str(getattr(cursor, "phase", "") or "").strip().lower() == "check":
-        if str(getattr(cursor, "check_oracle_status", "") or "") == "fail":
-            return MilestoneVerdict(
-                phase_complete=False,
-                status="failed",
-                summary="校验未通过，不进入下一步",
-            )
     ms = milestones_for_phase_eval(state, cursor)
     if not ms:
         return MilestoneVerdict(phase_complete=False, status="pending", summary="无里程碑")

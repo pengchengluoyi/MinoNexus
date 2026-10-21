@@ -1,5 +1,4 @@
 id: map_cases
-version: 2
 label: 覆盖分析
 summary: 代码读取业务数据并执行规则，不调用模型
 engine: rule

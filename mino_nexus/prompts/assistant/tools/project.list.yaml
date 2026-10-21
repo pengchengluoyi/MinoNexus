@@ -1,5 +1,4 @@
 id: project.list
-version: 1
 title: 项目与应用列表
 description: 列出所有项目和其下的应用。用户问有哪些项目、有哪些应用时用。
 route: GET /project/list

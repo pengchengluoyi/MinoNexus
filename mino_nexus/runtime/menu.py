@@ -77,6 +77,17 @@ def available_capabilities(
     return available
 
 
+def _bound_menu_ids(ctx: RunContext, phase: str) -> set[str]:
+    from mino_nexus.services.execution_binding import CONTRACT
+
+    if getattr(ctx, "execution_contract_version", "") != CONTRACT or not getattr(ctx, "execution_binding", None):
+        return set()
+    check = getattr(ctx, "execution_binding_menu", None)
+    if not callable(check):
+        return set()
+    return set(check(phase) or ())
+
+
 def available_menu_brief(
     ctx: RunContext,
     *,
@@ -88,6 +99,9 @@ def available_menu_brief(
     extra_ids: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
     """id + summary。不把 platforms / implementations / low_level 塞进 prompt。"""
+    allowed = _bound_menu_ids(ctx, phase)
+    if not allowed:
+        return []
     kind = (kind or "agent").strip().lower()
     plat = str(platform or getattr(ctx, "platform", "") or "").strip()
     from mino_nexus.catalog.skill_channel import menu_caller_ok
@@ -146,18 +160,16 @@ def available_menu_brief(
         facts = evaluate(row["id"], ctx=ctx)
         if facts:
             row["dependencies"] = facts
-    if getattr(ctx, 'execution_contract_version', '') == 'execution_binding.v1':
-        from mino_nexus.services.execution_binding_runtime import menu_projection
-        binding = getattr(ctx, 'execution_binding', None)
-        if not binding:
-            return []
-        check = getattr(ctx, "execution_binding_menu", None)
-        allowed = check(phase) if callable(check) else set()
-        out = [row for row in out if row['id'] in allowed]
-    return out
+    return [row for row in out if row['id'] in allowed]
 
 
 def recovery_menu_brief(ctx: RunContext, *, platform: str = "") -> list[dict[str, Any]]:
+    from mino_nexus.loop.observe.session_log import active_writer
+
+    writer = active_writer()
+    allowed = _bound_menu_ids(ctx, writer.phase if writer else "prep")
+    if not allowed:
+        return []
     plat = str(platform or getattr(ctx, "platform", "") or "").strip()
     rows: list[dict[str, Any]] = []
     for rule in plugin_registry.list_recovery_rules(enabled_only=True):
@@ -169,13 +181,7 @@ def recovery_menu_brief(ctx: RunContext, *, platform: str = "") -> list[dict[str
             "kind": "recovery",
             "summary": summary,
         })
-    if getattr(ctx, 'execution_contract_version', '') == 'execution_binding.v1':
-        from mino_nexus.loop.observe.session_log import active_writer
-        writer = active_writer()
-        check = getattr(ctx, 'execution_binding_menu', None)
-        allowed = check(writer.phase if writer else 'prep') if callable(check) else set()
-        rows = [row for row in rows if row['id'] in allowed]
-    return rows
+    return [row for row in rows if row['id'] in allowed]
 
 
 def capability_menu_diagnostics(ctx: RunContext) -> dict[str, Any]:

@@ -1,5 +1,4 @@
 id: test-engineer-chat
-version: 1
 label: 测试工程师（对话）
 summary: 身份说明。真机执行走「执行测试用例」。
 category: device

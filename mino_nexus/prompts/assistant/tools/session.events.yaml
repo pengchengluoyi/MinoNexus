@@ -1,5 +1,4 @@
 id: session.events
-version: 1
 title: 会话原始事件
 description: 分页读取会话事件，包含工具调用/回执、guard、review、exec/vision 和 LLM 互链。按 next_from_seq 继续，不会截成摘要；查询 LLM 正文请用 session_llm_list 和 llm_get。
 route: GET /case-runner/sessions/{session_id}/events

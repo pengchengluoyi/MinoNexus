@@ -1,4 +1,4 @@
-"""逻辑块 runner v2：按 success_criteria.milestones 推进 hook 步（P3+ / P4 门控）。"""
+"""当前逻辑块执行器：按里程碑推进并消费实际结果证据。"""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -82,6 +82,23 @@ def try_dispatch_block_hook(
     cap = str(pending.get("hook_cap") or "").strip()
     if not cap and step:
         cap = str(step.get("hook_cap") or step.get("cap") or "").strip()
+    if cap == "screenshot" and pending.get("key_ref") == "operation.observe":
+        import hashlib
+        from mino_nexus.loop.milestones import write_state
+        observed = proxy.observe("screenshot", force_fresh=True)
+        image = str(getattr(observed, "image_base64", "") or "")
+        ok = bool(image and getattr(observed, "has_image", lambda: False)())
+        if ok:
+            pending["status"] = "pass"
+            pending["evidence"] = "current_application_observation"
+            pending["review_observation_ref"] = hashlib.sha256(image.encode()).hexdigest()
+            write_state(cursor, state)
+        if writer:
+            writer.append("operation/observation", {"milestone_id": mid, "status": "pass" if ok else "unverified",
+                "observation_ref": pending.get("review_observation_ref", ""), "channel": "app"})
+        return {"ok": ok, "case_fail": not ok, "status": "pass" if ok else "unverified",
+                "error_kind": "" if ok else "observation_missing", "capability_id": cap, "milestone_id": mid,
+                "summary": "已采集当前应用画面，业务预期由 Check 验证" if ok else "未取得当前画面，观察步骤不能跳过"}
     from mino_nexus.loop.conditional_steps import gate
     conditional_result = gate(pending, state, cursor, ctx, proxy, turn_seq=turn_seq, writer=writer)
     if conditional_result is not None:
@@ -866,13 +883,19 @@ def _dispatch_login_state(
 
 
 def _complete_login_state(cursor, ctx, *, block_id, writer=None, frame_thumb="", review_submit=False):
-    from mino_nexus.services.login_evidence import can_commit
-    if not can_commit(ctx):
-        if writer:
-            writer.append("login/completion_blocked", {"reason_code": "login_evidence_invalid"})
-        return {"ok": False, "case_fail": True, "status": "blocked", "error_kind": "login_evidence_invalid",
-                "capability_id": "confirm_login_state", "milestone_id": "login_state", "step_id": "login_state",
-                "block_id": block_id, "summary": "登录证据已过期、作用域改变或身份未证实，不能完成登录步骤"}
+    # This function completes a submission milestone, not an authenticated session.
+    transition = getattr(cursor, 'login_transition_result', None) or {}
+    reference = getattr(cursor, 'login_submit_reference', None) or {}
+    from mino_nexus.services.login_evidence import scope
+    result = transition.get('result') or {}
+    if (reference.get('context_id') != id(ctx) or reference.get('scope') != scope(ctx)
+            or not reference.get('attempt_ref')
+            or transition.get('attempt_ref') != reference.get('attempt_ref')
+            or result.get('ok') is not True or result.get('status') != 'completed'):
+        return {'ok': False, 'case_fail': True, 'status': 'unverified',
+                'error_kind': 'login_transition_observation_error',
+                'capability_id': 'confirm_login_state', 'block_id': block_id,
+                'summary': '缺少本次提交的页面切换证据，停止确认'}
     cursor.login_state_waits = 0
     from mino_nexus.loop.milestones import note_tool_pass_milestone
     cursor.login_state_waits = 0
@@ -893,7 +916,8 @@ def _complete_login_state(cursor, ctx, *, block_id, writer=None, frame_thumb="",
                 "milestone_id": "submit_login", "reason": "login_result_shared",
                 "attempt_ref": str(prior.get("attempt_ref") or ""),
                 "observation_hash": str(getattr(ctx, "decision_screenshot_hash", "") or ""),
-                "verified_by": "confirm_login_state",
+                "verified_by": "submission_transition",
+                "business_context_verified": False,
             })
     note_tool_pass_milestone(
         cursor,

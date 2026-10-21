@@ -37,11 +37,19 @@ def mask_id(value: str) -> str:
 # ---------------- 绑定码 / 身份 ----------------
 
 
-def create_bind_code(user_id: str) -> dict[str, Any]:
-    from mino_nexus.models.assistant import ImBindCode
+def create_bind_code(user_id: str, *, node_id: str, channel: str, instance_id: str) -> dict[str, Any]:
+    from mino_nexus.models.assistant import ImBindCode, AssistantProfile
 
+    if _route_args(channel, instance_id, node_id) != user_id:
+        raise PermissionError("渠道不属于当前账号")
     now = _now()
     with session_scope() as db:
+        profile = db.get(AssistantProfile, user_id)
+        if profile is None:
+            profile = AssistantProfile(user_id=user_id)
+            db.add(profile)
+        profile.extra = {**(profile.extra or {}), "bind_code_route": {
+            "node_id": node_id, "channel": channel, "instance_id": instance_id}}
         db.query(ImBindCode).filter(ImBindCode.expires_at < now).delete()
         db.query(ImBindCode).filter(ImBindCode.user_id == user_id).delete()
         for _ in range(20):
@@ -66,13 +74,17 @@ def _route_args(channel: str, instance_id: str, node_id: str) -> str:
 def consume_bind_code(code: str, *, channel: str, tenant: str, sender_id: str,
                       instance_id: str = "", node_id: str = "") -> Optional[str]:
     """同一事务校验归属、条件删除一次性码并创建映射；不可覆盖其他主人。"""
-    from mino_nexus.models.assistant import ImBindCode, ImRouteIdentity
+    from mino_nexus.models.assistant import ImBindCode, ImRouteIdentity, AssistantProfile
     from sqlalchemy import delete
     from sqlalchemy.exc import IntegrityError
     uid = _route_args(channel, instance_id, node_id)
     now = _now()
     try:
         with session_scope() as db:
+            profile = db.get(AssistantProfile, uid)
+            route = (profile.extra or {}).get("bind_code_route") if profile else None
+            if route != {"node_id": node_id, "channel": channel, "instance_id": instance_id}:
+                return None
             # DELETE RETURNING 同时校验与抢占。跨账号尝试不消耗该码。
             owner = db.execute(delete(ImBindCode).where(
                 ImBindCode.code == str(code or "").strip(), ImBindCode.user_id == uid,
@@ -94,7 +106,7 @@ def consume_bind_code(code: str, *, channel: str, tenant: str, sender_id: str,
 
 def bind_identity(user_id: str, *, channel: str, tenant: str, sender_id: str,
                   instance_id: str = "", node_id: str = "") -> str:
-    """只用于明确维护操作，无法改写既有身份归属。在线入站不自动绑定。"""
+    """用于明确维护操作或已验证的渠道登录本人关联，无法改写既有身份归属。"""
     from mino_nexus.models.assistant import ImRouteIdentity
     if _route_args(channel, instance_id, node_id) != user_id:
         raise PermissionError("该身份无法绑定")
@@ -128,19 +140,36 @@ def find_identity(channel: str, tenant: str, sender_id: str, *, instance_id: str
     return row["user_id"] if row else None
 
 
+class ImBindingError(PermissionError):
+    """绑定校验的固定原因码；不把身份或渠道凭据写进异常。"""
+    def __init__(self, reason: str):
+        super().__init__("社交绑定已失效")
+        self.reason = reason
+
+
 def require_im_binding(user_id: str, channel: str, node_id: str, reply_ctx: dict[str, Any]) -> None:
     """每次模型、工具和发送前复核同一绑定；解绑再绑定也不能复活旧请求。"""
     from mino_nexus.core.execution_user import require_user_id
-    from mino_nexus.services.assistant_gateway import validated_source
+    from mino_nexus.services.assistant_gateway import _source_validation
     require_user_id(user_id)
     instance = str(reply_ctx.get("instance_id") or "")
     row = find_route_identity(channel, str(reply_ctx.get("tenant") or ""),
         str(reply_ctx.get("sender_id") or ""), instance_id=instance, node_id=node_id)
-    if (not row or row["user_id"] != user_id or not reply_ctx.get("binding_key")
-            or row["binding_key"] != reply_ctx["binding_key"]
-            or validated_source({"channel": channel, "node_id": node_id,
-                "instance_id": instance, "reply_ctx": reply_ctx}) != user_id):
-        raise PermissionError("社交绑定已失效")
+    if not row:
+        raise ImBindingError("binding_missing")
+    if row["user_id"] != user_id:
+        raise ImBindingError("binding_owner_mismatch")
+    if not reply_ctx.get("binding_key") or row["binding_key"] != reply_ctx["binding_key"]:
+        raise ImBindingError("binding_changed")
+    source_ctx = dict(reply_ctx)
+    # 旧版持久请求遗漏了固定渠道的 transport。只在绑定已验证后恢复路由标记；
+    # 真实入站仍由 gateway 严格校验，显式错误标记也不能被修正或绕过。
+    if channel == "feishu_cli" and source_ctx.get("transport") in (None, ""):
+        source_ctx["transport"] = "feishu_cli"
+    source_owner, reason = _source_validation({"channel": channel, "node_id": node_id,
+        "instance_id": instance, "reply_ctx": source_ctx})
+    if source_owner != user_id:
+        raise ImBindingError(reason or "source_owner_mismatch")
 
 
 def legacy_inbound_claimed(key: str) -> bool:
@@ -163,11 +192,17 @@ def claim_inbound(key: str, owner_user_id: str) -> bool:
         return result.rowcount == 1
 
 
-def list_identities(user_id: str) -> list[dict[str, Any]]:
+def list_identities(user_id: str, *, merge_accounts: bool = False) -> list[dict[str, Any]]:
     from mino_nexus.models.assistant import ImRouteIdentity
 
     with session_scope() as db:
         rows = db.query(ImRouteIdentity).filter(ImRouteIdentity.user_id == user_id).order_by(ImRouteIdentity.id).all()
+        # 同一账号重新登录可能更换机器人实例；保留路由记录，只合并管理视图。
+        accounts = {}
+        for row in rows:
+            key = (row.channel, row.node_id, row.tenant, row.sender_id,
+                   "" if merge_accounts and row.channel == "wechat" else row.instance_id)
+            accounts[key] = row
         return [
             {
                 "id": r.id,
@@ -179,7 +214,7 @@ def list_identities(user_id: str) -> list[dict[str, Any]]:
                 "tenant": r.tenant or "",
                 "bound_at": int(r.bound_at or 0),
             }
-            for r in rows
+            for r in accounts.values()
         ]
 
 
@@ -193,7 +228,12 @@ def delete_identity(user_id: str, identity_id: int) -> bool:
         from mino_nexus.models.assistant import AssistantSubscription
         db.query(AssistantSubscription).filter_by(user_id=user_id, channel=row.channel,
             sender_id=row.sender_id, node_id=row.node_id, status="active").update({"status": "cancelled"})
-        db.delete(row)
+        # 解绑账号时同时撤销该节点旧实例的绑定，避免旧登录恢复后重新生效。
+        bindings = db.query(ImRouteIdentity).filter_by(user_id=user_id, channel=row.channel,
+            node_id=row.node_id, tenant=row.tenant, sender_id=row.sender_id)
+        if row.channel != "wechat":
+            bindings = bindings.filter_by(instance_id=row.instance_id)
+        bindings.delete(synchronize_session=False)
         db.flush()
         left = db.query(ImRouteIdentity.id).filter(ImRouteIdentity.user_id == user_id).first()
     if left is None:
@@ -217,7 +257,7 @@ def get_profile(user_id: str) -> dict[str, Any]:
         return {
             "user_id": row.user_id,
             "persona": row.persona or "",
-            "enabled": row.enabled is not False,
+            "enabled": True,
             "project_id": row.project_id or "",
         }
 
@@ -232,8 +272,7 @@ def save_profile(user_id: str, patch: dict[str, Any]) -> dict[str, Any]:
             db.add(row)
         if "persona" in patch and patch["persona"] is not None:
             row.persona = str(patch["persona"])[:2000]
-        if "enabled" in patch and patch["enabled"] is not None:
-            row.enabled = bool(patch["enabled"])
+        row.enabled = True
     return get_profile(user_id)
 
 
@@ -367,12 +406,14 @@ def recent_im_history(user_id: str, inbound: dict[str, Any], binding: dict[str, 
         return history
 
 
-def list_turns(user_id: str, *, limit: int = 30, offset: int = 0, surface: str = "") -> dict[str, Any]:
+def list_turns(user_id: str, *, limit: int = 30, offset: int = 0, surface: str = "", node_id: str = "") -> dict[str, Any]:
     from mino_nexus.models.assistant import AssistantTurn
 
     limit = max(1, min(int(limit or 30), 200))
     with session_scope() as db:
         q = db.query(AssistantTurn).filter(AssistantTurn.user_id == user_id)
+        if node_id:
+            q = q.filter(AssistantTurn.node_id == node_id)
         if surface:
             q = q.filter(AssistantTurn.surface == surface)
         total = q.count()
@@ -436,13 +477,14 @@ def add_subscription(sub: dict[str, Any]) -> int:
         return row.id
 
 
-def list_subscriptions(user_id: str) -> list[dict[str, Any]]:
+def list_subscriptions(user_id: str, *, node_id: str = "") -> list[dict[str, Any]]:
     from mino_nexus.models.assistant import AssistantSubscription
 
     with session_scope() as db:
         rows = (
             db.query(AssistantSubscription)
             .filter(AssistantSubscription.user_id == user_id)
+            .filter(AssistantSubscription.node_id == node_id if node_id else True)
             .order_by(AssistantSubscription.id.desc())
             .limit(200)
             .all()

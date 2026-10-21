@@ -38,9 +38,9 @@ def public(row):
 
 
 def authorize(project_id, sess):
-    from mino_nexus.services.mino_bots import _require_access, _uid
-    _require_access(project_id, sess)
-    owner = _uid(sess)
+    from mino_nexus.services.project_members import require_maintainer
+    require_maintainer(project_id, sess)
+    owner = str((sess or {}).get("user_id") or "").strip()
     if not owner:
         raise ValueError('缺少执行账号')
     return owner
@@ -150,6 +150,41 @@ def target_selection(opts, body, current=None):
     if channel and 'app_id' in body and aid and aid != channel['app_id']:
         raise ValueError('应用与渠道不一致，请重新选择测试目标')
     return (channel['app_id'], surface, channel['platform']) if channel else ('', '', '')
+
+
+def resolve_target(opts, view, args=None):
+    """Environment and channel come from the request, then the project config.
+    A value saved on the workspace is only a hint and is ignored once it is stale."""
+    args = args or {}
+    channels, envs = opts['channels'], opts['environments']
+    env_keys = [e['key'] for e in envs]
+    env = str(args.get('env_profile') or '')
+    if env and env not in env_keys:
+        raise ValueError(f"环境「{env}」不在项目配置中，可选：{'、'.join(env_keys) or '无'}。")
+    if not env:
+        saved = view.get('env_profile') or ''
+        env = saved if saved in env_keys else ('test' if 'test' in env_keys else (env_keys[0] if env_keys else ''))
+    ids = {c['id']: c for c in channels}
+    surface = str(args.get('env_surface') or '')
+    if surface and surface not in ids:
+        raise ValueError(f"渠道「{surface}」不在项目配置中，可选：{'、'.join(c['label'] for c in channels) or '无'}。")
+    if not surface and args.get('app_id'):
+        mine = [c for c in channels if c['app_id'] == args['app_id']]
+        surface = mine[0]['id'] if len(mine) == 1 else ''
+    if not surface and view.get('env_surface') in ids:
+        surface = view['env_surface']
+    if not surface:
+        online = {d.get('platform') for d in opts.get('devices', [])}
+        pool = [c for c in channels if c['platform'] in online] or channels
+        if len(pool) == 1:
+            surface = pool[0]['id']
+        elif view.get('platform'):
+            same = [c for c in pool if c['platform'] == view['platform']]
+            surface = same[0]['id'] if len(same) == 1 else ''
+    if not surface:
+        raise ValueError('这个项目有多个应用渠道，请告诉我测哪一个：' + '、'.join(c['label'] for c in channels) + '。')
+    ch = ids[surface]
+    return {'app_id': ch['app_id'], 'env_surface': surface, 'platform': ch['platform'], 'env_profile': env, 'label': ch['label']}
 
 
 def create_workspace(project_id, sess, body):

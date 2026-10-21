@@ -497,6 +497,7 @@ def compile_step_spans(
     layer: str,
     *,
     platform: str = "",
+    field_defs: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, str] | None]:
     """一次编号步。返回 (hits, fail)。fail 为 None 时 hits 已通过校验。"""
     source = str(text or "")
@@ -513,6 +514,9 @@ def compile_step_spans(
         "catalog": menu,
         "other_layer_key_refs": [str(row.get("key_ref") or "") for row in layer_menu(other_layer)] if other_layer else [],
     }
+    if field_defs is not None:
+        payload["account_fields"] = [{key: row[key] for key in ("key", "label", "options") if key in row}
+                                     for row in field_defs]
     spans, err = _ask(payload)
     errors: list[str] = [err] if err else []
     hits: list[dict[str, Any]] = []

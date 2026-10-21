@@ -1,5 +1,4 @@
 id: propose_atlas
-version: 1
 label: 建议图谱变更
 summary: 判断需求影响模块
 engine: json_chat

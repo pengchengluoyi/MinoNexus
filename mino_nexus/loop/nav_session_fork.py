@@ -98,7 +98,7 @@ def format_guest_tab_fork_hint(fork: GuestTabLoginFork) -> str:
     return (
         f"【导航分叉·未登录】本步点 Tab「{fork.tab_label}」后应进入「{fork.expected_ref}」，"
         f"不是已登录个人页。到位后 signal_done；"
-        f"禁止 fsm_navigate 目标「{fork.tab_label}」/个人页，勿重复点 Tab。"
+        f"勿继续导航到「{fork.tab_label}」/个人页，勿重复点 Tab。"
     )
 
 

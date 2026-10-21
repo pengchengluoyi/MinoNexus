@@ -1,0 +1,37 @@
+id: cli.execute
+version: 1
+title: 执行飞书和 Meego CLI 操作
+description: >-
+  根据用户明确请求，在本人 Scout 的飞书或 Meego 上创建或修改业务数据。
+  复用现有 IM 身份、群聊执行权限、任务记录和写入去重，不需要再次确认已明确授权的操作。
+  command 为不含程序名的命令名称数组，options 为不带 -- 的 CLI 参数名到值的映射。
+  没有参数时传 options={} 或不传 options；绝不要使用空字符串作为参数名。若工具拒绝无名参数，不要声称操作已执行。
+  提交 Bug 前使用 cli.query 查询实际空间、类型、字段和模板；未确定空间先查询 project list，链接或别名先用 project get 的 simple-names 解析真实 key。
+  唯一可用的空间、缺陷类型和模板可直接使用；多项无法区分时询问用户名称，不要求用户填写内部字段或模板 ID。不假设类型 key 为 bug，不猜字段 ID 或模板 ID。
+  例如 command=[workitem,create]，options={project-key:空间KEY,work-item-type:缺陷类型KEY,params:{fields:[{field_key:name,field_value:标题},{field_key:template,field_value:模板ID}]}}。
+  复现步骤、预期结果、实际结果等使用查询得到的字段 key 加入 fields。
+  dry-run=true 仅预览，不能称已创建。成功必须以工具回执为准，保留工作项 ID。
+  不提供删除、任意 Shell、节点本地文件读取或 CLI 登录配置修改。
+route: POST /runtime/cli/execute
+risk: write
+async: false
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    plugin:
+      type: string
+      enum: [feishu, meego]
+    command:
+      type: array
+      items: {type: string}
+      minItems: 1
+      maxItems: 8
+    options:
+      type: object
+      description: CLI 长参数及业务数据；JSON 参数直接传对象，不传文件路径。
+    node_id: {type: string}
+  required: [plugin, command]
+result_pick: [data]
+surfaces: [im]
+enabled: true

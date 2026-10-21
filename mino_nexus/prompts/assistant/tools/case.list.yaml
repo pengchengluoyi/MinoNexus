@@ -1,5 +1,4 @@
 id: case.list
-version: 3
 title: 项目用例列表
 description: 列出某个应用所在项目下的用例。用户问有哪些用例、搜某条用例时用。
 route: GET /project/{project_id}/cases

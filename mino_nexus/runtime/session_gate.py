@@ -247,7 +247,7 @@ def compile_sms_send_hint(
         return ""
     return (
         "【短信登录】手机号已填入且右侧仍有发送控件："
-        "先 request_sms_code，再 get_otp 取码并 input_text 填入验证码框；"
+        "先用 tap_element 点击发送验证码控件，确认发码成功后再 get_otp 取码并 input_text 填入验证码框；"
         "勿跳过发送步骤直接填码。"
     )
 

@@ -1,5 +1,4 @@
 id: scout.update_cancel
-version: 1
 title: 取消 Scout 更新等待
 description: 只取消指定 operation_id 尚未派发的空闲等待。不能强行终止安装或释放结果未知的维护门禁。
 route: POST /runtime/nodes/{node_id}/updates/{operation_id}/cancel

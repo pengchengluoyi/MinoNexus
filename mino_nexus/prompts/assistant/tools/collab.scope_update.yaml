@@ -1,5 +1,4 @@
 id: collab.scope_update
-version: 2
 title: 保存工作区测试目标
 description: 用户明确选择已有模块、需求或应用环境后保存到当前工作区；同范围返回已有工作区。此操作只保存选择，不执行用例。
 route: PATCH /project/{project_id}/collab/workspaces/{topic_id}

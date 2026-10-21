@@ -7,8 +7,8 @@ from typing import Any, Optional
 
 from mino_nexus.core.schemas import CapturedScreen
 
-# 均值亮度低于此阈值视为黑屏（0–255）
-_BLACK_MEAN_THRESHOLD = 12
+# 所有采样点都低于此阈值才视为近乎全黑；深色页面的平均亮度不是不可读证据。
+_BLACK_PIXEL_THRESHOLD = 12
 _SAMPLE_MAX_SIDE = 64
 
 
@@ -47,11 +47,10 @@ def analyze_shot(shot: Any) -> dict[str, str]:
         img = Image.open(io.BytesIO(data)).convert("L")
         img.thumbnail((_SAMPLE_MAX_SIDE, _SAMPLE_MAX_SIDE))
         pixels = list(img.getdata())
-        mean = sum(pixels) / max(len(pixels), 1)
-        black = mean < _BLACK_MEAN_THRESHOLD
+        black = max(pixels, default=0) < _BLACK_PIXEL_THRESHOLD
         return {"capture_ok": "yes", "capture_black": _yes_no(black)}
     except Exception:
-        return {"capture_ok": "yes", "capture_black": "unknown"}
+        return {"capture_ok": "no", "capture_black": "unknown", "capture_error": "screenshot_decode_failed"}
 
 
 def shot_usable(shot: Any) -> bool:

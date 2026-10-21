@@ -1,5 +1,4 @@
 id: workspace-route
-version: 7
 label: 测试工作区对话
 summary: 工作区里的一句话：查事实、调用现有工具、直接回答
 engine: text_chat

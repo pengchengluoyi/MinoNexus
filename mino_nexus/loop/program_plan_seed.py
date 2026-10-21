@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from mino_nexus.loop.llm_step_context import step_scope_key
-from mino_nexus.loop.milestones import milestone_v1_enabled, milestones_empty, read_state
+from mino_nexus.loop.milestones import milestones_empty, read_state
 
 
 def _run_case(case: dict[str, Any] | None, ctx: Any) -> dict[str, Any] | None:
@@ -24,8 +24,6 @@ def ensure_program_milestone_seeds(
     include_prep: bool = False,
 ) -> None:
     """有 do/check_program_plan 时写入里程碑骨架；不依赖 vision_plan 开关。"""
-    if not milestone_v1_enabled():
-        return
     _, phase = step_scope_key(cursor)
     ph = str(phase or getattr(cursor, "phase", "") or "").strip().lower()
     run_case = _run_case(case, ctx)

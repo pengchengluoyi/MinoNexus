@@ -12,7 +12,7 @@ OTP_CHILD = ContextVar('bound_otp_child', default=None)
 def implementation():
     return {'id': GMAIL_IMPL, 'executor': GMAIL_EXECUTOR, 'runs_on': 'scout',
             'low_level': {}, 'params_contract': {'version': 1},
-            'result_contract': {'version': 1}, 'device_hint_template': {'execution_mode': 'legacy'}}
+            'result_contract': {'version': 1}, 'device_hint_template': {'execution_mode': 'agent'}}
 
 
 def request_params(ctx):

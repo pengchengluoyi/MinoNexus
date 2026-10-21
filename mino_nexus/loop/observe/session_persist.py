@@ -1,6 +1,8 @@
 """登录态写入 RunContext，校验阶段可读（不依赖当轮是否重跑 inspect-session）。"""
 from __future__ import annotations
 
+from mino_nexus.loop.login_transition import update_auth_state
+
 import re
 from typing import Any
 
@@ -14,11 +16,7 @@ def stamp_session_observation(ctx: Any, row: dict[str, Any] | None, *, form_left
     """inspect-session 成功后写入 ctx.session_fact / task_session。"""
     if not isinstance(row, dict) or not row.get("ok"):
         return
-    from mino_nexus.services.login_evidence import record, normalize_observation, can_commit
-    prior = getattr(ctx, "login_evidence", None) or {}
-    if (prior.get("verification_method") == "login_page_transition" and can_commit(ctx)
-            and normalize_observation(row).get("session") == "unknown"):
-        return {**row, "session": "logged_in", "reason": "本用例登录提交已切换页面，当前观察未提供相反证据"}
+    from mino_nexus.services.login_evidence import record
     row, evidence = record(ctx, row, form_left=form_left)
     from mino_nexus.services.session_match import normalize_device_session
 
@@ -38,8 +36,10 @@ def stamp_session_observation(ctx: Any, row: dict[str, Any] | None, *, form_left
         "account_binding_source": evidence["account_binding_source"],
         "business_context": "unverified",
     }
-    ctx.session_fact = dict(fact)
-    ctx.task_session = dict(fact)
+    update_auth_state(ctx, session_fact=dict(fact))
+    update_auth_state(ctx, task_session=dict(fact))
+    update_auth_state(ctx, device_session=session)
+    update_auth_state(ctx, device_session_source="inspect_session")
     ctx.session_dirty = session not in {"logged_in", "logged_out", "guest"}
     from mino_nexus.services.resource_transition import emit_inspect_session
 
@@ -49,15 +49,21 @@ def stamp_session_observation(ctx: Any, row: dict[str, Any] | None, *, form_left
 
 def mark_session_dirty(ctx: Any, *, reason: str = "") -> None:
     ctx.session_dirty = True
-    ctx.login_evidence = {}
-    if reason != "login_form_visible":
+    update_auth_state(ctx, device_session="unknown")
+    update_auth_state(ctx, device_session_source="invalidated")
+    update_auth_state(ctx, login_evidence={})
+    ctx.web_auth_hint = None
+    ctx.session_contradiction = None
+    if reason not in {"login_form_visible", "login_submission_transition"}:
         from mino_nexus.services.login_evidence_policy import clear_submission
         clear_submission(ctx)
+    prev = dict(getattr(ctx, "session_fact", None) or {})
+    prev["session"] = "unknown"
+    prev["login_state_verified"] = False
     if reason:
-        prev = dict(getattr(ctx, "session_fact", None) or {})
-        prev["session"] = "unknown"
         prev["stale_reason"] = str(reason)[:200]
-        ctx.session_fact = prev
+    update_auth_state(ctx, session_fact=prev)
+    update_auth_state(ctx, task_session=dict(prev))
 
 
 def execution_context_session_line(ctx: Any) -> str:

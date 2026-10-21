@@ -1,5 +1,4 @@
 id: assistant-media
-version: 1
 label: 助手图片理解
 summary: 描述用户图片的界面、现象与需要补充的信息
 engine: text_chat

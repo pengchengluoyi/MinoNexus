@@ -1,5 +1,4 @@
 id: inspect-session
-version: 8
 label: 会话观察
 summary: 观察当前屏登录态
 engine: observe

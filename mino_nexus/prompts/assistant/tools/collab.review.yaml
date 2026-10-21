@@ -1,0 +1,29 @@
+{
+  "id": "collab.review",
+  "version": 1,
+  "title": "读取工作区问题聚合、人工决策与结果过期状态",
+  "description": "读取工作区问题聚合、人工决策与结果过期状态",
+  "route": "GET /project/{project_id}/collab/workspaces/{topic_id}/review",
+  "risk": "read",
+  "enabled": true,
+  "params_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "project_id": {
+        "type": "string"
+      },
+      "topic_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "project_id",
+      "topic_id"
+    ]
+  },
+  "result_pick": [
+    "data"
+  ],
+  "card": "answer"
+}

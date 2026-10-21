@@ -145,6 +145,10 @@ def handle_utterance(
     preferences = conversation.preferences(user_id)
     if preferences:
         messages.append({"role": "system", "content": json.dumps({"display_preferences": preferences}, ensure_ascii=False)})
+    if pending and pending.get('tool_id') in {'cli.query', 'cli.execute'}:
+        messages.append({'role': 'system', 'content': json.dumps({'pending_cli_request': {
+            key: pending.get(key) for key in ('tool_id', 'args', 'question')
+        }}, ensure_ascii=False)})
     steps: list[dict[str, Any]] = []
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
     model_error = ""
@@ -164,6 +168,12 @@ def handle_utterance(
     def submit(spec_id: str, args: dict[str, Any]) -> dict[str, Any]:
         from mino_nexus.services.assistant_runtime import execute_request
         check_binding()
+        if pending and pending.get('tool_id') in {'cli.query', 'cli.execute'} and spec_id == 'cli.execute':
+            if pending['tool_id'] == spec_id:
+                saved_args = pending.get('args') or {}
+                args = {**saved_args, **args, 'options': {**(saved_args.get('options') or {}), **(args.get('options') or {})}}
+            if not conversation.cancel(pending['id'], pending['revision']):
+                return result_for(answer='这条待补充请求已变化，请查看最新回复。', origin=origin)
         request_args = {**target, **args}
         if spec_id == 'case.run':
             request_args = conversation.reuse_execution_args(origin, request_args)
@@ -228,7 +238,25 @@ def handle_utterance(
                 return submit(spec["id"], args)
             if args.get("intent") == "execute_test" and spec.get("id") in ("case.list", "device.list", "app.list"):
                 return submit("case.run", args)
+            resumed = None
+            if pending and pending.get('tool_id') == spec.get('id') == 'cli.query':
+                saved_args = pending.get('args') or {}
+                field = str((pending.get('question') or {}).get('field') or '')
+                same_command = args.get('command') == saved_args.get('command') and args.get('plugin') == saved_args.get('plugin')
+                value = (args.get('options') or {}).get(field.removeprefix('options.'))
+                if same_command and field.startswith('options.') and value not in (None, '', []):
+                    from mino_nexus.services.assistant_envelope import lane_for
+                    resumed = conversation.claim(pending['id'], pending['revision'], lane=lane_for(user_id, origin), patch={field: value})
+                    args = {**resumed['args'], **args, 'options': {**(resumed['args'].get('options') or {}), **(args.get('options') or {})}}
             outcome = run_tool(spec, args, user_id=user_id, target=target)
+            if resumed:
+                updated = conversation.finish(resumed['id'], resumed['revision'], outcome)
+                pending = None
+                if outcome.ask or not outcome.ok:
+                    result = result_for(answer=outcome.ask or outcome.summary, outcome=outcome, origin=origin,
+                                        request=updated, steps=steps, usage=usage)
+                    result['routing_path'] = 'llm'
+                    return result
             last_outcome = outcome
             steps.append({
                 "tool": spec.get("id"),

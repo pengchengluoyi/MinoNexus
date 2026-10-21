@@ -22,7 +22,12 @@ class ProfileBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     persona: Optional[str] = None
-    enabled: Optional[bool] = None
+
+
+class BindCodeBody(BaseModel):
+    node_id: str
+    channel: str
+    instance_id: str
 
 
 class McpTokenBody(BaseModel):
@@ -104,13 +109,22 @@ def put_profile(body: ProfileBody, sess: dict = Depends(current_session)):
 
 
 @router.post("/bind/code")
-def bind_code(sess: dict = Depends(current_session)):
-    return ok(store.create_bind_code(_uid(sess)))
+def bind_code(body: BindCodeBody, sess: dict = Depends(current_session)):
+    uid = _uid(sess)
+    from mino_nexus.core.execution_user import execution_user
+    # 前端提供的路由只作选择；必须与当前用户可见的节点快照一致。
+    from mino_nexus.services.im_status import identity_channel
+    if not any(n["node_id"] == body.node_id and any(
+            identity_channel(c["channel"]) == body.channel and c.get("instance_id") == body.instance_id
+            for c in n["channels"]) for n in _im_nodes(sess)):
+        raise HTTPException(status_code=409, detail="渠道实例已变化或不可用，请刷新节点后重试")
+    with execution_user(uid):
+        return ok(store.create_bind_code(uid, **body.model_dump()))
 
 
 @router.get("/identities")
 def identities(sess: dict = Depends(current_session)):
-    return ok({"items": store.list_identities(_uid(sess))})
+    return ok({"items": store.list_identities(_uid(sess), merge_accounts=True)})
 
 
 @router.delete("/identities/{identity_id}")
@@ -132,9 +146,10 @@ def turns(
     limit: int = Query(30),
     offset: int = Query(0),
     surface: str = Query(""),
+    node_id: str = Query(""),
     sess: dict = Depends(current_session),
 ):
-    return ok(store.list_turns(_uid(sess), limit=limit, offset=offset, surface=surface))
+    return ok(store.list_turns(_uid(sess), limit=limit, offset=offset, surface=surface, node_id=node_id))
 
 
 @router.get("/turns/{turn_id}")
@@ -218,8 +233,8 @@ def revoke_mcp_token(token_id: int, sess: dict = Depends(current_session)):
 
 
 @router.get("/subscriptions")
-def subscriptions(sess: dict = Depends(current_session)):
-    return ok({"items": store.list_subscriptions(_uid(sess))})
+def subscriptions(node_id: str = Query(""), sess: dict = Depends(current_session)):
+    return ok({"items": store.list_subscriptions(_uid(sess), node_id=node_id)})
 
 
 @router.delete("/subscriptions/{sub_id}")
@@ -275,9 +290,9 @@ class GroupPolicyBody(BaseModel):
 
 
 @router.get('/requests')
-def assistant_requests(sess: dict = Depends(current_session)):
+def assistant_requests(node_id: str = Query(""), sess: dict = Depends(current_session)):
     from mino_nexus.services.assistant_conversation import list_requests
-    return ok(list_requests(_uid(sess)))
+    return ok(list_requests(_uid(sess), node_id=node_id))
 
 
 @router.post('/requests/{request_id}/respond')

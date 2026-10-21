@@ -314,11 +314,7 @@ def _retain_publication(obj, fields):
     new = sync_review(new, old)
     if old.get("v5_publication"):
         new["v5_publication"] = deepcopy(old["v5_publication"])
-        changed_resource = new.get("resource_key") != old["v5_publication"].get("resource_key")
-        new["v5_plan_state"] = "needs_revalidate" if changed_resource else old.get("v5_plan_state", "published")
-        meta = dict(new.get("meta") or {})
-        meta["step_program_keys"] = deepcopy(old["v5_publication"]["compiled_keys"])
-        new["meta"] = meta
+        # Preserve historical publication as evidence, never as the active plan.
     fields["extra"] = new
 
 

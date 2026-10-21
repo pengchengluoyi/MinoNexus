@@ -1,0 +1,1082 @@
+candidate_category	source_file	line	source_excerpt
+compatibility_candidate	mino_nexus/action_space/scheme.py	1	"""""""任务策略与本轮执行方式分开；旧 dom 任务兼容 DOM 优先。"""""""
+compatibility_candidate	mino_nexus/ai/job_slots.py	42	# 兼容 v18 及更早 job 模板（v19 起可省略）
+compatibility_candidate	mino_nexus/ai/llm_client.py	319	"""""""兼容 OpenAI / 方舟 usage 字段。"""""""
+compatibility_candidate	mino_nexus/ai/llm_client.py	468	"structure = {""chunks"": 0, ""tool_delta_chunks"": 0, ""legacy_delta_chunks"": 0, ""message_chunks"": 0}"
+compatibility_candidate	mino_nexus/ai/llm_client.py	515	"structure[""legacy_delta_chunks""] += 1"
+compatibility_candidate	mino_nexus/ai/model_sdk.py	39	"raise ValueError(""请选择受支持的 API Key 接入方式；兼容接口请选择 openai"")"
+compatibility_candidate	mino_nexus/ai/model_sdk.py	207	"legacy = body.get(""function_call"")"
+compatibility_candidate	mino_nexus/ai/model_sdk.py	208	if not calls and isinstance(legacy, dict):
+compatibility_candidate	mino_nexus/ai/model_sdk.py	209	"calls = [{""function"": legacy}]"
+compatibility_candidate	mino_nexus/ai/model_sdk.py	235	当前 OpenAI 兼容路径的 post_call 在 provider SDK 解析后触发，不是 HTTP
+platform_contract_candidate	mino_nexus/ai/schemas.py	69	"SCENE_PLATFORM_VALUES = (""android"", ""ios"", ""web"", ""any"")"
+platform_contract_candidate	mino_nexus/ai/schemas.py	81	"platform: Literal[""android"", ""ios"", ""web"", ""any""] = ""android"""
+compatibility_candidate	mino_nexus/ai/schemas.py	403	"description=""兼容：新 id 视为 milestones_append"","
+compatibility_candidate	mino_nexus/ai/schemas.py	417	"description=""兼容字段：为 true 时等同 exit_allowed"","
+compatibility_candidate	mino_nexus/catalog/flow_block_seed.py	184	# Legacy IDs are no longer seeded, but startup must not delete them:
+platform_contract_candidate	mino_nexus/catalog/registry.py	49	def platform_ok(platforms: list[str], platform: str) -> bool:
+compatibility_candidate	mino_nexus/catalog/resource_logout_caps.py	5	# Cache cleanup retains application data; neither legacy name proves logout.
+platform_contract_candidate	mino_nexus/catalog/skill_channel.py	52	CHANNEL_PLATFORMS = {
+platform_contract_candidate	mino_nexus/catalog/skill_channel.py	255	def normalize_platform(platform: str) -> str:
+platform_contract_candidate	mino_nexus/catalog/skill_channel.py	264	def channel_platforms_for(cap_id: str) -> frozenset[str] | None:
+platform_contract_candidate	mino_nexus/catalog/skill_channel.py	279	def channel_supports(cap_id: str, platform: str) -> bool:
+platform_contract_candidate	mino_nexus/catalog/skill_channel.py	304	def apply_channel_skip(row: dict[str, Any], platform: str) -> bool:
+compatibility_candidate	mino_nexus/catalog/skill_channel.py	490	"""device_hint_template"": {""execution_mode"": ""legacy""},"
+platform_contract_candidate	mino_nexus/catalog/skill_channel.py	508	def _system_device_implementation(eid: str, platforms: list[str], low_level: dict[str, Any]) -> dict[str, Any]:
+compatibility_candidate	mino_nexus/catalog/skill_channel.py	517	"""device_hint_template"": {""execution_mode"": ""legacy""},"
+compatibility_candidate	mino_nexus/catalog/skill_channel.py	624	"""device_hint_template"": {""execution_mode"": ""legacy""}}"
+compatibility_candidate	mino_nexus/catalog/skill_channel.py	743	def _without_legacy_kinds(kinds: list[Any]) -> list[str]:
+directory_candidate	mino_nexus/cli.py	310	"os.environ[""MINO_NEXUS_DEV_DATA_DIR"" if not getattr(sys, ""frozen"", False) else ""MINO_NEXUS_DATA_DIR""] = str(target)"
+directory_candidate	mino_nexus/cli.py	364	"raw_dir = args.data_dir or os.environ.get(""MINO_NEXUS_DEV_DATA_DIR"" if args.dev else ""MINO_NEXUS_DATA_DIR"", """")"
+directory_candidate	mino_nexus/cli.py	366	"raw_dir = str(Path.home() / "".mino-dev"" / ""nexus"")"
+directory_candidate	mino_nexus/cli.py	372	"if os.name == ""nt"" else Path.home() / "".mino-nexus"").resolve()"
+directory_candidate	mino_nexus/cli.py	376	"os.environ[""MINO_NEXUS_DEV_DATA_DIR"" if args.dev else ""MINO_NEXUS_DATA_DIR""] = str(target)"
+compatibility_candidate	mino_nexus/core/bootstrap.py	16	from mino_nexus.services.knowledge_store import migrate_legacy
+compatibility_candidate	mino_nexus/core/bootstrap.py	18	kn = migrate_legacy(db)
+compatibility_candidate	mino_nexus/core/bootstrap.py	66	from mino_nexus.services.flow_block_key_ref_backfill import backfill_flow_block_key_refs
+compatibility_candidate	mino_nexus/core/bootstrap.py	68	bk = backfill_flow_block_key_refs()
+compatibility_candidate	mino_nexus/core/bootstrap.py	70	"SLog.i(TAG, f""flow block key_ref backfilled {bk}"")"
+directory_candidate	mino_nexus/core/database.py	92	"""""""测试在 monkeypatch MINO_NEXUS_DATA_DIR 后调用，避免写入真实 mino.db。"""""""
+directory_candidate	mino_nexus/core/maintenance_probe.py	30	"os.environ[""MINO_NEXUS_DEV_DATA_DIR"" if not getattr(sys, ""frozen"", False) else ""MINO_NEXUS_DATA_DIR""] = str(Path(args.data_dir).expanduser().resolve())"
+compatibility_candidate	mino_nexus/core/migration.py	1	"""""""启动迁移，包括结构和历史数据变更；失败必须中断初始化。"""""""
+compatibility_candidate	mino_nexus/core/migration.py	91	"{""id"": MARKER, ""payload"": json.dumps({""legacy_ai"": ""pending_claim"", ""legacy_im"": ""disabled"", ""version"": 1})})"
+compatibility_candidate	mino_nexus/core/migration.py	168	from mino_nexus.services.collab_workspace import migrate_legacy
+compatibility_candidate	mino_nexus/core/migration.py	169	migrate_legacy()
+compatibility_candidate	mino_nexus/core/migration.py	174	"conn.execute(text(""UPDATE collab_message_jobs SET status='interrupted', error='工作区模型已升级，请查看原任务后重新发起' WHERE status IN ('queued', 'running') AND topic_id IN (SELECT topic_id FROM collab_topics WHERE workspace_kind LIKE 'legacy%')""))"
+compatibility_candidate	mino_nexus/core/migration_backup.py	1	"""""""账号隔离迁移前做 SQLite 一致性备份；不覆盖已有备份。"""""""
+directory_candidate	mino_nexus/core/paths.py	18	"else Path.home() / ""Library/Application Support/Mino/nexus/data"" if sys.platform == ""darwin"""
+directory_candidate	mino_nexus/core/paths.py	19	"else Path.home() / "".mino-nexus"")"
+directory_candidate	mino_nexus/core/paths.py	20	"if not development and sys.platform == ""darwin"" and not os.environ.get(""MINO_NEXUS_DATA_DIR""):"
+compatibility_candidate	mino_nexus/core/paths.py	21	"legacy = Path.home() / "".mino-nexus"""
+directory_candidate	mino_nexus/core/paths.py	21	"legacy = Path.home() / "".mino-nexus"""
+compatibility_candidate	mino_nexus/core/paths.py	22	"if (legacy / ""mino.db"").exists():"
+directory_candidate	mino_nexus/core/paths.py	24	"raise ValueError(""检测到新旧 Nexus 数据目录，请显式指定 MINO_NEXUS_DATA_DIR；不会自动合并"")"
+compatibility_candidate	mino_nexus/core/paths.py	25	prod_default = legacy
+directory_candidate	mino_nexus/core/paths.py	26	"dev_default = Path.home() / "".mino-dev"" / ""nexus"""
+directory_candidate	mino_nexus/core/paths.py	28	# old MINO_NEXUS_DATA_DIR pointing at dev; it is not a production instance.
+directory_candidate	mino_nexus/core/paths.py	29	"variable = ""MINO_NEXUS_DEV_DATA_DIR"" if development else ""MINO_NEXUS_DATA_DIR"""
+directory_candidate	mino_nexus/core/paths.py	32	"forbidden = ([prod_default, Path.home() / "".mino-nexus"", Path.home() / ""Mino"" / ""nexus"","
+compatibility_candidate	mino_nexus/core/platform_contract.py	3	Legacy conversion belongs to the offline migration planner, not this module.
+platform_contract_candidate	mino_nexus/core/platform_contract.py	8	"TARGET_PLATFORMS = (""mac"", ""win"", ""android"", ""web"")"
+platform_contract_candidate	mino_nexus/core/platform_contract.py	9	"NATIVE_PLATFORMS = frozenset({""mac"", ""win""})"
+platform_contract_candidate	mino_nexus/core/platform_contract.py	15	"def __init__(self, code: str, field: str = ""platform""):"
+platform_contract_candidate	mino_nexus/core/platform_contract.py	20	"def target_platform(value, *, field=""platform"") -> str:"
+platform_contract_candidate	mino_nexus/core/platform_contract.py	26	"def platform_set(values, *, field=""platforms"") -> list[str]:"
+platform_contract_candidate	mino_nexus/core/platform_contract.py	38	"scope = document.get(""platform_scope"")"
+platform_contract_candidate	mino_nexus/core/platform_contract.py	40	"raise PlatformContractError(""platform_scope_required"", ""platform_scope"")"
+platform_contract_candidate	mino_nexus/core/platform_contract.py	43	"raise PlatformContractError(""platform_scope_conflict"", ""platforms"")"
+platform_contract_candidate	mino_nexus/core/platform_contract.py	47	"raise PlatformContractError(""platform_scope_conflict"", ""platform"")"
+platform_contract_candidate	mino_nexus/core/platform_contract.py	48	"return {""platform_scope"": scope, ""platforms"": values}"
+platform_contract_candidate	mino_nexus/core/platform_contract.py	66	def native_sn(platform, node_id) -> str:
+platform_contract_candidate	mino_nexus/core/platform_contract.py	93	def execute_platform(request: dict) -> str:
+platform_contract_candidate	mino_nexus/core/platform_contract.py	118	def batch_platforms(platforms_by_sn) -> list[str]:
+platform_contract_candidate	mino_nexus/core/platform_contract.py	163	def native_request_platform(request: dict, *, node_id: str, host_system: str) -> str:
+platform_contract_candidate	mino_nexus/core/platform_contract.py	189	"if ""platforms"" in value or ""platform_scope"" in value:"
+platform_contract_candidate	mino_nexus/core/platform_contract.py	207	"platforms = list(TARGET_PLATFORMS) if c[""platform_scope""] == ""all"" else c[""platforms""]"
+platform_contract_candidate	mino_nexus/core/platform_contract.py	241	def validate_platform_announcement(message, *, fallback_host=None):
+compatibility_candidate	mino_nexus/core/protocol.py	177	executor_snapshot_version: int = 0  # 0: legacy delta; 1: complete executors snapshot
+directory_candidate	mino_nexus/core/service_cli.py	65	"os.environ[""MINO_NEXUS_DATA_DIR""] = args.data_dir"
+compatibility_candidate	mino_nexus/loop/action_fuse.py	1	"""""""兼容旧导入。实现在 loop.fuse.action_fuse。"""""""
+compatibility_candidate	mino_nexus/loop/agent_loop.py	2338	# Review that action before any legacy login chain can take ownership.
+compatibility_candidate	mino_nexus/loop/agent_loop.py	5269	"""节点拒绝当前焦点输入，契约不兼容，已停止。"""
+platform_contract_candidate	mino_nexus/loop/case_runner.py	65	"def _platform_of(sn: str, fallback: str = ""android"") -> str:"
+compatibility_candidate	mino_nexus/loop/case_runner.py	125	"execution_mode: str = ""legacy"","
+compatibility_candidate	mino_nexus/loop/case_runner.py	158	"execution_mode = ""legacy"" if execution_mode in {"""", ""agent""} else execution_mode"
+compatibility_candidate	mino_nexus/loop/case_runner.py	159	"if execution_mode not in {""legacy"", ""v5""}:"
+platform_contract_candidate	mino_nexus/loop/device_display_guard.py	14	def platform_needs_display_guard(ctx: Any) -> bool:
+compatibility_candidate	mino_nexus/loop/email_login_auto.py	302	"""""""兼容旧名：与 run_email_login_ui_chain 相同。"""""""
+compatibility_candidate	mino_nexus/loop/explore_cursor.py	14	"""""""与 StepCursor 接口兼容，供 agent_loop / skill_trace 复用。"""""""
+compatibility_candidate	mino_nexus/loop/fuse/action_fuse.py	63	"""""""细粒度签名（兼容旧测试）。"""""""
+compatibility_candidate	mino_nexus/loop/fuse/action_fuse.py	625	# 兼容旧名
+compatibility_candidate	mino_nexus/loop/fuse/dispatch_gate.py	85	"""""""兼容 registry.run_guards 返回值。"""""""
+compatibility_candidate	mino_nexus/loop/hierarchy_slots.py	101	本开关仅保留给需要旧版 `calibration_id` 目录的兼容场景。
+platform_contract_candidate	mino_nexus/loop/input_contract.py	7	"def supports_focus_input(capabilities: Any, *, executor: str, platform: str, write_mode: str = ""replace"") -> bool:"
+compatibility_candidate	mino_nexus/loop/input_contract.py	133	"""请升级并重启该节点后再跑。不会用补坐标掩盖不兼容。"""
+compatibility_candidate	mino_nexus/loop/input_contract.py	138	"""""""只识别节点明确在写入前拒绝的焦点错误，兼容旧节点的错误前缀。"""""""
+compatibility_candidate	mino_nexus/loop/llm_step_context.py	176	"""brief_legacy"": brief[:500] if brief else """","
+platform_contract_candidate	mino_nexus/loop/login_state_probe.py	8	"_WEB_PLATFORMS = frozenset({""web"", ""browser"", ""playwright""})"
+platform_contract_candidate	mino_nexus/loop/login_state_probe.py	50	def _platform(ctx: Any) -> str:
+compatibility_candidate	mino_nexus/loop/login_verification.py	3	能力名仍叫 request_sms_code（目录兼容），Web 邮箱场景下等价于点 Send 发邮件验证码，不是手机短信。
+compatibility_candidate	mino_nexus/loop/observe/session_project.py	14	"""""""Session log 旧版会把 thumb 截断成 ...(+N)，拼 data URL 会 ERR_INVALID_URL。"""""""
+compatibility_candidate	mino_nexus/loop/observe/session_project.py	393	"""""""投影为 agent_stream 兼容形状；优先用于 Studio 回放。"""""""
+compatibility_candidate	mino_nexus/loop/registry.py	1066	"""""""动作族次数上限（legacy）。do 阶段已从 skill_defs 移除，避免与 LLM 空转对打。"""""""
+compatibility_candidate	mino_nexus/loop/router_proxy.py	1	"""""""RouterProxy：签名兼容上游 `CapabilityRouter`，内部把动作发给 Scout。"
+compatibility_candidate	mino_nexus/loop/router_proxy.py	152	"execution_mode: str = ""legacy"","
+platform_contract_candidate	mino_nexus/loop/router_proxy.py	1061	def executors_for_platform(platform: str) -> tuple[str, ...]:
+platform_contract_candidate	mino_nexus/loop/router_proxy.py	1083	def _device_platform(sn: str, node: NodeSession) -> str:
+compatibility_candidate	mino_nexus/loop/router_proxy.py	1232	"with registry_runtime(getattr(ctx, ""execution_mode"", ""legacy"")):"
+compatibility_candidate	mino_nexus/loop/session_ensure.py	88	# Preserve legacy uncompiled cases until they have a structured contract.
+compatibility_candidate	mino_nexus/loop/ui_sms_request.py	150	"""""""兼容旧调用：默认安卓 EditText 规则。"""""""
+compatibility_candidate	mino_nexus/loop/v5_case_exec.py	264	"verdict = {""verification_status"": verification, ""reason_code"": reason, ""legacy_error_kind"": """","
+compatibility_candidate	mino_nexus/loop/web_progress.py	1	"""""""兼容旧导入。实现在 loop.web.web_progress。"""""""
+compatibility_candidate	mino_nexus/prompts/assistant/jobs/assistant-route/system/20-rules.md	7	只向用户提供本次目标兼容且 executable=true 的设备。macOS 应用只列 macOS 桌面，Windows 应用只列 Windows 桌面，普通网站只列 Web 槽；没有候选时说明具体原因，不能列其他渠道的设备凑数。
+compatibility_candidate	mino_nexus/prompts/assistant/jobs/assistant-route/system/20-rules.md	9	渠道未明确且存在多个渠道时先问渠道，再问兼容设备；不要用用例的历史 Web/Android 标签决定所选应用的执行渠道。
+compatibility_candidate	mino_nexus/prompts/assistant/jobs/assistant-route/system/20-rules.md	25	渠道和设备追问由工具返回，不能自行枚举 Android/iOS/Web/Server，不展示未配置、繁忙、离线或不兼容候选。
+compatibility_candidate	mino_nexus/prompts/assistant/tools/case.run.yaml	67	description: 执行策略；默认 dom_preferred，有有效结构用 DOM，无法定位时用截图兜底；visual 为纯视觉，旧 dom 兼容映射到 dom_preferred。平台执行能力由设备与渠道准入判断。
+compatibility_candidate	mino_nexus/prompts/assistant/tools/device.list.yaml	3	title: 兼容设备列表
+compatibility_candidate	mino_nexus/prompts/assistant/tools/device.list.yaml	31	description: 执行策略；默认 dom_preferred，有有效结构用 DOM，无法定位时用截图兜底；visual 为纯视觉，旧 dom 兼容映射到 dom_preferred。平台执行能力由设备与渠道准入判断。
+platform_contract_candidate	mino_nexus/routers/rApplicationUnderstanding.py	24	platform: Literal['web', 'android', 'ios', 'pc']
+platform_contract_candidate	mino_nexus/routers/rApplicationUnderstanding.py	58	def trends(project_id: str, app_id: str, platform: str = Query(default='', max_length=40)):
+platform_contract_candidate	mino_nexus/routers/rApplicationUnderstanding.py	99	"def compile_metrics(project_id: str, app_id: str, platform: str = Query(default="""", max_length=40), days: int = Query(default=30, ge=1, le=90)):"
+platform_contract_candidate	mino_nexus/routers/rApplicationUnderstanding.py	109	platform: Literal['web', 'android', 'ios', 'pc']
+compatibility_candidate	mino_nexus/routers/rCaseRunner.py	198	"execution_mode=str(body.execution_mode or ""legacy""),"
+compatibility_candidate	mino_nexus/routers/rMinoBots.py	8	@router.api_route('/project/{project_id}/collab/{legacy_path:path}', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+compatibility_candidate	mino_nexus/routers/rMinoBots.py	9	def retired(project_id: str, legacy_path: str, sess: dict = Depends(current_session)):
+compatibility_candidate	mino_nexus/routers/rMinoBots.py	10	if legacy_path.startswith('workspaces'):
+compatibility_candidate	mino_nexus/routers/rNavFsm.py	788	# ---------------- 遗留 walkthrough 批次（只读兼容，新采集走 /captures） ----------------
+compatibility_candidate	mino_nexus/routers/rProjectCases.py	387	if execution_mode not in {'legacy', 'v5'}:
+compatibility_candidate	mino_nexus/routers/rReleases.py	82	"""""""Accept items[] , a single-entry object, or a legacy {os:{arch:{}}} map."""""""
+compatibility_candidate	mino_nexus/routers/rRuntime.py	186	async def claim_legacy_node(node_id: str, sess: dict = Depends(current_session)):
+compatibility_candidate	mino_nexus/routers/rSettings.py	759	"@router.post(""/knowledge/backfill-situations"")"
+compatibility_candidate	mino_nexus/routers/rSettings.py	760	def backfill_knowledge_situations(
+compatibility_candidate	mino_nexus/routers/rSettings.py	767	from mino_nexus.services.knowledge_situation import backfill_situations
+compatibility_candidate	mino_nexus/routers/rSettings.py	770	n = backfill_situations(app_id=app_id, project_id=project_id, limit=limit)
+platform_contract_candidate	mino_nexus/runtime/menu.py	160	"def recovery_menu_brief(ctx: RunContext, *, platform: str = """") -> list[dict[str, Any]]:"
+platform_contract_candidate	mino_nexus/runtime/platform_gate.py	24	def _norm_device_platform(raw: str) -> str:
+platform_contract_candidate	mino_nexus/runtime/platform_gate.py	47	def parse_case_platforms(case: dict[str, Any]) -> Optional[set[str]]:
+platform_contract_candidate	mino_nexus/runtime/platform_gate.py	88	def platform_label(platforms: set[str]) -> str:
+platform_contract_candidate	mino_nexus/runtime/platform_gate.py	161	def platform_skip_reason(
+compatibility_candidate	mino_nexus/runtime/platform_gate.py	164	"""""""设备平台与用例渠道不兼容时返回 skip 说明。"""""""
+platform_contract_candidate	mino_nexus/runtime/platform_gate.py	168	"if ""platform_scope"" in case:"
+platform_contract_candidate	mino_nexus/runtime/platform_gate.py	171	"if declared[""platform_scope""] == ""all"" or device_platform in declared[""platforms""]:"
+compatibility_candidate	mino_nexus/runtime/platform_gate.py	179	"return ""用例平台尚未迁移确认，请明确 mac / win / android / web 后重新发布"""
+compatibility_candidate	mino_nexus/runtime/run_context.py	102	"execution_mode: str = ""legacy"""
+compatibility_candidate	mino_nexus/runtime/run_context.py	249	"""""""兼容上游签名：按 sn 找节点再构造。"
+compatibility_candidate	mino_nexus/runtime/run_context.py	326	"LEGACY_WEB_SLOT_SN = ""web-local"""
+compatibility_candidate	mino_nexus/runtime/run_context.py	327	"LEGACY_WEB_SLOT_SNS = frozenset({""web-local"", ""web_local""})"
+compatibility_candidate	mino_nexus/runtime/run_context.py	339	"def is_legacy_web_sn(sn: str = """") -> bool:"
+compatibility_candidate	mino_nexus/runtime/run_context.py	341	"return str(sn or """").strip().lower() in LEGACY_WEB_SLOT_SNS"
+platform_contract_candidate	mino_nexus/runtime/run_context.py	344	"def is_web_slot(sn: str = """", platform: str = """") -> bool:"
+compatibility_candidate	mino_nexus/runtime/run_context.py	354	"if is_legacy_web_sn(s) or s == ""web"" or s.startswith(""web-""):"
+platform_contract_candidate	mino_nexus/runtime/run_context.py	365	"def device_platform_kind(device_type: str = """", channels: Any = None, sn: str = """") -> str:"
+platform_contract_candidate	mino_nexus/runtime/session_gate.py	31	"_SCENE_PLATFORM = frozenset({""android"", ""ios"", ""web"", ""desktop"", ""mac"", ""macos"", ""pc"", ""windows"", ""linux"", ""any""})"
+platform_contract_candidate	mino_nexus/runtime/session_gate.py	127	if plat_raw in _SCENE_PLATFORM:
+platform_contract_candidate	mino_nexus/runtime/session_gate.py	148	if prep_raw in _SESSION_PREP and req_raw in _REQUIRED and need_raw in _DEVICE_NEED and plat_raw in _SCENE_PLATFORM:
+compatibility_candidate	mino_nexus/runtime/session_gate.py	205	**_legacy: Any,
+compatibility_candidate	mino_nexus/runtime/session_gate.py	208	del _legacy
+compatibility_candidate	mino_nexus/runtime/session_gate.py	222	**_legacy: Any,
+compatibility_candidate	mino_nexus/runtime/session_gate.py	225	del _legacy
+compatibility_candidate	mino_nexus/services/account_fact_review.py	21	# Never infer device identity by parsing a session ID. Legacy sessions record
+compatibility_candidate	mino_nexus/services/account_lease.py	942	"""""""兼容旧调用：等同 ensure_case_account_lease。"""""""
+compatibility_candidate	mino_nexus/services/account_requirement_compile.py	18	"_LEGACY_LOGIN_TITLE_RE = re.compile(r""登录态|登录状态"", re.I)"
+compatibility_candidate	mino_nexus/services/account_requirement_compile.py	58	if _LEGACY_LOGIN_TITLE_RE.search(t):
+platform_contract_candidate	mino_nexus/services/app_issues.py	49	def aggregate(cases, describe, *, app_id, project_id, owner, platform='', category='', status='', page=1, size=50):
+compatibility_candidate	mino_nexus/services/application_channels.py	1	"""""""Project applications own runtime channels; legacy values keep their original keys."""""""
+platform_contract_candidate	mino_nexus/services/application_channels.py	5	def app_platforms(app):
+platform_contract_candidate	mino_nexus/services/application_understanding.py	143	def apply_reviewed(fsm, *, platform, build):
+platform_contract_candidate	mino_nexus/services/application_understanding.py	236	def trends(project_id, app_id, *, platform=''):
+compatibility_candidate	mino_nexus/services/assistant_errors.py	30	return ('执行资源正在被其他任务使用，本次任务尚未提交。', ['等待资源空闲后继续本次请求，或明确选择另一台兼容设备。'])
+compatibility_candidate	mino_nexus/services/assistant_gateway.py	271	# 兼容旧永久 claim，不能在升级后重放已处理消息。
+compatibility_candidate	mino_nexus/services/assistant_gateway.py	272	"legacy = [owner, str(inbound.get(""node_id"") or """"), channel, str(inbound.get(""instance_id"") or """"), str(inbound.get(""tenant"") or """"), sender, msg_id]"
+compatibility_candidate	mino_nexus/services/assistant_gateway.py	273	if store.legacy_inbound_claimed(hashlib.sha256(json.dumps(legacy, ensure_ascii=False).encode()).hexdigest()):
+compatibility_candidate	mino_nexus/services/assistant_store.py	146	def legacy_inbound_claimed(key: str) -> bool:
+compatibility_candidate	mino_nexus/services/assistant_targets.py	1	"""""""IM 执行目标：渠道来自项目定义，设备兼容性复用任务准入。"""""""
+compatibility_candidate	mino_nexus/services/assistant_targets.py	93	"unavailable.append({**row, ""reason"": ""；"".join(reasons) if reasons else ""没有兼容的在线设备""})"
+compatibility_candidate	mino_nexus/services/assistant_tools.py	349	"msg = (""设备名称有歧义，请选择："" if ambiguous else ""没有找到与本次渠道兼容的设备："") + ""、"".join(options)"
+compatibility_candidate	mino_nexus/services/assistant_tools.py	511	"msg = str((device or {}).get(""blocked_reason"") or ""这台设备不可执行本次应用渠道，或你没有访问权限，请选择兼容且就绪的设备。"")"
+compatibility_candidate	mino_nexus/services/assistant_tools.py	518	"msg = ""当前应用渠道没有可执行设备。"" + (""；"".join(reasons) if reasons else ""请连接同系统、兼容且属于当前账号的设备。"")"
+compatibility_candidate	mino_nexus/services/assistant_tools.py	523	"msg = f""本次用哪台设备？当前应用渠道兼容且可执行的设备：{'、'.join(names)}。"""
+platform_contract_candidate	mino_nexus/services/case_clause_events.py	419	def platform_block(row: dict[str, Any], platform: str) -> bool:
+compatibility_candidate	mino_nexus/services/case_compilation.py	46	# legacy project-store reader may lazily write names in another session.
+compatibility_candidate	mino_nexus/services/case_compilation.py	202	"legacy = _snapshot(db, previous, number, actor, {""kind"": ""legacy_snapshot"", ""compile_origin_unknown"": True})"
+compatibility_candidate	mino_nexus/services/case_compilation.py	204	if legacy.input_digest == digest(input_view(current)):
+compatibility_candidate	mino_nexus/services/case_compilation.py	205	"return _queue(db, row, legacy, request_id=""source:"" + legacy.revision_id, initial_status=initial_status)"
+compatibility_candidate	mino_nexus/services/case_compilation.py	248	"record_change(db, row, previous, origin={""kind"": ""adopt_legacy""})"
+compatibility_candidate	mino_nexus/services/case_compilation.py	258	# Reuse active work, including an adopted legacy job.
+platform_contract_candidate	mino_nexus/services/case_import.py	109	"def _resolve_import_platform(value: str, env_doc: dict | None, *, default: str = """") -> str:"
+compatibility_candidate	mino_nexus/services/case_resource_key_catalog.py	208	"write_category=""登录态（兼容旧写法）"","
+compatibility_candidate	mino_nexus/services/case_review.py	284	"mode = context.get(""execution_mode"") or (""v5"" if case.get(""v5_publication"") else ""legacy"")"
+compatibility_candidate	mino_nexus/services/case_review.py	285	"if mode not in {""legacy"", ""v5""}:"
+platform_contract_candidate	mino_nexus/services/case_step_key_compiler.py	1095	"def _stored_plan_fresh(plan: Any, source: str, *, platform: str = """", instruction: str | None = None,"
+compatibility_candidate	mino_nexus/services/case_store.py	457	"""""""Legacy callers share the same transactional revision/job path."""""""
+compatibility_candidate	mino_nexus/services/collab_agentscope_team.py	208	"""""""兼容旧 env 开关：在已有 state 上补一轮协调者摘要（LangGraph 路径用）。"""""""
+platform_contract_candidate	mino_nexus/services/collab_bot_scope.py	17	def _norm_platform(value: str) -> str:
+platform_contract_candidate	mino_nexus/services/collab_bot_scope.py	62	def platform_allowed(case_platform: str, allowed: list[str]) -> bool:
+platform_contract_candidate	mino_nexus/services/collab_bot_scope.py	75	def filter_case_ids_by_platform(
+compatibility_candidate	mino_nexus/services/collab_steward.py	14	LEGACY_KINDS = frozenset(
+compatibility_candidate	mino_nexus/services/collab_steward.py	63	def cleanup_legacy_work_items(db, topic_id: str) -> int:
+compatibility_candidate	mino_nexus/services/collab_steward.py	68	CollabWorkItem.action_kind.in_(tuple(LEGACY_KINDS)),
+compatibility_candidate	mino_nexus/services/collab_steward.py	361	cleanup_legacy_work_items(db, topic_id)
+compatibility_candidate	mino_nexus/services/collab_steward.py	383	cleanup_legacy_work_items(db, topic_id)
+compatibility_candidate	mino_nexus/services/collab_steward.py	523	_LEGACY_MSG_MARKERS = (
+compatibility_candidate	mino_nexus/services/collab_steward.py	543	def is_legacy_bot_message(body: str) -> bool:
+compatibility_candidate	mino_nexus/services/collab_steward.py	551	return any(m in text for m in _LEGACY_MSG_MARKERS)
+compatibility_candidate	mino_nexus/services/collab_steward.py	560	"if is_legacy_bot_message(str(row.get(""body"") or """")):"
+compatibility_candidate	mino_nexus/services/collab_steward.py	573	if kind in LEGACY_KINDS:
+compatibility_candidate	mino_nexus/services/collab_worker.py	14	from mino_nexus.services.collab_steward import LEGACY_KINDS, RUN_KINDS
+compatibility_candidate	mino_nexus/services/collab_worker.py	637	if kind in LEGACY_KINDS:
+compatibility_candidate	mino_nexus/services/collab_workspace.py	54	if write and (row.archived or row.workspace_kind.startswith('legacy')):
+compatibility_candidate	mino_nexus/services/collab_workspace.py	228	if t.workspace_kind.startswith('legacy'):
+compatibility_candidate	mino_nexus/services/collab_workspace.py	400	def migrate_legacy():
+platform_contract_candidate	mino_nexus/services/compile_metrics.py	31	def summary(project_id, app_id, *, platform='', days=30):
+compatibility_candidate	mino_nexus/services/control_registry.py	36	"def registry_runtime(execution_mode: str = ""legacy"") -> Iterator[None]:"
+compatibility_candidate	mino_nexus/services/control_registry.py	37	"mode = str(execution_mode or ""legacy"").strip().lower()"
+compatibility_candidate	mino_nexus/services/control_registry.py	38	"if mode not in {""legacy"", ""v5""}:"
+compatibility_candidate	mino_nexus/services/control_registry.py	102	"""legacy_control_id"": str(merged.get(""legacy_control_id"") or """"),"
+compatibility_candidate	mino_nexus/services/control_registry.py	139	legacy_key = key
+compatibility_candidate	mino_nexus/services/control_registry.py	164	legacy = (
+compatibility_candidate	mino_nexus/services/control_registry.py	166	.filter(UiControl.project_id == pid, UiControl.desc_key == legacy_key)
+compatibility_candidate	mino_nexus/services/control_registry.py	169	if legacy is not None:
+compatibility_candidate	mino_nexus/services/control_registry.py	170	"locator[""legacy_control_id""] = str(legacy.control_id)"
+compatibility_candidate	mino_nexus/services/control_registry.py	210	"""""""Legacy compatibility only; V5 never borrows another project's identity."""""""
+platform_contract_candidate	mino_nexus/services/control_registry.py	234	def locator_cell(scheme: str, platform: str) -> str:
+platform_contract_candidate	mino_nexus/services/control_registry.py	245	def read_locator(control: dict[str, Any] | None, *, scheme: str, platform: str) -> str:
+platform_contract_candidate	mino_nexus/services/desktop_catalog.py	40	"def capabilities(reported: list[str], os_name: str, *, platform: str = ""desktop"") -> list[Capability]:"
+compatibility_candidate	mino_nexus/services/device_admission.py	137	"if any((run.payload or {}).get(""execution_mode"", ""legacy"") != doc.get(""execution_mode"", ""legacy"") for run in same_group):"
+compatibility_candidate	mino_nexus/services/device_admission.py	146	legacy_count = 0
+compatibility_candidate	mino_nexus/services/device_admission.py	147	"legacy_id = """""
+compatibility_candidate	mino_nexus/services/device_admission.py	155	legacy_count += 1
+compatibility_candidate	mino_nexus/services/device_admission.py	156	legacy_id = run.run_id
+compatibility_candidate	mino_nexus/services/device_admission.py	159	if legacy_count >= limit:
+compatibility_candidate	mino_nexus/services/device_admission.py	160	raise ResourceBusy(sn, legacy_id)
+platform_contract_candidate	mino_nexus/services/device_store.py	97	"def _kind_of(sn: str, platform: str = """") -> str:"
+compatibility_candidate	mino_nexus/services/device_targets.py	38	"raise ValueError(""请明确选择与执行设备兼容的被测应用渠道"")"
+compatibility_candidate	mino_nexus/services/device_targets.py	48	"raise ValueError(""设备与被测应用渠道不兼容；网站请选择 Web 浏览器"")"
+compatibility_candidate	mino_nexus/services/device_targets.py	118	"raise ValueError(""没有兼容且就绪的执行设备，请在 Workbench 选择设备"")"
+platform_contract_candidate	mino_nexus/services/execution_binding.py	91	def _supports_combination(rows, executor, platform, combination):
+compatibility_candidate	mino_nexus/services/execution_binding.py	277	"""execution_mode"": str(requirements.get(""execution_mode"") or ""legacy""),"
+compatibility_candidate	mino_nexus/services/execution_binding_runtime.py	418	"""""""Authenticated, strictly read-only view; no legacy lazy ownership/pool migration."""""""
+compatibility_candidate	mino_nexus/services/execution_dependencies.py	68	# Do not invoke list_test_accounts: its legacy read path can migrate data.
+compatibility_candidate	mino_nexus/services/execution_requirements.py	54	# legacy precondition_raw alias is not part of that input and must not make
+platform_contract_candidate	mino_nexus/services/execution_requirements.py	125	def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferred', provider_id=''):
+compatibility_candidate	mino_nexus/services/execution_requirements.py	268	'execution_mode': 'legacy', 'action_scheme': action_scheme, 'operations': rows,
+platform_contract_candidate	mino_nexus/services/execution_requirements.py	275	def adapt_event(value, *, platform, framework=False):
+compatibility_candidate	mino_nexus/services/execution_requirements.py	276	"""""""Versioned legacy assembly bridge; preserve explicit disabling and contracts."""""""
+compatibility_candidate	mino_nexus/services/execution_requirements.py	293	impl.setdefault('device_hint_template', {'execution_mode': 'legacy'})
+platform_contract_candidate	mino_nexus/services/execution_resources.py	89	def admission(doc, case, *, project_id, package, platform):
+compatibility_candidate	mino_nexus/services/flow_block_key_ref_backfill.py	1	"""""""为已有逻辑块补全 key_ref（P8 一次性 backfill）。"""""""
+compatibility_candidate	mino_nexus/services/flow_block_key_ref_backfill.py	8	def backfill_flow_block_key_refs() -> int:
+compatibility_candidate	mino_nexus/services/knowledge_jobs_store.py	26	def _legacy_defaults(raw: dict[str, Any] | None) -> dict[str, bool]:
+compatibility_candidate	mino_nexus/services/knowledge_jobs_store.py	91	defaults = _legacy_defaults(raw)
+compatibility_candidate	mino_nexus/services/knowledge_situation.py	47	BACKFILL_BATCH = 8
+compatibility_candidate	mino_nexus/services/knowledge_situation.py	49	_BACKFILL_DONE: set[str] = set()
+compatibility_candidate	mino_nexus/services/knowledge_situation.py	489	def backfill_situations(
+compatibility_candidate	mino_nexus/services/knowledge_situation.py	493	limit: int = BACKFILL_BATCH,
+compatibility_candidate	mino_nexus/services/knowledge_situation.py	508	if len(pending) >= max(1, int(limit or BACKFILL_BATCH)):
+compatibility_candidate	mino_nexus/services/knowledge_situation.py	524	"SLog.w(TAG, f""backfill upsert failed {kid}: {exc}"")"
+compatibility_candidate	mino_nexus/services/knowledge_situation.py	533	"""backfill_situations"","
+compatibility_candidate	mino_nexus/services/knowledge_store.py	233	def migrate_legacy(db) -> int:
+compatibility_candidate	mino_nexus/services/mino_bots.py	305	"""""""兼容旧客户端；测试管家 UI 不再展示大段说明。"""""""
+compatibility_candidate	mino_nexus/services/mino_bots.py	913	"""v5_publish"": {""label"": ""正式发布用例"", ""hint"": ""兼容旧项""},"
+compatibility_candidate	mino_nexus/services/mino_bots.py	1533	**_legacy: Any,
+compatibility_candidate	mino_nexus/services/nav_alias_governance.py	10	"""""""兼容旧 API；不再改写 doc。"""""""
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	198	def _legacy_draft_path(app_id: str) -> Path:
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	202	def _read_legacy_draft_file(app_id: str) -> dict[str, Any] | None:
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	203	path = _legacy_draft_path(app_id)
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	206	legacy = _read_json(path, None)
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	207	return legacy if isinstance(legacy, dict) else None
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	210	def _migrate_legacy_draft(app_id: str) -> dict[str, Any] | None:
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	211	"""""""一次性：旧版 `nav_fsm_draft.json` → `nav_fsm` 表 version=draft。"""""""
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	212	legacy = _read_legacy_draft_file(app_id)
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	213	if not legacy:
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	218	saved = store.save_draft(app_id, legacy)
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	220	_legacy_draft_path(app_id).unlink()
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	225	return legacy
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	237	_write_json(_legacy_draft_path(app_id), payload)
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	250	legacy = _read_legacy_draft_file(app_id)
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	251	if legacy:
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	252	return legacy
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	254	return _migrate_legacy_draft(app_id)
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	263	path = _legacy_draft_path(app_id)
+compatibility_candidate	mino_nexus/services/nav_calibration_store.py	275	read_draft(app_id)  # 触发遗留 JSON 迁移
+compatibility_candidate	mino_nexus/services/nav_execute.py	8	"""""""目标逻辑页：展示名/别名语义；兼容旧 target_tab。"""""""
+compatibility_candidate	mino_nexus/services/nav_live_graph.py	21	_LEGACY_KIND_SUFFIX_RE = re.compile(
+compatibility_candidate	mino_nexus/services/nav_live_graph.py	156	if _ORPHAN_NOISE_RE.match(sid) or _LEGACY_KIND_SUFFIX_RE.match(sid):
+compatibility_candidate	mino_nexus/services/nav_live_graph.py	190	if tab_layered and (_ORPHAN_NOISE_RE.match(sid) or _LEGACY_KIND_SUFFIX_RE.match(sid)):
+compatibility_candidate	mino_nexus/services/nav_route.py	339	"legacy = {sid for sid in ids if sid.startswith(""page.tab_"")}"
+compatibility_candidate	mino_nexus/services/nav_route.py	340	"if not legacy or not any(sid.startswith(""page.sk"") for sid in ids):"
+compatibility_candidate	mino_nexus/services/nav_route.py	346	"if str((st or {}).get(""id"") or (st or {}).get(""state_id"") or """").strip() not in legacy"
+compatibility_candidate	mino_nexus/services/nav_route.py	354	if frm in legacy or to in legacy:
+compatibility_candidate	mino_nexus/services/nav_route.py	361	"meta[""state_wireframes""] = {k: v for k, v in wfs.items() if str(k).strip() not in legacy}"
+compatibility_candidate	mino_nexus/services/nav_route.py	365	"bar[""entries""] = [e for e in bar.get(""entries"") or [] if str(e).strip() not in legacy]"
+compatibility_candidate	mino_nexus/services/nav_route.py	368	"bar[""labels""] = {k: v for k, v in labels.items() if str(k).strip() not in legacy}"
+compatibility_candidate	mino_nexus/services/nav_route.py	370	"if str(bar.get(key) or """").strip() in legacy:"
+compatibility_candidate	mino_nexus/services/nav_route.py	377	"if str(recover.get(key) or """").strip() in legacy:"
+compatibility_candidate	mino_nexus/services/nav_screen_registry.py	2917	def _resolve_legacy_fsm_atlas_state_id(
+compatibility_candidate	mino_nexus/services/nav_screen_registry.py	3106	legacy_target = _resolve_legacy_fsm_atlas_state_id(sid, out, states)
+compatibility_candidate	mino_nexus/services/nav_screen_registry.py	3107	if legacy_target and legacy_target != sid:
+compatibility_candidate	mino_nexus/services/nav_screen_registry.py	3108	fsm_remap[sid] = legacy_target
+compatibility_candidate	mino_nexus/services/nav_screen_registry.py	3124	leg = _resolve_legacy_fsm_atlas_state_id(sid, out, states)
+compatibility_candidate	mino_nexus/services/nav_screen_registry.py	3188	_resolve_legacy_fsm_atlas_state_id(sid, out, states),
+platform_contract_candidate	mino_nexus/services/nav_screen_registry.py	3399	"def _normalize_atlas_target(value: str, platform: str = """") -> str:"
+compatibility_candidate	mino_nexus/services/nav_state_resolve.py	166	legacy = resolve_state_ref(fsm, raw)
+compatibility_candidate	mino_nexus/services/nav_state_resolve.py	167	if legacy and F.state_by_id(fsm, legacy) and legacy != raw and legacy not in skip:
+compatibility_candidate	mino_nexus/services/nav_state_resolve.py	169	legacy,
+compatibility_candidate	mino_nexus/services/nav_state_resolve.py	171	screen_score=_screen_score(localized, legacy),
+compatibility_candidate	mino_nexus/services/nav_state_resolve.py	172	"method=""legacy_ref"","
+platform_contract_candidate	mino_nexus/services/nav_target_scope.py	61	def _norm_platform(platform: str) -> str:
+platform_contract_candidate	mino_nexus/services/nav_target_scope.py	75	def _kind_for(platform: str, target_id: str) -> str:
+platform_contract_candidate	mino_nexus/services/nav_target_scope.py	115	def _normalize_target_id(platform: str, kind: str, target_id: str) -> str:
+platform_contract_candidate	mino_nexus/services/nav_target_scope.py	124	def scope_from_values(platform: str, target_id: str) -> TargetScope | None:
+compatibility_candidate	mino_nexus/services/node_claim.py	1	"""""""Workbench administrator claim of a legacy node with no account owner."""""""
+compatibility_candidate	mino_nexus/services/node_registry.py	25	LEGACY_WEB_SLOT_SNS,
+compatibility_candidate	mino_nexus/services/node_registry.py	26	is_legacy_web_sn,
+platform_contract_candidate	mino_nexus/services/node_registry.py	49	def _device_identity_valid(device: P.DeviceManifest, node_id: str, host_platform: str) -> bool:
+compatibility_candidate	mino_nexus/services/node_registry.py	64	"if device.platform == ""web"" and device.sn.startswith(""web"") and not is_legacy_web_sn(device.sn):"
+platform_contract_candidate	mino_nexus/services/node_registry.py	133	def _plugin_platforms(raw: Any) -> dict[str, Any]:
+compatibility_candidate	mino_nexus/services/node_registry.py	378	self._retire_legacy_web_slot(reg.node_id, has_new_web)
+compatibility_candidate	mino_nexus/services/node_registry.py	385	"if is_legacy_web_sn(sn) or old.platform == ""desktop"":"
+compatibility_candidate	mino_nexus/services/node_registry.py	433	self._purge_orphaned_legacy_web_slots()
+compatibility_candidate	mino_nexus/services/node_registry.py	445	def _retire_legacy_web_slot(self, node_id: str, has_new_web: bool) -> None:
+compatibility_candidate	mino_nexus/services/node_registry.py	452	for sn in LEGACY_WEB_SLOT_SNS:
+compatibility_candidate	mino_nexus/services/node_registry.py	462	self._purge_orphaned_legacy_web_slots()
+compatibility_candidate	mino_nexus/services/node_registry.py	526	def _purge_orphaned_legacy_web_slots(self) -> None:
+compatibility_candidate	mino_nexus/services/node_registry.py	528	for sn in LEGACY_WEB_SLOT_SNS:
+compatibility_candidate	mino_nexus/services/node_registry.py	595	if is_legacy_web_sn(d.sn) and not _channel_connected(d.channels):
+compatibility_candidate	mino_nexus/services/node_registry.py	607	self._purge_orphaned_legacy_web_slots()
+compatibility_candidate	mino_nexus/services/node_registry.py	693	if is_legacy_web_sn(sn):
+compatibility_candidate	mino_nexus/services/node_registry.py	748	self._purge_orphaned_legacy_web_slots()
+compatibility_candidate	mino_nexus/services/node_registry.py	784	self._purge_orphaned_legacy_web_slots()
+compatibility_candidate	mino_nexus/services/node_registry.py	831	self._purge_orphaned_legacy_web_slots()
+compatibility_candidate	mino_nexus/services/node_store.py	220	"""""""账号是可见性依据；studio_id 仅保留为兼容元信息。"""""""
+compatibility_candidate	mino_nexus/services/node_store.py	251	# List-only exception for administrator legacy claiming. Node commands,
+compatibility_candidate	mino_nexus/services/otp_binding.py	15	'result_contract': {'version': 1}, 'device_hint_template': {'execution_mode': 'legacy'}}
+platform_contract_candidate	mino_nexus/services/page_recognition_comparison.py	18	def record_pair(writer, *, states, reviewed, fsm_meta, project_id, app_id, platform, build,
+platform_contract_candidate	mino_nexus/services/page_recognition_comparison.py	62	def listing(project_id, app_id, *, platform='', build='', limit=50, offset=0):
+compatibility_candidate	mino_nexus/services/phone_pool_lease.py	131	# 兼容现有形象字段：新用户尚未配置形象；这属于补池初始值，非 UI 核验证据。
+platform_contract_candidate	mino_nexus/services/platform_migration.py	38	"_PLATFORM_FIELDS = {""platform"", ""platforms"", ""platform_scope"", ""platforms_by_sn"", ""native_os"", ""device_platform"", ""target_platform""}"
+platform_contract_candidate	mino_nexus/services/platform_migration.py	52	def suggest_platform(value, *, authoritative_host=None, windows_channel=False, android_only=False) -> dict:
+platform_contract_candidate	mino_nexus/services/platform_migration.py	101	"if key == ""platform_scope"":"
+platform_contract_candidate	mino_nexus/services/platform_migration.py	103	"findings.append({""field"": field, ""state"": ""blocked"", ""reason"": ""platform_scope_invalid""})"
+compatibility_candidate	mino_nexus/services/platform_migration.py	117	# Legacy apps used a comma string; report each token without
+compatibility_candidate	mino_nexus/services/platform_migration.py	248	Legacy runs without a ledger keep the conservative recursive check. A
+platform_contract_candidate	mino_nexus/services/platform_migration_apply.py	31	_SCALAR = {'platform', 'platform_scope', 'sn', 'device_sn', 'os'}
+platform_contract_candidate	mino_nexus/services/platform_migration_apply.py	83	elif key == 'platform_scope':
+compatibility_candidate	mino_nexus/services/plugins_store.py	19	_LEGACY_MIGRATED = False
+compatibility_candidate	mino_nexus/services/plugins_store.py	211	def ensure_legacy_keys_migrated() -> None:
+compatibility_candidate	mino_nexus/services/plugins_store.py	213	global _LEGACY_MIGRATED
+compatibility_candidate	mino_nexus/services/plugins_store.py	214	_LEGACY_MIGRATED = True
+compatibility_candidate	mino_nexus/services/plugins_store.py	217	_legacy_migrate_shared_keys()
+compatibility_candidate	mino_nexus/services/plugins_store.py	220	def _legacy_migrate_shared_keys() -> None:
+compatibility_candidate	mino_nexus/services/plugins_store.py	492	"legacy = stored_flow.get(""template"") if isinstance(stored_flow.get(""template""), dict) else None"
+compatibility_candidate	mino_nexus/services/plugins_store.py	495	elif legacy:
+compatibility_candidate	mino_nexus/services/plugins_store.py	496	"cfg[""templates""] = [default_zentao_template_row(raw=legacy)]"
+compatibility_candidate	mino_nexus/services/plugins_store.py	515	"legacy = stored_flow.get(""template"") if isinstance(stored_flow.get(""template""), dict) else None"
+compatibility_candidate	mino_nexus/services/plugins_store.py	518	if legacy:
+compatibility_candidate	mino_nexus/services/plugins_store.py	519	return [default_zentao_template_row(raw=legacy)]
+compatibility_candidate	mino_nexus/services/pool_account_store.py	376	"""""""project.env 是否仍带 legacy test_accounts 键（含空列表）。"""""""
+compatibility_candidate	mino_nexus/services/pool_account_store.py	381	"""""""若 env 仍含 legacy test_accounts，迁入 DB 后从 project.env 去掉；否则不写 env。"""""""
+platform_contract_candidate	mino_nexus/services/project_env.py	23	"CHANNEL_PLATFORMS = (""mac"", ""win"", ""android"", ""web"")"
+platform_contract_candidate	mino_nexus/services/project_env.py	98	"def _infer_kind_platform(cid: str, kind: str = """", platform: str = """") -> Tuple[str, str]:"
+compatibility_candidate	mino_nexus/services/project_env.py	99	# Read legacy values verbatim; only absent legacy fields may use a known preset.
+compatibility_candidate	mino_nexus/services/project_env.py	140	# 旧数据：无简称的 android/ios/web 保持原 id，方便包名解析。有简称的不折回成唯一 web。
+compatibility_candidate	mino_nexus/services/project_env.py	210	def _migrate_legacy_mode(mode: str, *, slot: str) -> str:
+compatibility_candidate	mino_nexus/services/project_env.py	222	"mode = _migrate_legacy_mode(src.get(""mode""), slot=""otp"")"
+compatibility_candidate	mino_nexus/services/project_env.py	243	"mode = _migrate_legacy_mode(src.get(""mode""), slot=""login"")"
+compatibility_candidate	mino_nexus/services/project_env.py	361	"""""""规范结构：environments + channels + pipeline + profiles。兼容旧四套 android/ios/web。"""""""
+compatibility_candidate	mino_nexus/services/project_env.py	415	# 旧数据默认三步走：测试 → 预发 → 正式；其余环境可单独开测但不在上线路径里
+compatibility_candidate	mino_nexus/services/project_env.py	523	"tags_legacy = item.get(""tags"") if isinstance(item.get(""tags""), list) else []"
+compatibility_candidate	mino_nexus/services/project_env.py	532	"{""tags"": tags_legacy, ""facets"": combined, ""profile_id"": profile_id}"
+platform_contract_candidate	mino_nexus/services/project_env.py	992	"def target_id_from_snapshot(snap: dict, platform: str = ""android"", surface: str = """") -> str:"
+compatibility_candidate	mino_nexus/services/project_pool_config_store.py	1	"""""""项目号池配置 SQLite 真源；从 projects.env 懒迁移。"""""""
+compatibility_candidate	mino_nexus/services/project_store.py	39	"""""""导入 / 旧数据缺创建人：回填 Nexus 种子账号 `admin`，避免 UI 看起来无主。"""""""
+compatibility_candidate	mino_nexus/services/project_store.py	407	# Freeze existing unique legacy associations before a second same-platform app is added.
+compatibility_candidate	mino_nexus/services/project_store.py	449	# This legacy endpoint edits values only. Channel/platform changes use project env.
+compatibility_candidate	mino_nexus/services/resource_pool.py	3	标签 tags 仅作一次性迁移输入，匹配与展示真源均为 facets。
+compatibility_candidate	mino_nexus/services/resource_pool.py	821	# Legacy leases have local timestamps without an offset; V5 leases use
+platform_contract_candidate	mino_nexus/services/resource_transition_engine.py	17	def _platform(ctx: Any) -> str:
+platform_contract_candidate	mino_nexus/services/resource_transition_engine.py	29	def _rules_for_trigger(trigger_id: str, platform: str) -> list[dict[str, Any]]:
+compatibility_candidate	mino_nexus/services/run_store.py	473	"""execution_mode"": doc.get(""execution_mode"") or ""legacy"","
+compatibility_candidate	mino_nexus/services/run_write_safety.py	170	# A legacy intent without generation counts only if this process still holds the exact action record.
+compatibility_candidate	mino_nexus/services/run_write_safety.py	217	"""execution_mode"": str(doc.get(""execution_mode"") or ""legacy"")})"
+compatibility_candidate	mino_nexus/services/session_atomic.py	25	"prefix = ""eligible"" if eligible else ""legacy"""
+compatibility_candidate	mino_nexus/services/session_store.py	311	"return {""status"": ""legacy"", ""message"": ""旧合同记录，未记录统一绑定""}"
+platform_contract_candidate	mino_nexus/services/settings.py	102	def channel_screenshot_compress_ratio(platform: str, provider_id: Optional[str] = None) -> float:
+platform_contract_candidate	mino_nexus/services/ui_devices.py	19	def _type_of(platform: str) -> str:
+compatibility_candidate	mino_nexus/services/ui_devices.py	62	for proto, legacy in _CHANNEL_ALIASES:
+compatibility_candidate	mino_nexus/services/ui_devices.py	63	if proto in out and legacy not in out:
+compatibility_candidate	mino_nexus/services/ui_devices.py	64	out[legacy] = out[proto]
+compatibility_candidate	mino_nexus/websocket/node.py	100	legacy 可重取；V5 正编号写请求禁止网络重发，丢结果按 effect_unknown 终结。
+compatibility_candidate	mino_nexus/websocket/node.py	272	"await self.ws.close(code=1008, reason=""平台合同不兼容"")"
+compatibility_candidate	docs/ENVIRONMENTS.md	9	开发 Nexus 数据根 `~/.mino-dev/nexus`，正式 macOS 数据根 `~/Library/Application Support/Mino/nexus/data/`，Docker 使用 `/data`。两种环境禁止共用或互相包含目录，环境标记会校验。旧安装目录不自动迁移。
+directory_candidate	docs/ENVIRONMENTS.md	9	开发 Nexus 数据根 `~/.mino-dev/nexus`，正式 macOS 数据根 `~/Library/Application Support/Mino/nexus/data/`，Docker 使用 `/data`。两种环境禁止共用或互相包含目录，环境标记会校验。旧安装目录不自动迁移。
+directory_candidate	docs/environment-isolation.md	9	| Scout 默认目录（macOS） | ~/.mino-dev/scout | ~/Library/Application Support/MinoScout |
+directory_candidate	docs/environment-isolation.md	11	| Nexus 目录变量 | MINO_NEXUS_DEV_DATA_DIR | MINO_NEXUS_DATA_DIR |
+directory_candidate	docs/environment-isolation.md	12	| Nexus 默认目录 | ~/.mino-dev/nexus | ~/.mino-nexus |
+directory_candidate	docs/environment-isolation.md	14	PID、锁、停止请求、插件文件、日志分别跟随各自目录。源码启动不调用正式 launchd/systemd/计划任务，不搜索安装包作为备用可执行文件。显式目录经过 realpath 检查，禁止相同或互相包含；首次写入目录环境标记，跨环境重用已标记目录直接失败。不要复制或硬链接正式数据到开发目录。开发 Nexus 不再读取正式目录变量，原先以 MINO_NEXUS_DATA_DIR 指定开发临时目录的脚本应改用 MINO_NEXUS_DEV_DATA_DIR。
+compatibility_candidate	docs/environment-isolation.md	18	已有配置不删除、不自动迁移。开发密钥启用独立服务名后，旧共享服务名里的开发密钥不会自动读取，需在开发环境重新填写；正式密钥沿用原名。localhost / 127.0.0.1 / ::1 在同协议、同端口的归属比较中视为同一本机地址，但不改写已有 profile 哈希依据。不同账号或服务的冲突继续阻断，禁止自动覆盖归属。
+compatibility_candidate	docs/github-updates.md	25	B4 启动前自动备份按用户要求暂缓；不存在“每次启动已自动备份”的保证。旧版无法读取迁移后的库时，恢复备份需要单独决定，可能丢失升级后写入的数据。
+compatibility_candidate	docs/github-updates.md	49	## 旧安装迁移
+compatibility_candidate	docs/github-updates.md	51	旧安装先停止 Nexus 与 Workbench，备份后复制到新的目录，显式用新数据根启动并验收登录、历史记录和 Scout 重连。保留原目录和原版本安装包；源码移除旧安装器不意味着现场已经迁移。不要把运行中的 SQLite 主文件直接复制成备份。
+directory_candidate	docs/local-deployment-layout.md	5	- 业务数据：`~/Library/Application Support/Mino/nexus/data/`。
+directory_candidate	docs/local-deployment-layout.md	9	- 开发环境：`~/.mino-dev/nexus`、Nexus 50101、Vite 60101；禁止与生产数据根重叠。
+compatibility_candidate	docs/local-deployment-layout.md	16	旧 `~/Mino/…` 或独立 Workbench 安装目录不自动移动、删除或合并。迁移必须先停止写入、备份、复制到新目录并显式指定新路径，原目录留作回滚。B4 自动备份暂缓，当前版本不会替代人工备份。
+compatibility_candidate	docs/release-manifest-v1.md	13	| compatibility.protocol | 当前节点协议 2、MCP 2025-03-26；字段存在不代表所有工作流兼容 |
+compatibility_candidate	docs/release-manifest-v1.md	14	| compatibility.api | 明确 tested_build_pairs；为空时禁止以版本相近推断兼容 |
+compatibility_candidate	docs/release-manifest-v1.md	15	| compatibility.schema | Nexus 初始化含 migration 和 bootstrap；旧版数据兼容未经证明时必须拒绝自动回退 |
+compatibility_candidate	docs/release-manifest-v1.md	16	| compatibility.automatic_rollback | 本期基线 false；D 阶段完成实际兼容演练后才可新增明确组合 |
+directory_candidate	docs/scout/01-定位与系统边界.md	48	| `~/Library/Application Support/MinoScout/config.json` | `nexus_url`、`token`、`version`、`manifest_url`（可选）、`installed_layers`（更新后） |
+directory_candidate	docs/scout/02-安装与分层产物.md	53	- 生产二进制：`~/Library/Application Support/MinoScout/bin/mino-scout`（或 `~/.local/bin/mino-scout` 软链）。
+compatibility_candidate	docs/scout/02-安装与分层产物.md	87	- **替换**：`replace_path`（`.new` → `mv`，旧路径保留为 `.old`，**全部层成功后再删 .old**）。
+directory_candidate	docs/scout/05-Studio与运维.md	23	"SCOUT=""$HOME/Library/Application Support/MinoScout/bin/mino-scout"""
+directory_candidate	docs/scout/05-Studio与运维.md	68	"- 用 `$SCOUT` 绝对路径，或 `export PATH=""$HOME/Library/Application Support/MinoScout/bin:$PATH""`。"
+compatibility_candidate	docs/基础框架/CASE_RUN_FIXES.md	4	**修复落盘后需重启 Nexus 进程**，否则内存中的 catalog / skill guards 仍是旧版。
+directory_candidate	docs/基础框架/CASE_RUN_FIXES.md	127	### 3.3 日志排查 SQL（`~/.mino-nexus/mino.db`）
+directory_candidate	docs/基础框架/DATA_MODEL.md	7	库文件是 `mino.db`（`data_dir()`，默认 `~/.mino-nexus`，可用 `MINO_NEXUS_DATA_DIR` 覆盖）。SQLAlchemy，`create_all` + 启动时 `run_auto_migration()`。
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	12	| 项目号池账号 | `pool_accounts` + `pool_account_facets` | Studio 账号管理；`projects.env.test_accounts` 仅迁移来源 |
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	13	| 项目号池配置（扩展字段 / 启用模板 / 本地模板） | `project_pool_config` | Studio 号池与模板；`projects.env` 中对应键仅迁移来源 |
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	46	Workbench V4：`users.email` 为规范化后的可空邮箱，数据库唯一约束兜底；无邮箱的旧本地账号保留 NULL。启动时仅新增列、规范化回填和创建唯一索引，不删除旧账号。历史重复邮箱会使唯一索引迁移明确失败，需要先由账号管理处理，不静默合并账号。新普通注册写 `email_verified=false` 并固定 `role=user`。注册与登录会话采用独立事务，不通过全量账号快照写回。
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	86	- `migration.py` 的自动迁移逻辑重做（建议换 alembic）
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	99	## Workbench V4 账号命名空间与迁移
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	109	首次启动在建表/迁移前使用 SQLite backup API 生成独占创建、0600 权限的一致性备份，不覆盖旧备份。迁移标记 `migration:account-isolation-v1` 写回 SQLite。仅可信且仍对应有效用户的旧任务 `plugin_user_id` 回填 owner，关联 session 继承可信任务归属；无可信归属数据不推测 owner。已部署中间版本缺 binding_key 时，添加列前也执行备份。历史全局 Key、旧社交映射和无归属本地插件配置均需维护流程明确确认，当前未实现认领/转移 UI。
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	119	- `app_regression_runs.payload.device_targets` 按 sn 保存选中设备的真实平台、OS、会话代际和应用渠道；`platforms_by_sn` 由这些服务端事实生成。客户端平台参数只兼容旧调用，不作为权限或路由依据。
+directory_candidate	docs/基础框架/DATA_MODEL.md	122	以上使用现有数据库建表流程，不增加 JSON 真源。验证必须使用新的 `MINO_NEXUS_DATA_DIR`，禁止修改已有运行库。
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	129	### 显式平台迁移回执（N4 开发中）
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	131	`platform_migration_receipts(plan_id,state,reviewer,backup_path)` 仅由显式审阅后的 `services.platform_migration_apply` 在成功的业务数据迁移事务内创建/写入，不由启动自动执行。state 为 applied/reverted，回执与字段更新同事务；重复调用仍验证对应字段摘要，漂移则拒绝。业务库启用仍依赖三仓消费者和完整引用清单验收，不能根据该工具存在推定已迁移。session、历史 run、原文、冻结 publication 和锁键不在该工具可写范围。
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	139	读取返回 `binding_record.status=legacy|supported|unsupported|invalid`。没有 binding 的旧会话保留原证据；未知版本不按当前目录补造详情。Workbench 显示版本提示、当时的操作/实现装配和普通终结保证范围。
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	144	- `case_revisions`：`revision_id`、owner/project/case、单案递增 revision、不可变 source/source_digest、冻结 compile_input/input_digest、来源 receipt/line 或补充理由、时间。原文和资源配置形成候选版本；旧版本没有更新或删除入口，删除用例也保留历史。首次接管旧用例只登记当前可见快照，`legacy_snapshot` 不伪造旧解析来源。
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	151	### N4 SN 引用迁移补充（2026-10-16）
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	155	预演、prepare 与 apply/rollback 同时检查 tasks 的 pending/queued/running、case_compile_jobs 的 queued/running；有未结束工作时阻止切换。编译任务的输入/产物/历史不直接迁移。任意未分类字典中的 desktop SN 键会输出脱敏阻断项，不能因尚未支持改写便从盘点中消失。该扩展不代替完整引用审阅、业务写入暂停及三仓消费者验收。
+compatibility_candidate	docs/基础框架/DATA_MODEL.md	158	N4 预演/静默窗口按持久 write_safety 动作账本核对停止状态：完整 settled 回执，或 recovered 且包含同 action_ref/SN 的 write_stop.v1、审核者与有效进程/执行 lane 停止证明，才能忽略历史 cases 中保留的隔离摘要。缺失/空账本沿用旧数据保守检查，畸形账本、独立顶层隔离、未知写及证明不完整仍阻断；不修改历史 verdict 或解除实际租约。apps.platforms 继续按现有逗号字符串存储合同盘点，不误报必须改成 JSON 数组；嵌套 platforms 仍须数组。
+compatibility_candidate	docs/基础框架/HTTP.md	52	使用 Nexus 下发的地址。节点不再配置服务地址；旧版本 Scout 需升级以使用统一管理的地址。
+compatibility_candidate	docs/基础框架/HTTP.md	53	历史 `/project/{project_id}/case-sources` 接口保留手动兼容和历史查询，不再接受
+directory_candidate	docs/基础框架/HTTP.md	89	数据目录：`MINO_NEXUS_DATA_DIR`，否则 macOS `~/Library/Application Support/MinoNexus`。
+compatibility_candidate	docs/基础框架/HTTP.md	121	| GET | `/runtime/nodes` | 当前账号归属的全部节点；管理员的已归属节点按本人 owner 过滤，另外可见未归属节点以便认领。`studio_id` 仅兼容、不授权。离线节点仍列出 |
+compatibility_candidate	docs/基础框架/HTTP.md	133	| GET | `/releases/scout/latest` | **客户端不用。** 兼容旧调用的可选代理；未设 `MINO_SCOUT_MANIFEST_URL` 时 404。不存文件 |
+compatibility_candidate	docs/基础框架/HTTP.md	204	| PUT | `/settings/ai/roles/{id}/prompt` | 兼容旧入口；技能 id 会写进 `skills` 表 |
+compatibility_candidate	docs/基础框架/HTTP.md	357	IM 工具 `device.list`、`case.run`、`app.explore` 支持 `project_id/app_id/env_surface/env_profile`。渠道别名按项目解析，多个渠道时先明确渠道，再询问该渠道兼容且可执行的本人设备。消息中明确指名项目和渠道时，本轮先查询实时候选，不复用历史设备清单；下发保留 `env_surface` 并重新校验设备准入。设备摘要将 `status=online/offline` 与 `desktop_state=ready` 分开显示，后者只表示“桌面就绪”。
+compatibility_candidate	docs/基础框架/HTTP.md	364	`GET /project/{project_id}/cases/{case_id}/v5/execution-preview` 要求认证，查询参数为 `app_id`、`sn`，可选 `env_profile`、`env_surface`。用例必须存在已发布计划，应用必须属于同一项目，设备必须属于当前账号且与应用渠道兼容。
+compatibility_candidate	docs/基础框架/HTTP.md	368	绑定使用验证过的节点连接代际、Scout 进程代际和能力修订，不按 Scout 版本字符串推断支持。旧节点未声明 `execution_binding_version=1` 时返回阻断诊断。严格 Web 的 `web.strict.v1` 为显式版本适配；业务原子仍按目录的 enabled、lifecycle、caller、phases 和实现合同约束，接口不会自动改业务目录。控件 `/probe` 使用独立的项目配置绑定，仍不产生用例通过结论。旧普通合同保持原行为；普通 runner 全面迁移仍待后续。
+compatibility_candidate	docs/基础框架/HTTP.md	374	| GET | `/case-runner/devices` | 默认 `only_online=false`、`compatible_only=false`，保留账号内离线/未就绪设备。可传 `app_id/env_surface/env_profile/action_scheme/playwright_headless`；逐行返回 `executable/blocking_code/blocked_reason`。`compatible_only=true` 且指定应用时只保留兼容该渠道的设备，未就绪原因仍可展示。原生 macOS/Windows/Linux 渠道要求同 OS Desktop；网站匹配 Web 槽。 |
+compatibility_candidate	docs/基础框架/HTTP.md	375	| POST | `/case-runner/run`、`/case-runner/explore` | 服务端再次核对 owner、Scout 事实与应用兼容性，在 SQLite 原子获取资源锁后建任务。忽略客户端平台对执行路由的影响；阻塞返回 409（错误详情含 sn、blocking_code、message），他人资源返回 404。 |
+compatibility_candidate	docs/基础框架/HTTP.md	377	| GET | `/packs/desktop-paths` | 旧客户端兼容入口：返回空 changes 和 configuration_required=false；Desktop 工具从当前 Scout 设备清单生成，不写库。 |
+compatibility_candidate	docs/基础框架/HTTP.md	378	| POST | `/packs/desktop-paths` | 旧客户端兼容入口：返回空 configured 和 configuration_required=false；不修改目录，不要求管理员角色。 |
+compatibility_candidate	docs/基础框架/HTTP.md	386	"项目写接口要求 **管理员、项目创建者或 `project_members` 中的维护者**；读接口不变。非维护者返回 403，`detail = {reason_code: ""project_maintainer_required"", message}`。存量项目由 `projects.created_by` 隐式成为维护者，无需数据迁移。路径段填 app id 的兼容入口按所属项目判定；`/nav-fsm`、`/app-automation`、`/flow-blocks/apps`、`/apps/{app_id}/intel` 的持久写按 app 所属项目判定，app 与项目都查不到时交给原处理函数。"
+compatibility_candidate	docs/基础框架/HTTP.md	442	`POST /project/app/create` 的 `platforms` 仍为逗号分隔字符串，成员严格限制 `mac / win / android / web`；重复值、旧别名（Mobile/pc/desktop/iOS 等）返回 422。空字符串表示未选择；不会自动解释成全平台或补出 Android。服务层更新应用 platforms 使用同一校验。历史读取暂保留原标签，数据转换必须走审阅迁移，不通过读接口隐式重写。本节仅说明应用写入口，不代表环境、导入、恢复的 N4 全量切换已完成。
+compatibility_candidate	docs/基础框架/HTTP.md	446	`GET /project/{project_id}/cases/{case_id}/execution-preview`，保留 `/v5/execution-preview` 别名。必需 `app_id`、`sn`；可选 `env_profile`、`env_surface`、`action_scheme`、`provider_id`、`execution_mode=legacy|v5`（默认 v5 兼容旧入口）。Workbench 新建任务显式传当前模式。
+compatibility_candidate	docs/基础框架/HTTP.md	448	只读返回 `status`、`binding`（仅 ready）、`diagnostics`、`scope=execution_binding_only`、`runnable_now=false`。不写 session、不触发旧环境懒迁移、不租号/预约、不操作设备、不调用模型。项目读权限保持现有共享规则，设备与模型配置仍限定认证账号。编译缺失/原文变化返回 needs_input；离线、隔离、策略拒绝等返回 blocked。诊断包含来源和恢复入口；可选分支有 `blocking:false`。ready 仅表示当前绑定资格，启动时重新解析，不承诺队列许可或业务通过。
+compatibility_candidate	docs/基础框架/HTTP.md	457	失败任务重跑要求当前认证 owner 与任务 owner 一致，所选 SN 在当前登记中属于当前账号且具有四值平台。无法确认的旧身份返回 409 并要求重选；不会按 SN 前缀猜平台或迁移历史任务。该检查不代替实际开跑的资源隔离、占用、节点在线和应用兼容性准入。
+compatibility_candidate	docs/基础框架/HTTP.md	462	`PUT /project/{project_id}/env` 的渠道在规范化之前校验：目标 platform 为 mac/win/android/web，kind 分别为 app/app/app/web；kind=server 时省略 platform 字段。无效值、kind 冲突、重复/非法 ID 返回 422，配置不写入。渠道 ID 可含字母、数字、下划线、点号、连字符，长度 1–64；不要求等于 platform，不自动改名。旧配置仍可读，保存前需先按审阅方案迁移。
+compatibility_candidate	docs/基础框架/HTTP.md	474	| `POST .../v5/publish` | `{expected_revision,expected_compile_job_id,reviewed_expected_strength,retry_policy?,reversible?}`；已登记版本链必须携带审阅时 preview 的 `compile_job_id`。同一原文重编后旧 job 或缺 job 均返回 409 `compile_revision_conflict`，须刷新并重新审阅；没有版本链的历史用例保持原接口兼容 |
+compatibility_candidate	docs/基础框架/HTTP.md	483	原有 `POST .../v5/compile`、`.../step-keys/compile`、`.../resource-key/compile` 统一进入队列，仍返回 `{case,job,preview}`。新客户端发送上述稳定请求身份；兼容无 body 的旧入口可复用在途工作，不能把 HTTP 返回当编译已完成。保存/导入不再被模型时延阻塞；预览的解析仍是可丢弃候选，确认导入保留原文并以持久任务报告编译缺口。
+compatibility_candidate	docs/基础框架/HTTP.md	516	原 `/sys/updates/*`、`/sys/workbench/*` 及对应 MCP 更新工具随 B5 移除。Nexus/Workbench 改由 wheel 或 Docker 统一升级，不在服务进程内下载、停写、切换和回滚。历史 D2/D3 资料仅供旧安装迁移参考，不能用来调用新版本接口。
+compatibility_candidate	docs/基础框架/MIGRATION.md	15	不搬的 30,358 行是旧路径：`services/executor/`（旧 Plan 循环，`plan_execute_service` 零调用方）、`copilot_service.py`、`services/local/{locate,navigation,overlay,plan}`、`core/vision/`、`core/local_brain.py`、`services/shared/page_context/`、`feishu_regression_service.py`、`driver/` 的非 engine 部分。
+compatibility_candidate	docs/基础框架/NAVIGATION_ATLAS.md	4	> **状态：0.4 / 0.6 / 1 / 2–6 / B1–B3 工具链已落代码**（见 §18）；**运营模型 v2.5**（§19）将取代「先 walkthrough 再手填」为主路径；当前代码仍含 W1–W5 / `__CALIBRATE__` 手填流程（兼容期保留）。
+directory_candidate	docs/基础框架/NAVIGATION_ATLAS.md	33	`data_dir()` 定义见 `mino_nexus/core/paths.py`（默认 `~/.mino-nexus`，与 `mino.db` 同级）。
+compatibility_candidate	docs/基础框架/NAVIGATION_ATLAS.md	1229	### 19.5 与现有实现的兼容
+compatibility_candidate	docs/基础框架/NODE_REGISTRY.md	47	账号归属由登录会话签发的安装凭证确定，写入 SQLite `nodes.owner_user_id`。已归属节点的列表及所有节点操作均仅允许本账号归属；`studio_id` 是兼容元信息，不能扩大权限。管理员在 Workbench 的节点列表额外看见历史无归属节点，并可显式认领到当前账号；认领前不允许设备派单、节点命令或插件操作，不提供账号间迁移。
+compatibility_candidate	docs/基础框架/NODE_REGISTRY.md	63	→ 若该设备上有在途 run，该 run 判为中断（不尝试迁移）
+compatibility_candidate	docs/基础框架/NODE_REGISTRY.md	143	运行与探索提交通过同一服务重新核对账号归属、真实设备平台、应用渠道/OS、能力目录与当前占用。客户端 `platform` 不决定路由；不兼容或不就绪返回 409。他人资源返回 404，普通账号看不到未归属节点。用户选中的目标不可用时不自动换设备。本次 Desktop 接入提交中的任一选中目标不满足准入条件即拒绝整个提交，避免静默漏跑。
+compatibility_candidate	docs/基础框架/NODE_REGISTRY.md	149	历史无归属节点只由管理员通过 `POST /runtime/nodes/{node_id}/claim` 一次性认领到当前账号。认领更新节点、未归属设备和现有长期凭证 owner，断开当前连接后由 Scout 使用原凭证重新注册；已有 owner 的节点返回 409。此接口不提供账号间迁移。
+compatibility_candidate	docs/基础框架/OTP_GMAIL.md	139	| `login_kind` | `email`（邮箱登录用例）；缺省兼容旧数据 `phone` |
+compatibility_candidate	docs/基础框架/OTP_GMAIL.md	201	## 7. 移除 adapter（迁移）
+compatibility_candidate	docs/基础框架/OTP_GMAIL.md	207	| 存量数据 | `mode=adapter` → 迁移为 `hitl` 或 `auto`（并写 migration 日志） |
+compatibility_candidate	docs/基础框架/PROTOCOL.md	141	安装凭证由登录账号签发，15 分钟有效。首次注册在 SQLite 同一事务内绑定账号和节点、消费凭证并生成独立长期凭证；重复登记仅允许同一节点在有效期内恢复同一长期凭证。不同节点使用已消费凭证、无效/过期/吊销凭证、长期凭证与 node_id 不匹配及跨账号重装必须拒绝。拒绝后关闭连接（1008），不接受任意非空或共享环境 token。`studio_id` 仅兼容，不授予账号权限。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	257	| `node.plugin_wechat_message` | S→N | **旧事件，仅为兼容旧版 Scout 保留**，新版 Scout 发 `node.plugin_im_message`。微信收到一条文本。Nexus 生成回复后再发 `plugin.bot.wechat`。不在日志里写正文 |
+compatibility_candidate	docs/基础框架/PROTOCOL.md	437	## 7. 兼容性
+compatibility_candidate	docs/基础框架/PROTOCOL.md	516	协议信封仍为 v2；新增容量字段可缺省。V5 是显式选择的执行模式，不能根据版本号、旧 agent 字段或连接形态猜测支持。未报契约、未发布配置或模式不符时拒绝 V5；legacy 路径保持独立。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	529	- 负编号只读请求可以刷新事实；正请求缓存不能以等待超时冒充真实完成。legacy Future 超时冻结并缓存已返回的未知结论，worker 仍活动的事实单独保留，迟到结果不能覆盖。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	533	- V5 设备故障返回 fail 及上述领域原因；不将所有驱动异常标成需要人介入的 blocked，也不进入 legacy executor fallback。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	543	`HEARTBEAT.device_workload[]` 在 Web 设备行可带 `lanes_total/lanes_free/lanes_quarantined`，Nexus 以实际报告为准。V5 默认 4 个独立进程 lane，每个 run 独占一 lane 与 Playwright 线程；第 5 个排队。legacy/headed 不与 V5 lane 混用。超时终止 worker 和浏览器后代，未确认全部停止的 lane 隔离；close 与 dispatch 竞争时，不能在请求锁释放前宣称 lane 空闲。`close_web_v5/cancel_run` 返回 executor_stopped，未回收成功不能宣称干净结束。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	582	`0` 或缺省只用于已安装旧 Scout 的兼容增量，维持按 id 合入；其空数组不能证明撤销完成，不提供新绑定保证。必须按显式字段判断，不能凭 Scout 包版本猜测。新 Scout 上报全量 executor，再覆盖其中 desktop 的实时就绪事实，不发送 desktop-only 列表。设备 channel=connected 不能重新放行已撤销或 unavailable 的 executor。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	592	### V5 R5：执行绑定代际载荷与旧节点兼容（2026-10-15）
+compatibility_candidate	docs/基础框架/PROTOCOL.md	603	capability_revision 是完整 executor 声明（id/available/provides）与 runtime_capabilities 的规范化快照身份；两仓使用同一 stdlib 算法。更新元数据与快照同锁生效。执行器全量/增量规则保持原合同：snapshot_version=1 时 None 不更新、[] 撤销全部；旧版本 0 保留兼容增量。不一致快照不能宣称 binding ready。旧连接心跳不能改写替换后的会话；进程代际变化需重新注册，不能只发心跳换身份。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	634	Nexus 节点列表新增只读 `platform_contract_audit`：mode=shadow、activated=false、target_version、observed_device_count、issues、migration_required。仅报告平台字段问题计数，不输出参数、凭据或原始 manifest；不能将 issues 为空解释为完成数据迁移或具备新绑定执行能力。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	636	资源准入支持规范 mac/win SN，并与历史 desktop SN 及同宿主 headed Web 继续共用 `desktop:<node_id>:console` 资源锁。新 SN 与 node_id 不一致拒绝；headless Web 独立槽保持。此兼容基础不自动迁移设备，不释放已有隔离。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	638	原子切换仍依赖 N1/N2 与受控数据迁移。不能提前宣称新词表已全局生效；Scout 注册与输入能力、Nexus 运行消费者及 Workbench 写入口将在整体切换切片同步调整。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	651	新增 mac/win 原生身份的消费支持，不切换默认 Scout manifest，不宣称平台合同已协商或启用。目标平台 mac/win 与 executor/channel=desktop 是不同字段；共享资源键仍为 desktop:<node_id>:console。旧 desktop 接收路径作为切换期兼容保留，不能用兼容路径证明全量迁移完成。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	657	下一步仍需同步切换 Scout host/device/runtime_capabilities 上报、协议激活/旧节点拒绝边界和历史引用迁移。当前通过的是隔离消费路径检查，未执行真实原生操作、未迁移业务数据。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	662	本节取代影子阶段的默认上报约定。REGISTER/REGISTERED/HEARTBEAT 新增 platform_contract_version（缺省 0）；Scout 发 1，Nexus 接受后明确回 1。缺失、bool 或其他版本拒绝，不凭包版本推断。REGISTER.platform 保留空串以兼容 dataclass 构造；宿主只由 host.os=mac/win/linux 声明。设备只允许 mac/win/android/web，原生 SN 为 <platform>:<node_id>:console，不带 os；Linux 不注册原生桌面槽。executor/channel/资源锁的 desktop 命名不变。
+platform_contract_candidate	docs/基础框架/PROTOCOL.md	664	注册与心跳在修改可用能力前验证全部设备身份及 runtime_capabilities，包括递归 platform/platforms/platform_scope、重复或冲突覆盖、深度/数量上限、executor 与目标平台对应关系、input_text 合同版本 2 及 target_mode/write_modes 精确组合。无效注册拒绝；无效心跳关闭连接，不部分接受。host.os 变化要求重新注册。空 runtime_capabilities 是显式撤销，None 为缺合同而拒绝。新连接不继承旧 desktop 活跃槽；历史记录、未知写隔离和共用资源锁不改写。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	666	用户已取消历史 SN 迁移，选择清空后重新导入；清空范围尚待明确，因此本切换不删除业务配置或历史数据。新合同只接受规范输入，旧配置须重新导入或在正式入口修正。源码启用不等于真机/业务验收通过，运行版本和 session 证据另记统一开发记录。
+platform_contract_candidate	docs/基础框架/PROTOCOL.md	745	node.update / executor=core / contract_version=1 / platform_scope=all / platforms=[]。
+compatibility_candidate	docs/基础框架/PROTOCOL.md	772	源码交付不代表各平台安装验收通过。真实 clean release、兼容性演练及目标平台运行证据另记。
+compatibility_candidate	docs/开发手册.md	26	确需改变上述进程管理方式时，必须由用户明确授权具体目标和操作；普通“继续”“验证修复”或修改代码的授权不包含杀进程、迁移进程归属。未经确认重载的结果应如实标记“源码已修改，运行进程尚未确认加载”，不得为了完成验证擅自重启。
+directory_candidate	docs/开发手册.md	46	| 默认路径 | `~/.mino-nexus/`（可用环境变量 `MINO_NEXUS_DATA_DIR` 覆盖） |
+directory_candidate	docs/开发手册.md	62	- 复制、覆盖、删除整个 `mino.db` 或 `~/.mino-nexus`（除非本人明确要做备份恢复，且与当前调试无关）
+directory_candidate	docs/开发手册.md	83	| 必须自动化 | 在 `tests/` 或脚本里把 `MINO_NEXUS_DATA_DIR` 指到 **临时目录**，或在 PR 说明里写清「未动共享库」 |
+directory_candidate	docs/开发手册.md	85	需要「空库」时：用**新的** `MINO_NEXUS_DATA_DIR` 启动 Nexus，而不是在现有库里删表清数据（除非本人运维操作）。
+directory_candidate	docs/开发手册.md	149	- [ ] 这条命令会不会 `commit` 到 `~/.mino-nexus/mino.db`？
+compatibility_candidate	docs/开发手册.md	172	| cr-609e25f69684 · 控件定位与项目归属 | 文字编译必须带真实 project_id；仅 legacy 可读 `_project` 兜底。V5 不借别的项目控件，不自动把 vlm_text 当 typed 定位，空项目及身份冲突要明确拒绝。发布必须核对 revision。 | 未配置当前渠道时应展示真实缺项，不能填假定位或隐藏失败。 |
+directory_candidate	docs/开发手册.md	178	修改焦点、控件归属、模型预算、路由编号、取证缓存或安装打包时，检查对应约束及已有 session_events；验证只在新的临时 MINO_NEXUS_DATA_DIR 中进行，不运行 pytest、不往仓库提交测试或 mock。新问题需补实际诊断和运行版本，不只记录工具 pass。
+compatibility_candidate	docs/开发手册.md	195	只有 Workbench 一个前端。任务策略经 action_space.scheme 统一归一化，旧 dom 兼容 dom_preferred，能力目录 schemes 仍是 dom/visual；禁止入口、摘要和恢复各自把新值收成 visual。显式目录 platforms 优先于常量，程序能力通过启动注册器自动同步现库版本与平台，业务能力经 Workbench 维护；不允许调试脚本改共享库。必填登录结果不能渠道 skip；回看分支先校验再推进；截图兜底只能用于尚未派发的动作，execution_started 的不确定写动作禁止重放。
+compatibility_candidate	docs/开发手册.md	246	普通 UI 写必须持久化同一任务内的写意图后才派发。结果边界优先读取 execution.execution_started，兼容显式旧布尔；缺失和执行器异常按 unknown，不从 fail/declined/skipped 猜测未执行。yes/unknown 失败停止 fallback；Future 超时冻结原结论，迟到成功不得翻绿，同 run 后续写拒绝。任务结束、取消请求、超时和 worker 已停止是不同事实。
+compatibility_candidate	docs/开发手册.md	260	心跳必须看 `executor_snapshot_version`：1=完整快照，None不更新、[]全部撤销、非空全量替换；0/缺省是旧节点增量兼容，不能据此声称已撤销。Scout不能仅发送desktop条目；设备channel=connected不能复活已撤销/unavailable的executor。未知快照版本停用执行能力。两仓协议同步发布，不能先按新语义消费旧增量节点。
+compatibility_candidate	docs/排查手册/01-Session-Log与数据库.md	12	| 进程内缓存 | `agent_stream._RUNS` | Studio 旧路径；**优先读 session 投影**，内存有限、重启即丢 |
+directory_candidate	docs/排查手册/01-Session-Log与数据库.md	23	~/.mino-nexus/
+directory_candidate	docs/排查手册/01-Session-Log与数据库.md	31	export MINO_NEXUS_DATA_DIR=/path/to/data
+directory_candidate	docs/排查手册/01-Session-Log与数据库.md	34	库路径：`$MINO_NEXUS_DATA_DIR/mino.db`（未设置 env 时即 `~/.mino-nexus/mino.db`）。
+directory_candidate	docs/排查手册/01-Session-Log与数据库.md	36	> Console 文档里偶写 `~/Library/Application Support/MinoNexus`；**以 `mino_nexus/core/paths.py` 为准**（非 Windows 默认 `~/.mino-nexus`）。
+compatibility_candidate	docs/排查手册/01-Session-Log与数据库.md	95	例如按已有 session_id 查询 `tool/result`，检查 `json_extract(payload, '$.scout.node_id')`、`json_extract(payload, '$.attempts')` 与 `json_extract(payload, '$.desktop.action.effect')`。旧记录返回 NULL 不代表 Scout 没执行，而是旧版未持久化这些诊断字段。读取仍受 session 的 owner_user_id 授权约束。
+directory_candidate	docs/排查手册/01-Session-Log与数据库.md	126	"DB=""${MINO_NEXUS_DATA_DIR:-$HOME/.mino-nexus}/mino.db"""
+directory_candidate	docs/排查手册/01-Session-Log与数据库.md	142	"db = os.path.expanduser(""~/.mino-nexus/mino.db"")"
+directory_candidate	docs/排查手册/02-按ID查询日志.md	38	"db = os.path.expanduser(""~/.mino-nexus/mino.db"")"
+compatibility_candidate	docs/排查手册/04-核心功能(不可回退).md	30	- **没有** `guard/block` + `require_session`（旧版 bug）。
+compatibility_candidate	docs/排查手册/05-适配Web网页.md	46	- Email 标签已点，程序链报「未找到邮箱输入框」——旧版用安卓规则扫 DOM。
+compatibility_candidate	docs/排查手册/05-适配Web网页.md	60	- history 应有 `【登录凭证·环境】`；无则 Nexus 未重启或旧版本。
+compatibility_candidate	docs/排查手册/06-MCP与LLM响应查询.md	68	成功返回 accepted 与 running_version_verified=false，仅代表 Scout 已应答。查询返回 running_version（在线节点上报）、last_reported_version、process_generation、connection_generation、update_job 和 command_inflight；离线 running_version=null。应在重连后核对实际运行版本，不能从“下载完成”或旧版本号判定更新成功。
+compatibility_candidate	docs/更新日志/9月12日_AppIntel信息基座.md	235	| 现有 | 迁移 |
+directory_candidate	docs/更新日志/9月15日-fsm_navigate异常导致任务失败.md	40	任务 ID：`cr-664c2ef9877d`。各用例采集 session：`cr-664c2ef9877d::case-<case_id>`（`~/.mino-nexus/nav/capture/...`）。
+directory_candidate	docs/更新日志/9月15日-fsm_navigate异常导致任务失败.md	221	sqlite3 ~/.mino-nexus/mino.db \
+directory_candidate	docs/更新日志/9月15日-fsm_navigate异常导致任务失败.md	226	"con = sqlite3.connect(""/Users/changpengcheng/.mino-nexus/mino.db"")"
+directory_candidate	docs/更新日志/9月15日-大模型单步骤判断是否达成异常.md	340	sqlite3 ~/.mino-nexus/mino.db \
+directory_candidate	docs/更新日志/9月15日-大模型单步骤判断是否达成异常.md	347	db=sqlite3.connect('/Users/changpengcheng/.mino-nexus/mino.db')
+directory_candidate	docs/更新日志/9月15日-大模型单步骤判断是否达成异常.md	359	B='/Users/changpengcheng/.mino-nexus/nav/capture/3d2b9799-0027-4c7d-bfe7-8c5b88f4087d/cr-04b827be9cc5case-99ab0675'
+directory_candidate	docs/更新日志/9月15日-大模型单步骤判断是否达成异常.md	370	sqlite3 ~/.mino-nexus/mino.db \
+directory_candidate	docs/更新日志/9月15日-导航架构页与探索循环问题核对.md	7	- 数据来源：`~/.mino-nexus/mino.db`（567 MB）、`~/.mino-nexus/nav/capture/<app_id>/`（5 个 session / 21 帧）
+directory_candidate	docs/更新日志/9月15日-导航架构页与探索循环问题核对.md	303	nodes = json.load(open('/Users/changpengcheng/.mino-nexus/nav/capture/%s/cr-2413334003fc__explore__/turn_0001.nodes.json'%APP))
+directory_candidate	docs/更新日志/9月15日-导航架构页与探索循环问题核对.md	312	sqlite3 ~/.mino-nexus/mino.db \
+directory_candidate	docs/更新日志/9月15日-导航架构页与探索循环问题核对.md	317	sqlite3 ~/.mino-nexus/mino.db \
+compatibility_candidate	docs/更新日志/9月15日-探索新页面在架构图中丢失.md	18	↑ 全是旧数据      ↑ 上一次旧探索的 4 帧
+compatibility_candidate	docs/更新日志/9月15日-探索新页面在架构图中丢失.md	73	### 2.2 旧数据为什么没事
+directory_candidate	docs/更新日志/9月15日-探索新页面在架构图中丢失.md	325	sqlite3 ~/.mino-nexus/mino.db \
+directory_candidate	docs/更新日志/9月15日-探索新页面在架构图中丢失.md	369	B='/Users/changpengcheng/.mino-nexus/nav/capture/3d2b9799-0027-4c7d-bfe7-8c5b88f4087d/cr-8982083156e0__explore__'
+compatibility_candidate	docs/更新日志/9月16日-增加页面切换多态识别能力.md	123	| 边无 `target_page`/tap 编译 | `_hydrate_atlas_edge_execute` + `target_page` 迁移 |
+compatibility_candidate	docs/更新日志/9月16日-用例执行调用fsmnavigate能力异常.md	143	"| 1 | **跑批那份图里同时有两代节点，且互不连通。** published `v1`（`fsm_id=4`，`synthesis_mode=tab_bar_layered`）只有 5 个 legacy `page.tab_*` + 5 条 tab 边；draft（`fsm_id=6`）只有 5 个 `page.sk*` + 14 条 atlas 边。`overlay_atlas_for_runtime` 把 draft **叠加**上去而不删旧节点 → 运行时 10 states / 19 edges，**两个连通分量**。且 `meta.tab_bar.labels` 仍是 `page.tab_我的→""我的""`，`resolve_state_fuzzy` 走 `legacy_ref` 0.95 直接命中旧节点 → `shortest_nav_path` 恒空 | `load_fsm_doc(use_live=False)` 返回 `source=published+atlas`；`resolve_state_fuzzy(doc,""我的"")` → `page.tab_我的`，`method=legacy_ref` | `nav_route.overlay_atlas_for_runtime`、`nav_route.resolve_state_ref`（`tab_bar.labels` / `entries` 子串两条分支都会命中） |"
+compatibility_candidate	docs/更新日志/9月16日-用例执行调用fsmnavigate能力异常.md	144	"| 2 | **`nav_fsm_store` 落库时把 state 的 `meta` 整块丢掉。** `save()` 只写 `state_id/kind/identify/guards/wiki_ref/entry/role`，`_state_public()` 也不返回 `meta`；`nav_fsm_states` 表根本没有 meta 列。于是 `display_name` / `aliases` / `page_role` / `tab` / `visit_count` 在发布那一刻全部消失 —— §0.1 的 `enrich_state_aliases_from_nav_edges`（`nav_candidate_compiler` 第 1290 行刚写进 meta）紧接着被 `save_draft` 抹掉 | 运行时 `_state_labels(page.sk9f40e317be03)` 只剩 `['sk9f40e317be03']`；把 legacy 节点删掉后 `resolve_state_fuzzy(""我的"")` → `method=no_match`。补一个 `display_name=""我的""` 后同一份图立刻 `ok=true`、2 hop | `nav_fsm_store.save` / `_state_public`、`models/nav_fsm.py` |"
+compatibility_candidate	docs/更新日志/9月16日-用例执行调用fsmnavigate能力异常.md	147	**为什么表现成「只会 BACK」**：`_skip_tab_fallback` 只在 **plan 失败** 分支里被问到，而它守的是**唯一的兜底策略**——`direct_tab_tap_params` 直点目标页展示名（默认这个名字就在底栏上）。底栏槽位 < 2 就认为直点必败 → `press_key BACK`。因为根因 1+2 让 plan **100% 失败**，兜底成了唯一路径，`fsm_navigate` 退化成 BACK 机。附带：`is_tab_shell_state` 读的 `tab_bar.entries/labels` 在运行时指向 legacy id、在 live 里是空的，所以 `pick_fsm_first_step` 的 `tab_shell_terminal` / `deep_page_direct_tab` 两条捷径同样永不触发。底栏本身不是导航前提，只是这条兜底的前提。
+compatibility_candidate	docs/更新日志/9月16日-用例执行调用fsmnavigate能力异常.md	154	| 2 | 运行时只认一代节点：`prune_superseded_tab_states` 剔除 legacy `page.tab_*` 节点与其边，并清掉 `tab_bar.entries/labels` / `recover.default_*` 里指向已删节点的引用；`_adopt_atlas_tab_bar` 把 `home/launch` 换到骨骼那一代。合成侧同样剔除，否则每次重发都会把旧节点带回来 | `nav_route.prune_superseded_tab_states` / `overlay_atlas_for_runtime`、`nav_candidate_compiler.merge_synthesized_doc` |
+compatibility_candidate	docs/更新日志/9月16日-用例执行调用fsmnavigate能力异常.md	160	（`scripts/republish_nav_fsm_from_atlas.py <app_id> --write`，走 `promote_prepared`；库已备份 `mino.db.bak-fsm-tab-legacy-*`）：
+compatibility_candidate	docs/更新日志/9月16日-用例执行调用fsmnavigate能力异常.md	164	| `v1` | 5 states / 5 edges，**全是** `page.tab_*`，带名 0 个 | 8 states / 22 edges，**无** legacy，带名 8 个 |
+compatibility_candidate	docs/更新日志/9月16日-用例执行调用fsmnavigate能力异常.md	195	| 多页共享同一别名不再 `legacy_ref` 先到先得；同分时优先 leftover 覆盖，其次精确边 `to`（`name≥0.9`），再排除当前屏 | `nav_route.resolve_state_ref`、`resolve_state_fuzzy` |
+compatibility_candidate	docs/更新日志/9月16日-用例执行调用fsmnavigate能力异常.md	212	1. `tab_bar.entries/labels` 在剔 legacy 时被清空，`is_tab_shell_state` 恒 False，`pick_fsm_first_step` 的 Tab 捷径永不触发。
+compatibility_candidate	docs/更新日志/9月16日-用例执行调用fsmnavigate能力异常.md	251	## 1. 术语：`target_page` 与 `target_tab` 迁移
+compatibility_candidate	docs/更新日志/9月16日-用例执行调用fsmnavigate能力异常.md	263	### 1.2 落点范围（全局迁移）
+compatibility_candidate	docs/更新日志/9月16日-用例执行调用fsmnavigate能力异常.md	267	| 边 `execute` | `nav_screen_registry._hydrate_atlas_edge_execute`、`nav_synthesis`、`nav_fsm` 边 | `target_tab` → `target_page`；读路径 **兼容旧键 1 个版本** |
+compatibility_candidate	docs/更新日志/9月16日-用例执行调用fsmnavigate能力异常.md	273	**验收**：全仓 `rg target_tab` 仅余 **兼容读取** 注释或迁移脚本；新采集边仅写 `target_page`。
+compatibility_candidate	docs/更新日志/9月16日-用例执行调用fsmnavigate能力异常.md	434	1. **`target_page` 迁移**：边读写、tap 编译、错误文案、tool_schema 描述；兼容 `target_tab` 只读。
+compatibility_candidate	docs/更新日志/9月16日—增加应用版本差异识别以及新版本预期修改功能.md	3	**背景**：跑批时 Scout 经 `get_app_version` 回传版本，`RunContext.app_version` 已可记录（[`runtime/run_context.py`](../../mino_nexus/runtime/run_context.py)）。Nav 配置侧 `nav_fsm` 表的 `version` 字段目前是 **配置修订号**（`v1` / `draft`），**不是** APK 的 `1.2.3`（[`models/nav_fsm.py`](../../mino_nexus/models/nav_fsm.py)）。新版本 PRD 常 **改登录步数、改 Tab、改骨骼**，若仍用单一 Atlas + 单一 FSM，会出现：**路线按旧版编译**、**localize 对不上新壳**、或 **用例/文档描述的新流从未跑过却被当成真**。
+compatibility_candidate	docs/更新日志/9月16日—增加应用版本差异识别以及新版本预期修改功能.md	225	**迁移**：additive ALTER（[`core/migration.py`](../../mino_nexus/core/migration.py)）；旧数据 **全进 `av:default` verified**。
+compatibility_candidate	docs/更新日志/9月18日-MinoNexus从启动到用例结束-能力汇报.md	333	- 部分能力仍在持续迁移（如完整问人 UI、部分恢复路径），以当前 Studio 可见功能为准。
+compatibility_candidate	docs/更新日志/9月18日-studio拆分scout方案.md	90	| `GET /releases/scout/latest` 给安装用 | 客户端（Studio）直读 GitHub manifest；Nexus 代理仅可选兼容 |
+compatibility_candidate	docs/更新日志/9月18日-意图识别与大模型注意力集中.md	44	2. **意图为空** → 仍用 **tap/swipe 族次数**（旧步骤兼容）。
+compatibility_candidate	docs/更新日志/9月18日-细分校验能力并增加校验结果可信度.md	370	- 不替代 Console 写用例；结构化 checkpoints 是 **增强**，长期仍兼容纯文本 expected。
+directory_candidate	docs/更新日志/9月18日-造物相机登录专项-批跑复盘与问题归类.md	5	**真源**：`~/.mino-nexus/mino.db` → `app_regression_runs` / `session_meta` / `session_events`
+compatibility_candidate	docs/更新日志/9月8日_Session_Event_Log.md	35	5. **渐进迁移**：第一期双写（log + 现有 `agent_stream`），读侧逐步切到 log。
+compatibility_candidate	docs/更新日志/9月8日_Session_Event_Log.md	258	现有 `GET /case-runner/agent/steps?run_id=` **兼容**：内部改为 `project_trajectory(session_id)`，字段形状与现 Studio 对齐。
+directory_candidate	docs/架构/V1/单用例执行全景.md	144	3. **NavRuntime**：`localize`、导航守卫 `check`、可选 `capture_turn` 落盘 `~/.mino-nexus/nav/`。
+compatibility_candidate	docs/架构/V1/单用例执行全景.md	197	## 6. Android / Web 兼容框架
+compatibility_candidate	docs/架构/V2/执行改造方案-记忆与FSM逻辑块.md	110	**兼容**：`parse_session_value` / guards 读字符串处改为读 JSON；迁移期双写 `session_block` 字符串（deprecated）一个版本。
+compatibility_candidate	docs/架构/V2/执行改造方案-记忆与FSM逻辑块.md	171	- `job_upgrades.py` 增加 `upgrade_agent_decide_v19` 迁移脚本（DB 补丁，与现有 v5–v18 同模式）。
+compatibility_candidate	docs/架构/V2/执行改造方案-记忆与FSM逻辑块.md	365	## 4. 数据与迁移
+compatibility_candidate	docs/架构/V2/执行改造方案-记忆与FSM逻辑块.md	370	| `nav_flow_block_catalog.steps_json` | v1→v2 迁移；seed 增加 `fb.global.login.email_web` |
+compatibility_candidate	docs/架构/V2/执行改造方案-记忆与FSM逻辑块.md	376	**兼容**：旧用例无 milestones 时，fallback `legacy_step_effect` 一个版本（feature flag `MINO_MILESTONE_V1=0`）。
+compatibility_candidate	docs/架构/V2/看图规划-执行与步骤状态机方案.md	34	| **`agent-vision-assert`** | 视觉校验 | **仅 check**：一次性对规划给出的 **全部校验点** 截图判定 pass/fail | 无业务 mutate；输出结构化 `check_evidences[]`（`llm_jobs` 迁移期保留 `assert-vision` 只读别名） |
+compatibility_candidate	docs/架构/V2/看图规划-执行与步骤状态机方案.md	36	**改名**：现有 `agent-decide` → **`agent-vision-exec`**（DB `llm_jobs.id` 迁移期可 alias 双读）。Console / `roles_catalog` 文案同步。
+compatibility_candidate	docs/架构/V2/看图规划-执行与步骤状态机方案.md	152	| 字段 | 保留 | 移除/迁移 |
+compatibility_candidate	docs/架构/V2/看图规划-执行与步骤状态机方案.md	309	**开关真源**：Console → 技能 `run-case` → SOP `phases[]` 的 `job` / `exec_job` / `advance_on`（见 §4.4）；启动时 `upgrade_run_case_sop_vision_v1` 仅迁移仍为 legacy 的库内 SOP。
+directory_candidate	docs/架构/V3/执行链路性能优化.md	16	## 1. 基线（2026-09-29，只读 `~/.mino-nexus/mino.db`）
+compatibility_candidate	docs/架构/V3/用例固化与控件身份.md	144	标题列兼容现在的 `name`。两列都空才算标题缺失。
+compatibility_candidate	docs/架构/V4/IM对话优化.md	70	七层是单体仓库中的逻辑边界，优先在现有 `services/`、`models/`、`prompts/` 中渐进拆分。第一阶段不引入消息中间件、不迁移数据库、不新增独立部署服务。
+compatibility_candidate	docs/架构/V4/IM对话优化.md	95	Envelope 不声称天然符合完整 CloudEvents；借鉴其事件来源与事件 id 组合的去重思想。若未来声明兼容，须单独给出规范映射和版本，不把自定义 JSON 称为标准兼容。
+compatibility_candidate	docs/架构/V4/IM对话优化.md	363	终态工具结果和正式通知走可靠输出，不能依赖易丢的 token 流。usage 若未返回则标记未知/待补，不记为零消费；当前非流式调用模式保持兼容，流式统计未经验证时不宣布已支持。
+compatibility_candidate	docs/架构/V4/IM对话优化.md	405	当前用例主要归项目，第一阶段的准确语义是“选应用作为执行目标，选项目共享模块作为范围”。应用私有模块关系需要明确数据迁移，不假设已有。模型只见范围摘要/选择 id，服务端解析完整分页并保存集合/内容版本。
+compatibility_candidate	docs/架构/V4/IM对话优化.md	471	机器人迁移节点时，正文缓存/媒体迁移只走已授权机制；未迁移则说明该正文不可恢复，不重新生成并假装完全相同，也不影响已知业务任务的查询。
+compatibility_candidate	docs/架构/V4/IM对话优化.md	526	第一阶段纯文本兼容层可先完成。原生按钮、附件获取、线程、流式或 Envelope 跨 Scout 边界传输需要真实两端契约；涉及协议时按仓库规则同步两仓文档、protocol 和 golden fixtures。不能只改 Nexus 就宣称两端生效，也不直接修改只读上游仓库。
+compatibility_candidate	docs/架构/V4/IM对话优化.md	540	### 14.3 兼容、发布与回退
+compatibility_candidate	docs/架构/V4/IM对话优化.md	542	旧文本入站映射为 Envelope 的 text 部分；旧工具 schema 与现有任务 API 保持受控兼容，新增字段启动校验。按实例/能力启用新入口，未知默认降级。
+compatibility_candidate	docs/架构/V4/IM对话优化.md	544	保留旧消息去重记录，升级不能重放历史写操作。待执行请求、旧按钮和补发记录按明确 schema/template 版本恢复；回退时暂停不兼容的新操作并说明状态，不能清库或把 unknown 重置为未执行。
+compatibility_candidate	docs/架构/V4/IM对话优化.md	605	| A18 | 一台独占设备已被任务使用，另有兼容空闲设备 | 设备追问只列可立即用的设备，占用原因清楚，不泄露他人任务 |
+compatibility_candidate	docs/架构/V4/IM对话优化.md	619	| A32 | 重复选项、旧版本按钮、过期请求、绑定变化 | 原子消费和版本/归属校验有效，无重复任务或错误范围 |
+compatibility_candidate	docs/架构/V4/IM对话优化.md	664	| [CloudEvents v1.0.2 规范](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md) | 来源/id、元数据与事件数据分离、关联与精简载荷 | 固定参考版本；自定义 Envelope 未声明标准兼容 |
+compatibility_candidate	docs/架构/V4/IM对话优化.md	669	| [Rasa 3.x Forms 历史文档](https://legacy-docs-oss.rasa.com/docs/rasa/forms/) | 必填信息校验、咨询插话、恢复原流程 | 不使用 slot 等内部概念要求用户理解 |
+compatibility_candidate	docs/架构/V4/IM对话优化开发记录.md	33	渠道追问检查本次环境有效配置、动作支持、设备兼容、账号归属、节点状态、Desktop会话/能力/就绪、独占占用、共享桌面和Web并发容量。未配置与已配置但忙碌是不同原因。用户明确点名不可用渠道时保留目标并解释，不偷偷切到另一渠道。最终提交仍通过现有事务准入，候选列表不能替代锁。
+compatibility_candidate	docs/架构/V4/IM对话优化开发记录.md	43	“对话设置”提供展示偏好与撤销、节点实际能力、受控群策略和图片/语音设置。群策略只能选择已验证机器人实例与真实项目，普通“同意”不构成授权。群项目选择兼容项目API的裸数组。接入、会话与轨迹、订阅、MCP保留原功能与账号缓存隔离。
+compatibility_candidate	docs/架构/V4/IM对话优化开发记录.md	57	| Scout可靠性 | 先持久化、入站去重、传输ACK不删除、业务确认、actor隔离、出站幂等、unknown不重发、附件/引用、旧Inbox迁移通过 |
+compatibility_candidate	docs/架构/V4/IM对话优化开发记录.md	100	| A08 | 单纯点击“一键登录按钮”被编译成登录流 | 系统/设备兼容分支隔离通过 |
+compatibility_candidate	docs/架构/V4/IM对话优化开发记录.md	110	| A18 | 一台独占设备已被任务使用，另有兼容空闲设备 | 占用/空闲兼容设备隔离通过 |
+compatibility_candidate	docs/架构/V4/IM对话优化开发记录.md	124	| A32 | 重复选项、旧版本按钮、过期请求、绑定变化 | 并发单次消费/旧revision隔离通过；原生按钮未接入 |
+compatibility_candidate	docs/架构/V4/IM通知与执行恢复修复-20261013.md	65	兼容现代 delta.tool_calls、legacy delta.function_call、完整 message 快照，以及 SDK dict/typed chunk。完整快照替换累计结果，避免 arguments 重复拼接；支持分片名称。
+compatibility_candidate	docs/架构/V4/IM通知与执行恢复修复-20261013.md	71	历史任务没有保存原始流式分片，所以只能证明旧解析器存在兼容缺口，不能断言该次供应商一定返回了 legacy 字段，也不能把供应商故障视为已证实。
+compatibility_candidate	docs/架构/V4/IM通知与执行恢复修复-20261013.md	181	- 保留旧 success_criteria 输入的解析兼容行为，显式空菜单不会扩大为所有动作。十个修改的 Python 文件语法、提示词仓库加载、提示词字面量守门与 git diff --check 通过。
+compatibility_candidate	docs/架构/V4/IM通知与执行恢复修复-20261013.md	193	最新记录为 2026-10-13 19:07 至 19:09 的两次任务。它们均使用 agent-vision-exec v17，不能将本次问题解释为仍在使用旧版提示词。
+compatibility_candidate	docs/架构/V4/IM通知与执行恢复修复-20261013.md	209	2. provider_parsed：在 SDK post_call 能提供响应对象时记录第一选择的消息结构、工具数量、是否有名字、是否属于菜单、参数类型和字符串长度。当前 OpenAI 兼容路径的这一边界位于 provider SDK 解析之后、LiteLLM 最终标准化之前，不是 HTTP 原始响应。
+compatibility_candidate	docs/架构/V4/IM通知与执行恢复修复-20261013.md	219	使用实际 LiteLLM 和其 OpenAI 兼容路径，通过 httpx.MockTransport 注入响应，并禁止真实 socket 连接，验证共享 _post_chat_completions → SDK → Nexus 解析链路：
+compatibility_candidate	docs/架构/V4/PC端UI自动化方案.md	95	| **Python SDK** | `cua_driver` 提供异步调用、同一 Rust runtime、图像及结构化结果；容易保留请求上下文和会话，也可接已有 daemon | 锁定 wheel、原生库、系统架构和版本；typed API 存在版本迁移，平台特有能力可能要 generic call；直接加载的崩溃会影响宿主 | **默认路线**。按需放入独立 Desktop worker，用本地受控 IPC 与 Scout 通信。 |
+compatibility_candidate	docs/架构/V4/PC端UI自动化方案.md	163	以上暂停 / 接管 / 急停是目标能力，不是全部已验收。租约、停止确认与失联回收的具体契约统一见 [多机节点方案 §8](多机部署Scout节点开发方案.md#8-2026-10-12-租约迁移与验收边界补充)；未经能力上报与联调的按钮不可呈现为可用。
+compatibility_candidate	docs/架构/V4/PC端UI自动化方案.md	173	- [动作回执与后置条件验证](https://github.com/trycua/cua/blob/5458c77b04a6e5e7a099929e0c4d4366e83dd403/libs/cua-driver/docs/action-result-contract.md)、[窗口 SDK 迁移与快照完整性](https://github.com/trycua/cua/blob/5458c77b04a6e5e7a099929e0c4d4366e83dd403/libs/cua-driver/docs/native-window-sdk-migration.md)。
+compatibility_candidate	docs/架构/V4/PC端UI自动化方案.md	178	## 9. 2026-10-12 纯视觉兼容性整改
+compatibility_candidate	docs/架构/V4/PC端UI自动化方案.md	189	2. 正确读取点击直接返回的 typed ActionResult，同时兼容输入/按键的 ToolResult 和 JSON。未验证的 HID 投递保留 `verification_required`，业务结果等下一次纯视觉观察；部分执行、拒绝与疑似无效果分别保留。
+compatibility_candidate	docs/架构/V4/PC端UI自动化方案.md	206	按用户选择保留当前桌面截图、坐标及驱动路线，先修启动/激活后的原生校验，不迁移整条执行链到 Cua 窗口托管。Mac 前台身份改读 NSWorkspace.frontmostApplication，避免将 AXFocusedApplication 读取失败直接视为应用未激活；AX 键盘控件焦点仍用于 current_focus 输入保护，录屏及辅助功能权限要求不变。
+compatibility_candidate	docs/架构/V4/PC端UI自动化方案.md	214	本轮按用户要求将既有 PC 设备操作统一交给 Cua Driver 0.34.1；保留 Nexus 用例决策、账号/数据资源、任务调度、独占租约、取消/预算、业务断言和 Scout 协议适配。没有迁移为另一套 Agent，也没有新接入 perception 或 accessibility 业务路线。
+compatibility_candidate	docs/架构/V4/README.md	17	本次没有声称全部 24 项评审发现均已解决：持有 fencing、迟到在线上报的设备迁移、完整桌面失联回收、所有 MCP 客户端、全天在线、真实模型维护/账户可用/计费均仍需要对应实现或部署后证据。SDK 登记不作为官方维护声明；估价不作为账单。
+compatibility_candidate	docs/架构/V4/README.md	24	| Prompt 备份与来源冲突 | Prompt §6.1/§10/§13 | 一致快照导出；文件真源，保留旧数据与审计证据 |
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	37	| UI-04 | P0 | 输入新旧契约不兼容，被当成输入失败重试 | `cr-65b60adb09d9` 已核实；门禁/上报部分实现，待运行验证 | §2.6 |
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	48	| UI-15 | P2 | 控件缺页面作用域、编译缓存依赖不全 | 已增加页面作用域、旧控件来源 ID 与逻辑块内容摘要；完整迁移范围待运行验证 | §3.4、§3.5 |
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	174	> **状态**：当前焦点输入及部分门禁已见于代码；部分可见验证的结构化结果仍待核验/实施，完整链路待运行验收。本节细化 §3.2、§3.3 中输入事件的契约；与旧版输入必须携带坐标、视觉必须读到完整字符串的要求不一致时，以本节目标方案为准。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	186	旧链路问题是重复定位可能改变输入目标，节点定位或读回失败可能阻断后续视觉确认。最新代码已新增 `current_focus`：Web 使用键盘选中/插入，ADB 直接调用文字输入。不能继续把“Web 一定要求坐标”作为当前代码结论；最新 ADB 替换语义、焦点关联和兼容检查的问题见 §2.6。其他设备执行器仍需独立核对。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	311	该现象首先归类为 Nexus 与运行中 Scout 的输入契约不兼容，不能归为被测产品输入失败，也不能据此否定无坐标方案。相同旧执行器重复接收相同新参数不具备恢复条件，第一次明确拒绝后就应阻塞，不再重试三次。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	327	旧协议缺少 `target_mode` 时按其原有、明确记录的旧版本语义处理，不将“缺坐标”自动解释成当前焦点模式。新协议要求显式模式。避免参数缺失被静默解释成另一种动作。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	332	- Web `_input_focused` 使用 `ControlOrMeta+A` 和 `keyboard.insert_text`；需按所支持控件验证替换、追加及输入事件兼容性，不以“键盘 API 未报错”代替字段验收。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	365	兼容性判断和命中的运行清单摘要写入 Session。安装文件已更新不代表进程已更新，必须等重启后注册的新运行信息确认，才允许新契约派单。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	367	#### 2.6.4 不兼容错误立即阻塞
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	382	兼容旧 Scout 的过渡期，优先通过能力声明判断；对旧格式错误只在结构化上下文充分时做明确兼容映射，保留原始原因，不用宽泛中文关键词永久代替错误码。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	388	1. 同一变更周期更新协议文档、两仓解析/校验及 golden fixtures，明确新旧格式兼容边界。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	389	2. Scout 先发布兼容所需新旧模式的实现，并具备准确运行能力上报。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	391	4. Nexus 仅向已确认支持的节点派发新格式；旧节点执行兼容任务或明确阻塞，禁止临时补坐标掩盖不兼容。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	411	每个事件都需要参数/兼容性校验和执行回执，但不要求每个事件后额外调用一次模型。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	472	`cr-cae218300b60` 第 12 回合点击落在插画区域，第 13 回合 current_focus 写入被节点在执行前拒绝。Nexus 将焦点失效统归 contract_unsupported，误判为版本不兼容。`cr-81a964f4a975` 在 account_fill 阶段继续多次点击直至熔断。两个会话的第 1/6 回合分别从前置和填写钩子租号，第二次实际更换账号。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	474	**本轮修复（待重启后新 Session 验收）：**Nexus 精确识别旧节点返回的焦点失效、不可编辑等执行前错误，保留节点的有效焦点保护。每个填写里程碑最多一次重新定位和输入恢复；输入结果回看失败也共享这一预算。真正的能力不兼容继续阻塞。正常填写仅开放 input_text 与等待；恢复阶段开放一次重新点击；待回看输入时允许判断结果并选择下一步，派发前再次检查当前状态，不能只靠模型遵守提示。补齐 active_milestone 槽，明确待输入结果验收的 pending 聚焦项不需要重复点击。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	520	逐步收敛三个最终决策点：派发门禁决定当前动作是否合法；状态归约决定新事件如何改变状态；验收聚合决定哪些检查点有充分证据。规划、宏、回看、守卫恢复只提交候选动作或结果，不能各自直接给不相关步骤补通过。先迁移登录输入链路，不以一次性重写整个 loop 作为前提。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	554	跨平台可共享业务语义，但不能仅因文本相同就共享具体绑定。绑定应记录平台、适用版本、来源、最后验证时间及状态。旧控件拆分采用显式映射迁移，保留历史 Session 的引用意义。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	577	2. 旧路径空 evidence 只记警告；当前不再允许空证据通过。模型 confidence 仍是自报分数，不是独立证据或经校准的准确率。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	609	只有目标条件变更、依赖满足或有效新证据才算进展。截图时间变了、又跑一次检索、只改提示文字、重新进入恢复栈都不能清零预算。等待有截止时间，契约不兼容立即阻塞，未知结果先核实，不默认重发。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	702	不同时重写整个 loop、重建全部导航图或扩大大量渠道。先让同一登录链路走统一的派发、状态与验收入口，再迁移其他事件。历史任务保留原结论，复核或纠正作为附加记录，不静默修改原始轨迹。
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	721	| 新节点/旧节点、运行版本未重启 | 正确能力匹配；不兼容首次明确拒绝即阻塞 |
+compatibility_candidate	docs/架构/V4/UI 自动化执行异常问题解决.md	769	8. 控件复用冲突的实际范围和旧绑定迁移策略；编译缓存依赖变化是否正确失效。
+compatibility_candidate	docs/架构/V4/Workbench逻辑优化开发方案.md	42	- 数据库旧列本期保留但停止使用，接口对历史字段明确忽略或返回弃用提示；不保留对应用户流程，不为删 UI 直接破坏旧数据。其他助手功能保持原职责。
+compatibility_candidate	docs/架构/V4/Workbench逻辑优化开发方案.md	89	4. 存量有可信归属的数据保留原 owner；全局模型密钥、无归属节点和绑定不自动复制给所有用户。迁移到待认领 / 停用状态，由有权限的维护流程确认归属后启用。先备份后迁移，业务状态仍在 SQLite，不新增 JSON 真源。
+compatibility_candidate	docs/架构/V4/Workbench逻辑优化开发方案.md	95	账号隔离作为 P0，先明确归属与迁移，再贯通三页、后台执行和社交回调；同时补注册、移除默认值、修复状态字段和权限。同时记录列表性能基线，再按耗时占比优化请求与渲染。跨 Scout / Nexus 的上报变化同步协议文档和 golden fixtures。
+compatibility_candidate	docs/架构/V4/Workbench逻辑优化开发方案.md	103	- 每账号配置 sdk_provider、base_url、聊天 model、可选 embedding_model、temperature/max_tokens/top_p/thinking 及可选输入/输出/向量单价。自定义兼容服务可使用 openai 接入方式；SDK 有原生适配的当前服务商使用原生适配。没有额外 SDK 已覆盖的业务直连 HTTP 模型实现。
+compatibility_candidate	docs/架构/V4/Workbench逻辑优化开发方案.md	104	- SDK 随版本固定的注册表提供模型和能力、参数、上下文与价格信息。SDK registered、官方维护状态、账号可用性是不同概念；未记录维护/退役信息显示未知。允许自定义模型和 Ark ep-… 接入点，不能因未登记就断言无效，不能静默切换到别的模型。默认新配置使用注册表已有的 Doubao ID；已有显式保存的 ID 不自动迁移。
+compatibility_candidate	docs/架构/V4/Workbench逻辑优化开发记录.md	9	- Nexus：每次连接独立记录首次插件快照就绪；仅来源节点在线、owner 一致且缺少首次快照时，入站线程有界等待 20 秒再验证，兼容现有 0.1.84。连接换代、实例不符、已让出或归属不符仍拒绝。警告增加具体原因，不记录正文、凭证或社交身份。
+compatibility_candidate	docs/架构/V4/Workbench逻辑优化开发记录.md	20	- 移除助手默认应用、默认设备及其候选查询、提示词注入和隐式补参。旧字段输入忽略，数据库旧列保留。启用开关移至状态区。工具缺参追问，候选按用户节点权限过滤，执行前检查设备在线和权限。
+compatibility_candidate	docs/架构/V4/Workbench逻辑优化开发记录.md	58	1. LangBot 4.10.11 当前可用接口没有持续连接确认字段。本轮保留兼容的 `connected`，仅在本次进程启动后 120 秒内收到真实渠道消息时令 `connection_verified=true`；超期显示待确认。持续适配器连接/认证事件尚待接入，不能把本轮当作持续在线保证。
+compatibility_candidate	docs/架构/V4/Workbench逻辑优化开发记录.md	78	7. 迁移前做不覆盖的一致性备份；仅可信旧任务归属回填。全局 Key、旧社交映射、无归属节点及本地插件不自动分配，业务状态仍在 SQLite。
+compatibility_candidate	docs/架构/V4/Workbench逻辑优化开发记录.md	84	- 独立 HTTP 七组检查：A/B/管理员三页与 Key 独立；猜 ID/伪造 user_id 拒绝；模型连接及后台任务使用本人 Key；任务/session/模型诊断 owner；绑定码 TTL/原子消费、并发重复回调、假实例、未绑定群成员、解绑消息；实际 WS 推送/退出关闭/匿名拒绝；迁移备份保留旧配置。均通过。
+compatibility_candidate	docs/架构/V4/mino接入社交软件实现24小时在线.md	8	> **前端范围**：**MinoWorkbench** 是唯一用户及管理入口。文件名保留以兼容已有引用；“24 小时在线”是部署目标，不是已验收的可用性承诺。
+compatibility_candidate	docs/架构/V4/mino接入社交软件实现24小时在线.md	179	| 实现 | `fastapi_mcp` 或 FastMCP；如果与 `fastapi>=0.124,<0.130` 不兼容，就手写端点（协议面不大） |
+compatibility_candidate	docs/架构/V4/mino接入社交软件实现24小时在线.md	237	- **缺参追问**：参数只取本条明确输入及当前会话已确认上下文；缺失或同名歧义就追问，即使只有一台在线设备也不自动选择。结果卡展示实际解析的项目、用例和设备，执行前重新校验归属、兼容性及就绪状态。
+compatibility_candidate	docs/架构/V4/mino接入社交软件实现24小时在线.md	404	| `pyproject.toml` | 小 | `fastapi-mcp` 或 `fastmcp`，先确认与 fastapi 版本上界兼容 |
+compatibility_candidate	docs/架构/V4/mino接入社交软件实现24小时在线.md	546	7. MCP 明确只实现 2025-03-26 的无会话 POST 子集；GET 返回 405、已接收的通知返回 202。校验 JSON-RPC 格式、协议版本和 Origin；额外浏览器 Origin 使用显式 MINO_MCP_ALLOWED_ORIGINS。稳定 id 参与写操作幂等。尚未实现恢复流/断点重连/完整 MCP 客户端兼容矩阵。
+compatibility_candidate	docs/架构/V4/prompt改造方案.md	33	1. **改 prompt 要写迁移代码。** `ai/job_upgrades.py` 已经 3452 行、45 个 `upgrade_*` 函数。`agent-decide` 从 V5 打补丁打到 V22，每一版都是「读库里的正文 → 字符串替换 → 写回」，`bootstrap.py` 启动时逐个执行。字符串一旦对不上，补丁就静默跳过。
+compatibility_candidate	docs/架构/V4/prompt改造方案.md	188	迁移后这几处改为通过 `prompt_repo` 取 job 并渲染。`verify_no_prompt_literals.py` 同时扩展：不再只认中文，凡是作为 `role: system` 内容的长字符串字面量，不论中英文都拦截。
+compatibility_candidate	docs/架构/V4/prompt改造方案.md	247	## 6. 迁移步骤：先取出来，再删除
+compatibility_candidate	docs/架构/V4/prompt改造方案.md	253	1. **一致快照备份**：以 `mode=ro` 打开源连接，通过 SQLite backup API 写到新文件 `mino.db.bak-prompt-export-<日期时间>`，不覆盖已有备份，不向源库执行更新或 checkpoint。不直接复制正在运行的 `mino.db`，不删除或遗漏其 WAL / SHM；记录实例、时间和构建，并核验快照可读及完整性。失败则停止后续迁移。
+directory_candidate	docs/架构/V4/prompt改造方案.md	264	**以哪个库为准**：以实际跑批用的那个 Nexus 实例的 `mino.db` 为准。当前本机 `~/.mino-nexus/mino.db` 里有 24 个 job、16 个技能，`_role_prompts` 与 `layer_stack` 都为空。已确认只有这一个 Nexus 实例，不需要多库对比。
+compatibility_candidate	docs/架构/V4/prompt改造方案.md	302	**其它对话型 job**：`conductor`、`req-qa-bm`、`version-qa-bm`、`report-writer`、`doc-keeper`、`product-expert` 这 6 个对话型 job，在代码中除了目录定义、别名表和「设置页试对话」之外，没有找到任何业务调用方，Workbench 也不调用 `/settings/ai/roles/chat`。**已确认：这 6 个不删**，照常导出为 `jobs/` 下的文件，保持原样迁移。`knowledge-reviewer` 同样保留。
+compatibility_candidate	docs/架构/V4/prompt改造方案.md	327	| `scripts/` | 新增 2 个一次性脚本 | `export_prompts_from_db.py`、`verify_prompt_export.py`，迁移完成后可删除。**不新增 `verify_prompts.py`**。`verify_no_prompt_literals.py` 扩展为中英文都拦截（该脚本目前未挂进 CI） |
+compatibility_candidate	docs/架构/V4/prompt改造方案.md	349	1. 另外 6 个对话型 job **不删**，原样迁移。
+directory_candidate	docs/架构/V4/prompt改造方案.md	350	2. 只有本机 `~/.mino-nexus/mino.db` 一个 Nexus 实例，不需要多库对比。
+compatibility_candidate	docs/架构/V4/prompt改造方案.md	355	按 [V4 索引](README.md) 的交付顺序协作。当前工作树已有 `prompt_repo` 与 `prompts/assistant/`，旧版“先落到库 / 代码、不建 prompts/”的过渡约定不再适用。
+compatibility_candidate	docs/架构/V4/prompt改造方案.md	358	- 多人修改同一加载链路前先确认工作树及责任范围，不把未提交修改视为线上版本。迁移保留旧库快照；回滚按一组代码与模板版本恢复，不恢复旧配置与新代码混用的双真源。
+compatibility_candidate	docs/架构/V4/多机部署Scout节点开发方案.md	23	- Workbench `useRunDevices()` 默认请求 `/case-runner/devices?only_online=true`；不可用目标会被隐藏。`isExecutable()` 主要检查状态和 `sn`，不足以判断桌面权限、会话、能力和任务兼容性。
+compatibility_candidate	docs/架构/V4/多机部署Scout节点开发方案.md	35	- 设备从 A 移到 B 后，只出现在 B；A 迟到的断开心跳或重新注册中的离线设备不能抢回设备位置。跨账号迁移仍拒绝。
+compatibility_candidate	docs/架构/V4/多机部署Scout节点开发方案.md	38	**兼容处理**：旧的无归属 Scout 本机插件文件不作为新账号的配置。首次验证归属后建立按服务地址与账号隔离的空插件存储、IM 库和钥匙串条目；旧文件保留原位，不再阻塞新配置。已经确认归属的配置沿用原路径，账号或服务不匹配仍拒绝继承。数据库清理仅针对明确无归属的记录，不能删除已归属节点、账号插件、模型密钥或助手绑定。
+compatibility_candidate	docs/架构/V4/多机部署Scout节点开发方案.md	40	**验收**：同账号两节点列表互不混入；迁移后仅新节点出现设备；迟到断开不回迁；断开手机不显示；Desktop 权限不足仍能看到处理原因；离线节点无实时设备；新账号遇到旧本机文件仍能保存新插件，且不能读取旧配置、消息和密钥。
+compatibility_candidate	docs/架构/V4/多机部署Scout节点开发方案.md	70	| 可执行判断 | 服务端返回当前任务的可选状态和阻塞原因（拟新增），综合 owner、节点连接、桌面会话、能力、OS / 应用兼容性和占用情况。前端消费服务端判定，不再只依据 `sn` 或 online 放行。能力不足与繁忙不是同一种状态。 |
+compatibility_candidate	docs/架构/V4/多机部署Scout节点开发方案.md	74	任务的匹配规则要明确：原生 macOS 应用匹配可执行的 macOS 桌面；Windows 原生应用不能直接派到 Mac 桌面。测试普通网站继续选择该节点的 Web 槽；只有涉及桌面交互的测试才选择 Desktop。缺少应用目标平台或必要执行能力时提示补全 / 不兼容，不能自动挑另一台设备。
+compatibility_candidate	docs/架构/V4/多机部署Scout节点开发方案.md	128	1. **Nexus**：改 `rRuntime.py`、`runtime_tokens.py`、`node_register.py`、`node_store.py` 及节点注册链路；复用 SQLite，列表和操作统一按账号鉴权。历史未归属节点由管理员在 Workbench 认领，旧字段不参与授权且不要求额外客户端。
+compatibility_candidate	docs/架构/V4/多机部署Scout节点开发方案.md	146	## 8. 2026-10-12 租约、迁移与验收边界补充
+compatibility_candidate	docs/架构/V4/多机部署Scout节点开发方案.md	148	节点归属、设备当前位置、桌面任务准入和机器人持有应分别描述。设备离线迟到报告已有防护，不代表旧节点迟到的“仍在线”报告已有 generation/fencing 防护；后者仍待协议设计及两仓实现，不能靠 device_lost 的分支宣称完成迁移一致性。当前设备准入复用数据库 reservation/lease，不退化为仅进程锁。
+compatibility_candidate	docs/架构/V4/控件定位未写-项目归属错位-cr-609e25f69684.md	26	"1. **项目键不一致是根问题**：导入/编译时 `ensure_control` 用了 `_project`，运行用 `app_id`。V5 的""编译产物冻结、运行只读""要求控件身份在编译期就带正确项目；建议在 `stamp_compiled_plans/ensure_control` 调用处保证传入真实 project_id，并在发布前做一次迁移（把 `_project` 行归到项目）。本次仅做运行侧回退，**没有迁移数据**。"
+compatibility_candidate	docs/架构/V4/控件定位未写-项目归属错位-cr-609e25f69684.md	27	2. 当前库里 `_project` 74 行、真实项目 42/40/14 行；回退对旧数据有效，但同一 `desc_key` 在两个键下可能各有一份，后续迁移需去重。
+directory_candidate	docs/架构/V4/纯视觉输入聚焦引用丢失-cr-d399967e8238.md	66	**部署注意**：本机运行的是 `~/Library/Application Support/MinoScout/bin/mino-scout`（0.1.87），**不会自动带上源码改动**；需要发布/安装新 Scout 并重启节点后才生效。我没有改版本号，也没有重启节点。
+directory_candidate	docs/架构/V4/视觉校验输出契约冲突-cr-008eeb42ce13.md	40	在独立临时 `MINO_NEXUS_DATA_DIR` 中完成 49 项离线响应与契约检查：实际旧响应不能推进里程碑；规范响应可推进；主/备用渲染和 schema 参数一致；缺项、重复/未知 ID、非布尔结果、非字符串证据阻塞；选填聚合及完整/截断输入范围限制保持有效。校验脚本与模拟仅留本地，不进入仓库，不运行 pytest，不写共享数据库，不调用真实模型。
+directory_candidate	docs/架构/V4/辅助请求幂等键冲突与IM确认异常-cr-72f483f92cdf.md	3	日期：2026-10-14。关联 `cr-72f483f92cdf · case-bc8b51cf` 和 16:29:48–16:31:01 微信入站日志。排查仅只读共享 SQLite；验证使用独立临时 MINO_NEXUS_DATA_DIR。
+compatibility_candidate	docs/架构/V4/辅助请求幂等键冲突与IM确认异常-cr-72f483f92cdf.md	13	前一轮 V5 引入 Scout RequestGuard，以 `(run_id,step_idx)` 登记完整 Execute。守卫正确拒绝同键不同内容，但 Nexus 的 legacy observe/cancel/plugin 与无任务 RPC 仍固定使用 step_idx=-1，node_plugin_call 更始终使用空 run_id 和 -1。第一次请求占键后，不同参数截图、下一条发送或 ACK 都复用旧键，于是冲突。完整守卫与辅助发送方没有接齐，这是此次改动造成的回归。
+compatibility_candidate	docs/架构/V5/README.md	56	## 本次文件迁移
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	7	本轮继续修订方案并整理三仓平台字段审计；不修改运行代码、不操作业务数据库、不运行模型或设备。本方案覆盖 8 项问题、3 项一致性调整及 2026-10-15 用户反馈。R2 对照两端源码和 Workbench 入口；R3 修正 7 项反馈，并在 §21 明确全局平台字段合同。R4 按用户决定选定路线 B：N0–N5 的明确范围纳入本版，§21 平台统一与 SN 迁移不再延期；N3 不含连续取证。R5 在 §22 写入当前实现检查、整改任务及验收门槛；不改变已确认的路线 B。本轮不包含部署操作。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	9	> 最新实施与验收以 §29 为准。前文“本轮不修改代码/未启用/迁移待做”描述原修订批次，不代表当前状态；历史 SN 迁移已按用户要求取消，改为待明确范围的清空重导。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	15	本方案是针对基线的修订。用户已确认本版采用路线 B、平台内部统一 mac/win/android/web，以及本期“不再弹窗”仅作一次检查；这些决定直接覆盖旧版相冲突的待定项。其他工程细节按下表和后续验收处理，不因文件更新就认定代码已完成。开发事实仅在 [统一开发与验收记录](执行开发与验收记录.md) 更新。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	17	保留既有产品决定：DOM 优先与显式纯图、观察策略与严格合同解耦、Workbench 唯一前端、事件实现来源改为注册、未来目标平台 android/web/mac/win、不为平台迁移添加长期兼容层。不将这些设计目标写成当前代码已实现。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	120	## 8. R07：实施依赖单向，影子阶段不删除旧路径
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	126	1. **当前 DOM 切片收口**：依托已有程序注册与保护补齐 D01–D07、R03/R05/R06 必要部分，完成 D08。允许有限重复注册代码暂存，不依赖整套事件迁移才修当前故障。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	129	4. **原子业务切片替换**：词表、协议、消费者、必要数据迁移和事件引用迁移作为完整合同切片验收。迁移歧义则中止并列清单；数据迁移是新合同 N4 必交项，具体清单与保护见 §18；本轮不执行迁移或设备升级。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	132	删去事件方案“D05 必须依赖事件整体迁移”的硬依赖，以及“E02＋E09 是不改变行为的最小影子切片”的说法。已有必填不跳过保护不能在影子阶段退回旧缺陷。影子结论不覆写实际 verdict。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	143	| P-B 导入与版本 | XLSX、持久收据、revision/job、幂等补交、旧 job 不覆盖、冻结兼容计划 | 真实输入与 provider 编译；中断/改文/重编/版本选择证据 | 待实现核对和端到端验收，不由 P-A 代替 |
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	148	P-A 单独通过只能称“首批执行场景已验收”。V5 面向首批用户的产品完成需要 P-A 至 P-D 均满足选定范围。事件平台重构不是 P-A 的循环前置；本版已确定采用路线 B，必须满足 R01/R02/R04/C01/C02，并完成 N0–N5 及 §19.2 的切换复验；§21 的词表统一和 SN 迁移均属本版范围。新合同验收前保留现合同只是过渡顺序，不是路线 A。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	156	provides 从字符串数组变为对象数组、移除旧平台字段和改设备身份属于破坏性合同变更，不能写成 additive。新增可选字段本身可以 additive，但不能掩盖整个变更的破坏性。明确协议/参数/结果版本、双方校验、历史证据读取和不兼容拒绝；不以同版本 fixture 自洽代替旧请求拒绝验证。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	166	**验收 C01–C03**：不兼容消息明确拒绝；Scout 工具分类正确且依赖不丢；同一句原文在 MVP、DOM、编译、展示和核验中的强度一致，相似页面不能仅靠圆按钮通过。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	206	| R4 §4/§8/§11 去留悬空 | 接受；均保留，明确触发阶段、迁移范围与任务 | §18 处置表 |
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	212	协议验收依据还存在仓库说明冲突：当前 `CLAUDE.md §5` 指定 golden fixtures 为真源，`AGENTS.md §5` 指定同步协议文档和实现为真源、fixture 仅本地保留。本轮不擅自改这两份仓库规则，也未运行 fixture。实施协议变更前由仓库维护者统一真源及样例管理规则；准备同版本合法/非法载荷、两端 round-trip、旧版本拒绝和实际消费者证据，AST 比较仅作辅助，不能作为协议验收通过条件。不新增已提交测试文件，不运行 pytest。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	223	| 平台字段多义 | Register.platform 为宿主系统，DeviceManifest.platform 为被测平台；desktop 还依赖 os、SN、session_key | 不能全局同词替换；宿主信息保留，目标字段按 R4 迁移，mixed/any 是集合概念 |
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	242	execution_contract # legacy 现合同或新绑定合同版本
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	313	旧会话缺 execution_binding 时展示“旧合同记录，未记录统一绑定”，仍按原 session_id 打开证据；不根据现在的目录补造历史绑定。未知新 schema 显示不支持该详情版本并保留原始脱敏记录，不误判为空或通过。此处是历史读取，不是 R4 禁止的运行平台别名兼容。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	362	| §11 数据迁移 | **保留且是 N4 必交，不再悬空** | 只读预演、备份、歧义中止、事务/幂等、被退役配置导出、历史读取验证；缺一不得切换 |
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	368	迁移必须涵盖现方案表格之外的实际消费者：DeviceReservation 的共享资源键、运行选择/用例/冻结计划、runtime_capabilities 内 platform、环境渠道、持久任务及截图/历史引用。活动未知写资源不得通过改 SN 获得一个“空闲的新身份”；不能证明已停止则不迁移该资源。历史 session_id 原样读取，不以新 SN 拼出旧 ID。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	370	“Mobile→android”只能在相关应用/渠道等权威记录确认 Android 后执行，删除 iOS 支持本身不能证明旧 Mobile 数据属于 Android。不明项列人工迁移决议。移除用户渠道配置仍需保留完整受控导出，不把含敏感配置的迁移报告放进公开文档数据目录。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	384	| N4 平台与业务事件迁移 | Nexus migration/环境/资源/编译；Scout 平台；Workbench 消费者 | §18 全范围迁移预演与正式事务机制 | 不猜平台、不丢配置、不改历史；资源身份不产生双重准入；旧事件引用清零或明确阻断 |
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	401	量级是设计估算，未测人日：S=单模块局部改动；M=单仓多入口；L=两仓或带持久化/失败语义改动；XL=三仓协议、存量迁移与产品回归。它反映涉及面和验证成本，不可直接相加或换算日期。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	409	| N4 | XL，风险最高 | 三仓平台、SN、环境渠道、资源锁、事件引用和存量迁移；歧义量未知 | 只读迁移预演给出记录数、引用数及歧义清单后排正式切片 |
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	412	N1+N2+N4 是整体重构主成本，不能与普通修补按同等规模排期。负责人估工时前至少取得：当前 D08 基线、入口/消费者清单、迁移预演规模、N3 单次观察入口现状、可用联调环境及三仓负责人的实际可投入量。分别估开发、联调、首次验收和切换复验；当前没有这些依据，因此不填虚假人日或日期。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	420	| B（已确认） | N0–N5 的本文范围及 P-A–P-D 全部交付；含 §21 词表统一、SN 迁移与消费者切换 | 先现合同 D08，再新合同受影响 D08；平台/入口全覆盖受影响时相当于两轮完整 D08；N3 按单次检查验收 |
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	422	**双轮验收成本必须单列**：第一次不能为赶切换省略，第二次不能用旧 session 充抵；可以复用未受影响的证据，但须提交影响分析和复用理由。N5 还包含协议、迁移、取消/超时等验收，不能理解成“只重跑 8 条”。负责人安排三仓工程顺序及复验，不再等待 A/B 决策。影子阶段维持旧行为是路线 B 的过渡步骤，不能将 N4 移到后续版本后仍称本版路线 B 已完成。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	437	## 21. 全局平台字段合同与迁移边界（路线 B 本版必交）
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	439	平台内部被测平台统一使用 **mac / win / android / web**。这是被测平台合同，不是把全仓包含 platform/os 的字符串全部替换。当前三仓仍混用旧值，本轮仅修改方案。字段定位见[三仓平台字段审计](数据/20261015/全局平台字段审计.csv)；它是源码消费面清单，不是生产数据库迁移数量或全部动态内容已核查的证明。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	446	| 应用覆盖、用例适用、实现覆盖 | platforms，四值数组 | 单用例若单平台可继续 platform；多值不塞逗号字符串。现有 apps.platforms 字符串需版本化迁移；各入口不得同时保存冲突副本 |
+platform_contract_candidate	docs/架构/V5/合同收口与交付修订方案.md	447	| any 与 mixed | 适用范围用 platform_scope=all/explicit；批次用 platforms_by_sn + 派生 platforms | any/mixed 不进入设备平台枚举；all 表示全部受支持平台，不是所有平台都有执行能力；空集合与未填写区分 |
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	459	| platform_scope | 本方案新增的集合语义字段 | 在用例适用范围合同实现 all/explicit，联动编译/API/UI/迁移；不是设备字段 |
+platform_contract_candidate	docs/架构/V5/合同收口与交付修订方案.md	459	| platform_scope | 本方案新增的集合语义字段 | 在用例适用范围合同实现 all/explicit，联动编译/API/UI/迁移；不是设备字段 |
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	465	### 21.2 迁移决议表（只用于一次性受控迁移）
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	472	| Mobile / mobile / 移动端 | **R4 旧版无条件 Mobile→android 规则作废**；权威记录确认仅 Android 才迁 android | Workbench 旧提示明确含 Android 与 iOS；不可因本版删 iOS 就推断历史 Android；混合覆盖保留原值供审阅 |
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	477	迁移必须输出 old→new、来源证据、涉及实体/引用、歧义原因和复核者；报告不得含密码令牌。apps.platforms、用例/场景/device_need、环境快照、能力/恢复规则/逻辑块、资源 claim、注册及嵌套 runtime_capabilities、任务及冻结计划、API/UI/导入导出/提示词一起纳入消费者清单。自由文本原句保留，不批量改用户叙述；解析结果生成新 revision。数据库中的自定义知识、技能及提示词没有在本轮读取，正式迁移前仍须只读盘点，不能称为已清零。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	485	1. 定义四值校验、集合 schema、宿主和外部边界；先列消费者和旧数据歧义；本版路线 B 已确定。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	486	2. 影子阶段只比对，保留当前协议。一次性迁移程序允许读取旧别名，新合同运行入口不允许别名；二者不矛盾。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	512	| I04 / P1 | Scout `desktop.py:248` 仍注册 platform=desktop、旧 SN；Nexus `services/device_targets.py:8–43` 使用 desktop+os/pc；Workbench `apps/CreateDialog.tsx:36` 默认 Mobile，`config/envModel.ts:61` 使用 pc | N4、N5 | 依 §21 整体迁移四值词表、SN、嵌套能力、环境/资源引用及 API/UI/导入消费者；保留宿主/驱动和共享锁语义，歧义不猜 | 新运行 platform 仅 mac/win/android/web；三仓同合同，Mobile 歧义拒迁；SN 不分裂共享锁；历史会话可读，非法或冲突输入写前拒绝 |
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	527	| N4 平台与业务事件迁移 | 未见整体切换落地 | 三仓四值/身份/引用迁移预演及业务事件迁移，不只是改 UI 标签 |
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	542	3. 按 N4 预演结果同步切换三仓，处理歧义、引用及共享资源锁；不能只完成平台改名就宣布事件合同迁移完成。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	557	本轮实际修复与受控验证详见统一开发记录同名章节。登录入口的 observed skip 准出、当前焦点写前拒绝回执、待补充原文入口/新草稿/冲突检查已进入代码；旧冻结混跑保护与 mac/win/headed Web 共享锁兼容同步补齐。前端仅通过类型检查，补充后的真实编译/浏览器/业务验收尚未完成，不提升为产品闭环已验收。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	559	用户已明确两条历史 Mobile 应用“造好物”和“移动端”均仅 Android，迁移可据此生成 android 候选，不再为这两条重复询问；其他 Mobile 仍需独立证据。N4 的全量平台、SN、环境和引用消费者切换尚未完成，业务库未迁移。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	566	本次按用户更正，仅推进真实依赖解析与平台/身份迁移 N4/I04；不将普通 runner 全面接入绑定另立为本次已完成任务。路线 B、四值 `mac / win / android / web` 和两条历史 Mobile 应用仅 Android 的既有决定不变。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	585	**N4/I04 仍在开发，未完成整体切换**：Scout 原生注册/SN、嵌套运行能力、全部环境写入口、导入/任务恢复、业务事件引用与自动全量映射盘点尚未贯通；显式事务执行器不能替代这些消费者工作。真实业务库未执行迁移，未升级或重启节点。完整 N1/N2 消费者未验收前，不提前将真实 `desktop:` SN 改名。两条 Mobile 的已确认决定可填入对应应用映射；其他 Mobile 仍不得推广推断。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	590	## 26. 普通本地工具依赖与迁移入口接续（2026-10-15）
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	598	- 环境快照停止跨环境补包名、停止 iOS Bundle 补 Android 包名。规范化保留 profile 内自定义字段，修复无 channels 时重复生成预置通道的问题。此项没有切换全部环境新写入入口，也没有宣告旧值已迁移。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	600	验证：48 项隔离 SQLite、真实生产函数及内存节点登记检查通过，未调用模型/设备服务、未写业务库。证据 `数据/20261015/mino-v5-local-dependency-import-checks.json`。尚需三仓完整注册/嵌套能力/环境编辑入口切换、SN 字典键和所有引用审阅迁移、普通其他工具依赖接入，以及真实业务 D08/N5；不以本轮检查替代端到端验收。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	607	历史读取保留原平台词值；Workbench 显示迁移提示并阻止保存，等待审阅迁移后重读，不把 pc 或未知值猜为 win/android。该提示不是已完成迁移，也不是新的 needs_input 任务流程。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	609	项目环境部分更新保留未提供的 profiles/channels/pipeline 和其他现有配置；UI 编辑启动标识保留同块自定义字段。旧应用环境 PUT 只更新已登记渠道的 test 值并合并现有字段，未知渠道或结构改写返回 422，不能绕过项目渠道合同。服务层渠道结构变更也校验；原渠道未变的内部账号/序列维护保留旧数据兼容，不借维护操作迁移平台。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	613	剩余原生注册切换仍需 Scout manifest/SN、Nexus 派发与注册消费者、Workbench 设备选择共同完成，并审阅全部 SN 字典键/引用映射。当前 Scout 仍上报 desktop + os，不能因本节环境入口已统一就宣布全局平台已完成或执行生产迁移。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	620	mac/win 新请求验证宿主系统、SN、平台与 session_key，拒绝其他平台冒用原生前缀，device_hint 不复制设备 os。新原生用例不从 Mobile/pc/desktop/空值猜平台，也不把 Web 用例自动改写成原生。旧 desktop 路径保留兼容，不改历史任务 verdict 或隔离。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	624	本轮不切换 Scout 默认 manifest、host 和嵌套 runtime_capabilities 上报；未完成协议激活边界、SN 字典键及所有引用的审阅迁移，未做真机执行验收。N4/N5 保持未关闭，不以消费者就绪代替完整原生可用。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	629	用户取消历史 SN 引用迁移，选择清空后重新导入。取消的是旧 SN 转换与引用迁移交付，不是新平台合同：新运行仍严格 mac/win/android/web；原生与 headed Web 共用 desktop 资源锁。清空配置范围尚未确定，本轮没有删除 SN、配置、账号、历史任务或隔离记录。
+compatibility_candidate	docs/架构/V5/合同收口与交付修订方案.md	659	按用户决定，HITL（human_input_text、signal_ask_human、hitl）及 persona（persona_subtask、ai_persona）本版不迁移、不注册，也不提供给大模型。目录加载、目录写入、工具菜单及派发入口统一排除；历史目录和运行证据保留，不为清理本版能力删除历史记录。它们不再作为 V5 未完成开发项。Gmail 动态取码失败不能回退到人工输入或 persona。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	39	| 关联与重取 | 结果 raw_response 和 device/action 记录保留 action_ref、logical_seq。一次请求的 legacy 网络重取复用原 Execute 与原 wire 编号；框架 observe 继续用负编号。 |
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	40	| 服务写守卫 | control_registry 提供 registry_runtime 上下文，V5 上下文禁止 ensure/fill，嵌套 legacy 不能解除只读。case 循环和本地编排线程绑定该上下文，线程切换继承上下文。 |
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	45	RunContext 的 execution_mode 默认 legacy，本批只提供本地守卫标记，并写入 session/start。HTTP 开跑请求当前保留既有 agent 字段用法；没有将该旧字段直接视作 V5 准入，也没有开放未经验证的 V5 运行路径。节点合同、模式固化和准入由后续 PR-B/B2 接入。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	47	四个控件字段是 PR-C 的前置基础；本批没有发布 API、Workbench 编辑器、typed resolver、修订冲突返回协议或唯一身份迁移审计，不据此宣称 PR-C 完成。
+directory_candidate	docs/架构/V5/执行开发与验收记录.md	51	验证全部使用临时 MINO_NEXUS_DATA_DIR，没有读取或修改共享业务 mino.db，没有运行 pytest，也不向仓库加入测试、mock 或协议 fixture 文件。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	60	| 旧库迁移 | 从只含旧列及一条旧定位的临时 ui_controls 启动实际迁移，旧身份与定位保留，四列默认值正确，旧控件保持 draft。 |
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	69	PR-A 尚未提供原子在途登记、请求内容冲突检测、execution_started、写门闩或禁写重发。legacy 的同键重取仍可能遇到 Scout 在途保护不足，不能将独立编号修复称为 exactly-once。
+directory_candidate	docs/架构/V5/执行开发与验收记录.md	98	所有写验证使用全新临时 MINO_NEXUS_DATA_DIR，不修改共享业务数据库，不运行 pytest，不提交测试/mock/fixture。失败任务诊断仅只读 SELECT。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	105	- 四条故障回归：项目身份、legacy fallback/V5 拒借、focus_ref/单次恢复、405s/显式覆盖、模型绝对 deadline、超时仍写 verdict、8 并发账号租约仅 1 获得，以及 cr-58678 两组边界与拒绝错框/重复候选。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	140	本次回归来自完整 Scout 请求守卫与仍复用 -1 的 legacy/RPC 发送路径没有收口。新增统一辅助身份分配器，真实任务 run_id、正动作及 focus_ref 保留，中央 WebSocket 闸门兜住全部调用；插件发送/确认与 RouterProxy 取证接同一分配器。ACK 失败被捕获，done/uncertain 入站重投不重放业务。两仓协议文字同步，Scout 守卫保持不变。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	156	只有 Workbench 一个前端。任务策略经 action_space.scheme 统一归一化，旧 dom 兼容 dom_preferred，能力目录 schemes 仍是 dom/visual；禁止入口、摘要和恢复各自把新值收成 visual。显式目录 platforms 优先于常量，程序能力通过启动注册器自动同步现库版本与平台，业务能力经 Workbench 维护；不允许调试脚本改共享库。必填登录结果不能渠道 skip；回看分支先校验再推进；截图兜底只能用于尚未派发的动作，execution_started 的不确定写动作禁止重放。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	258	用户反馈要求对照源码、明确绑定结构与唯一入口、核实快照、收敛依赖工程、指定 needs_input 出口，并交代 R4 平台/事件/迁移去留。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	262	修订方案升至 R2，新增 §13–20；R4 的关键冲突表述同步指向新合同，保留平台/SN、业务迁出及数据迁移目标。事件平台文件去掉“-已完成”，以后按设计/代码/业务验收状态列维护。历史记录中的旧名仅为当时背景，不再控制启动。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	281	三仓静态审计发现 Workbench 创建应用的 Mobile 明确含 Android/iOS；desktop 既是设备旧值又是执行器和共享锁种类；宿主平台、被测平台与环境渠道不能机械替换。详细字段和迁移边界见主方案 §21 及 数据/20261015/全局平台字段审计.csv。R4 冲突条款同步修订，所有开发记录继续在本文件。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	316	用户明确决定：采用路线 B，本版纳入新合同、平台统一和 SN 迁移；内部被测平台统一 mac/win/android/web；本期“不再弹窗”只需在明确检查点有效观察一次，未发现即可，连续取证/闪现/后续延迟出现属后续业务逻辑。此前 R3 的 A/B 待选、时间窗待选和 N3 因连续取证升 L/XL 的描述不再有效。主方案删除拼写对话说明，历史记录仅保留当时背景，不作为规范依据。
+platform_contract_candidate	docs/架构/V5/执行开发与验收记录.md	318	同步修订主方案 §7/§9/§16/§17/§19–21、阅读入口、平台专题和 DOM 方案。源码只读核实：Register.host、Scout 宿主 os、Workbench host.os 和 case_runner.platforms_by_sn 已有基础；platform_scope 才是本方案新增字段，禁止全部记作从零新增。本版仍需完成统一值及消费者验证。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	322	按用户追加要求，专题正文同步修正：DOM 平台字段删除目标 desktop+os 表述；MVP 将 N4 迁移纳入本版并排除连续取证；可信性合同明确单次弹窗检查不套重复读取默认；验收清单新增 B01–B06。历史方案及审计快照不改写为新事实。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	453	cr-0aeb25a90979 最新任务冻结快照显示运行前作者又补回第四/五步（case-25e70e0b 增加返回箭头，case-1896d041 补登录与完成，case-f195d70c 补账号密码登录）。以上次 case_list 的三步展示仅作为当时快照，不替换任务实际作者文本，不把当前 case_id 当成旧版内容。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	577	- I01/I02 仅完成上述源码和独立受控证据，保留待部署/业务验收状态。N1/N2 统一绑定及受控解除隔离、I03 单次页面就绪检查、N4 平台/SN 迁移、N5 和 P-B/P-C/P-D 尚未完成，不修改方案中待验收结论。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	582	用户确认已更新 Scout 后，先检查 Android/Web 设备在线且无 running 任务，经 MCP 各提交一次，显式指定 `action_scheme=dom_preferred`、测试环境和原项目/渠道。任务实际 `execution_mode=legacy`，不冒充新绑定合同验收。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	600	当前 N1/N2 是底座第一切片，**尚未启用完整新绑定执行**：菜单/预检/普通及严格派发仍需统一接入，真实连接/进程/能力代际与 wire 校验、持久化写前守卫、受控停止/解除隔离尚待完成。新心跳语义需本轮 Scout 源码重新发布加载；当前安装的0.1.95不能算已支持快照v1。I03、I07、N3/N4/N5和全库D08未完成，平台/SN暂未迁移。按R5顺序接续，不提前勾方案验收。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	630	9项受控检查通过，包含缺回执pass不翻绿、显式yes/no、已开始失败阻止后备、旧布尔兼容、只读不隔离、新Playwright未标注出口默认unknown，以及真实ScoutCore→Router→AdbExecutor.wait_ms的no回执；无设备API/mock/pytest。独立SQLite session=r5-controlled-producer-boundary。源码与两仓协议说明同步；仍需新版Scout正常加载后的真实业务验收，I02未全项关闭，受控解除隔离未实现。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	645	既有23项受控组件检查通过，包含真实NodeRegistry→纯resolver→原子persist_binding→dispatch_projection→ScoutCore→本地AdbExecutor.wait_ms，以及两仓5类载荷round-trip、撤销/重连/进程变化、旧节点兼容。收尾仅复查受影响两项：适用性优先；真实spawn后代际变化在IPC发送前拒绝，实际设备请求0。11个Python文件AST/未定义名通过。受控材料保留在工作区，不新增已提交tests/mock、不运行pytest。首次收尾校验因解释器缺psutil、随后因沙箱禁止进程枚举未完成，改用已有依赖的解释器及获批权限后通过；不将环境失败算成功。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	658	这是上一批显式回执改动遗漏了声明式low_level系统动作造成的真实兼容缺口；如wake_screen等不走已补齐的原生if分支，不能只验证tap/input就宣布回执覆盖。安全守卫正确保留unknown和隔离；问题应修生产回执，不把Router恢复为从pass合成yes。后续尝试通过正式task_cancel停止无效恢复时任务已结束（already=true），未改结果、未清租约或隔离，也未再次跑批。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	664	13项受控检查使用真实本机shell调用与真实归一器，覆盖完成、写前拒绝、超时、实际二进制缺失、远端非零、前序完成后拒绝、部分batch、读取兼容、后处理失败，以及恢复/屏幕守护停止。设备API调用0，独立session=r5-controlled-low-level-receipts；不提交tests/mock，不跑pytest。受控路由初始化首次因测试环境不存在归属设备被拒，保留失败，不弱化访问控制，后续仅验证停止入口在无transport时先返回。该切片仍需新Scout包和实际业务验收，不能认定I02、D08或全套V5完成。单次否定检查尚未收口，未在本切片修改其语义。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	691	仍需完成：N1/N2 在菜单、预检、普通/严格派发的完整接入与写前绑定持久化，受控停止/解除隔离；N3 否定弹窗单次有效检查和持久待补充处理；N4 四值平台、SN/引用/共享锁及事件消费者同步迁移；P-B/I07 稳定导入身份、行级原文revision/收据/编译job原子提交与补交；产品问题处理/版本解释链；多语言真实业务及 N5/D08/Workbench 浏览器闭环验收。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	737	## 2026-10-15：I04 第一切片——严格词表、影子诊断与只读迁移预演
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	745	- 新增 `python -m mino_nexus.services.platform_migration <明确的SQLite路径>` 只读预演入口：SQLite mode=ro、query_only、统一读事务；输出表/rowid/字段、旧→候选值、依据和人工审阅待办。读取已知平台/引用列，不导出原文或秘密；历史 session 不扫描改写。Mobile、泛 pc、无宿主 desktop、旧 SN 引用、活动任务/租约/未知写均不自动迁移。自定义知识/技能/设置只统计并列待盘点，不宣称已全覆盖。没有 apply 模式，也未改正式业务库。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	749	剩余：正式数据只读盘点及歧义决议；完整引用/原文 revision/冻结计划迁移实施；N1/N2 就绪后的三仓注册、嵌套能力、平台消费者及 Workbench 写入口原子切换；旧设备身份退出、任务恢复和 B01–B06/D08 真实验收。迁移预演 cutover_ready 固定 false，操作者/依赖未验证时不得据候选自动切换。当前仍不能标 I04/N4 完成。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	756	分工：用户负责 I02、I03、I04；本切片只接入执行绑定，不修改用户的未知写停止/解除隔离、单次否定检查与平台迁移语义。同文件中用户已新增的 Scout 进程代际写意图和 source_ready/validate_frozen 校验按三方合并保留。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	758	新增 `services/execution_binding_runtime.py`，复用既有纯 resolver、验证过的一致节点快照和原子 binding store。严格发布计划投影为静态 operation_ref（prep/do/check/cleanup），预检与 attempt 共用解析入口。真实 attempt 在 probe/open 之前提交 `execution/bound` 与不可变绑定；RouterProxy 每次派发从持久回执投影 selected_impl、low_level、executor_order、device_hint 和 wire 代际，并重新核对当前目录、账号、目标、连接和能力。失败后维持绑定必需状态，不回退旧路径；错阶段、歧义操作、换 run、旧代际和输入组合扩大在发送前阻断。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	762	普通 RouterProxy 提供显式 bind_execution 入口及同一持久派发投影；绑定菜单仅展示当前阶段已绑定事件，未绑定成功时为空。尚未适配的本地能力、插件和恢复展开在新合同下拒绝或不展示，不自动退回旧合同。旧普通 runner 未被自动标记为已迁移。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	779	- N4 的资源锁兼容切片：mac/win/legacy desktop 与 headed Web 保持同一 desktop:{node}:console 竞争域，headless Web 保持独立。此项不是平台/SN全量迁移完成。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	804	范围按用户更正为真实依赖解析和平台/身份迁移；保留其他并发开发的项目维护者权限改动，未覆盖 I02 退役进程恢复与写隔离保护。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	810	3. `platform_migration_apply.py` 提供 prepare/apply/rollback，显式审阅映射、CAS、BEGIN IMMEDIATE、私有完整备份、外键检查、回执幂等、反向字段更新。对活动任务、未知写、预留/租约拒绝应用；历史与锁键不可写。业务库没有应用迁移。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	813	验证：28 项真实服务/隔离 SQLite 依赖检查，23 项隔离 SQLite 事务迁移检查，13 项无缓存本地 HTTP 浏览器检查，Workbench TypeScript noEmit 通过。浏览器使用实际 CreateDialog、客户端 API 和 Nexus 项目入口/服务，数据仅入临时库；验证四值提交、旧别名/重复值 422、多选不丢项、无外部资源/加载/运行异常。此验证范围不包含完整登录鉴权链路和真实用例跑批。未运行 pytest，未向仓库提交测试/mock 文件。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	815	**未完成项保持打开**：普通 runner 的本地工具依赖声明/菜单；Scout 注册、嵌套能力和 SN 原子切换；全部环境/API/导入/恢复消费者；全量引用自动盘点及业务事件迁移；真实会话与切换验收。N4/I04 不标完成，历史 `cr-c27984c8aedc` 的结果与隔离状态未更改。原生/有头 Web 仍共用原桌面锁。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	817	## 2026-10-15：I02 严格 v5 lane 受控处置与解除后基线；项目维护者权限；N4 事件迁移只读预演
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	830	- 新表 project_members（主键 project_id + user_id）。管理员、项目创建者（projects.created_by，隐式成员，无需迁移）或成员行即为维护者。
+directory_candidate	docs/架构/V5/执行开发与验收记录.md	834	- 受控 ASGI 验证（临时 MINO_NEXUS_DATA_DIR，20 项）：创建者可写；他人 403 并给出可读文案；他人可读；他人不能自加；管理员添加后可写、移除后 403；创建者不可移除；app 维度与 app id 填入 project 段均正确判定；未知 app 交给原处理函数；管理员可写。HTTP.md、DATA_MODEL.md 已更新。Workbench tsc（tsconfig.app.json）与 eslint 通过。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	836	**N4 业务事件迁移只读预演（用户选定：先预演，不改数据）。** 报告见[数据/20261015/N4事件迁移预演说明](数据/20261015/N4事件迁移预演说明.md)，附三份明细 CSV。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	844	未完成：N4 正式迁移、消费者切换与平台/SN 迁移均未执行，业务库未改。权限按用户选择只覆盖写接口，未做项目级读隔离。Scout 新包、Nexus 重载以及所有者在 Workbench 点击核对，仍需用户操作后才能解除 25102RKBEC 与 Web lane 0 的真实隔离。未运行 pytest，未添加提交的测试或 mock，未操作真实设备。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	848	本次范围是 N1 执行绑定与策略、N2 存储与两端合同，补齐此前仅严格 Web 接入的普通固定用例链路。保留同期 I02/I03、真实依赖、项目写权限和 N4 影子迁移改动。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	850	- N1：编译期固化扁平步骤和原文修订；普通/严格预检和 attempt 复用唯一 resolver；固定依赖、caller/phase/停用、精确输入组合、完整候选装配、已知本地编排及 recovery 版本进入绑定。菜单和派发读取已提交绑定，并复核当前事实。纯预检不再调用带懒迁移副作用的配置入口。
+directory_candidate	docs/架构/V5/执行开发与验收记录.md	854	验证使用独立临时 MINO_NEXUS_DATA_DIR 和当前源码副本，未运行 pytest、未在三仓添加测试/mock：49 项语法及合同检查通过（含并发 12 次更新、事务回滚、绑定幂等/不可变、终结/取消、超线告警及 Nexus→Scout 装配守卫）；13 项实际 ORM/注册/Router/普通入口隔离检查通过，包括预检 SQL 写入 0、预检与 attempt 相同绑定、实际 run_case 绑定写失败时 UI 派发 0、外层清理仅控制通知、原文变更和块循环拒绝；Workbench tsc -b 通过；本地 HTTP 无缓存浏览器 6 项组件交互通过，无失败/远程资源请求（旧记录、未知版本、绑定装配、普通保证、只读预检、过期选择）。浏览器接口为隔离受控数据，不是生产链路验收。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	858	交付边界：旧普通计划必须重新编译生成 binding_steps/source revision；探索继续旧合同；动态插件（含 Gmail 取码）、HITL 和未实现 persona 不冒充本版已支持，本版固定 get_otp 为环境固定码路径。N4 平台/SN 整体迁移仍未切换；未修改真实业务库、未重启部署、未运行真机业务。N1/N2 固定合同代码与上述受控验证完成，N5/D08 真实业务和升级后联调验收仍开放，不以本轮检查关闭它们。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	903	`case_import` 精确解析通道到四值平台，逐行显示错误并阻止无效平台编译/提交；旧回执重新校验。`case_runner.retry_failed` 重验 owner、登记设备与平台，不从旧任务默认 android 或恢复旧 plugin_user_id。旧 desktop 身份在注册消费者整体切换之前会要求重新选择，不能把这一拦截描述为原生设备迁移完成。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	905	`project_env` 去除跨环境及 iOS→Android 启动标识补值，保留自定义 profile 配置，修复推断通道重复。缺值由现有目标配置/预检处理；没有修改业务库配置或执行生产迁移。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	909	证据：`数据/20261015/mino-v5-local-dependency-import-checks.json`。本轮未重启服务，未做真实站点/真机端到端验收；N4/N5 与普通 runner 全能力依赖闭环仍未关闭。后续仍需完成全量注册/嵌套 capabilities/环境编辑新写入和三仓原生消费者切换、SN 与引用迁移，以及业务复验。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	914	- Nexus：默认目标渠道改为 mac/win/android/web，server 不带 platform；保留旧 ios/pc 读取预置，不静默转换未知平台。项目环境 PUT 在规范化前校验原始渠道；部分更新保留未提交的 profiles/channels/pipeline。服务层阻止新增无效渠道结构，内部维护原有旧渠道不触发平台迁移。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	915	- Workbench：新增 App 平台限 android/win/mac；Web 与 Server 按各自合同创建。历史平台配置显示迁移提示且禁止保存。读取与 dirty 计算不抛错，真正保存走独立 buildWritePayload 校验；配置草稿保留。点号通道 ID、启动配置里的自定义字段不再丢失。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	925	本轮接续用户指定的两个任务。I02 写安全、I03 单次观察、I04/平台迁移仍由用户负责；本轮不替换其实现，不占用或解除真实设备隔离。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	943	本轮增量：严格发布请求携带审阅时的 `expected_compile_job_id`。同一原文 revision 重编后，旧页面即使仍勾选“已核对”也不能发布新 job；缺少或不匹配时返回 409 `compile_revision_conflict`。保留事务内 source/job/artifact/控件/目录复核；没有版本链的历史用例保持兼容。Workbench 刷新 preview 后重置审阅，发布和基线变更同步刷新版本链与诊断。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	967	- 新原生用例匹配不把旧别名、缺失平台或 Web 声明当作原生运行许可；显式 all/explicit coverage 分开处理。旧 desktop 路径继续兼容，历史原文和 verdict 不变。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	975	仍需：Scout manifest/host/runtime_capabilities 统一发出新合同及版本/旧节点拒绝边界，SN 字典键与全部引用审阅迁移，Windows/macOS 真机及端到端 D08/N5。未重启或安装服务，不关闭 N4。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	986	下一步正式路径：在 Workbench 既有账号下，对原用例创建真实编译任务 → 核对 source revision/job 与模型调度证据 → 处理实际诊断 → 在适用的严格 Web 范围审阅发布，普通 Web/Android 保持各自保证等级 → 提交任务并逐项核对作者操作、required 检查与新 session → 同版本证据复核。不能把八条全部强制改成严格 Web，也不把 blocked/未核验记为业务通过。N4 平台/SN/引用迁移的剩余项与 N5 异常矩阵仍按原方案单列，不能由本次构建抵销。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1015	## 2026-10-16：N4 SN 字典引用与迁移静默窗口
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1017	接续检查时发现 Scout manifest/host/协议注册正在同期切换，保留既有修改，本轮仅完善 Nexus 迁移工具。新增受限 rename_key 原子操作，支持 device_targets、platforms_by_sn 的 desktop SN 键迁为同 node 的 mac/win 键；引用值原样移动，同列嵌套平台变更按审阅顺序提交并可逆序回退。目标键冲突、跨宿主、未知映射、历史/冻结路径均拒绝，资源锁键不改。预演新增未分类 SN 字典键阻断，避免遗漏未知引用。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1021	15 项独立临时 SQLite 检查通过：计划脱敏、SN 键与嵌套值原子变更、私有备份、幂等、字段级回退、锁/历史保持、越界映射拒绝、目标键碰撞拒绝、5 类活动任务状态在三个入口阻断、终态任务未知写继续阻断、未知字典键脱敏盘点。未运行 pytest、未调用设备或模型、未修改业务数据库。证据：工作区 .mino/n4-reference-migration/mino-results.json。本轮源码未重载，未执行正式迁移，完整 N4/N5/D08 保持开放。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1030	22 项临时 SQLite/纯函数检查通过，含上一切片 15 项及十种坏证明/独立隔离反例、strict lane、retired generation、旧账本、历史摘要和应用存储合同；不跑 pytest。真实库仅以 mode=ro/query_only 读取，未执行正式迁移、未改历史 verdict 或租约、未重启进程。首次只读预演与定向诊断在 .mino/n4-reference-migration/mino-live-preflight.json 和 mino-write-blockers.json；本轮检查在 .mino/n4-preflight-truth/mino-results.json。首次 101 项数量包含上述误报，不能直接作为真实待迁移数量；N4/N5/D08 未关闭。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1033	## 2026-10-16：迁移预演复验与并发正式验收进展
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1035	修复后的真实库只读预演：400 条历史跑批均保留，四条已恢复动作通过持久停止证明核对，不再被历史 cases 隔离摘要重复阻断。当前报告为 86 项 blocked、16 项 candidate，其中旧平台归档 52、平台缺失 12、需权威证据 10、集合语义 7、自定义内容盘点 4、重复平台消费者 1。该数量是快照诊断项而非独立用例数，期间业务库已有并发变更，不能把与首次报告的全部差值归为本轮修复。仍未正式迁移。证据：.mino/n4-preflight-truth/mino-live-preflight.json。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1046	本轮将默认上报切换、嵌套合同校验、服务加载及可用设备复验连续执行。历史 SN 迁移按用户要求取消；未执行清空。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1052	隔离验证：39 项平台/嵌套声明与实际 registry+SQLite 检查、两仓 REGISTER 真序列化回读、6 项摘要/游标/程序目录检查、6 项探索快照与读写分类检查通过。真实服务 WebSocket 的旧版本、嵌套 pc、非法输入组合三类上报均拒绝；正式 Scout 注册和心跳稳定。没有跑 pytest，检查脚本没有进入源码仓。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1098	按用户要求开发动态取码，并明确人工输入/persona 本版不迁移、不注册、不进模型菜单。实施期间发现同期已增加 host_plugin、Gmail 依赖事实和 reload_page；保留这些改动，合并到同一 host_plugin 合同，没有另建并行通道。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1104	- 人工输入、persona 及对应执行器被目录读取/写入、模型工具生成和派发排除；signal_ask_human 不再提供。启动目录升级跳过这些历史行，保留原记录，不做本版迁移。主方案及两仓协议已更新。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1113	用户指定开发“登录成功证据不完整”，本轮不扩大到条件必需绑定、业务事件迁移等其他事项。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1128	## 2026-10-16：P0 编排子能力声明与 P1 四种业务事件迁移
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1132	request_sms_code、accept_legal_consent、open_app、open_url 从目录/菜单/派发/新编译排除，无运行时别名。启动计划改用 launch_app；新迁移函数生成候选并校验参数、清除派生缓存，保留原文、历史和已发布快照。鉴权只读 event-migration-preview 接口不写入用例；含歧义参数或业务恢复动作的规则明确阻断。旧计划需重新编译，旧宏不能绕过绑定。保留并合并同期登录身份正向证据改动。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1134	验证：67 项工作区隔离检查通过，包括生产目录/编译展开/requirements/迁移/handler、本地执行步骤与受控设备观察边界；检查独立 Android/Web 按键声明、退役拦截、候选缓存与历史保持、单次勾选、回看失败、键盘后新目标及回执保留。Python 语法和定向 git diff --check 通过，未跑 pytest，未向源码仓加入测试文件。证据为当前工作区 exports/mino-event-development-checks.json 与 exports/mino-event-development-report.md。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1136	边界：源码已写回，未重启 Nexus、安装 Scout 或触碰真实业务库；不能宣称实际 Android/Web 用例已通过或关闭 I02/I03。本次只实现上述四事件的候选迁移与显式阻断，不关闭完整 N4/E10；relogin/FSM/其他 guard 分层、存量业务恢复重设计和 Workbench 候选审核应用仍另行处理。历史发布未被静默迁移。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1144	- 全局恢复规则迁移仅管理员可写，保留前后快照；可审核替换规则或停用归档。旧业务动作不能重新混入恢复规则。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1145	- N3/P-C：复检缺口清除仅为 fixed_pending_run。关闭要求同账号、项目、用例、原文、编译和发布版本的严格 verified_pass；核对目标、开始时间、终结标记、执行器停止、持久事件引用和全部必需检查点。普通通过、失败、旧版本、过期或缺失证据均不能关闭。重新编译后旧关闭状态失效。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1219	本轮没有强清租约、改数据库解隔离、改写原 verdict 或运行 pytest。N3 的严格同版本 verified_pass 准出保持；普通 agent/legacy pass 与单检查点模型通过不能替代它。其他会话并行修改源码与运行 Web 任务，未把其工作或结果计入本轮交付；更新时核对路径、备份并逐文件比较原字节，未提交整仓 diff。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1226	- 修复：Workbench 新增统一 screenshotSource，按现有 Nexus 配置解析根路径，优先识别 JPEG/PNG 数据；任务轨迹、DesktopEvidence、V5Evidence 共用，V5 保留同一事件引用并兼容 thumb。不改变截图采集、业务结果或身份/隔离规则。
+compatibility_candidate	docs/架构/V5/执行开发与验收记录.md	1251	- Web账号系统 case-e1835aa2、case-3973849e 依用户决定不在V5解决，本轮均未执行。Android剩余五条完整闭环、旧隔离正式复核仍待设备恢复；N3 strict verified_pass、D08和整个V5业务验收不因配置完成或普通agent/legacy结果而关闭。
+compatibility_candidate	docs/架构/V5/历史方案/看图优先与DOM后置混合执行方案.md	66	| 关闭所有旧模式学习 | 需迁移区分。未迁移旧控件行为可保留并显式标 legacy；已有 typed 发布控件始终受保护；不把关学习与旧定位解析全库切换绑成一个大改动 |
+compatibility_candidate	docs/架构/V5/数据/20261015/N4事件迁移预演说明.md	1	# N4 业务事件迁移只读预演（2026-10-15）
+compatibility_candidate	docs/架构/V5/数据/20261015/N4事件迁移预演说明.md	3	范围按[事件平台推导与分层方案 §8](../../方案/事件平台推导与分层方案.md#8-业务逻辑迁出事件需求-33)：业务事件迁出、`open_app`/`open_url` 并入 `launch_app`、`fsm_navigate` 与 13 条 `guard.*` 转 policy、`check_run_env` 与 `operation.open_cart` 退役、recovery 同名重复合并。**本次只读，未改任何数据**：在运行库的副本上以 `mode=ro` 打开，预演前后副本 md5 一致；三仓源码只做文本检索。平台词表/SN/环境渠道迁移不在本次预演范围（见同目录《全局平台字段审计》）。
+compatibility_candidate	docs/架构/V5/数据/20261015/N4事件迁移预演说明.md	44	2. 迁移前备份；改写在事务中、幂等；被退役条目完整导出到受控位置（不放公开数据目录）。
+compatibility_candidate	docs/架构/V5/数据/20261015/N4事件迁移预演说明.md	46	4. 迁移改变执行行为，按修订方案 §19 依赖 N1/N2 完整后实施，并纳入 N5 复验。
+compatibility_candidate	docs/架构/V5/数据/20261015/N4事件迁移预演说明.md	48	明细：[汇总](N4事件迁移预演-汇总.csv) · [库内引用](N4事件迁移预演-库内引用.csv) · [代码消费者](N4事件迁移预演-代码消费者.csv)。
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	58	| Nexus action_space/scheme.py | 只接受 visual/dom，缺省 visual；模块说明明确不互相改道 | 引入 DOM 优先语义，在入口统一兼容旧值 |
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	72	| Nexus hierarchy_slots.py | 已有节点归一化和紧凑 flatten，但主要在 Nexus 再裁剪 | 保留兼容，提炼与引用映射前移 Scout；不能同时投递树、ARIA、history 三份重复内容 |
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	87	| resource_key、case_scene、meta.resource_key、required_session | 同一前置在多个 JSON 中被不同规则覆写 | 归并为一个执行需求快照；兼容层只读旧表示，不让多个来源互相覆盖 |
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	88	| platform、env_surface/env_profile、device_need、target_package | Web/Android/PC 字符串和渠道选择混在一起 | 本版统一 platform=mac/win/android/web；mac/win 原生共用 desktop 执行器，宿主 os 独立；设备重复判别字段及 SN 按 N4 整体迁移；多候选明确选择 |
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	93	| control_id/revision/publish_state/locator_spec | 配置缺格、冻结版本、运行回写与临时定位混用 | 持久控件身份与临时 node_ref 分开；运行不污染发布配置；兼容普通临时目标，不伪造 control_id |
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	151	### 5.2 默认值和旧数据兼容
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	153	策略值 `dom_preferred` 已有源码实现记录；实际运行保障仍按统一开发记录与 session 验收，不能仅由枚举存在推断完成。保留 `visual` 为显式纯图；旧 `dom` 兼容映射到 DOM 优先，UI 展示明确写“DOM 优先（无有效结构则截图兜底）”。
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	157	新任务缺省采用 DOM 优先；明确保存的纯图偏好不被悄悄覆盖。旧任务恢复按其持久策略继续，无法判定偏好来源的历史配置通过可解释的兼容规则处理并记录；不在运行中覆盖旧任务合同。
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	173	| Browser Use | `browser-use`；MIT；官方提供 `uv add browser-use` | 提供面向浏览器 agent 的 DOM 能力与完整自动化栈 | 可以做离线提炼适配对比，但不引入完整 Agent；内部 DOM 模块不等于承诺稳定的独立 SDK API，版本兼容与成本需实测 |
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	177	"较新 Playwright 文档中 `aria_snapshot(mode=""ai"")` 标为 1.59 增加；**当前 1.49.1 没有这项 API**。如将其作为后续优化，需一起更新并固定 Playwright/Chromium、验证 Scout 安装包，不照抄新文档参数到旧版本。"
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	336	| D02 | P0 | 统一观察策略与兼容解析，取消 DOM 唯一匹配失败就终止 | Nexus action_space、agent_loop、router_proxy、能力装配 | Web/Android 结构不足、PC 无树时自动用当前截图，不扩大写入权限、不重复已执行动作 |
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	346	| D12 | P1 | SDK 比选实测与可控升级 | Scout 依赖、安装包与本地只读素材基准 | 固定依赖/浏览器版本，离线可运行；明确支持 Frame/shadow 与实际压缩，不用最新 API 假装兼容旧 SDK |
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	352	合同扩展 D13 独立于“正常用例能执行”的首期上线，不把三平台普通执行绑定到 Web-only 原子合同的完成时间。后续若要将严格合同设为唯一入口，须先完成对应平台资格、发布数据、能力和断言迁移，再正式切换，不能删掉严格检查后仍称严格。
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	385	| 旧数据/新默认 | visual 明确选择保留；dom 正常兼容；恢复任务不被默默改合同；所有入口相同默认 |
+compatibility_candidate	docs/架构/V5/方案/DOM优先执行与用例全覆盖开发方案.md	394	发布时同步两仓协议与兼容解析，保留旧任务和控件版本。新字段是 additive，旧 Scout 不理解新结构提炼合同时只使用其实际声明的能力或给升级原因；不能让老节点看似接单却默默执行另一种输入/定位方式。展示“源码已实现 / 已安装 / 已启动 / 业务已验收”四个独立状态。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	84	| 应用“导航/架构” | Planned 占位 | 暴露迁移实现文字；按 V5 依赖决定隐藏/延期，不要求先重建图编辑器。G04、M01 |
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	118	| 其他 Planned / 旧路由 / 无引用组件 | 保留URL、跳转或未接入源码 | 具体清单见2.1；仅整理真实可用性和兼容边界，不恢复已取消产品。G04、M01、Q05 |
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	120	### 2.1 占位、兼容与未接入实现逐项处理
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	129	- 知识审核、网络和导航图：V5非阻塞能力默认从主工作流隐藏或明确标“尚未提供”，不展示Vue迁移来源和阶段编号。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	131	现有兼容跳转：`/settings`→节点；`/settings/dispatch`及子路径、`/dialogue`、`/agents`、`/report/*`、`/settings/schedule`→应用列表；插件列表/详情、`/timeline`→节点；`/case-resource-key`与`/resource-transition-rules`→对应目录zone；`/access`→权限；`/system`→健康；`/doc-library`、`/app-intel`→catalog；未知路径→应用列表。处理原则是：能保留对象身份就映射，不能就明确说明迁移/失效，避免用户以为进入了原报告。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	150	`ui/UserMenu.tsx:65` 跳 `/dashboard`，该路由仍Planned；管理侧栏同时存在多个高权重占位入口。改为真实可用默认页，主导航显示可用状态。验收：管理员第一次进入即可完成查看状态或目录，不先经过迁移占位页。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	182	`apps/queries.ts:69–85` 退到最近40个runs后仍 `degraded:false`，用户看见0可能误以为无运行；空summary也触发额外runs请求。应区分完整汇总与有限窗口，显示“最近记录/计数待确认”，仅在明确不支持接口时兼容降级。验收：超过40个历史运行、summary返回空数组/形状错误，都不伪称完整计数。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	190	`CasesPanel.tsx:100–129` 主要展示用例身份、最近结果与三段内容；`CaseRow`没有显式的revision/job/artifact关系类型。用户不能区分原文已改、解析失败但旧产物仍存在、最新解析完成尚未发布、旧版回归。增加轻量状态摘要：最新原文r、最新解析任务状态、有效产物版本、发布版本及当前运行资格。前端不能从“有steps_parsed”推导当前可运行；版本字段由合同提供。验收：新原文+旧成功、新解析失败、旧版明确回归三种情况都可一眼辨认。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	237	RunBar只发action_scheme，没有execution_mode；CreateTaskDialog默认legacy，另用checkbox选择v5并限定Web。两个入口对同一组case可以形成不同解释。抽取统一的运行意图/预检/版本选择模型，复用现有入口；“观察方案”“执行合同”“产品版本”分别命名。验收：列表与任务页选同一目标、版本、case时，预检和最终载荷一致；没有严格能力时明确实际路线。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	255	`CreateTaskDialog.tsx:28,58–76`用getProjectCases(projectId)，无当前app过滤；`:180–181`失败后可能呈现“没有可选用例”。后端是否允许项目用例共享给该app需核对，不能先把共享当越权。按现有case-page合同呈现适用范围，显示不兼容原因、错误/重试；大项目不要每次拉全量。验收：同项目多应用，列表能说清哪些用例适用，错误不变空集，跨页选择身份稳定。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	261	详情选择与rowKey主要用caseId，runId兼容拼接 `${taskId}::${caseId}`；现有关系多靠session_id/report_run_id。多设备同case、多attempt或session代际时，caseId不是执行单元唯一身份。显示并使用服务端稳定execution/attempt/session引用；旧记录保留兼容入口。验收：同case两设备同时执行、整案重试、历史SN变更，不串选中行、截图、终态。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	310	`EnvConfigPanel.tsx:75`、`envModel.ts:263,302`把default_profile设为列表首项。用户调整上线顺序就改变默认跑批环境，尤其移动正式环境到首位时影响大。拆成独立设置与显式变更反馈；兼容旧配置时说明迁移规则。验收：仅排序不改变default_profile；从运行入口能看见真实默认环境与来源。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	324	节点升级有update_job与掉线兼容提示，应保留；插件install仍依赖长HTTP返回，catch一般提示安装失败。超时、升级导致节点重启、连接断开是不同事实。节点命令/插件统一展示受理、执行、重连、完成/失败/待确认，凭持久job查询，不因网页请求失败重新安装。节点在线/休眠/设备可执行也分开。验收：实际受理后断线能恢复同job；休眠有IM持有渠道时说明影响；结果未知不绿标完成、不自动重发。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	413	`DataTable.tsx:117–123`本地页不随筛选后总量减少复位；服务器页由各域零散处理。SessionLog的Number参数可产生小数/Infinity/巨大pageSize；DataTable早返回error也移除toolbar且无onRetry。统一有限整数、允许页大小、页上界/空集处理；错误区保留筛选/重试/旧数据时间。验收：第5页缩至1页能归位；恶意query不制造巨大请求；错页可以就地恢复。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	424	**Q05｜类型与组件治理仍不足，文档存在迁移残留〔S，P3，F〕**
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	450	- **同一事实被多个接口投影返回**：按稳定event identity合并来源；保留更完整的回合、坐标与图引用。当前已做保守兼容，但缺身份时有上限。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	474	E --> F[核对与冻结兼容路线]
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	508	预检结果分为可执行、静态受阻、临时不可用、待补充；先解释再下发，保留原requested_total。用户明确选旧版回归才允许旧产物；最新原文未固化不能默默跑旧版。严格Web与普通移动/PC的能力差异采用服务端事实展示，不能以一个checkbox覆盖整个产品版本。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	575	- 修改以组件/适配器/状态模型的具体问题为单位，保留工作树已有改动；不夹带后端重构、数据库清理、文件迁移或已取消页面复活。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	577	- 不以类型断言代替验证，不以默认空数组掩盖缺字段；也不拒绝已明确定义的旧接口兼容形状。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	593	| 版本一致性 | 原文改后旧产物、旧job晚返回、依赖变更、新失败旧成功、显式旧版回归 | latest原文/最新job/当前有效/发布/attempt解释清楚，不混版、不现场绕固化重拆 |
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	647	| 路由/占位/兼容 | `src/router/index.tsx:39–115`；`src/ui/Planned.tsx:24–43`；`src/layouts/AdminLayout.tsx:13–49`；`src/ui/UserMenu.tsx:65` |
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	765	│  OpenAI / 兼容接口 │ 连接与凭证                        │
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	933	| 读取失败 | 绑定状态暂不可用 | 就地重试；有缓存时标明旧数据，不将失败当零绑定 |
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	982	只有明确映射到现有契约的状态才使用确定文案。旧数据不能可靠区分时显示「已结束 · 结果未完整提供」等事实组合，并在详情说明，避免为了填满状态图而补造历史记录。
+compatibility_candidate	docs/架构/V5/方案/Workbench全页面与业务逻辑问题审计及改造方案-2026-10-15.md	1060	此次重排不得破坏此前已经确认的工作台规则。这些是兼容约束，不代表本轮重新实施或验收。
+compatibility_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	28	新增 execution_mode=legacy/v5，默认 legacy，开跑选择后不可变。v5 任务仅在节点上报 contracts.web_v5、使用 headless Web、控件已发布、用例已冻结发布时准入。
+compatibility_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	55	正常 scout_run_id 已按案/设备隔离；重跑另建实际尝试 run_id，不清空同一个 run 的编号后复用。编号修复对所有新设备任务生效，升级先排空旧在途。PR-A 可先修不同新请求的键；PR-B 启用冲突检测和合同准入时要求所有发送路径已完成迁移。
+compatibility_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	141	| 既有 probe 响应 data.contracts | web_v5=1、locator_contract、predicate_facts_contract | 新能力支持声明；缺失拒绝试点，不悄然降旧路径 |
+compatibility_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	183	| publish_state | legacy/draft/published；编译期自动创建的控件为 draft，只有 Workbench 人工核对 typed locator 后才 published；V5 只选 published，不将 dom_hit 自动升级为可信 |
+compatibility_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	190	当前表 control_id 没有项目级唯一约束，迁移前做重复/归属审计；正常写入口保证 (project_id,control_id) 唯一，发现重复先报告，不自动合并用户记录。既有 desc_key 唯一约束保留；V5 引用显式 control_id，不以描述相似自动合并两个页面目标。
+compatibility_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	192	首期保存当前行与递增 revision；session 的选定配置快照用于历史复核，无需先建全量配置版本仓库。Workbench 显示现配置和已有会话快照，但不承诺尚未实现的任意历史版本回滚。修订兼容策略见 §6.4。
+compatibility_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	217	旧 legacy 控件可保留既有字符串路径，需在 UI 明示来源风险；迁移到 V5 由人工核对 scope/selector 后发布 typed spec，不自动把历史 dom_hit 当正确 locator。stamp_compiled_plans 旧描述启发式拆除，V5 不调用隐式 ensure_control；缺作用域/归属不默默猜。
+compatibility_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	303	既有 spans/key_refs 等兼容索引仍由编译产出，不承担预期语义。structured_check、StepPointer/check 消费、case_key_registry 预览/支持度和 Workbench 按版本分派；v1 保留旧模式，未知版本拦截。V5 不以 v1 缺字段猜默认通过，也不将 v2 静默交给旧消费者。
+compatibility_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	345	predicate_contract 固定语义；verifier_build 随 session 保存实现版本。兼容修复先过受控反例会话，不强迫全库重编译；breaking 语义变更仅影响相关计划，重新校验发布，运行不自动换谓词。
+compatibility_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	347	control locator 的兼容修正仍经 Workbench 发布新 revision，下个 run preflight 重新解析并校验，同案继续用已选快照。控件 identity/scope/敏感属性/事实支持变化标受影响计划 needs_revalidate；数据语义变化不当作 locator 修复。历史结果用当时 session 快照解释，不拿当前控件覆盖。
+compatibility_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	369	新增 append_batch(session_id,records,meta_patch,deadline)→EventRef 列表。底层原子 seq 分配、插入、计数和 meta 更新同写事务；保留 SessionWriter RLock，迁移直接 store 入口。action/观察分别短事务提交；关键 Evidence 与 verdict/meta 同次终结事务，不持整案长事务。
+compatibility_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	375	统一 reason_code/verification_status/legacy_error_kind，保留旧值；未知旧原因标 needs_mapping，不从 summary 猜 assertion_mismatch。主原因保存首次触发，后续拒绝/清理为诊断。
+compatibility_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	396	| 历史 unverifiable/untestable/unexecutable | 保留旧 reason，有明细才映射 | 保留历史状态，兼容显示未核验/不可执行 |
+platform_contract_candidate	docs/架构/V5/方案/三端UI自动化结果可信性方案.md	408	路线 B 说明：本版平台/执行绑定新合同与本文严格 Web 原子合同是不同维度。四值统一不意味着 Android/mac/win 自动具备严格 Web 的全部保障；本版需验收它们声明支持的实际路线。platform_scope 为新增适用集合语义；host.os 与 platforms_by_sn 复用已有基础并改消费者，详见主方案 §21。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	5	> 2026-10-16 生效补充：历史 SN 引用迁移已由用户取消，改为明确范围后清空重导；本文件相应迁移步骤不再作为本版待开发任务。平台合同默认启用、嵌套校验和实际验收以 [修订方案 §29](../合同收口与交付修订方案.md) 与统一开发记录为准。业务数据清空尚未执行。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	12	> 当前细化合同与状态见[修订方案 R4 §13–21](../合同收口与交付修订方案.md#r2-code-review)。平台词表/SN、业务迁出、数据迁移目标均保留；影子阶段不改变这些值，正式切片按 N4 验收。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	14	本文响应需求 3（字段与事件差异导致任务异常失败），是当前 DOM 切片之后的新合同重构：当前 D01/D05 先按现有合同修复并验收，不依赖本文整体迁移；本文再处理平台标注、词表和事件分层的长期收口。
+directory_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	16	"文中""现状""来自 2026-10-14 对 `~/.mino-nexus/mino.db` 的只读查询和 Nexus / Scout 源码阅读，数字是当日快照。""目标、任务""均为设计，不表示已开发。"
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	20	> **R3 修订声明**：四值词表 mac/win/android/web 已确认；旧 R4 的“Mobile 无条件迁 Android”作废。普通 pc/desktop 须权威事实消歧，Linux 只退出本期被测平台，不删除宿主支持。全局字段合同以[主方案 §21](../合同收口与交付修订方案.md#21-全局平台字段合同与迁移边界路线-b-本版必交)为准；路线 B 已由用户选定，词表统一、SN 迁移和新合同切换均为本版范围，按 §19.2 安排实施与双轮验收；本轮文档修改不代表代码已完成。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	30	| K5 | **`pc` 与 `desktop` 不保留** | 迁移须权威事实确认真实 `win` / `mac`；执行器、宿主、资源命名不受此禁用约束 |
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	32	"| K7 | **不写兼容层** | 无别名表、无""未知平台""回退、无读时归一化。收到不在词表的值就拒绝并报错 |"
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	37	| K11 | **允许 `core/migration.py` 做值改写，以最新为准** | 本次迁移是该文件 additive 约定的明确例外 |
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	117	6. **同一概念只有一个词、一个字段、一个入口。** 不留兼容分支（K7）。
+platform_contract_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	153	| 用例平台 | `platform` | 单值四选一；多值用 platforms 数组，all 用 platform_scope | `parse_case_platforms` 词表换成 §4.2 |
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	154	| 渠道平台 | 渠道条目 `platform` | 同上 | 平台值 pc 经 Windows 专用 schema 确认后迁 win；渠道 ID 是引用，整体迁移引用后才能改；ios 受控归档 |
+platform_contract_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	170	"- `PLATFORMS = (""android"", ""web"", ""mac"", ""win"")`"
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	251	事件页只读；程序注册不自动解除既有停用、deprecated 或授权限制。平台推导缓存不写库；调用规则与装配迁移完成前仍保留其原权威。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	291	| 目录 `implementations` | 当前装配适配来源；迁移后由版本化事件适配合同承接，不能提前停读 |
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	295	注册面是实际实现存在性的依据；调用资格仍受权限/阶段/停用和依赖约束。目录 implementations 中 low_level/参数映射在替代合同完成前继续参与装配；完成迁移后才将旧描述降为展示，完整绑定见修订方案 §14。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	328	| `open_app`、`open_url` | `launch_app` 的参数变体（包名 / URL） | 合并为 `launch_app`，目标由参数给出；**旧 id 删除，同时迁移引用它们的用例与块**，不留别名 |
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	406	## 11. 数据迁移（一次性，不留兼容）
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	408	### 11.1 迁移原则
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	411	2. **平台值只从权威来源推导，不假定。** 推导不出来的行：迁移中止并输出清单，由人决定，不写默认值。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	413	4. 平台事实改由注册后，旧 platforms_json 不再判定可用平台；但装配、caller/phase、停用等语义须按 R01 完整迁移，不能把整个目录一并降为展示。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	414	5. 迁移落点是 `core/migration.py`。值改写是 additive 约定的**已确认例外**（K11），以本方案为准；迁移需幂等，重复启动不重复改写。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	425	| `apps.platforms` | `Mobile`（2）、`Web`（1）、`Mac`（1） | `Web`→`web`、`Mac`→`mac`；`Mobile` 只有关联权威渠道确认 Android 后才迁移，否则中止列人工决议 |
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	426	| `catalog_entries.platforms_json` | `ios` 51 行、`mac` 10、`windows` 10 | **不迁移，不再读取**；列保留为历史，不参与判定（K13） |
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	431	**注意 `ios` 渠道的数据损失**：被删的渠道里有用户填写的配置（如 bundle id）。迁移必须先把被删渠道的完整内容导出到迁移报告，再删除；不得静默丢弃。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	448	这条与 K7 不冲突，前提是：**代码不得解析 sn 前缀推断平台**（§4.5 已要求）。旧行里的 `desktop:…` 只是不透明的 id 字符串，不需要任何兼容分支。代价：历史记录里的 sn 与新设备记录的 sn 不再相等，Workbench 展示历史证据时原样显示旧 sn，不做跨表 join。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	464	平台词表、SN 改名与注册协议扩展（E02、E07、E05）**不走影子**：它们是一次性切换，Nexus、Scout、Workbench 必须同版本发布；旧版本 Scout 注册时因 `platform=desktop` 不在词表而被明确拒绝并提示升级，不做兼容。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	477	| E08 | 切换 | 数据迁移（§11），含 ios 渠道配置导出 | 迁移报告列出每个改动与每个被删项；幂等 |
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	479	| E10 | S2 | 迁出业务事件（§8）；删除 `open_app` / `open_url` 并迁移引用 | 登录相关语义只存在于登录块 |
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	482	**原 E02＋E09 最小影子切片撤销。** 影子只并行计算差异，不删除别名或改词表/SN；当前 DOM 切片先按现合同验收。新合同 N1/N2 完整后，N4 作为平台、消费者、引用与数据迁移的完整切片，见修订方案 §18–19。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	498	| 数据迁移 | 迁移报告完整；`m_device`、`app_regression_runs.platform` 无 `desktop`；`projects.env` 无 `pc` / `ios` 渠道；被删 ios 渠道配置已导出 |
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	499	| 历史证据 | `session_events` 等行数与迁移前一致；Workbench 能按旧 session_id 打开历史会话 |
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	509	- **注册协议是破坏性扩展**：旧 Scout 不报 `platforms`/条目化 `provides`，按 K7 不做兼容推断，直接拒绝注册并提示升级；须确认现网 Scout 均可同步升级。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	515	- `open_app / open_url` 合并会影响已有用例的 `key_ref`，迁移时必须回放现库用例确认引用已迁移。
+compatibility_candidate	docs/架构/V5/方案/事件平台推导与分层方案.md	533	- 同文 D05 先复用现有逻辑块完成编译覆盖，不等待本文 §8 全量迁移；后续迁出业务事件再统一归属并重验相关计划，避免循环依赖。
+compatibility_candidate	docs/架构/V5/方案/执行侧交付与验收清单.md	45	| 控件回写守卫（PR-A） | control_registry 写入口及 locator_stop_reason/note_execution_locator/nav_route | V5 runtime 不学习；发布 typed 控件不被旧路径改写 |
+compatibility_candidate	docs/架构/V5/方案/执行侧交付与验收清单.md	65	demo 只含登录相关页面与只读计数/复位/有限延迟，不建通用代理或环境变异平台。计数仅证明请求接收数，还需真实 checkbox/输入值等状态观测；不能用“客户端两条日志”代替“动作都发生”。业务环境迁移另核对数据、复位、权限和控件。
+compatibility_candidate	docs/架构/V5/方案/执行侧交付与验收清单.md	75	| PR-B 两仓协议与写安全 | 方案二 §2.4 字段/fixture 清单；Scout 原子在途；execution_started；写不重发；run 门闩 | 编号迁移已完成；两仓协议四步；E05–E10 不再重复写或错误禁恢复 |
+compatibility_candidate	docs/架构/V5/方案/执行侧交付与验收清单.md	77	| PR-C 控件与严格动作/事实 | UiControl 迁移（四字段）、Workbench 发布；共享 resolver；tap_target/input_target/read_web_target_facts；来源及超时 | 最大 Scout 新开发项；E01–E04/E09–E12/E17–E18；不进入旧 input fallback |
+compatibility_candidate	docs/架构/V5/方案/执行侧交付与验收清单.md	82	每批可切小 PR，但保持同一合同和依赖，不将 C/D/E 称为一份“一次小改”。协议清单先冻结再开始 PR-B；消息版本决策、支持声明和旧 fixture 兼容一并登记。目录只能经 Workbench 创建，不因空库灌默认能力。
+compatibility_candidate	docs/架构/V5/方案/执行侧交付与验收清单.md	167	会话详情先支持结论→check→wire动作→控件事实→脱敏读数/截图；展示当时配置与当前注册表、手工来源/Schema、expander、谓词/build、模式/sn/node/profile、reason/legacy reason。过期artifact明确expired。
+compatibility_candidate	docs/架构/V5/方案/执行侧交付与验收清单.md	185	待实施验证：秘密止漏完整性、历史复键规模、unknown 实际规模、append错误率、真实驱动耗时、lane 浏览器进程可取性、打包/开发节点核实、文字编译的可映射比例（首批用例中有多少预期能映射到原子谓词）、计划消费兼容、视觉误判率。它们有明确交付位置，仍无实测结果；开工不能据文档将其标为完成。
+platform_contract_candidate	docs/架构/V5/方案/执行侧交付与验收清单.md	194	| B02 | 宿主、集合、渠道及嵌套能力 | host.os 与外部 OS/SDK 语义分开；platform_scope 新增集合语义，platforms_by_sn 复用并校验；server 不伪装平台 |
+compatibility_candidate	docs/架构/V5/方案/用例维护解析与执行闭环统一方案.md	42	→ 发布或冻结兼容计划 → 预检 → 按固定版本执行
+compatibility_candidate	docs/架构/V5/方案/用例维护解析与执行闭环统一方案.md	54	已有其他输入能力不删除，但不作为MVP的新开发、兼容或验收承诺。飞书spike仅验证一张真实Sheets的工作表/范围、编号、多行字段、读取完整性与错误返回；失败保留结论，不改用docx方案充数。
+compatibility_candidate	docs/架构/V5/方案/用例维护解析与执行闭环统一方案.md	136	| 发布/执行 | 展示实际revision与执行路线；新原文未固化时不能悄悄运行旧发布；旧版本回归需明确选择 |
+compatibility_candidate	docs/架构/V5/方案/用例维护解析与执行闭环统一方案.md	146	本版按已确认路线 B 交付：以下产品闭环与主修订方案 N0–N5、P-A–P-D 同时纳入完成口径。平台内部被测平台统一 mac/win/android/web，包含三仓消费者、SN/引用迁移与新合同切换；不是延期到 V6。现合同 D08 后须复验新合同受影响用例，旧 pass 不能充抵新合同证据。
+compatibility_candidate	docs/架构/V5/方案/用例维护解析与执行闭环统一方案.md	164	| 新旧版本 | 修改原文产生新job；旧job不覆盖；运行消费同一revision的计划和资源 |
+compatibility_candidate	docs/架构/V5/方案/用例维护解析与执行闭环统一方案.md	180	不做飞书正式同步、文件监听、独立需求页、完整来源维护页、全量页面知识库、趋势分析、复杂自动接管、组合租约重构、训练/微调、写回来源、与本版无关的全库重构、消息中间件；不做持续弹窗监测。路线 B 必需的平台、SN、环境渠道及事件引用迁移属于本版 N4，不能以“全库迁移不做”排除。
+compatibility_candidate	docs/架构/V6/README.md	37	后台来源调度、产品自动升级/回退、历史迁移及撤除入口继续按 [取消与不恢复事项](../V7/取消与不恢复事项.md)处理，不因转 V7 重新立项。手动导入以 [现行规则](实施/用例API来源接入-20261018.md)为准。
+compatibility_candidate	docs/架构/V6/V5遗留事项与范围交接-20261016.md	61	| 历史 SN 与引用迁移 | 用户取消，选择以后清空再导入 | 取消的是历史迁移交付，新 mac/win/android/web 合同和共享锁仍保留。未获具体清空范围前，不删除配置、账号、历史任务或隔离记录。 |
+compatibility_candidate	docs/架构/V6/V5遗留事项与范围交接-20261016.md	62	| HITL、人工输入及 persona | 用户明确本版不迁移、不注册、不进模型菜单 | 不再列 V5 未开发；动态取码失败不回退到这些路径。后续也不自动恢复。 |
+compatibility_candidate	docs/架构/V6/V5遗留事项与范围交接-20261016.md	77	- 写回来源、训练/微调、通用连接器、全量历史迁移、独立消息中间件与大规模拆服务：不是默认 V6 承诺，需单独论证。
+compatibility_candidate	docs/架构/V6/V5遗留事项与范围交接-20261016.md	87	| N4/I04 | 新平台四值合同、原生消费者、注册/心跳与共享 desktop 锁已切换；mac/web/android 有真实观察任务；历史迁移按上表取消。 |
+compatibility_candidate	docs/架构/V6/持续维护与执行可靠性方案.md	41	| V6-B 解释与诊断 | 同类问题少重复解释，工具误判更容易定位 | 复核资料能减少同类误判；旧版本不污染新版本；原句/证据可追溯 |
+compatibility_candidate	docs/架构/V6/持续维护与执行可靠性方案.md	80	每case保留latest_source_revision、latest_compile_job_id、latest_valid_artifact_id、active_publication_id；最新失败必须可见，旧发布只供明确选择旧版回归。
+compatibility_candidate	docs/架构/V6/持续维护与执行可靠性方案.md	120	复用REGISTER/HEARTBEAT的runtime_capabilities，明确contract/version/features、platform/os、build、process_generation、capacity/readiness。派单看最新快照，超过两次协商心跳周期不可准入；合同默认精确匹配，只有显式兼容矩阵才放行其他版本。
+compatibility_candidate	docs/架构/V6/持续维护与执行可靠性方案.md	154	未核验、旧版未知、静态受阻、缺资源、取消继续留在原范围分母；创建前明确不适用单列，运行中建议不适用不能删分母。“批次关闭”“已核验完成”“全部通过”“环境安全收尾”是不同结论。
+compatibility_candidate	docs/架构/V6/持续维护与执行可靠性方案.md	204	| 同 12 个批次 payload | requirement_id 均为空，execution_mode 字段未记录 | 无法从这些快照确认显式选择了V5或legacy；需求字段为空仅表示分组未记录，不是执行失败原因 |
+compatibility_candidate	docs/架构/V6/实施/A-发布候选与CI验收-20261017.md	17	三仓 manifest 使用真实包摘要与大小完成校验；公开 GitHub URL schema 已修正并验证。候选清单中的固定 tag URL 仅表示预定发布位置，目前不是实际下载链接。自动回退保持禁止；旧 Nexus 完整初始化已有不兼容证据。
+compatibility_candidate	docs/架构/V6/实施/A-发布候选与CI验收-20261017.md	31	本机正式切换单独安排：当前 10104 由 IDE 源码启动且含并行开发内容，不能把 A-only 包直接替换而声称没有功能回退。先确认正式版本范围与维护窗口、停止全部写者、完成一致性备份、登记原数据目录，再演练正式服务停启及恢复。旧数据兼容未证明时不能只切 current 自动回退。
+compatibility_candidate	docs/架构/V6/实施/A-实施记录-20261017.md	9	| `mino_nexus/core/migration.py` | 后半段迁移失败记录错误并向上抛出，不再吞异常或继续报告 schema ready。 |
+compatibility_candidate	docs/架构/V6/实施/A-实施记录-20261017.md	14	离线 migrate 不是在线升级器：调用方仍必须确认全部写者已退出，并在任何初始化前完成一致性备份。此命令不提供更新锁、自动备份/恢复或兼容性准入。自定义正式数据根仍需安装配置登记后才能做完整冲突检查；仅有路径参数不等于三组件隔离已完成。
+compatibility_candidate	docs/架构/V6/实施/A-实施记录-20261017.md	25	6. 用 HEAD 旧 seed 实际处理隔离数据：新版 v99 被覆盖为 v13，历史 retired ID 被删除。证实该旧代码不具备自动回退兼容性；该组合必须禁止自动回退。
+compatibility_candidate	docs/架构/V6/实施/A-实施记录-20261017.md	26	7. 用真实 SQLite view 制造后半段索引迁移失败：CLI 退出 1，无 schema ready 成功日志。
+compatibility_candidate	docs/架构/V6/实施/A-实施记录-20261017.md	51	| `ensure_db → bootstrap` | 默认能力、提示词、知识迁移、流程块、key_ref 回填、能力布局升级；部分内部函数独立提交 | 不是整个 bootstrap 的单一事务。失败重试与新库重复启动已验证；不代表全部历史库/旧版本兼容。其余 seed 的版本覆盖规则仍需逐项核对。 |
+compatibility_candidate	docs/架构/V6/实施/A-实施记录-20261017.md	64	- 完整写者清单及活动统计、全部迁移/bootstrap 的新旧版本副本兼容演练。
+compatibility_candidate	docs/架构/V6/实施/A-审计与基础交付.md	11	- **bootstrap 单列审计行**：记录默认行写入、覆盖/去重规则、文件或外部副作用、失败后重跑和新旧版本重复执行的结果。离线 CLI 若复用 ensure_db，会同时执行 bootstrap，备份必须发生在 create_all/迁移/bootstrap 之前；不能只验证 ALTER 可重入就认定整个初始化安全。
+compatibility_candidate	docs/架构/V6/实施/A-审计与基础交付.md	13	- 不全量重构 ensure_db 模式。核实重复执行和旧版启动兼容性；仅修阻碍首期版本组合的实际问题。
+compatibility_candidate	docs/架构/V6/实施/A-审计与基础交付.md	17	- run_auto_migration 后半段捕获异常后仍记录 schema ready：让失败向调用者传播，离线 migrate 必须非零退出，ensure_db 不得在失败后标记 ready。用隔离副本实际触发一次迁移失败，检查退出状态、日志与 ready 状态；schema 后置检查不能替代异常传播。
+compatibility_candidate	docs/架构/V6/实施/A-审计与基础交付.md	18	- seed_global_flow_blocks 的版本不等覆盖：改为明确版本序列的只升不降，同版保留，旧版启动不得覆盖新版 steps/version；未知版本不可猜顺序。同时检查 retired 删除是否影响新版数据。用新版种子写入的隔离副本运行旧版初始化验证；已发布旧版无法满足时，该组合禁止自动回退，转人工维护。
+compatibility_candidate	docs/架构/V6/实施/A-审计与基础交付.md	34	三仓各用自己的 GitHub Releases，共用 manifest_schema_version。首期定稿使用 manifest_schema_version=1，兼容保留 Scout version/items/layers，增加 component、build_id、source_commit、compatibility。item 明确 os/arch、URL、sha256、bytes；静态资源可声明平台无关，附带运行时按平台单列。
+compatibility_candidate	docs/架构/V6/实施/A-审计与基础交付.md	38	验收输出：导入/写者/迁移审计表（bootstrap 独立一行）、忽略规则与跟踪清单检查、监听地址/端口登记及占用结果、IDE 实测表、安装基线原型、manifest schema 1 与三仓样例实际包。基础设施不介入 Git 提交审批。
+compatibility_candidate	docs/架构/V6/实施/A-审计与基础交付.md	43	见 [A 阶段实施记录](A-实施记录-20261017.md)。迁移异常传播、种子版本保护、过时 bootstrap 调用及 Nexus 显式隔离启动已修复并实测；旧 HEAD seed 已证实不兼容新版数据，禁止据此自动回退。完整写者审计、安装服务基线、probe、manifest/CI 与三仓实际包仍待完成，A 阶段保持进行中。
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	3	执行日期：2026-10-15。本次为源码静态审计与本机只读检查，不是 A 阶段整体准出。未启动/停止服务、未导入业务应用、未连接业务数据库、未执行迁移或 bootstrap；未改运行配置、服务登记和业务代码。
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	39	- ensure_db 每进程 _ready 短路，首次执行先迁移前备份、create_all、run_auto_migration、bootstrap；其中多个子函数独立提交，不是一笔总事务。
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	42	## 4. 迁移实际行为与可重入判断
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	46	| 缺列 ADD COLUMN | 查询存在性后执行 | 有重复执行保护；并发执行与旧代码兼容未演练 |
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	48	| owner 回填 | settings marker 控制数据迁移，随后建索引 | marker 有保护；半程提交/旧版兼容需副本演练 |
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	50	| DROP app_cases | 表存在时删 | 重复删除可跳过，但不可逆；需证明目标旧版不依赖该表 |
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	55	本次没有执行两遍迁移，也未对正式库副本演练，幂等性与自动回退兼容性均未判通过。
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	62	- migrate_legacy：知识条目按 ID 跳过已有项；会从 settings.payload 移除旧 knowledge 字段，读取 learned YAML。
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	64	- seed_global_flow_blocks：已有版本不等于内置版本时覆盖 steps/version；删除 retired block；独立 Session 内 commit。旧版重新启动可能反向覆盖内置版本，不能把“有版本字段”当单调升级保证。
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	65	- key_ref backfill、read_web_auth、skill_channel 等有各自写入路径；完整调用名见索引。
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	68	处置：备份在任何初始化之前；副本验证两次重复启动、失败重试和旧版重启的语义，而非只检查新增行数量。本次只完成静态风险识别。
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	74	| lifespan 初始化 | ensure_db、seed users、僵尸run清扫、租约释放/过期清理 | 启动不是只读；旧版恢复也会写 |
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	87	已完成：只读端口/目录/产品服务登记快照、公开健康与前端类型检查、直接导入索引、迁移/ bootstrap 静态审计、忽略规则检查。
+compatibility_candidate	docs/架构/V6/实施/A-审计与隔离现状.md	91	待实施/演练：正式安装布局与数据根登记；迁移/旧版恢复副本演练；全部后台写者退出核对；probe token、能力注册、CI manifest、安装器原型。本轮未启动这些修改，A 阶段不标完成。
+compatibility_candidate	docs/架构/V6/实施/A-静态索引.md	157	- `mino_nexus/services/flow_block_key_ref_backfill.py:9`：from mino_nexus.core.database import SessionLocal
+compatibility_candidate	docs/架构/V6/实施/A-静态索引.md	260	- `18`：`migrate_legacy`
+compatibility_candidate	docs/架构/V6/实施/A-静态索引.md	270	- `68`：`backfill_flow_block_key_refs`
+compatibility_candidate	docs/架构/V6/实施/A-验收与交接-20261017.md	9	| 迁移异常传播、失败 ready 状态、故障修复后重试 | 通过；原实施记录的 9 项隔离初始化检查，失败 CLI 非零退出 |
+compatibility_candidate	docs/架构/V6/实施/A-验收与交接-20261017.md	11	| 完整旧版 ensure_db | 失败且如实保留；旧 HEAD `2f4f378c2e898dc330ccfc316a6d37e1bdf9b091` 在新版隔离库副本执行 bootstrap，报 `guard_requires_policy_rule`；失败前已发生独立 seed 提交，不能把异常退出当作未写入 |
+compatibility_candidate	docs/架构/V6/实施/A-验收与交接-20261017.md	18	| manifest schema 1 | 三仓实际本地包校验通过；兼容范围与不允许自动回退显式记录；见 mino-manifest-checks.json |
+compatibility_candidate	docs/架构/V6/实施/A-验收与交接-20261017.md	31	| DROP app_cases、FTS/索引 | 包含不可逆表删除和全文索引变更；失败向调用者传播；旧版本依赖需逐组合验证 |
+compatibility_candidate	docs/架构/V6/实施/A-验收与交接-20261017.md	33	| **bootstrap（单独审计）** | load_all 校验 prompt；migrate_legacy 迁移知识并移除 settings 旧字段；recovery/resource-transition seed、permission/media/account/OTP/consent/IME/check-run-env/FSM/package/empty-params 升级、flow seed、key_ref backfill、read_web_auth、skill_channel 各自可能写库。并行 B 增加 development capability 同步，归 B 所有。外层 rollback 不能撤销内部独立 Session 的提交 |
+directory_candidate	docs/架构/V6/实施/A-验收与交接-20261017.md	67	后续只读检查 10104 的 PID 9355：入口为源码 cli.py，无 --data-dir 参数，进程 MINO_NEXUS_DATA_DIR 未设置；按该入口代码，默认数据根为 `/Users/changpengcheng/.mino-nexus`，该目录存在 mino.db。此结论是启动参数与代码推导，不冒称取得运行中 engine 的查询结果。正式切换前须再次核对当前进程、活动任务和数据根；本机另一会话正在开发并重启源码进程，旧 PID 不可用于停服。
+compatibility_candidate	docs/架构/V6/实施/A-验收与交接-20261017.md	74	2. 选定可发布版本后，准备独立正式 releases/launcher/config/logs 安装根和原数据根登记。切换前核对全部写者并完成一致性备份及恢复方案；旧 HEAD 已不兼容，禁止只切 current 自动回退。
+compatibility_candidate	docs/架构/V6/实施/A-验收与交接-20261017.md	76	4. 本轮真实隔离实验不覆盖实体设备、微信外发、历史生产库迁移及全部平台；不以本机 macOS arm64 包证明 Linux/Windows 通过。
+compatibility_candidate	docs/架构/V6/实施/B-开发准备与结果读取.md	7	Scout core.py 区分 node/plugin 请求；新增 PyCharm 接入属于程序系统能力：由 Nexus 启动时自动注册和升级能力目录版本，代码声明平台、caller、phases、版本和受限参数；不走 Workbench 手工维护/点击升级。Scout 实现对应处理器并报告支持情况，Nexus 派发完整载荷，旧节点不支持时明确拒绝。MCP 客户端依赖进入 runtime 层兼容要求，适配代码进入 app 层，不能仅发 app 让旧 runtime 缺依赖。
+compatibility_candidate	docs/架构/V6/实施/B-开发准备与结果读取.md	25	协议实现和文档同步，旧 Scout 未支持时返回 unsupported；是否提升 wire 版本取决于合同兼容性，而不是仅因为新增业务能力。
+compatibility_candidate	docs/架构/V6/实施/B-开发环境前端交互.md	21	保存前显示节点、端点、传输与敏感字段遮罩，说明“保存在这台 Scout，其他电脑不会自动继承”。本机端点限制、权限检查和项目映射仍生效。Scout 离线显示“未保存到节点”，不能仅在 Nexus 缓存就显示成功；保存失败保留旧版，草稿不进日志或浏览器持久存储。
+compatibility_candidate	docs/架构/V6/实施/B-开发环境前端交互.md	23	Scout 复用 config.py 的 JSON 配置，在 ide_connections 保存 connection_id、url、transport、可选非秘密 headers、revision、最近检查结果；沿用配置读写入口，保存时保留 nexus_url/token 等其他字段。Nexus 保存节点/连接引用及应用绑定、脱敏状态。配置更新失败保留旧版，原始粘贴内容成功后从页面清除；秘密字段不进入日志。
+compatibility_candidate	docs/架构/V6/实施/B-开发环境前端交互.md	25	不扩展 im_store.py、不新增 SQLite 用途或迁移。当前本机 PyCharm MCP 无需 Authorization，首期按无鉴权连接实现；带 token/认证 header 的导入提示“当前版本暂不支持此认证配置”，不静默忽略也不明文保存。秘密存储方案留待真实需求出现时处理。
+compatibility_candidate	docs/架构/V6/实施/C-MINO测试闭环.md	25	- 启动迁移为 `tap_target`、`input_target`、`read_web_target_facts` 保留程序调用身份和准确阶段，解决重启后目录合同被清空导致 `event_call_not_allowed`。开发库通过正常管理 API 配置了这三项能力及样例控件，没有直接写业务数据库。
+compatibility_candidate	docs/架构/V6/实施/C-MINO测试闭环.md	55	本地验证分为 30 项负载/端口检查、12 项编译生效/断言检查、4 项目录迁移检查。浏览器分别完成 11 项开发准备页检查和 11 项真实会话页检查；使用全新上下文、禁用 Service Worker、阻断远程资源，实际读取并解码 Scout 动作后截图。未运行 pytest；本地脚本和 mock 不提交仓库。
+compatibility_candidate	docs/架构/V6/实施/D1-Scout更新与门禁.md	28	- Scout 本地设备/IDE 活动复核、安装锁、固定 GitHub Release 清单及平台/摘要/大小/层依赖检查；独立旧 runtime/app 助手、完整旧 bin 保留、兼容回退、原操作人工恢复。
+compatibility_candidate	docs/架构/V6/实施/D1-Scout更新与门禁.md	55	4. 新旧 build 必须经过兼容性实测并列入 manifest rollback_build_ids；未列入时停止在维护状态，不能自行放行。
+compatibility_candidate	docs/架构/V6/实施/D1-Scout更新与门禁.md	64	1. **切换前失败恢复**：`prepare` 下载、清单、摘要或兼容检查失败时，不改原 bin；核对旧 build/source_commit/clean 身份后释放运行锁，重新启动旧版。仅旧版重新注册并核验加载身份后终结为 `rolled_back`，保留预检失败原因；恢复失败仍为 `needs_operator`。此方案仍有停机窗口，未实现停机前异步下载。
+compatibility_candidate	docs/架构/V6/实施/D1-Scout更新与门禁.md	66	3. **发布兼容证据接入**：Scout release workflow_dispatch 接收 `rollback_evidence_json`，通过环境变量交给清单生成器。每个新旧 build 对必须附全部发布平台的更新、回退、配置保留成功标记及 HTTPS 证据地址。生成器拒绝错目标、重复/缺失平台、无证据的旧 build 参数；保留证据并生成 rollback_build_ids。tag 自动触发和无证据发布仍不允许自动回退。该输入是发布负责人的实测声明，格式校验不证明报告内容真实。
+compatibility_candidate	docs/架构/V6/实施/D1-Scout更新与门禁.md	73	仍须正式验收：干净且明确兼容的一对发布包；网络/清单/哈希拒绝后旧版注册恢复；无 Nexus 同名记录的 CLI 更新成功及失败回退；旧 sidecar/错误 build 不确认；跨平台冻结包和服务托管竞争。未执行 Git 提交、远端 CI、Release 发布或正式服务更新。
+compatibility_candidate	docs/架构/V6/实施/D1-Scout更新与门禁.md	82	- 发布清单拒绝缺失/模糊的 dirty/validated 标记、无效 build、重复或不支持的平台；兼容证据 URL 检查 HTTPS 主机及凭据/空白。
+compatibility_candidate	docs/架构/V6/实施/D2-Nexus安装升级.md	5	不实施 verify_only、业务激活接口、零 SQL 写入启动模式，不整体重构 ensure_db，不自动编排协议预暂存。主线是：空闲→停服备份→离线迁移→正常启动→基础探测→成功或兼容代码回退。
+compatibility_candidate	docs/架构/V6/实施/D2-Nexus安装升级.md	9	硬前置：先完成正式基线安装与可验证的服务登记；当前源码目录运行的 Nexus 不直接进入自更新。A 阶段迁移异常传播、seed 只升不降两项修复与隔离验收完成后，才能开放离线升级和自动兼容回退。
+compatibility_candidate	docs/架构/V6/实施/D2-Nexus安装升级.md	17	## 数据兼容准入
+compatibility_candidate	docs/架构/V6/实施/D2-Nexus安装升级.md	19	新 release 提供离线 migrate/schema 校验 CLI，复用实际迁移实现，不维护两份迁移逻辑。前置审计包含 create_all、run_auto_migration、bootstrap、旧版启动初始化及外部副作用。
+compatibility_candidate	docs/架构/V6/实施/D2-Nexus安装升级.md	21	离线迁移后正常启动会再次调用 ensure_db，只有重复执行验证安全才可放行。旧版在新 schema/代表性新数据上的启动及业务读写也需验收。新增列并不证明这些条件成立。遇到问题只局部修复或将该版本转人工，不恢复全量模式重构。
+compatibility_candidate	docs/架构/V6/实施/D2-Nexus安装升级.md	23	使用受控数据库副本演练，不外发真实消息。备份覆盖 SQLite 一致性及迁移触及的受管文件；涉及不可恢复外部副作用的迁移排除自动更新。新服务开始启动前记录 writes_reopened，之后失败默认只回代码；无法兼容保留现场人工恢复。
+compatibility_candidate	docs/架构/V6/实施/D2-Nexus安装升级.md	36	见 [开发与验收记录](mino-D2-开发记录-20261017.md) 第三轮：本地原生包已经验证 launchd 停启、升级/回退、迁移/启动/回退失败、各关键效果阶段助手中断及真实 MCP 重连。已补 MCP 实际线程写者锁、Scout 更新协调门禁、迁移前恢复与人工恢复状态续接。
+compatibility_candidate	docs/架构/V6/实施/D3-Workbench安装升级.md	20	已接入 Nexus 管理员 HTTP/MCP 入口，复用 Workbench 独立助手与持久 operation，支持安装身份、固定版本清单检查、更新/回退、查询、取消和恢复。真实隔离 MCP 已通过权限、拒绝准入、原生取消及回执幂等验收；正式成功更新/回退与业务兼容组合仍待验收。范围及操作见 [Workbench MCP 更新入口](mino-D3-Workbench-MCP更新入口-20261017.md)。
+compatibility_candidate	docs/架构/V6/实施/E-循环验收.md	9	5. 演练目标版启动失败→兼容旧版恢复，以及不能兼容时正确进入人工维护。
+compatibility_candidate	docs/架构/V6/实施/Android-清缓存与新账号补池-20261019.md	87	实际已运行：Nexus **0.1.52 / bb4905e57e2d**，Workbench **0.0.31 / 71feca4fe98c**，Scout **0.1.117**。GitHub 构建成功并发布目标资产后才升级；使用官方包及标准安装器，Nexus 完成备份、两次副本迁移演练、正式迁移与健康检查。Scout 增量要求与现有运行库/浏览器层一致，原节点与 owner 保留，Android `5fda2f6d` 在线。工作区升级核对：`mino-three-component-upgrade-check.json`（10 项）。Workbench 清单仍只声明 Nexus 0.1.50 的测试组合，不伪写新的官方兼容组合。
+directory_candidate	docs/架构/V6/实施/mino-B-开发与验收记录.md	65	后续实测：用户提供开发接入凭据后，开发 Scout 已经 PyCharm 启动，PID 61700，测试 Nexus 50101 注册、心跳和插件就绪均成功；运行身份为 development/source，独立 .venv、~/.mino-dev/scout、节点 e6d693f7c7f6acce。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	3	状态：本地原生停启/升级回退、第三轮故障恢复与 MCP 重连隔离验收已完成，详见文末最新记录。**正式发布包、业务库副本及真实业务并发准出仍未完成，不标记 D2 完成。** 未停启现有业务 Nexus，未迁移或写入现有业务数据，未发布 Release。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	9	- `core/deployment_cli.py`：本地安装、暂存、取包、离线迁移、服务登记、探测、更新查询/取消与人工恢复入口；助手与解释器固定在 launcher，不依赖 current。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	10	- `core/update_engine.py`：固定 operation_id/参数、30 分钟以内等待、持久 hold、全部 running 批次/编译统计、后台工作退出、停服、完整数据根备份、同源迁移、原子 current 切换、正常启动和三项探测；启动后只回代码，不自动倒库。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	20	2. 全局 flow block 只允许已知版本序列向上升级。同版、未知版与更新版均保留；不再在旧版初始化中删除 retired ID。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	24	合并时保留了并行 A/B 的迁移、种子、bootstrap、probe、开发准备和截图读取实现；D2 只接入维护流程与门禁。这些修复不代表过去已经发布的旧版自动获得兼容性。自动回退必须针对**确切两版包**完成旧版初始化和业务读写演练。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	46	## 兼容门禁
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	55	没有该记录，或记录包摘要不符，更新在领取 hold 前拒绝。不能用空记录、模型判断或仅 additive schema 补齐。发布 manifest 不能自行授予这个部署的兼容准入。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	60	- helper 崩溃后可重查同一 operation；已经进入启动/探测阶段时只重新探测，不重放迁移或安装。效果不能确定时保留 needs_operator 和本地恢复入口。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	61	- 新版正常启动前持久 writes_reopened。之后即使启动探测失败，也只切回兼容旧代码，保留当前数据。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	62	- 离线迁移失败且从未重开写入时，可恢复完整备份；失败数据目录另存保留，不销毁原现场。恢复不确定时停止，不能删锁文件强行继续。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	63	- 有活动本地旧版 wechat-ilink 长驻监听时，工作锁会阻止更新直至其停止或等待过期；首轮不自动中断这类监听。正式准出前需要按实际启用的集成补充退出演练。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	74	| 实际制造迁移列名冲突 | 非零退出，未打印 schema ready |
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	81	| 隔离状态样例：幂等、参数冲突、hold 归属、期限、未知迁移保留门禁 | 通过；不是正式发布包验收 |
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	86	本地原生构建 ID：`0.1.32-b3819e7d9ff0-local-20261016172835`。这是合并工作副本的本地构建，不能当作已发布 tag 或正式兼容证据。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	90	1. 在 CI 实际生成并下载原生包，验证该包实际声明的架构及运行时可迁移性。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	92	3. 对授权业务库副本和确切新旧包演练初始化、迁移、旧版读写与代表性新数据；登记真实兼容证据。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	94	5. 实际验证新版启动失败、兼容代码恢复、不可兼容进入人工维护，以及 MCP 断线后查询原操作续接。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	115	| 两个不同原生构建的离线迁移、正常启动、HTTP 项目读写 | 通过；新版迁移重复执行，旧版初始化后仍保留新版 scout_updates 表及项目 |
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	117	| 新版通过 HTTP 写项目，再请求退回旧构建 | succeeded，rollback=true；新项目仍可读取，旧版仍能写入 |
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	118	| 新版真实启动后注入 MCP probe 认证失败 | rolled_back；保留数据库文件 inode 及启动后新增受管文件，未恢复备份；旧版读写正常 |
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	120	| 缺少确切包兼容证据 | 在领取 hold 前拒绝，原成功状态不变 |
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	123	旧构建：`0.1.32-b3819e7d9ff0-local-20261016172835`。新构建：`0.1.32-bc4a58c893bd-local-20261016173712`。二者均是 0.1.32 的不同本地 dirty 构建，重新编译原生程序且包摘要不同，不是改名的同一个二进制；也不是两个已发布的正式 tag。新构建包含当前源码新增表，旧版在新 schema 上实际启动和读写。稳定助手来自新包，升级和回退时不随 current 替换。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	125	兼容记录在实际迁移和双向业务演练之后登记，并绑定两包 SHA256；仅适用于本次无已连接 Scout、无 IDE/IM/批次活动的隔离部署，不能复制为生产兼容授权。测试包临时启用了 launchd stdout/stderr 文件以便取证；该诊断配置未合并到仓库，正式代码保留原有有界轮转日志。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	127	验收脚本曾在 phase=probing 后立即访问尚未监听的 HTTP 端口而失败；随后增加实际就绪等待，从保留的原 operation 和安装目录恢复，未重跑已通过的迁移/升级。记录中保留了该中断，不将它解释为产品回退成功。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	133	- CI/正式 tag 包的跨主机运行，以及授权业务库副本和真实代表性数据的确切新旧包兼容验收。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	135	- 进程完全无法启动、离线迁移失败的原生恢复、自动回退本身失败转 needs_operator，以及助手其余效果阶段中断。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	150	4. 新增本地 `recover --mode restart-previous`。仅 needs_operator、phase=stopping/backing_up、writes_reopened=false 且 current 仍为 previous_build 时允许；确认实际进程退出后重新启动旧版，不恢复/覆盖数据，保留部分备份。迁移及后续阶段明确拒绝，不能替代 prestart-backup/code-only。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	162	| 原生离线迁移失败 | 对新版表制造真实 view/schema 冲突；原生 CLI 非零退出，自动恢复完整备份，旧版 HTTP 读写恢复；失败数据目录保留 |
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	163	| 新版完全无法启动 | 迁移期间把隔离监听 host 改成无效值，观察原生进程非零退出；恢复配置后自动退回旧版，旧版读写正常 |
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	165	| migrating 阶段杀掉助手 | 原生迁移子进程已取得 runtime 锁；续接不重放迁移，进入 needs_operator；解除隔离 SQLite 阻塞并确认进程退出后 prestart-backup 恢复成功 |
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	166	| stopping 阶段杀掉助手，无完整备份 | 原有 code-only 拒绝；最终原生助手通过 restart-previous 恢复旧版 |
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	168	| switching 阶段中断 | 新模式拒绝；确认尚未启动后通过 prestart-backup 恢复旧版 |
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	170	| rolling_back 阶段中断 | 重建账本选定的旧版进程后，助手探测完成同一回退，不重做迁移 |
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	175	应用包对：旧 `0.1.32-b3819e7d9ff0-local-20261016172835`，新 `0.1.32-fbbc56937c00-local-20261016174908`。最终原生助手来自 `0.1.32-fbbc56937c00-local-20261016180245`，包含新增恢复模式和 Scout 幂等修复；在测试服务卸载后离线替换，原助手目录另存保留。两应用包先完成新版重复迁移、新旧版初始化与 HTTP 业务读写演练，再登记确切摘要兼容证据。最终包是本地 dirty 构建，不是正式 Release。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	183	- 用户已确认正式包尚未发布；未提供可用业务库副本路径。正式新旧 tag、CI 原生包跨主机安装及业务副本兼容验收仍待准备，未擅自发布或使用生产库。
+compatibility_candidate	docs/架构/V6/实施/mino-D2-开发记录-20261017.md	187	D2 保持进行中。原生迁移失败、完全启动失败、回退失败转人工维护、真实 MCP 重连及stopping/backing_up/migrating/switching/starting/rolling_back/operator_recovery 中断已补证（probing 上轮已验），不再列为完全未验；完整活动业务与正式发布兼容仍未验收。
+compatibility_candidate	docs/架构/V6/实施/mino-D3-Workbench-MCP更新入口-20261017.md	23	版本检查只读取平台清单，返回 `package_verified=false`、`compatibility_verified=false`；不能把检查成功当作升级准入成功。回退使用已保留的版本，不要求另暂存包，但同样受兼容性检查约束。
+compatibility_candidate	docs/架构/V6/实施/mino-D3-Workbench-MCP更新入口-20261017.md	61	本轮使用 dirty 本地验收包，因此**没有宣称 MCP 发起的正式更新/回退已成功，也没有宣称业务兼容组合已通过**。上一轮已通过的本地 CLI 升级、热切换、回退和中断恢复结论保持原范围。
+compatibility_candidate	docs/架构/V6/实施/mino-D3-开发与验收记录-20261017.md	5	macOS 已完成独立原生安装包、独立更新助手、固定版本升级、静态热切换、运行时停启、回退和中断恢复的本地验收。旧版本和配置保留，不处理 Nexus 数据库。Linux/Windows 的服务更新尚未验收。
+compatibility_candidate	docs/架构/V6/实施/mino-D3-开发与验收记录-20261017.md	7	新基线安装生成 installation_id；历史基线缺少该身份或更新合同会被拒绝，需先在新目录安装新基线并明确迁移服务登记，不能覆盖旧安装目录。
+compatibility_candidate	docs/架构/V6/实施/mino-D3-开发与验收记录-20261017.md	23	`--tested-nexus-build` 可重复提供，只能填写已实际验证的组合。缺少声明的版本不能自动准入；构建成功不等于业务兼容。`--allow-dirty` 仅产出带 dirty 标记的本地验收包，发布清单生成器继续拒绝它。
+compatibility_candidate	docs/架构/V6/实施/mino-D3-开发与验收记录-20261017.md	49	脏构建在默认升级/回退中被拒绝。隔离验收时可显式加 `--local-verification`；该选项只适用于 dirty 包，记录明确写明没有验证业务兼容。正式更新会读取配置 Nexus 的 `/sys/server_info`，要求其 build_id 在包声明的已验证列表中，并在切换前复核。
+compatibility_candidate	docs/架构/V6/实施/mino-D3-开发与验收记录-20261017.md	71	- 静态在线切换、旧版懒加载资源、幂等、参数冲突、取消及回退通过。
+compatibility_candidate	docs/架构/V6/实施/mino-D3-开发与验收记录-20261017.md	72	- 运行时升级/降级经过真实服务停启；注入新版启动失败后成功自动恢复旧版。
+directory_candidate	docs/架构/V6/实施/mino-执行可靠性与账号资源-20261017.md	25	使用工作区内全新 MINO_NEXUS_DATA_DIR、真实 SQLAlchemy/SQLite、8 个并发占号调用及独立 Python 冷启动进程；31 项检查通过。165 个 running/queued 任务跨页全部处理，未知写保留隔离。相关 Python 语法检查通过。
+compatibility_candidate	docs/架构/V6/实施/三仓整合发布-20261017.md	9	三仓产品文案、示例及新文件名称统一使用 Mino。读取旧安装文件格式的兼容分支保留，不更名现有用户数据。历史验收文档的品牌示例已统一；其中历史端口与旧验收结论不代表当前发布状态。
+compatibility_candidate	docs/架构/V6/实施/三仓整合发布-20261017.md	15	普通应用更新不替换稳定 launcher；旧安装的启动器修复仍需独立迁移。Windows 安装时使用管理员权限、运行时使用普通权限的访问错误尚缺具体路径及完整错误，不能宣称已解决。
+compatibility_candidate	docs/架构/V6/实施/执行可靠性与Android修复-20261018.md	55	- 账号租约上下文保留 sn / case_id，释放检查兼容旧上下文的 ctx.sn。避免设备隔离退化为整批隔离。
+compatibility_candidate	docs/架构/V6/实施/用例API来源接入-20261018.md	5	历史用例、绑定和收据保留；数据库中的历史调度列仅为兼容旧库而保留，无调度消费者。
+compatibility_candidate	docs/架构/V6/实施/用例API来源接入-20261018.md	43	- 历史来源接口只保留手动兼容和历史查询；调度参数从请求与返回中移除。
+compatibility_candidate	docs/架构/V6/实施/用例API来源接入-20261018.md	45	与当前配置不一致时阻断，重新发现项目即可继续。旧版 Scout 需升级。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	22	- MINO 项目：包含 Nexus、Scout、Workbench 三个应用，测试通过后可显式更新正式组件，失败时回退到兼容旧版本。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	28	首期削减：不实现 verify_only/激活两阶段启动、不自动编排协议预暂存、不整体重构 ensure_db 模式。启动配置隔离、迁移审计及必要局部修复仍需完成。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	136	5. 更新验证或兼容回退后，Agent 查询原 operation，继续工作。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	150	统一 schema 是协议文档与校验合同，不新建共享产品仓库。发布到固定 tag/build，latest 仅用于发现；执行时固定 manifest 与文件摘要。旧 Scout 格式保持兼容或提供明确转换，不能直接破坏现有客户端。
+directory_candidate	docs/架构/V6/支持自进化方案.md	156	macOS 分别使用 `~/Library/Application Support/MinoNexus/`、`MinoWorkbench/`：
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	166	Nexus 现有 `~/.mino-nexus` 优先登记原路径；新安装可用独立 data/。plist 显式设置数据根，不依赖终端环境；迁移数据另做备份复制校验，保留原件。
+directory_candidate	docs/架构/V6/支持自进化方案.md	166	Nexus 现有 `~/.mino-nexus` 优先登记原路径；新安装可用独立 data/。plist 显式设置数据根，不依赖终端环境；迁移数据另做备份复制校验，保留原件。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	174	提供检查版本、更新指定版本、查询、取消等待、回退到兼容历史版。按部署权限执行；一部署一更新锁，相同 operation/参数复用结果，不同参数拒绝。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	188	- Workbench 纯静态包切换不等待无关批次；联合不兼容更新另用维护窗口。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	192	首期只自动更新到**验证过旧版可兼容的新版本**。additive 只是候选条件，不自动证明兼容：新增约束、数据语义、bootstrap 和后台任务均可能破坏旧版。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	195	2. **离线迁移与切换**：用新 release 的 CLI 执行迁移和 schema 校验；成功后在同目录创建临时符号链接，再原子 rename 替换 current。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	197	4. **完成或回退**：成功释放 hold；失败停新版、切旧指针并验证。新版已启动后默认只回退代码，保留当前数据；不能兼容则进入人工维护，不能自动倒库。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	201	首期不新增 verify_only/激活入口，不整体重构 ensure_db。允许启动重复初始化的前提是**同一迁移实现可重入、重复调用无破坏性效果，且旧版本初始化也兼容当前数据**；有问题只修相关迁移/启动分支，不把未经验证的幂等性当事实。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	203	迁移不兼容、破坏性变化或无法证明旧版可用的版本走人工维护，不开放自动代码回退承诺。正式库副本迁移/旧版启动演练在受控目录进行，不接真实外部业务，不进 Git。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	215	首期由管理员在维护窗口协调，停止受影响任务，用本地 CLI/安装器安装**固定兼容版本**的 Nexus/Scout，再验证连接；协议不匹配不自动追 latest。离线节点回来后提示指定版本维护，不能派任务。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	217	不实现协议预暂存自动编排、签名计划或断连自愈。待独立助手和基本回退稳定后另评估。普通更新仍检查应用能力/API兼容，不能仅凭 wire 版本相同免验。
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	223	| A | 数据根/导入与写者清单、迁移及 bootstrap 可重入审计、端口登记、PyCharm 实测；安装基线和三仓 manifest/CI 并行 |
+compatibility_candidate	docs/架构/V6/支持自进化方案.md	227	| D2 | Nexus 安装/服务登记、离线迁移、正常启动探测、兼容代码回退 |
+compatibility_candidate	docs/架构/V7/MinoBots-方案.md	218	| 其余全部 | **模型与服务已删除，不再写**：`collab_tasks`、`collab_agent_runs`、`collab_decisions`。**库里的旧表和旧数据原样保留，不做迁移、不做删除**。`collab_policies`、`collab_approvals`、`collab_work_items`、`project_bots` 工作区不再使用 |
+compatibility_candidate	docs/架构/V7/MinoBots-方案.md	274	- 群组与成员、`chat_jobs` 启动校验、`member.assign`（§3.5）、`sender_name`（§6）、应用·渠道同步保存与三页签抽屉（§6.1）已实施。默认成员配置在 `settings.id=workspace-default-members`；项目维护者可读，全局默认成员修改需要管理员。已有对话不迁移成员，新对话自动加入默认成员。
+compatibility_candidate	docs/架构/V7/MinoBots-方案.md	280	- 旧数据里已有的 `collab_topics.workspace_kind` / `scope_key` 等列保留；迁移脚本里对它们的处理不变。
+compatibility_candidate	docs/架构/V7/MinoBots-方案.md	340	5. 旧数据：按用例建出来的议题保持原样，不迁移。
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	18	本地已完成前端构建、类型检查、Python 语法/内部导入和完整 wheel 打包检查。未运行 pytest。Docker、launchd、实际浏览器、Scout 跨机重连与存量迁移仍待实机验收；代码实现不等同于这些验收通过。
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	25	"2. **按""本地服务""而不是""桌面软件分发""来部署**：用 Python 包（wheel）安装，由 launchd（macOS）常驻；**不再用 PyInstaller 冻结，不再有服务自更新引擎。** 升级 = 装新版本 + 重启，启动时自动迁移；B4 自动备份暂缓，升级前需另行备份。"
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	31	现状：push main 即跑四平台（linux/win/mac arm/mac intel）PyInstaller 矩阵，产出冻结二进制 + `MinoInstaller` + `mino-maintain`；服务器端靠 `update_engine` 自查 GitHub、下载、停写、备份、迁移、切换、回滚。
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	38	"| 4 | Workbench 是静态前端却被冻成 Python 二进制，另起服务、另走更新链路，还要""声明兼容的 Nexus build""，且仅支持同机 | `MinoWorkbench/packaging/workbench_server.py`；`docs/github-updates.md` |"
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	41	| 7 | 兼容性要对每一对 `from--to` 版本做演练，复杂度随版本数平方增长 | `config/compatibility/<from>--<to>.json` |
+directory_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	50	│   └── 数据：~/Library/Application Support/Mino/nexus/data/（mino.db 等）
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	56	- **一个版本号**：Nexus 的 `mino_nexus/VERSION`。Workbench 版本记录在包内 `web/BUILD.json`，仅用于排障，不参与兼容准入（二者永远同版本，不存在不兼容组合）。
+directory_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	57	- **数据目录不变**：`~/Library/Application Support/Mino/nexus/data/`，升级不搬数据。
+directory_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	83	- 数据目录与日志目录由 `service install` 创建；不得与开发数据根 `~/.mino-dev/` 重叠。
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	94	B4 原设计为启动迁移前在线备份；按用户要求本次暂缓，当前仅执行已有迁移后监听，不新增此通用备份保证。升级前须另行安排备份。
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	100	pipx install --force <旧版本 wheel>
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	101	# 仅当新版本已执行过迁移且旧版本无法读取时，才从备份恢复 mino.db
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	105	迁移是只增不改（additive ALTER），旧版本通常可直接读取新库；恢复备份是最后手段，且会丢失升级后写入的数据，操作前必须确认。
+directory_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	109	源码启动：`mino-nexus --dev`（50101，仅 localhost，数据 `~/.mino-dev/nexus`）；Workbench 用 `npm run dev`（60101）连 50101。开发与正式互不读取对方目录、端口、变量。
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	145	- 升级前先备份数据卷（停容器后复制卷内容，或使用 B4 的启动前自动备份，备份落在 `/data/backups/`）。迁移只增不改，旧版本通常可直接读新库；恢复备份会丢失升级后写入的数据，须确认。
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	154	### 4.4 存量安装迁移
+directory_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	156	已装有 0.1.4x 冻结包（`~/Library/Application Support/Mino/{nexus,workbench}` 或旧 `~/Mino/…`）的机器：
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	196	Workbench 的 `release.yml` / `promote.yml` 与 Nexus 旧版相同。合并后应改为：
+directory_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	206	"| B1 | **生产模式开关** | 非冻结安装的 `mino-nexus` 现在默认 `--dev`（50101、仅 localhost、`~/.mino-dev`）。需新增生产模式（如 `--prod` 或 `service` 子命令传入），使用 50104、默认 `0.0.0.0`、生产数据目录，并保留""开发数据根不得与生产重叠""的校验 |"
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	209	| B4 | **启动前自动备份** | 迁移前对 `mino.db` 做 SQLite 在线备份，失败则不监听 |
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	210	| B5 | **拆除自更新** | 切换完成后删除 `update_engine`、`installer_upgrade`、`maintain`、`workbench_updates`、`bind-workbench`、兼容性演练矩阵及对应 `rReleases` 入口；**保留** `services/scout_install.py` 及 Scout 下载/更新相关入口 |
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	217	2. B1 完成并另行安排升级前备份后（B4 暂缓），在一台干净 Mac 上按 §4.1 手工安装，验收：登录、Scout 重连、重复重启、迁移后数据保留。
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	221	6. 用一台已装 0.1.4x 的 Mac 做 §4.4 存量迁移演练，保留旧目录。
+compatibility_candidate	docs/架构/V7/Nexus-Workbench合并部署方案.md	222	7. 源码清理已按用户后续授权提前完成；现场切换仍须先验收。原计划为验收全部通过后删除 `release.yml`（legacy）与 `scripts/build_release.py`、`write_manifest.py`、`packaging/` 中安装器与维护助手，执行 B5，更新 `site/` 下载页与 `docs/github-updates.md`、`docs/local-deployment-layout.md`、`docs/基础框架/HTTP.md`。
+compatibility_candidate	docs/架构/V7/README.md	41	| V7-C5 | verify_only/两阶段激活、零写启动及 ensure_db 整体重构 | 自进化方案 §1、D2 首期削减；现有迁移审计和失败保护仍需维持。 |
+compatibility_candidate	docs/架构/V7/README.md	43	| V7-C7 | 零停机、不可信代码安全沙箱及更广泛服务托管 | 自进化方案 §8、D2 记录。先独立设计安全/兼容合同，不承诺任意数据无损回退。 |
+compatibility_candidate	docs/架构/V7/README.md	45	自动发布语义变化、全量历史迁移等原设想不作为有效排期，见 [取消与不恢复事项](取消与不恢复事项.md)。Web 账号系统历史两条业务问题也尚未确认 V7 排期，不因归档自动复跑。
+compatibility_candidate	docs/架构/V7/README.md	47	## 迁移对应关系
+compatibility_candidate	docs/架构/V7/V6未完成事项接续-20261019.md	35	- 当前阻塞：应用声明 Mobile，环境仍保留 ios/pc/server 旧渠道，UI 保存受阻且任务没有兼容渠道。
+compatibility_candidate	docs/架构/V7/V6未完成事项接续-20261019.md	36	- 完成条件：先按目标范围修正执行配置，不能默认删除或全量迁移历史；用新运行核对原业务预期，历史业务失败 verdict 保留。
+compatibility_candidate	docs/架构/V7/V6未完成事项接续-20261019.md	57	- 本次仅迁移任务，没有触发新发布或本地更新；与已取消的产品自动升级/回退不同。
+compatibility_candidate	docs/架构/V7/V6未完成事项接续-20261019.md	68	这些是既有检查摘要，本次文档迁移未重新执行：
+compatibility_candidate	docs/架构/V7/Scout下载中心方案.md	73	安装记录继续用现有插件目录和 `.installed`。旧标记只有 `ok` 时版本显示未知，不推断成最新版。首期不为只读项新建 Scout 侧工具库。飞书/Meego 任务投影用 Nexus 一张 `node_tool_tasks` 表，走现有 additive 迁移；业务真源仍是 Scout 上的安装结果，Nexus 保存派发和给页面看的快照。`persist_snapshot` 今天不存 `plugin_job`，所以不能靠节点心跳恢复安装进度。
+compatibility_candidate	docs/架构/V7/Scout下载中心方案.md	89	| 工具更新与修复 | 先有经验证的固定版本和摘要。不用可变 URL 或 latest 当兼容目标。更新失败时旧版本仍显示已安装 |
+compatibility_candidate	docs/架构/V7/Scout下载中心方案.md	91	| ADB Keyboard | 发布条目提供固定提交和摘要之后才允许下载中心更新。电脑缓存更新不自动升级所有设备。现有自动准备保持原样，并标成旧路径 |
+compatibility_candidate	docs/架构/V7/Scout下载中心方案.md	92	| LangBot | 三个渠道共用一个宿主，不能装三份。data、配置、密钥与 venv 分开；切换前停宿主。数据迁移没有验证过的恢复办法时，不做一键更新。缺 Python 只提示，首期不下载 Python 发行版 |
+compatibility_candidate	docs/架构/V7/取消与不恢复事项.md	9	| 历史 SN/引用迁移、全量历史迁移 | 已取消迁移交付；“以后清空再导入”不是现在删除数据的授权 | [V5 交接 §4](../V6/V5遗留事项与范围交接-20261016.md) |
+compatibility_candidate	docs/架构/V7/取消与不恢复事项.md	10	| HITL、人工输入及 persona 迁移/注册 | 原决定不迁移、不注册、不进模型菜单；不自动恢复 | 同上 |

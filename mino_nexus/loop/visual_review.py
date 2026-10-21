@@ -365,7 +365,8 @@ def defer_visual_pass(
     row = in_progress_milestone(read_state(cursor))
     if not isinstance(row, dict):
         return False
-    if action_scheme(ctx) != "visual" and (cap not in ("tap_element", "tap_xy") or row_has_surface(row)):
+    navigation_action = bool(row.get("nav_target")) and cap in {"tap_element", "tap_xy", "press_key", "swipe_direction"}
+    if not navigation_action and action_scheme(ctx) != "visual" and (cap not in ("tap_element", "tap_xy") or row_has_surface(row)):
         return False
     if defer_input_focus(cursor, ctx, capability_id=cap, writer=writer):
         return True
@@ -477,6 +478,8 @@ def remember_visual_prior(
         milestone_id=str(milestone_id or ""),
         step_expected=step_expected,
     )
+    if row.get("nav_target"):
+        sheet["expected"] = "当前画面已到达导航目标「" + str(row["nav_target"]) + "」；按键成功或任意画面变化不能证明到达。"
     setattr(
         cursor,
         "visual_prior",
@@ -621,7 +624,7 @@ def apply_same_turn_prior(
         or not str(getattr(decision, "thought", "") or "").strip()
     )
 
-    if action_scheme(ctx) != "visual":
+    if action_scheme(ctx) != "visual" and not review_pending:
         return "reask" if confirmation else "none"
     prior = getattr(cursor, "visual_prior", None)
     if not isinstance(prior, dict) or not str(prior.get("milestone_id") or "").strip():

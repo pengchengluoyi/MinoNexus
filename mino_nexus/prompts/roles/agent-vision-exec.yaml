@@ -1,5 +1,4 @@
 id: agent-vision-exec
-version: 2
 sort_order: 170
 label: 看图执行
 group: runtime

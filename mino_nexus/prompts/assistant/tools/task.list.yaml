@@ -1,5 +1,4 @@
 id: task.list
-version: 1
 title: 最近任务
 description: 列出最近的跑批任务。用户问最近跑得怎么样、有没有失败时用。
 route: GET /case-runner/tasks

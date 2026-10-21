@@ -1,5 +1,4 @@
 id: knowledge-extract-batch
-version: 1
 label: 知识分类（批量）
 summary: 批量把知识归到 facet / situation
 engine: json_chat

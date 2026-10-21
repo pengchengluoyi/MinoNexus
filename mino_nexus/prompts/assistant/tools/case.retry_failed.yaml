@@ -1,5 +1,4 @@
 id: case.retry_failed
-version: 2
 title: 重跑失败项
 description: 复跑已验证尚未发生写入的失败执行单元，保持原设备、快照及剩余预算。省略执行单元时由服务读取合格项；无合格项则停止。
 route: POST /case-runner/tasks/{task_id}/retry-failed

@@ -1,5 +1,4 @@
 id: im-defect
-version: 1
 label: IM 提缺陷
 summary: 把说清的缺陷整理成 JSON。
 category: channel

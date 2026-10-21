@@ -59,11 +59,10 @@ def owned(db, project_id, *, write=True):
 
 def input_view(case):
     from mino_nexus.services.v5_publication import source_view
-    from mino_nexus.runtime.session_gate import clamp_case_scene
-    # References only: never freeze project env, provider credentials or accounts.
-    scene = clamp_case_scene(case["case_scene"]) if case.get("case_scene") else None
-    return {**source_view(case), "case_scene": scene, **{key: deepcopy(case.get(key)) for key in
-        ("case_id", "project_id", "app_id", "resource_key")}}
+    # Scene/resource_key are compiler OUTPUTS, not author input. Feeding them
+    # back invalidates input digests and prevents recompiling rejected artifacts.
+    return {**source_view(case), **{key: deepcopy(case.get(key)) for key in
+        ("case_id", "project_id", "app_id")}}
 
 
 def build_identity():
@@ -164,9 +163,6 @@ def _queue(db, row, revision, *, request_id, parent_job_id="", initial_status="q
             meta.pop(key, None)
     meta["resource_key"] = deepcopy(revision.compile_input.get("resource_key"))
     meta["ui_automation"] = {"coverable": False, "blocked_by": []}
-    if extra.get("v5_publication"):
-        meta["step_program_keys"] = deepcopy(extra["v5_publication"]["compiled_keys"])
-        extra.update(v5_plan_state="needs_revalidate", v5_has_unpublished_changes=True)
     extra["meta"] = meta
     row.extra = extra
     return job
@@ -364,6 +360,8 @@ def claim(worker_id, *, lease_seconds=120):
                 db.flush()
                 continue
             break
+        # Queued work follows the current compiler after an update, not its enqueue-time binary.
+        job.build = {**build_identity(), "dependency_digest": dependency_digest(db, job.project_id, job.owner_user_id)}
         job.status, job.claim_token, job.worker_id = "running", uuid.uuid4().hex, worker_id
         job.lease_until, job.started_at = time.time() + lease_seconds, now()
         _project_status(db, job)
@@ -395,6 +393,12 @@ def complete(job_id, token, output=None, diagnostics=None):
         if job.output or job.status in {"succeeded", "failed"}:
             return False
         output = deepcopy(output or {})
+        if output and not diagnostics:
+            from mino_nexus.runtime.session_gate import clamp_case_scene
+            try:
+                output["case_scene"] = clamp_case_scene(output.get("case_scene"))
+            except ValueError as exc:
+                diagnostics = [{"reason_code": str(exc), "field": "case_scene"}]
         valid_claim = job.status == "running" and job.lease_until >= time.time() and not job.cancel_requested
         if job.status == "running" and not valid_claim:
             job.status = "interrupted"
@@ -414,9 +418,6 @@ def complete(job_id, token, output=None, diagnostics=None):
             extra = deepcopy(row.extra or {})
             meta = dict(extra.get("meta") or {})
             meta.update(deepcopy(output.get("meta") or {}))
-            if extra.get("v5_publication"):
-                meta["v5_draft_step_program_keys"] = deepcopy(meta.get("step_program_keys") or {})
-                meta["step_program_keys"] = deepcopy(extra["v5_publication"]["compiled_keys"])
             if output.get("resource_key"):
                 extra["resource_key"] = deepcopy(output["resource_key"])
                 meta["resource_key"] = deepcopy(output["resource_key"])
@@ -479,13 +480,13 @@ def run_one(worker_id):
                     "model_calls_this_build": 0}
                 complete(job["job_id"], job["claim_token"], output)
                 return True
-            from mino_nexus.services.case_resource_claim import sync_case_resource_metadata
+            from mino_nexus.services.case_resource_claim import compile_execution_scene
             from mino_nexus.services.case_step_key_compiler import compile_case_step_program_keys
             if job.get('event_migration'):
                 from mino_nexus.services.event_migration import compile_reviewed
                 result = compile_reviewed(job)
             else:
-                source = sync_case_resource_metadata(deepcopy(job["input"]), project_id=job["project_id"])
+                source = compile_execution_scene(deepcopy(job["input"]), project_id=job["project_id"])
                 from mino_nexus.services.control_registry import capture_compile_controls
                 with capture_compile_controls() as generated_controls:
                     compiled = compile_case_step_program_keys(source)
@@ -498,7 +499,12 @@ def run_one(worker_id):
             "compile_provider_unavailable", "compile_prompt_unavailable",
             "compile_model_call_failed", "compile_model_response_incomplete", "migration_contract_changed",
             "migration_source_changed", "migration_plan_incomplete", "migration_control_review_required",
-            "business_event_migration_required"} else "compile_failed"
+            "business_event_migration_required", "case_scene_required", "case_scene_recompile_required",
+            "case_scene_session_conflict", "scene_prep_items_invalid", "scene_prep_text_required",
+            "scene_prep_kind_invalid", "scene_prep_phase_invalid", "obsolete_scene_template_id",
+            "scene_lease_requirements_invalid", "foreign_foreground_policy_invalid",
+            "case_scene_invalid:session_prep", "case_scene_invalid:required_session",
+            "case_scene_invalid:device_need", "target_platform_invalid:platform"} else "compile_failed"
         complete(job["job_id"], job["claim_token"], diagnostics=[{"reason_code": code, "error_type": type(exc).__name__}])
     finally:
         stopped.set()

@@ -183,7 +183,9 @@ def create_operation(app_id, sess, opid, action, revision, connection=None, *, e
     caps = getattr(live, "runtime_capabilities", None) or []
     if not any(c.get("id") == "node.ide_prepare" and c.get("contract_version") == 1 for c in caps):
         raise HTTPException(409, {"reason_code": "unsupported", "message": "当前运行的 Scout 不支持开发准备 v1，请先更新节点"})
-    mutation = action in {"execute", "restart", "build", "install"}
+    if action == "stop" and not any(c.get("id") == "node.ide_prepare" and "stop" in c.get("features", []) for c in caps):
+        raise HTTPException(409, "当前运行的 Scout 未加载停止调试会话能力，请更新节点")
+    mutation = action in {"execute", "stop", "restart", "build", "install"}
     if mutation:
         if action == "install":
             device = live.devices.get(cfg.get("android_serial", ""))
@@ -206,7 +208,7 @@ def create_operation(app_id, sess, opid, action, revision, connection=None, *, e
                     raise HTTPException(409, "配置已变化，请刷新")
             row = DevelopmentOperation(operation_id=opid, app_id=app_id, owner_user_id=uid,
                 node_id=node_id, action=action, revision=revision, slot=node_id if mutation else None,
-                state="queued", params=params, result={}, created_at=time.time(), deadline=time.time() + 120)
+                state="queued", params=params, result={}, created_at=time.time(), deadline=time.time() + (180 if action == "restart" else 120))
             db.add(row)
             db.flush()
             result = serialize(row)
@@ -239,7 +241,7 @@ def _claim_dispatch(opid, sess):
         if row.deadline < time.time():
             row.state, row.slot, row.result = "failed", None, {"reason": "排队期限已到，未派发"}
             return
-        if row.action in {"execute", "restart", "build", "install"}:
+        if row.action in {"execute", "stop", "restart", "build", "install"}:
             from mino_nexus.services.node_workload import workload_for_node_id
             workload = workload_for_node_id(node_id) or {}
             if workload.get("busy") or workload.get("active_runs") or any(d.get("busy") for d in workload.get("devices", [])):
@@ -270,11 +272,11 @@ async def _execute_dispatch(opid, sess, pending):
             if not device or device.platform != "android" or device.channels.get("adb") not in {"connected", "online", "available"}:
                 raise HTTPException(409, "安装前设备已离线或不属于该 Scout")
         payload = P.Execute(run_id="", step_idx=-1, sn="", capability_id="node.ide_prepare", params=params,
-            timeout_sec=100, executor_order=["ide"], low_level={},
+            timeout_sec=140 if params["action"] == "restart" else 100, executor_order=["ide"], low_level={},
             selected_impl={"id": "ide.prepare.v1", "executor": "ide", "runs_on": "scout", "params_contract": {"version": 1}, "result_contract": {"version": 1}})
         generation = live.node_connection_generation
         sent = True
-        result = live.send(P.MsgType.EXECUTE, payload, timeout=110)
+        result = live.send(P.MsgType.EXECUTE, payload, timeout=150 if params["action"] == "restart" else 110)
         if inspect.isawaitable(result):
             result = await result
         from mino_nexus.services.node_registry import get_registry
@@ -368,6 +370,8 @@ async def worker():
     from mino_nexus.services.auth_store import api_session_for
     from mino_nexus.core.execution_user import execution_user
     active = {}
+    recovering = {}
+    recovered_at = {}
     try:
         while True:
             try:
@@ -380,6 +384,11 @@ async def worker():
                             row.state, row.result = "unknown", {**(row.result or {}), "reason": "操作等待已到期，请读取原回执；不会重新执行"}
                     rows = [(r.operation_id, r.owner_user_id) for r in db.query(DevelopmentOperation)
                             .filter_by(state="queued").order_by(DevelopmentOperation.created_at).limit(16)]
+                    interrupted = [(r.operation_id, r.app_id, r.owner_user_id) for r in db.query(DevelopmentOperation)
+                                   .filter(DevelopmentOperation.action.in_(["execute", "stop", "restart"]), DevelopmentOperation.slot.is_not(None),
+                                           DevelopmentOperation.state.in_(["running", "unknown"]),
+                                           DevelopmentOperation.created_at < time.time() - 3,
+                                           DevelopmentOperation.deadline > time.time() - 300).limit(16)]
                 for opid, uid in rows:
                     sess = api_session_for(uid)
                     if not sess:
@@ -399,6 +408,24 @@ async def worker():
                         active.pop(opid)
                         if not task.cancelled():
                             task.result()
+                for opid, task in list(recovering.items()):
+                    if task.done():
+                        recovering.pop(opid)
+                        if not task.cancelled():
+                            try:
+                                task.result()
+                            except HTTPException:
+                                pass
+                recovered_at = {opid: at for opid, at in recovered_at.items() if time.time() - at < 600}
+                for opid, app_id, uid in interrupted:
+                    if opid in active or opid in recovering or time.time() - recovered_at.get(opid, 0) < 3:
+                        continue
+                    sess = api_session_for(uid)
+                    if not sess:
+                        continue
+                    recovered_at[opid] = time.time()
+                    with execution_user(uid):
+                        recovering[opid] = asyncio.create_task(recover_operation(app_id, opid, sess))
             except Exception as exc:
                 from mino_nexus.core.log import SLog
                 SLog.w("Development", "prepare worker: " + type(exc).__name__)
@@ -406,4 +433,6 @@ async def worker():
     finally:
         for task in active.values():
             task.cancel()
-        await asyncio.gather(*active.values(), return_exceptions=True)
+        for task in recovering.values():
+            task.cancel()
+        await asyncio.gather(*active.values(), *recovering.values(), return_exceptions=True)

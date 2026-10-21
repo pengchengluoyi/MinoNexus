@@ -1,5 +1,4 @@
 id: nav-widget-state
-version: 1
 label: Nav 控件态判定
 summary: 单控件 VLM 兜底：空心/实心等，非整屏分类
 engine: text_chat

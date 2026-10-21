@@ -104,19 +104,3 @@ def login_flow_allowed(
         return True, ""
 
     return True, ""
-
-
-def login_flow_block_message(
-    *,
-    cursor: StepCursor,
-    phase: str,
-    instruction: str,
-    expected: str,
-) -> str:
-    allowed, msg = login_flow_allowed(
-        cursor=cursor,
-        phase=phase,
-        instruction=instruction,
-        expected=expected,
-    )
-    return "" if allowed else str(msg or "").strip()

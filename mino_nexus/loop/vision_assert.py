@@ -7,7 +7,7 @@ from typing import Any, Optional
 from mino_nexus.ai.planner import assert_visual
 from mino_nexus.ai.schemas import AssertResult
 from mino_nexus.loop.milestones import read_state
-from mino_nexus.loop.vision_flags import vision_assert_v1_enabled
+from mino_nexus.loop.vision_flags import assertion_phase_active
 
 
 def _render_assert_job(slots: dict[str, str]) -> tuple[Any, Any]:
@@ -21,7 +21,7 @@ def _render_assert_job(slots: dict[str, str]) -> tuple[Any, Any]:
     raise JobRenderError("agent-vision-assert / assert-vision 均未配置")
 
 
-def _checkpoint_response_schema(checkpoints: list[dict[str, Any]]) -> dict[str, Any]:
+def _checkpoint_response_schema(checkpoints: list[dict[str, Any]], *, require_scope: bool = False) -> dict[str, Any]:
     """批量结果的同一契约供支持 schema 的服务与 prompt 文本降级使用。"""
     ids = [row.get("point_id") if isinstance(row, dict) else None for row in checkpoints]
     if any(not isinstance(point_id, str) or not point_id.strip() for point_id in ids):
@@ -70,6 +70,14 @@ def _checkpoint_response_schema(checkpoints: list[dict[str, Any]]) -> dict[str, 
             "items": variants[0] if len(variants) == 1 else {"anyOf": variants},
         },
     }
+    if require_scope:
+        properties["observation_scope"] = {
+            "type": "object", "properties": {
+                "matched": {"type": "boolean"},
+                "observed_channel": {"type": "string", "enum": ["app", "sms", "external", "unknown"]},
+                "evidence": {"type": "string"},
+            }, "required": ["matched", "observed_channel", "evidence"], "additionalProperties": False,
+        }
     return {
         "title": "checkpoint_assert_result", "type": "object", "properties": properties,
         "required": list(properties), "additionalProperties": False,
@@ -150,6 +158,7 @@ def vision_assert_checkpoints(
     checkpoints: list[dict[str, Any]] | None = None,
     text_observations: dict[str, Any] | None = None,
     run_context: Any = None,
+    require_scope: bool = False,
 ) -> AssertResult:
     """批量校验点；优先 job agent-vision-assert。"""
     from mino_nexus.ai.job_slots import assemble_assert_vision_slots
@@ -159,7 +168,7 @@ def vision_assert_checkpoints(
     response_schema = None
     if checkpoints:
         try:
-            response_schema = _checkpoint_response_schema(checkpoints)
+            response_schema = _checkpoint_response_schema(checkpoints, require_scope=require_scope)
         except ValueError as exc:
             return AssertResult(
                 passed=False, confidence=0.0, ai_reasoning=str(exc),
@@ -254,6 +263,15 @@ def vision_assert_checkpoints(
             parse_warnings=["assert response must be an object"], error_kind="assert_output_invalid",
         )
     result = _parse_assert_result(raw)
+    if require_scope:
+        from mino_nexus.loop.check_scope import bind_scope, scope_error
+        scope = raw.get("observation_scope")
+        error = scope_error(scope)
+        if error:
+            return AssertResult(passed=False, ai_reasoning=str((scope or {}).get("evidence") or "当前页面或观察通道尚未验证")
+                if isinstance(scope, dict) else "当前页面或观察通道尚未验证", error_kind=error,
+                raw_llm={"observation_scope": scope})
+        result.observation_scope = bind_scope(scope, image_base64)
     if result.parse_warnings:
         result.passed = False
         result.error_kind = "assert_output_invalid"
@@ -392,13 +410,17 @@ def run_vision_assert_if_enabled(
     provider_id: str = "",
     run_context: Any = None,
 ) -> Optional[AssertResult]:
-    if not vision_assert_v1_enabled():
+    if not assertion_phase_active():
         return None
     if getattr(cursor, "vision_assert_done", False):
         return None
     cps = checkpoints_from_milestones(cursor)
     structured = bool(cps) and all(isinstance(c, dict) and (c.get("element") or c.get("rules")) for c in cps)
     ctx_for_job = context_block
+    require_scope = getattr(cursor, "resolved_case", None) is not None
+    if require_scope:
+        from mino_nexus.loop.check_scope import scope_context
+        ctx_for_job += "\n" + json.dumps({"assertion_scope": scope_context(cursor, run_context)}, ensure_ascii=False)
     img = ""
     if callable(getattr(shot, "has_image", None)) and shot.has_image():
         img = str(getattr(shot, "image_base64", "") or "")
@@ -428,6 +450,7 @@ def run_vision_assert_if_enabled(
         provider_id=provider_id or None,
         checkpoints=cps,
         run_context=run_context,
+        require_scope=require_scope,
     )
     setattr(cursor, "vision_assert_done", True)
     if writer:
@@ -442,6 +465,7 @@ def run_vision_assert_if_enabled(
                 "passed": bool(result.passed),
                 "status": "blocked" if result.error_kind else ("pass" if result.passed else "fail"),
                 "error_kind": result.error_kind,
+                "observation_scope": getattr(result, "observation_scope", {}),
                 "confidence": float(result.confidence or 0),
                 "checkpoints": len(cps),
                 "evidence": str(result.evidence or "")[:300],

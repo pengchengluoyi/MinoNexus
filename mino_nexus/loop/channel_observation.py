@@ -228,12 +228,13 @@ def capture_decision_frame(proxy: Any, ctx: Any, *, hierarchy: bool = True) -> t
         focus = getattr(snap, "web_focus", None)
         if isinstance(focus, dict) and focus:
             setattr(ctx, "web_focus", dict(focus))
+    setattr(ctx, "viewport_wh", (0, 0))
     shot = None
     try:
         shot = proxy.observe("screenshot", force_fresh=True)
     except Exception:
         shot = None
-    if shot is not None and int(getattr(shot, "width", 0) or 0) > 0:
+    if shot is not None and int(getattr(shot, "width", 0) or 0) > 0 and int(getattr(shot, "height", 0) or 0) > 0:
         setattr(ctx, "viewport_wh", (int(shot.width), int(shot.height)))
     thumb = ""
     if shot is not None and getattr(shot, "has_image", lambda: False)():

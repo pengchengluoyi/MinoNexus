@@ -61,7 +61,9 @@ def capabilities(reported: list[str], os_name: str, *, platform: str = "desktop"
             ]
         out.append(Capability(
             id=cap_id, kind="generic", display_name=label, description=description,
-            platforms=[platform], caller="case", phases=["prep", "do"],
+            platforms=[platform],
+            caller="system" if cap_id == "get_foreground_app" else "program" if cap_id == "launch_app" else "case",
+            phases=["prep", "do", "check", "cleanup"] if cap_id == "get_foreground_app" else ["prep", "do"],
             visible_to=list(current.visible_to) if current is not None else ["case", "system"],
             implementations=[Implementation(id="desktop.cua", executor="desktop", display_name="Cua Desktop")],
             params=schema_to_param_rows(parameters),

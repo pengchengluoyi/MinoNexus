@@ -1,5 +1,4 @@
 id: app.explore
-version: 2
 title: 探索应用
 description: 在一台设备上探索一个应用并采集页面。用户说探索、逛一下这个应用时用。
 route: POST /case-runner/explore

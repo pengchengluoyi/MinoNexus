@@ -1,5 +1,4 @@
 id: doc-keeper
-version: 1
 label: 同步外部文档
 summary: 把人确认过的内容同步到 Wiki。
 category: sync

@@ -403,6 +403,10 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
     method = method.upper()
     props = (spec.get("params_schema") or {}).get("properties") or {}
     args = dict(args or {})
+    if spec.get('id') in {'cli.query', 'cli.execute'} and not args.get('node_id'):
+        origin = context.get('assistant_origin') or {}
+        if origin.get('node_id'):
+            args['node_id'] = origin['node_id']
     if spec.get("id") in {"scout.list", "scout.update", "scout.update_status", "scout.update_cancel"}:
         if set(args) - set(props):
             return ToolOutcome(ok=False, status=400, summary="Scout 工具含不支持的参数；更新须指定固定 release_tag/build_id，仅使用节点配置的发布源，不接受任意下载地址。", tool_id=str(spec["id"]))
@@ -416,7 +420,8 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         args, ask, options, notes = resolve_args(spec, args, user_id=user_id)
     except (ValueError, KeyError) as exc:
         return ToolOutcome(ok=False, summary=str(exc) if isinstance(exc, ValueError) else "目标不存在或已经变化，请重新选择。", tool_id=str(spec.get("id") or ""), args=args)
-    if isinstance(group, dict):
+    # CLI 属于本人节点的外部服务，不引入不相关的 Mino 项目选择；群启用/写权限已在上方检查。
+    if isinstance(group, dict) and spec.get('id') not in {'cli.query', 'cli.execute'}:
         pid = args.get("project_id")
         if args.get("app_id"):
             from mino_nexus.services.project_store import require_app
@@ -535,6 +540,8 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
     for name in names:
         url = url.replace("{" + name + "}", str(args.get(name)))
     rest = {k: v for k, v in args.items() if k not in names and k not in ("project_id", "module", "modules", "ordinal", "scope", "scope_revision", "all_cases", "intent") and v not in (None, "")}
+    if spec.get('id') in {'cli.query', 'cli.execute'}:
+        rest = {key: value for key, value in rest.items() if key in props}
     if spec.get("id") == "collab.scope_update":
         rest = {k: v for k, v in args.items() if k in props and k not in names}
     if spec.get("id") == "case.list":
@@ -561,7 +568,14 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         if not receipt_token:
             previous = receipts.get(receipt_key) or {}
             if previous.get("state") == "done":
-                return ToolOutcome(ok=True, summary="已处理该写操作，返回原任务标识", data=previous.get("data") or {}, tool_id=str(spec.get("id") or ""))
+                saved = previous.get('data') or {}
+                summary = '已处理该写操作，返回原任务标识'
+                if spec.get('id') == 'cli.execute':
+                    if saved.get('dry_run'):
+                        summary = '参数已经预览，尚未提交'
+                    elif saved.get('id'):
+                        summary = '已处理该写操作，原业务标识：' + str(saved['id'])
+                return ToolOutcome(ok=True, summary=summary, data=saved, tool_id=str(spec.get("id") or ""))
             return ToolOutcome(ok=False, status=503, summary="该操作正在处理或结果未知，请先查询任务状态；不会重复创建", tool_id=str(spec.get("id") or ""), args=args)
         if context.get("assistant_origin") and context.get("assistant_generation"):
             from mino_nexus.services.assistant_conversation import require_generation
@@ -583,6 +597,30 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         payload = response.json()
     except Exception:
         payload = {"detail": response.text[:500]}
+    if spec.get('id') in {'cli.query', 'cli.execute'} and isinstance(payload, dict):
+        cli = payload.get('data')
+        if (spec['id'] == 'cli.query' and args.get('plugin') == 'meego'
+                and isinstance(cli, dict) and cli.get('ok') is True
+                and (cli.get('data') in ([], {})
+                     or (args.get('command') == ['workitem', 'meta-templates']
+                         and isinstance(cli.get('data'), dict) and cli['data'].get('templates') == []))):
+            command = args.get('command') or []
+            if command in (['project', 'list'], ['project', 'get']):
+                question = ('Meego 空间列表没有返回结果。请提供目标空间的链接或别名，我会继续查询该空间。' if command[-1] == 'list'
+                            else 'Meego 没有找到这个空间。请核对空间链接或别名，也可检查 Scout 中 Meego 用户身份对该空间的访问权限。')
+                return ToolOutcome(ok=False, status=200, ask=question, summary=question,
+                    args={**args, 'command': ['project', 'get'], 'options': {}},
+                    field='options.simple-names', tool_id=spec['id'])
+            if command in (['workitem', 'meta-types'], ['workitem', 'meta-templates']):
+                resource = '工作项类型' if command[-1] == 'meta-types' else '创建模板'
+                summary = f'Meego 没有返回当前空间可用的{resource}，尚未创建 Bug。请核对目标空间、插件可访问范围以及空间中的{resource}配置。'
+                return ToolOutcome(ok=False, status=422, summary=summary, args=args, tool_id=spec['id'])
+        if isinstance(cli, dict) and cli.get('needs_input') and re.fullmatch(r'options\.[a-z][a-z0-9-]{0,70}', str(cli.get('field') or '')):
+            if receipt_key:
+                receipts.finish(receipt_key, receipt_token, 'rejected')
+            question = str(cli.get('summary') or '请补充本次操作的信息。')
+            return ToolOutcome(ok=False, status=200, ask=question, summary=question,
+                               args=args, field=cli['field'], tool_id=str(spec['id']))
     picked = _pick(payload, [str(x) for x in (spec.get("result_pick") or [])])
     ok = 200 <= response.status_code < 300 and not (isinstance(payload, dict) and (payload.get("ok") is False or payload.get("code", 200) != 200))
     if ok and spec.get("id") == "case.run" and isinstance(payload.get("data"), dict):
@@ -624,6 +662,8 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         if not any(k in receipt_data for k in ("task_id", "run_id", "id")) and isinstance(payload, dict) and isinstance(payload.get("data"), dict):
             receipt_data = payload["data"]
         identifiers = {k: receipt_data[k] for k in ("task_id", "run_id", "id", "status") if isinstance(receipt_data.get(k), (str, int))}
+        if spec.get('id') == 'cli.execute' and ok:
+            identifiers['dry_run'] = bool(receipt_data.get('dry_run'))
         if spec.get("id") == "collab.scope_update":
             identifiers["topic_id"] = receipt_data.get("topic_id", args.get("topic_id", ""))
         if spec.get("id", "").startswith(("workbench.update", "nexus.update")):

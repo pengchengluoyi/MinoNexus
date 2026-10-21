@@ -112,9 +112,6 @@ def requirements(case):
 
 def _static(case):
     result = requirements(case)
-    if str(case.get("platform") or "").lower() == "web" and not readiness(case):
-        from mino_nexus.services.v5_publication import preview
-        result.extend(_item(case, row, "publication") for row in preview(case).get("errors") or [])
     return list({item["id"]: item for item in result}.values())
 
 
@@ -272,7 +269,7 @@ def review(project_id, case_id, expected_revision, expected_job_id, item_id, rea
 
 def _context_checks(case, context):
     from mino_nexus.services.access_scope import require_owned_device
-    from mino_nexus.services.execution_binding_runtime import binding_target_config, strict_requirements, resolve_live
+    from mino_nexus.services.execution_binding_runtime import binding_target_config, resolve_live
     from mino_nexus.services.execution_requirements import ordinary_requirements
     from mino_nexus.services.node_registry import get_registry
     app_id, sn = context.get("app_id", ""), context.get("sn", "")
@@ -281,20 +278,12 @@ def _context_checks(case, context):
     except ValueError as exc:
         raise ValueError("review_target_missing") from exc
     require_owned_device(sn)
-    mode = context.get("execution_mode") or ("v5" if case.get("v5_publication") else "legacy")
-    if mode not in {"legacy", "v5"}:
-        raise ValueError("execution_mode_unsupported")
     try:
-        if mode == "v5":
-            if not case.get("v5_publication") or case.get("v5_has_unpublished_changes"):
-                return [_item(case, {"reason_code": "binding_requires_publication"}, "execution_binding", context)]
-            requirements = strict_requirements(case, app_id)
-        else:
-            snapshot = get_registry().execution_snapshot(sn)
-            if not snapshot:
-                return [_item(case, {"reason_code": "binding_target_unavailable", "responsibility": "runtime"}, "execution_binding", context)]
-            requirements = ordinary_requirements(case, app_id, platform=snapshot["device"]["platform"],
-                action_scheme=context.get("action_scheme") or "dom_preferred", provider_id=context.get("provider_id") or "")
+        snapshot = get_registry().execution_snapshot(sn)
+        if not snapshot:
+            return [_item(case, {"reason_code": "binding_target_unavailable", "responsibility": "runtime"}, "execution_binding", context)]
+        requirements = ordinary_requirements(case, app_id, platform=snapshot["device"]["platform"],
+            action_scheme=context.get("action_scheme") or "dom_preferred", provider_id=context.get("provider_id") or "")
         result = resolve_live(requirements, context)
         # The shared live resolver includes actual resource/model/OTP/environment
         # dependency facts. It never leases resources or invokes an executor.
@@ -327,9 +316,9 @@ def recheck(project_id, case_id, expected_revision, expected_job_id, reason, *, 
                 item = record.evidence["diagnostic"]
                 if not any(r["id"] == item["id"] for r in previous):
                     previous.append(deepcopy(item))
-    context = {k: str(v) for k, v in (context or {}).items() if k in {"app_id", "sn", "env_profile", "env_surface", "execution_mode", "action_scheme", "provider_id"}}
+    context = {k: str(v) for k, v in (context or {}).items() if k in {"app_id", "sn", "env_profile", "env_surface", "action_scheme", "provider_id"}}
     if context:
-        context = {"env_profile": "", "env_surface": "", "execution_mode": "", "action_scheme": "dom_preferred", "provider_id": "", **context}
+        context = {"env_profile": "", "env_surface": "", "action_scheme": "dom_preferred", "provider_id": "", **context}
     contextual = _context_checks(case, context) if context else []
     current = _static(case) + contextual
     with session_scope() as db:

@@ -143,7 +143,7 @@ def migration_candidate(document, *, context='plan'):
     revision = hashlib.sha256(json.dumps(original, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
     return {'schema': 'business-event-migration.v1', 'source_revision': revision,
             'status': 'blocked' if blockers else 'candidate' if changes else 'unchanged',
-            'requires_recompile': bool(changes), 'requires_publication_review': bool(changes),
+            'requires_recompile': bool(changes), 'requires_publication_review': False,
             'changes': changes, 'blockers': blockers, 'candidate': candidate}
 
 

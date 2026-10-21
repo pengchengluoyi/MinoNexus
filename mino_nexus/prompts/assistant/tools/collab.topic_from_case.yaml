@@ -1,5 +1,4 @@
 id: collab.topic_from_case
-version: 2
 title: 打开用例协作议题
 description: 为某条用例打开或复用协作议题，便于讨论与安排执行。用户要在群里跟进某用例时用。
 route: POST /project/{project_id}/collab/topics/from-case

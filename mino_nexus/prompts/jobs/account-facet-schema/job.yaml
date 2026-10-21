@@ -1,5 +1,4 @@
 id: account-facet-schema
-version: 1
 label: 账号池扩展字段
 summary: 根据用例前置建议 Facet 扩展
 engine: json_chat
