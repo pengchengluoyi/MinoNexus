@@ -38,6 +38,10 @@ jobs:
         # 只读 AST 检查：分层违规或包级环 → 非 0 退出。规则见 docs/架构/V8/代码分层方案-20261022.md §2
         run: python tools/arch_report.py --check
       - name: Check deferred imports
+        # 该检查会实际导入应用模块，必须先安装 pyproject.toml 声明的运行依赖。
+        # 延迟导入检查由下一步执行，依赖安装不启动业务服务。
+        run: python -m pip install .
+      - name: Resolve deferred imports
         # 函数体内的 import 编译期看不见，第一次走到那行才炸（2026-10-22 的 collab 500）。
         # 逐条解析 4000+ 条函数内 import，名字不存在 → 非 0 退出。
         run: python tools/check_lazy_imports.py
