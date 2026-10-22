@@ -61,7 +61,7 @@ def refresh_web_focus(ctx: Any, proxy: Any) -> dict[str, Any]:
         raw = detail.get("web_focus")
         if isinstance(raw, dict):
             out = normalize_web_focus(raw)
-            setattr(ctx, "web_focus", out)
+            ctx.web_focus = out
     except Exception:
         pass
     return out

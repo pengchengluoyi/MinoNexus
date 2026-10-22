@@ -107,7 +107,7 @@ def _clean_id_list(raw: Any, allowed: set[str]) -> list[str]:
 
 
 def get_stack() -> dict[str, Any]:
-    from mino_nexus.ai.prompt_repo import stack_spec
+    from mino_nexus.platform.llm.repo import stack_spec
 
     spec = stack_spec()
     drivers = list(spec.get("drivers") or [])

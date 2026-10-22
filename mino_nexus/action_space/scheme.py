@@ -1,16 +1,20 @@
-"""任务策略与本轮执行方式分开；旧 dom 任务兼容 DOM 优先。"""
+"""任务策略与本轮执行方式分开；DOM 优先是唯一入口策略，看图只做兜底/证据/断言。
+
+2026-10-22 口径（V8 §10.3）：入口不再提供"看图优先"选项。历史用例里存着的
+`visual` 不再报错（否则旧数据会突然跑不了），统一归一到 `dom_preferred`；
+是否真的看这一轮的图，由 `select_observation()` 按结构可用性决定，用户不再选择。
+"""
 from __future__ import annotations
 from typing import Any
 
 DEFAULT_ACTION_SCHEME = "dom_preferred"
 
+# 仅用于读取历史数据；不再向外输出。
+LEGACY_SCHEMES = frozenset({"visual"})
+
 def normalize_action_scheme(value: Any) -> str:
     raw = str(value or "").strip().lower()
-    if raw in ("dom", "dom_preferred"):
-        return DEFAULT_ACTION_SCHEME
-    if raw == "visual":
-        return "visual"
-    if not raw:
+    if raw in ("dom", "dom_preferred", "", *LEGACY_SCHEMES):
         return DEFAULT_ACTION_SCHEME
     raise ValueError(f"未知执行策略：{raw}")
 
@@ -30,7 +34,7 @@ def _visual_input_focus_active(ctx: Any, cursor: Any) -> bool:
     """截图聚焦后的同一次输入沿用焦点；下个业务动作重新选择观察方式。"""
     if cursor is None or getattr(ctx, "focus_action_scheme", "") != "visual":
         return False
-    from mino_nexus.loop.milestones import read_state
+    from mino_nexus.runtime.cursor_state import read_state
     from mino_nexus.action_space.visual import bind_focus_ref
 
     row = next((r for r in read_state(cursor).get("milestones", [])
@@ -54,13 +58,14 @@ def select_observation(ctx: Any, *, cursor: Any = None, writer: Any = None) -> s
     pending = bool(getattr(cursor, "visual_prior", None) or getattr(cursor, "pending_visual_review", None))
     recovering = False
     if cursor is not None:
-        from mino_nexus.loop.milestones import read_state
+        from mino_nexus.runtime.cursor_state import read_state
 
         recovering = bool(getattr(cursor, "interrupt_stack_v1", None) or read_state(cursor).get("screen_obstacle"))
-    from mino_nexus.loop.login_evidence_navigation import active_evidence_navigation, restore_execution_reference
+    from mino_nexus.runtime.cursor_state import active_evidence_navigation
+    from mino_nexus.navigation.login.reference import restore_execution_reference
 
     restoring = bool(cursor is not None and restore_execution_reference(cursor, ctx))
-    from mino_nexus.loop.prep_program_plan import active_reauthentication_navigation
+    from mino_nexus.runtime.cursor_state import active_reauthentication_navigation
 
     reauthenticating = active_reauthentication_navigation(cursor)
     observing_login = active_evidence_navigation(cursor)

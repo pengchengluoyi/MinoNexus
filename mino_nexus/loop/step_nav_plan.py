@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from mino_nexus.services.nav_route import click_label_from_nav_ref
+from mino_nexus.navigation.atlas.nav_route import click_label_from_nav_ref
 
 _NAV_TARGET_RE = re.compile(
     r"(?:进入|打开|切换到|跳转至|前往|切到|点到)"
@@ -77,8 +77,8 @@ def build_step_nav_plan_hint(
     if not str(app_id or "").strip():
         return "【本步导航】缺少 app_id，无法查路线图；请按当前导航计划，用 tap_element 点击可见入口进入目标页。"
 
-    from mino_nexus.services import nav_route
-    from mino_nexus.services.nav_state_resolve import plan_route_resolved
+    from mino_nexus.navigation.atlas import nav_route
+    from mino_nexus.navigation.atlas.nav_state_resolve import plan_route_resolved
 
     fsm_doc, _ = nav_route.load_fsm_doc(
         str(app_id),

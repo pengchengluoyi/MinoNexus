@@ -51,7 +51,7 @@ def _mark_model_recovery(cursor: Any, ctx: Any) -> None:
     stuck = int(getattr(cursor, "plan_only_streak", 0) or 0) >= 1
     gate = getattr(cursor, "progress_gate", None)
     steered = bool(gate is not None and int(getattr(gate, "fuse_block_streak", 0) or 0) >= 1)
-    setattr(ctx, "allow_model_recovery", hook == "fsm_navigate" or stuck or steered)
+    ctx.allow_model_recovery = hook == "fsm_navigate" or stuck or steered
 
 
 def ensure_single_in_progress(cursor: Any, *, writer: Any = None) -> bool:
@@ -60,7 +60,8 @@ def ensure_single_in_progress(cursor: Any, *, writer: Any = None) -> bool:
     ms = _milestones_list(state)
     if not ms:
         return False
-    from mino_nexus.catalog.skill_channel import apply_channel_skip, case_menu_ids, milestone_caps_registered
+    from mino_nexus.catalog.skill_channel import apply_channel_skip, milestone_caps_registered
+    from mino_nexus.loop.case_menu import case_menu_ids
 
     ctx = getattr(cursor, "run_context", None)
     _mark_model_recovery(cursor, ctx)
@@ -121,7 +122,7 @@ def ensure_single_in_progress(cursor: Any, *, writer: Any = None) -> bool:
             and not focus.get("params")
         ):
             from mino_nexus.loop.login_account_lease import picked_account_ready_for_login
-            from mino_nexus.services.account_lease import current_lease_is_active
+            from mino_nexus.resources.accounts.lease import current_lease_is_active
 
             if picked_account_ready_for_login(ctx) and current_lease_is_active(ctx):
                 focus["lease_ready"] = True
@@ -262,7 +263,7 @@ def _sparse_blocking_sheet(ctx: Any) -> bool:
     """少按钮、有长文案、底部一条宽按钮：像还没写进里程碑的协议层。信息流按钮很多，不算。"""
     if ctx is None:
         return False
-    from mino_nexus.loop.ui_consent import _bounds, _center, _label_text, _screen_wh
+    from mino_nexus.navigation.geometry.ui_consent import _bounds, _center, _label_text, _screen_wh
 
     nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
     labeled = []
@@ -299,8 +300,8 @@ def _login_form_mismatches_focus(ctx: Any, row: dict[str, Any]) -> bool:
     if not nodes:
         return False
     from mino_nexus.contract.execution.ui import ui_channel_from_ctx, ui_channel_label
-    from mino_nexus.loop.ui_sms_request import credential_field_for_login
-    from mino_nexus.services.account_credential_text import login_kind_from_ctx
+    from mino_nexus.navigation.geometry.ui_sms_request import credential_field_for_login
+    from mino_nexus.resources.account_credential_text import login_kind_from_ctx
 
     hit = credential_field_for_login(
         nodes,
@@ -321,7 +322,7 @@ def seeded_single_focus_skips_plan(state: dict[str, Any], ctx: Any) -> bool:
         return False
     if _blocking_overlay(ctx) or _unlisted_agree_control(state, ctx):
         return False
-    from mino_nexus.services.step_requirements import condition_complete
+    from mino_nexus.resources.step_requirements import condition_complete
     if any(r.get('requirement') == 'conditional' and not condition_complete(r) for r in _milestones_list(state)):
         return False
     if state.get("screen_obstacle"):
@@ -363,7 +364,7 @@ def _unlisted_agree_control(state: dict[str, Any], ctx: Any) -> bool:
     """屏上有「同意」类按钮，但当前里程碑还没写这一步。前置收工和跳过规划都会漏掉协议弹窗。"""
     if ctx is None:
         return False
-    from mino_nexus.loop.ui_consent import _label_text
+    from mino_nexus.navigation.geometry.ui_consent import _label_text
 
     nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
     found = False
@@ -394,8 +395,8 @@ def _login_finished_but_form_open(state: dict[str, Any], ctx: Any) -> bool:
     if not nodes:
         return False
     from mino_nexus.contract.execution.ui import ui_channel_from_ctx, ui_channel_label
-    from mino_nexus.loop.ui_sms_request import credential_field_for_login
-    from mino_nexus.services.account_credential_text import login_kind_from_ctx
+    from mino_nexus.navigation.geometry.ui_sms_request import credential_field_for_login
+    from mino_nexus.resources.account_credential_text import login_kind_from_ctx
 
     return (
         credential_field_for_login(
@@ -435,7 +436,7 @@ def _current_business_review(state: dict[str, Any], ctx: Any) -> bool:
 def program_exit_allowed(state: dict[str, Any], ctx: Any) -> bool:
     """必填都终态，且屏上没有还没写进列表的障碍：程序准出，不打 exit_latch。"""
     phase = str(state.get("phase") or "").strip().lower()
-    from mino_nexus.services.step_requirements import condition_complete
+    from mino_nexus.resources.step_requirements import condition_complete
     if any(r.get('requirement') == 'conditional' and not condition_complete(r) for r in _milestones_list(state)):
         return False
     if state.get("screen_obstacle"):
@@ -462,7 +463,7 @@ def program_exit_allowed(state: dict[str, Any], ctx: Any) -> bool:
     for row in _milestones_list(state):
         if row.get("optional"):
             continue
-        from mino_nexus.services.step_requirements import condition_complete
+        from mino_nexus.resources.step_requirements import condition_complete
         if row.get('requirement') == 'conditional' and condition_complete(row):
             last = row
             continue
@@ -556,7 +557,7 @@ def focus_exec_menu_ids(cursor: Any, ctx: Any = None) -> Optional[set[str]]:
 
     transition = same_turn_review_targets(cursor) if action_scheme(ctx) == "visual" else None
     if transition:
-        from mino_nexus.catalog.skill_channel import case_menu_ids
+        from mino_nexus.loop.case_menu import case_menu_ids
 
         caps = {"wait_ms", "wait_screen_ready"} & case_menu_ids(ctx, step_scope_key(cursor)[1])
         for branch in ("if_pass", "if_fail"):
@@ -573,7 +574,8 @@ def focus_exec_menu_ids(cursor: Any, ctx: Any = None) -> Optional[set[str]]:
 
 def milestone_exec_menu_ids(cursor: Any, row: dict[str, Any], ctx: Any = None) -> set[str]:
     """执行和回看分支共用同一能力范围，不按步骤来源改变设备事件契约。"""
-    from mino_nexus.catalog.skill_channel import canonical_cap, case_menu_ids, is_program_caller
+    from mino_nexus.catalog.skill_channel import canonical_cap, is_program_caller
+    from mino_nexus.loop.case_menu import case_menu_ids
 
     menu = case_menu_ids(ctx, step_scope_key(cursor)[1]) if ctx is not None else set()
     waits = {"wait_ms", "wait_screen_ready"} & menu
@@ -600,7 +602,8 @@ def milestone_exec_menu_ids(cursor: Any, row: dict[str, Any], ctx: Any = None) -
 
 
 def _phase_device_menu(cursor: Any, ctx: Any) -> set[str]:
-    from mino_nexus.catalog.skill_channel import case_menu_ids, is_program_caller
+    from mino_nexus.loop.case_menu import case_menu_ids
+    from mino_nexus.catalog.skill_channel import is_program_caller
 
     phase = step_scope_key(cursor)[1] if cursor is not None else "do"
     menu = case_menu_ids(ctx, phase) if ctx is not None else set()

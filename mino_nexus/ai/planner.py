@@ -25,9 +25,9 @@ from mino_nexus.ai.job_slots import (
     assemble_vision_plan_slots,
     assemble_vision_exec_slots,
 )
-from mino_nexus.ai.prompt_render import JobRenderError, render
-from mino_nexus.ai.coords import lift_selector_target, prepare_xy_params_for_execute
-from mino_nexus.ai.llm_client import (
+from mino_nexus.platform.llm.render import JobRenderError, render
+from mino_nexus.contract.coords import lift_selector_target, prepare_xy_params_for_execute
+from mino_nexus.platform.llm.client import (
     call_chat_text,
     resolve_regression_provider,
 )
@@ -58,7 +58,7 @@ def _llm_image(image_base64: str, image_mime: str = "image/png") -> tuple[str, s
     if not raw:
         return "", str(image_mime or "image/png")
     try:
-        from mino_nexus.loop.observe.agent_stream import make_llm_jpeg
+        from mino_nexus.platform.llm_image import make_llm_jpeg
 
         jpeg, mime = make_llm_jpeg(raw)
         if jpeg:
@@ -69,7 +69,7 @@ def _llm_image(image_base64: str, image_mime: str = "image/png") -> tuple[str, s
 
 
 def _chat(*, job: str, provider, messages, job_meta: dict | None = None, **kwargs):
-    from mino_nexus.ai import dispatch_log as dispatch
+    from mino_nexus.platform.llm import dispatch_log as dispatch
 
     tok = dispatch.bind(role="test-engineer", job=job, skill=job,
                         prompt_version=(job_meta or {}).get("prompt_version"),
@@ -77,9 +77,11 @@ def _chat(*, job: str, provider, messages, job_meta: dict | None = None, **kwarg
                         call_parameters=(job_meta or {}).get("call"))
     try:
         try:
-            from mino_nexus.loop.observe.session_log import append_llm_request
+            from mino_nexus.records.eventlog.writer import append_llm_request
 
-            append_llm_request(job_id=job, messages=messages)
+            append_llm_request(job_id=job, messages=messages,
+                               prompt_version=(job_meta or {}).get("prompt_version"),
+                               prompt_sha=(job_meta or {}).get("prompt_sha"))
         except Exception:
             pass
         raw, meta = call_chat_text(provider=provider, messages=messages, **kwargs)
@@ -943,7 +945,7 @@ def decide_next_action(
     if provider is None:
         return AgentDecision(status="ask_human", thought=f"未启用 AI 视觉：{gate.get('reason')}",
                              parse_warnings=["provider unavailable"])
-    from mino_nexus.loop.llm_step_context import build_accounts_json, build_session_json
+    from mino_nexus.resources.session.view import build_accounts_json, build_session_json
 
     accounts_brief = str(getattr(run_context, "accounts_brief", "") or "").strip()
     session_json = build_session_json(run_context, session_block)
@@ -1043,7 +1045,7 @@ def _parse_inspect_session_raw(
 ) -> dict[str, Any]:
     from mino_nexus.navigation.geometry.nav_screen_layout import normalize_vision_layout
 
-    from mino_nexus.services.session_match import normalize_device_session
+    from mino_nexus.resources.accounts.session_match import normalize_device_session
 
     session = normalize_device_session(raw.get("session") or "")
     identity = str(raw.get("identity") or "unknown").strip().lower()
@@ -1100,7 +1102,7 @@ def inspect_session(
     run_context: Any = None,
 ) -> dict[str, Any]:
     """观察当前屏登录态。空输出/解析失败重试；耗尽后 ok=False，不当成功。"""
-    from mino_nexus.services.login_evidence import normalize_observation, observation_ref
+    from mino_nexus.navigation.login.evidence import normalize_observation, observation_ref
     observed_at = time.monotonic()
     evidence_ref = observation_ref(image_base64)
     width = int(screen_w or 0) or 1080
@@ -1122,7 +1124,7 @@ def inspect_session(
     if provider is None:
         empty["reason"] = f"未启用 AI：{gate.get('reason')}"
         return empty
-    from mino_nexus.services.login_evidence_policy import configured_session_knowledge
+    from mino_nexus.navigation.login.policy import configured_session_knowledge
     configured_knowledge = configured_session_knowledge(run_context)
     if configured_knowledge:
         knowledge_hint = str(knowledge_hint or "") + "\n" + configured_knowledge

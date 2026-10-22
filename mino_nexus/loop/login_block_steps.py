@@ -21,7 +21,7 @@ def _web_tap_send_code(
             executor="internal",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
-    from mino_nexus.services.nav_flow_block_catalog import resolve_effective_steps
+    from mino_nexus.navigation.atlas.nav_flow_block_catalog import resolve_effective_steps
     steps = resolve_effective_steps(app_id=str(getattr(ctx, 'app_id', '') or ''), block_id='fb.global.login')
     step = next((row for row in steps if row.get('id') == 'send_code'), {})
     labels = {str(x).strip().lower() for x in step.get('match', [])}
@@ -31,7 +31,7 @@ def _web_tap_send_code(
             and str(n.get('text') or n.get('content_desc') or '').strip().lower() not in exclude]
     if len(hits) != 1:
         return _result(event, status=EventStatus.BLOCKED, summary='login_send_target_not_unique', executor='internal')
-    from mino_nexus.loop.ui_consent import tap_params_for_control
+    from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
     tap = _dispatch_device(router, ctx=ctx, seq=event.seq, cap='tap_element',
         params=tap_params_for_control(hits[0], nodes), label='登录块：发送验证码')
     if _exec_ok(tap):
@@ -48,9 +48,9 @@ def send_code(
     t0: float,
 ) -> EventResult:
     from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx, ui_channel_label
-    from mino_nexus.services.otp_resolve import login_kind_from_secrets
+    from mino_nexus.resources.otp_resolve import login_kind_from_secrets
 
-    from mino_nexus.loop.ui_sms_request import (
+    from mino_nexus.navigation.geometry.ui_sms_request import (
         credential_field_filled,
         credential_field_for_login,
         find_send_code_button,

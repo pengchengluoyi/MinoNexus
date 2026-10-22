@@ -17,7 +17,7 @@ _FOREGROUND_RE = re.compile(r"(?:topResumedActivity|mResumedActivity)=\S+\s+\S+\
 
 def _trace_recovery(ctx: Any, event_type: str, payload: dict[str, Any]) -> None:
     """只落匹配事实/动作结果，不写 params、设备凭证或原始 dumpsys。"""
-    from mino_nexus.loop.observe.session_log import active_writer
+    from mino_nexus.records.eventlog.writer import active_writer
 
     writer = active_writer()
     run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
@@ -120,7 +120,7 @@ def _note_write_stop(ctx, out: RecoveryOutcome, result) -> bool:
         out.error = str(control.get("reason_code") or "run_write_stopped")
         out.execution_metadata = execution_result_metadata(result)
         out.execution_metadata.setdefault("execution_control", {}).update(stop_run=True, resource_isolated=True)
-        setattr(ctx, "recovery_write_stopped", True)
+        ctx.recovery_write_stopped = True
         _trace_recovery(ctx, "recovery/stopped", {"rule_id": out.rule_id,
             "reason_code": out.error, **out.execution_metadata})
         return True
@@ -169,7 +169,7 @@ def _enrich_evidence_from_run_context(
     nodes = getattr(ctx, "nav_hierarchy_nodes", None)
     if not isinstance(nodes, list) or not nodes:
         return
-    from mino_nexus.services.nav_capture_store import infer_screen_package
+    from mino_nexus.navigation.atlas.nav_capture_store import infer_screen_package
 
     inf = infer_screen_package(
         nodes,
@@ -178,7 +178,7 @@ def _enrich_evidence_from_run_context(
     )
     fpkg = str(inf.get("foreground_package") or inf.get("foreground_id") or "").strip()
     kind = str(inf.get("screen_kind") or "").strip()
-    from mino_nexus.services.nav_target_scope import _looks_like_url, web_page_matches_target
+    from mino_nexus.navigation.atlas.nav_target_scope import _looks_like_url, web_page_matches_target
 
     if fpkg and not _looks_like_android_pkg(fpkg) and not _looks_like_url(fpkg):
         fpkg = ""
@@ -257,7 +257,7 @@ _EVIDENCE_TTL_SEC = 1.5
 def invalidate_evidence_cache(ctx) -> None:
     """设备状态可能被动作改变：丢弃本 run 缓存的取证。"""
     try:
-        setattr(ctx, "_evidence_cache", None)
+        ctx._evidence_cache = None
     except Exception:  # noqa: BLE001
         pass
 
@@ -277,7 +277,7 @@ def collect_evidence(ctx, router, *, target_package: str = "") -> Evidence:
     ev = _collect_evidence_uncached(ctx, router, target_package=target_package)
     if not getattr(ev, "error", ""):
         try:
-            setattr(ctx, "_evidence_cache", (_t.time(), key, copy.deepcopy(ev)))
+            ctx._evidence_cache = (_t.time(), key, copy.deepcopy(ev))
         except Exception:  # noqa: BLE001
             pass
     return ev
@@ -392,7 +392,7 @@ def resolve_app_foreground_guard(
     pkg = str(target_package or getattr(ctx, "target_package", "") or "").strip()
     plat = str(getattr(ctx, "platform", "") or "")
     from mino_nexus.runtime.run_context import is_web_slot
-    from mino_nexus.services.nav_capture_store import run_guard_foreground
+    from mino_nexus.navigation.atlas.nav_capture_store import run_guard_foreground
 
     fg = run_guard_foreground(
         list(nodes or []),
@@ -401,10 +401,10 @@ def resolve_app_foreground_guard(
     )
     af = str(fg.get("app_foreground") or "").strip().lower()
     if is_web_slot(str(getattr(ctx, "sn", "") or ""), plat):
-        setattr(ctx, "app_foreground", str(fg.get("app_foreground") or ""))
+        ctx.app_foreground = str(fg.get("app_foreground") or "")
         return fg
     if af != "unknown" or router is None or not pkg:
-        setattr(ctx, "app_foreground", str(fg.get("app_foreground") or ""))
+        ctx.app_foreground = str(fg.get("app_foreground") or "")
         return fg
     ev = Evidence()
     _fill_foreground_from_get_app(ev, router, ctx, target_package=pkg, diagnostic_purpose="foreground_guard")
@@ -412,7 +412,7 @@ def resolve_app_foreground_guard(
     if probed in ("yes", "no"):
         fg = {**fg, "app_foreground": probed, "foreground_package": ev.foreground_pkg,
               "foreground_source": "get_foreground_app", "hierarchy_app_foreground": af}
-    setattr(ctx, "app_foreground", str(fg.get("app_foreground") or ""))
+    ctx.app_foreground = str(fg.get("app_foreground") or "")
     return fg
 
 
@@ -518,6 +518,7 @@ def apply_rule(
     target_package: str = "",
     agent_turn: int = 0,
 ) -> RecoveryOutcome:
+    from mino_nexus.loop.screen_capture import merge_shot_evidence
     stopped = _write_stop(ctx)
     if stopped is not None:
         return stopped
@@ -753,7 +754,7 @@ def ensure_target_app_foreground(
 
     if in_launch_grace(ctx):
         return None
-    from mino_nexus.services.nav_target_scope import _looks_like_url, web_page_matches_target
+    from mino_nexus.navigation.atlas.nav_target_scope import _looks_like_url, web_page_matches_target
 
     if web_slot and pkg and _looks_like_url(pkg):
         away = ev.app_foreground == "no" or (

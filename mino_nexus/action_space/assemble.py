@@ -21,7 +21,7 @@ def stamp_scheme_params(cap_id: str, params: dict[str, Any] | None, scheme: str)
     mode = "node" if str(scheme or "").strip().lower() == "dom" else "coordinate"
     if mode == "node":
         from mino_nexus.action_space.dom import apply_dom_point
-        from mino_nexus.ai.coords import lift_selector_target
+        from mino_nexus.contract.coords import lift_selector_target
 
         typed = out.get("text") if cid == "input_text" else None
         if cid == "input_text":
@@ -78,11 +78,12 @@ def assemble_execute_params(
     width: int = 0,
     height: int = 0,
 ) -> dict[str, Any]:
+    from mino_nexus.action_space.visual import apply_focus_input, bind_focus_ref
     out = dict(params or {})
     cid = str(cap_id or "").strip()
     if cid not in _POINT_CAPS and cid != "input_text":
         return out
-    from mino_nexus.ai.coords import prepare_xy_params_for_execute
+    from mino_nexus.contract.coords import prepare_xy_params_for_execute
     from mino_nexus.action_space.scheme import execution_scheme as action_scheme
     from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 

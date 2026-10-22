@@ -65,30 +65,42 @@ result: EventResult = router.dispatch(event, ctx, ...)
 
 ## 3. 目录约定
 
-根上只准 `app.py` / `cli.py`。新业务进 `services/`，新表进 `models/`，基础设施进 `core/`。
+根上只准 `app.py` / `cli.py`。**`services/` 已经拆完删除**（V8 第 0–9 步，2026-10-22）——
+新业务按层落位：用例与评审进 `casework/`，资源与设备进 `resources/`，
+身份 / 凭证 / 集成插件进 `platform/`，对话与协作进 `assistant/`，
+新表进 `models/`，基础设施进 `core/`。
 
 ```
 mino_nexus/
-├── app.py                FastAPI 装配（请求模型必须模块级，见 §7）
-├── cli.py                mino-nexus 入口
+├── app.py / cli.py       装配根（只允许 import api）
 │
-├── core/                 基础设施（不谈业务）
-│   database.py           engine / SessionLocal / get_db → mino.db
-│   migration.py          启动时 additive ALTER
-│   paths.py              数据目录（与 engine 分开，避免拼路径被迫 import ORM）
-│   log.py protocol.py schemas.py http_util.py client_gate.py mdns.py
-├── models/               ORM，一张表一个文件
-├── routers/              HTTP 入口，沿用上游 r* 命名 + deps.py
-├── websocket/            observers.py（UI /ws）· node.py（Scout /node）
-├── loop/                 agent_loop · case_runner · router_proxy · local_executors
-│                         hierarchy_slots（UI 层级）· nav_runtime（NavFSM 编排）· guard_gate
-├── ai/                   planner · prompt_render · job_store · llm_client · …
-├── catalog/              能力目录 loader / registry（读 catalog_entries）
-├── runtime/              run_context · menu · session_gate
-└── services/             业务（项目 / 设备 / 跑批 / 设置 / QA / 集成插件）
-                          nav_fsm* / nav_localize / nav_compiler / nav_telemetry（导航图，见 docs/NAVIGATION_ATLAS.md）
+├── core/                 0 层：database · paths · log · protocol · schemas · client_gate · mdns
+├── contract/             0 层：纯数据契约（ui_nodes · execution · case_preview …）
+├── models/               0 层：ORM，一张表一个文件
+├── records/              1 层：eventlog（原子写 / writer / 绑定）
+├── platform/             2 层：identity · settings · settings_store · node_* · 迁移与插件
+├── resources/            3 层：设备 / 账号 / 项目环境 / 资源池 / 文档库 / 设计稿 / 节点
+├── catalog/              4 层：能力目录 loader / registry（读 catalog_entries）
+├── knowledge/            5 层：政策 / 文档 / 意图面 / 检查口径
+├── runtime/              6 层：run_context · menu · session_gate · cursor_state
+├── navigation/           7 层：atlas（图谱）· geometry（几何与控件定位）· login（登录链）
+├── action_space/         8 层：scheme · assemble · 坐标与参数
+├── ai/                   8 层：planner · prompt_render · job_store · llm_client
+├── casework/             9 层：用例 / 评审 / QA / 工作区协作 / 平台迁移
+│   └── qa/               qa_cover · qa_process_assist · qa_process_jobs
+├── assistant/           10 层：对话 / 通知 / 媒体 / 网关
+│   ├── workspace/        协作工作区（collab_* · workspace_*）
+│   └── connectors/       飞书 · 禅道 · Figma · IM（plugins_store · wechat_ilink · im_hold）
+├── loop/                11 层：agent_loop · case_runner · router_proxy · local_executors
+│   └── execution/        循环内的可命名阶段（35 个模块，见 ARCHITECTURE §3.0）
+├── api/                 12 层：HTTP 与实时通道
+│   ├── r*.py             路由，沿用上游 r* 命名 + deps.py
+│   ├── ws/observers.py   UI /ws
+│   └── ws/node.py        Scout /node
+└── prompts/              数据（启动时解析，不是代码包）
 ```
 
+层号只允许向下依赖（`python3 tools/arch_report.py --check` 强制）。
 命名沿用上游：router 用 `r*`，websocket handler 用 `w*`。
 
 **业务状态进 sqlite（`mino.db`）。** 禁止再给项目 / 应用 / 设备 / 跑批 / 账号 / 设置 / 能力目录加 JSON 真源。
@@ -99,8 +111,8 @@ mino_nexus/
 |---|---|---|
 | `core/database.py` + `models/`（SQLAlchemy） | **同样有。** 库文件叫 `mino.db`，不是 `autobots.db` | 服务端数据必须在库里 |
 | `core/database.APP_DATA_DIR` | `core/paths.py` | 上游把数据目录和 engine 塞在同一模块，任何要拼路径的模块都被迫 import ORM |
-| `system_settings_service.py` | `services/settings.py` + `services/settings_store.py` | 见 §8 |
-| `services/`（80 文件大平层） | `services/` + 已拆出的 `ai` / `loop` / `catalog` / `runtime` | 那四个包比上游扁平 services 好读，不拆回去 |
+| `system_settings_service.py` | `platform/settings.py` + `platform/settings_store.py` | 见 §8 |
+| `services/`（80 文件大平层） | **已删除**，按层拆进 `platform` / `resources` / `casework` / `assistant` / `knowledge` / `navigation` / `ai` | 平层里 80 个文件互相 import，改一处要通读；拆开后依赖方向可校验 |
 | `runtime/run_context.py`（跑探测） | `runtime/run_context.py`（**重写**） | 连通性来自 Scout 上报，Nexus 不探测（§6） |
 
 ---
@@ -159,7 +171,7 @@ mino_nexus/
 
 ### 7.1 请求模型 / WebSocket 注解必须在**模块级**
 
-本仓的 `app.py` 与 `websocket/node.py` 都有 `from __future__ import annotations`，
+本仓的 `app.py` 与 `api/ws/node.py` 都有 `from __future__ import annotations`，
 于是函数注解是**字符串**，FastAPI 拿模块 globals 去 `eval` 它。定义在函数内部的
 `BaseModel` 子类或 `WebSocket` import 拿不到 → `NameError` → **整个 app 起不来**。
 
@@ -199,10 +211,10 @@ app.include_router(r)
 
 | 模块 | 角色 | 落盘 |
 |---|---|---|
-| `services/settings_store.py` | **唯一真源。** UI（`rSettings`）读写；落在 `settings` 表 | `mino.db` |
-| `services/settings.py` | **只做 env 覆盖 + 转发。自己不存任何配置。** | 无 |
+| `platform/settings_store.py` | **唯一真源。** UI（`rSettings`）读写；落在 `settings` 表 | `mino.db` |
+| `platform/settings.py` | **只做 env 覆盖 + 转发。自己不存任何配置。** | 无 |
 
-`llm_client` 与 `runtime/run_context` **只 import `mino_nexus.services.settings`** —— "key 从哪来"收在一处。
+`llm_client` 与 `runtime/run_context` **只 import `mino_nexus.platform.settings`** —— "key 从哪来"收在一处。
 
 ### 铁律
 

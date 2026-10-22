@@ -11,7 +11,7 @@ from mino_nexus.loop.vision_flags import assertion_phase_active
 
 
 def _render_assert_job(slots: dict[str, str]) -> tuple[Any, Any]:
-    from mino_nexus.ai.prompt_render import JobRenderError, render
+    from mino_nexus.platform.llm.render import JobRenderError, render
 
     for jid in ("agent-vision-assert", "assert-vision"):
         try:
@@ -29,7 +29,7 @@ def _checkpoint_response_schema(checkpoints: list[dict[str, Any]], *, require_sc
     if len(set(ids)) != len(ids):
         raise ValueError("请求中的校验点 ID 重复")
     variants: list[dict[str, Any]] = []
-    from mino_nexus.services.checkpoint_text_policy import text_policy
+    from mino_nexus.knowledge.checkpoint_text_policy import text_policy
     for group in ("plain", "input", "text"):
         def row_group(row):
             return "text" if text_policy(row) else "input" if row.get("checkpoint_kind") == "input_value" else "plain"
@@ -87,7 +87,7 @@ def _checkpoint_response_schema(checkpoints: list[dict[str, Any]], *, require_sc
 
 def _checkpoint_output_contract(schema: dict[str, Any], checkpoints: list[dict[str, Any]]) -> str:
     """SDK 不支持 response_format 时，逐 ID 声明必填字段，避免套用普通项模板。"""
-    from mino_nexus.services.checkpoint_text_policy import text_policy
+    from mino_nexus.knowledge.checkpoint_text_policy import text_policy
 
     items = schema["properties"]["checkpoint_results"]["items"]
     variants = items.get("anyOf", [items])
@@ -163,7 +163,7 @@ def vision_assert_checkpoints(
     """批量校验点；优先 job agent-vision-assert。"""
     from mino_nexus.ai.job_slots import assemble_assert_vision_slots
     from mino_nexus.ai.planner import _llm_image, _parse_assert_result, _chat, _clamp_to_case_deadline, _case_model_deadline
-    from mino_nexus.ai.llm_client import resolve_regression_provider
+    from mino_nexus.platform.llm.client import resolve_regression_provider
 
     response_schema = None
     if checkpoints:
@@ -200,7 +200,7 @@ def vision_assert_checkpoints(
         slots["checkpoint_response_schema"] = _checkpoint_output_contract(response_schema, checkpoints)
     try:
         if text_observations is not None:
-            from mino_nexus.ai.prompt_render import render
+            from mino_nexus.platform.llm.render import render
             shared_texts = {fact["ref"]: fact for observation in text_observations.values()
                             for fact in observation.get("texts", [])}
             payload = {"texts": list(shared_texts.values()), "checkpoints": {
@@ -302,7 +302,7 @@ def vision_assert_checkpoints(
                     or not row["evidence"].strip()):
                 errors.append(f"校验点结果或证据无效: {point_id}")
                 continue
-            from mino_nexus.services.checkpoint_text_policy import text_policy
+            from mino_nexus.knowledge.checkpoint_text_policy import text_policy
             if text_policy(requested[point_id]):
                 from mino_nexus.loop.text_assert import validate_text_evidence
                 problem = validate_text_evidence(
@@ -381,7 +381,7 @@ def checkpoints_from_milestones(cursor: Any) -> list[dict[str, Any]]:
         item["verification_policy"] = str(rules.get("verification_policy") or (
             "visible_content" if item["checkpoint_kind"] == "input_value" else "exact_value"
         ))
-        from mino_nexus.services.checkpoint_text_policy import text_policy
+        from mino_nexus.knowledge.checkpoint_text_policy import text_policy
         if text_policy({**item, "rules": rules}) == "intent":
             item["verification_policy"] = "text_intent"
         if element:

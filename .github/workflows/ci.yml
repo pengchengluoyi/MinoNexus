@@ -34,6 +34,25 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+      - name: Check layering rules
+        # 只读 AST 检查：分层违规或包级环 → 非 0 退出。规则见 docs/架构/V8/代码分层方案-20261022.md §2
+        run: python tools/arch_report.py --check
+      - name: Check deferred imports
+        # 函数体内的 import 编译期看不见，第一次走到那行才炸（2026-10-22 的 collab 500）。
+        # 逐条解析 4000+ 条函数内 import，名字不存在 → 非 0 退出。
+        run: python tools/check_lazy_imports.py
+      - name: Check undefined globals
+        # 拆文件时漏掉 import：模块照常导入，第一条用例一跑就 NameError
+        # （2026-10-22 的 line_text / llm_session_block）。
+        run: python tools/check_globals.py
+      - name: Check call signatures
+        # 抽函数时加了形参、调用点照抄，但那个变量在调用处还没定义
+        # （2026-10-22 的 cap_id → UnboundLocalError）。
+        run: python tools/check_calls.py
+      - name: Check fall-through returns
+        # 声明了返回类型却会掉出函数末尾，调用方拿到 None 再取属性就 AttributeError
+        # （2026-10-22 的 apply_turn_prior → `_prior.leave`）。
+        run: python tools/check_returns.py
       - name: Build complete wheel
         run: |
           python scripts/prepare_web.py --dist _workbench/dist

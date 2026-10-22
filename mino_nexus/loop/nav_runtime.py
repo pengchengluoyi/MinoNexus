@@ -29,9 +29,9 @@ from mino_nexus.navigation.geometry.hierarchy_slots import (
     hierarchy_is_weak,
     observe_hierarchy_enabled,
 )
-from mino_nexus.services import nav_compiler, nav_localize, nav_telemetry
-from mino_nexus.services import nav_fsm as F
-from mino_nexus.services import nav_fsm_store as store
+from mino_nexus.navigation.atlas import nav_compiler, nav_localize, nav_telemetry
+from mino_nexus.navigation.atlas import nav_fsm as F
+from mino_nexus.navigation.atlas import nav_fsm_store as store
 
 TAG = "NavRuntime"
 
@@ -109,7 +109,7 @@ class NavRuntime:
         if run_kind == "explore":
             fsm, reason = None, "explore_capture_only"
         else:
-            from mino_nexus.services.nav_route import load_fsm_doc
+            from mino_nexus.navigation.atlas.nav_route import load_fsm_doc
 
             app_ver = str(getattr(ctx, "app_version", "") or "").strip()
             fsm, nav_src = load_fsm_doc(
@@ -133,7 +133,7 @@ class NavRuntime:
             elif fsm and nav_src:
                 SLog.d(TAG, f"NavFSM app_id={app_id} source={nav_src}")
         if fsm:
-            from mino_nexus.services.application_understanding import apply_reviewed
+            from mino_nexus.casework.application_understanding import apply_reviewed
             fsm = apply_reviewed(fsm, platform=str(getattr(ctx, "platform", "") or ""),
                                  build=str(getattr(ctx, "app_version", "") or ""))
         inst = cls(
@@ -265,7 +265,7 @@ class NavRuntime:
             cur_wf = wireframe_from_hierarchy(nodes)
         vlm_h = getattr(self, "_pending_vlm_hierarchy", None)
         if isinstance(vlm_h, dict) and vlm_h.get("nodes"):
-            from mino_nexus.services.nav_vlm_hierarchy import (
+            from mino_nexus.navigation.atlas.nav_vlm_hierarchy import (
                 merge_vlm_into_nodes,
                 vlm_landmark_signals_for_states,
             )
@@ -306,7 +306,7 @@ class NavRuntime:
         # Paired localization uses the same observation; only reviewed page features differ.
         if writer and nodes and self._app_version and any(state.get("reviewed_features") for state in self.fsm.get("states") or []):
             try:
-                from mino_nexus.services.page_recognition_comparison import record_pair
+                from mino_nexus.casework.page_recognition_comparison import record_pair
                 record_pair(writer, states=self.fsm.get("states") or [], reviewed=self.localized,
                     nodes=nodes, session_block=session_block, last_edge_to=self._last_edge_to,
                     last_edge_passed=self._last_edge_passed, state_wireframes=state_wfs,
@@ -384,7 +384,7 @@ class NavRuntime:
         """agent-decide / assert-vision 产出屏面布局后写入同 turn 采集。"""
         if not self.session_id or not layout_vision:
             return
-        from mino_nexus.services import nav_capture_store as cap_store
+        from mino_nexus.navigation.atlas import nav_capture_store as cap_store
 
         try:
             cap_store.patch_turn_layout(
@@ -400,7 +400,7 @@ class NavRuntime:
         """agent-decide v10：VLM hierarchy 写入 capture turn meta。"""
         if not self.session_id or not vlm_hierarchy:
             return
-        from mino_nexus.services import nav_capture_store as cap_store
+        from mino_nexus.navigation.atlas import nav_capture_store as cap_store
 
         try:
             cap_store.patch_turn_vlm_hierarchy(
@@ -494,13 +494,13 @@ class NavRuntime:
         """v2.5 被动采集：每 turn 落盘，不依赖 walkthrough 批次。"""
         if not self.session_id or not snap.ok or not snap.nodes:
             return
-        from mino_nexus.services import nav_capture_store as cap_store
+        from mino_nexus.navigation.atlas import nav_capture_store as cap_store
 
         image_b64 = ""
         if screenshot is not None and hasattr(screenshot, "has_image") and screenshot.has_image():
             image_b64 = str(getattr(screenshot, "image_base64", "") or "")
         try:
-            from mino_nexus.services.nav_target_scope import resolve_app_target_scope, scope_from_values
+            from mino_nexus.navigation.atlas.nav_target_scope import resolve_app_target_scope, scope_from_values
 
             run_target = str(self.target_package or "").strip()
             scope = (
@@ -672,7 +672,7 @@ class NavRuntime:
             return
         if str(status or "").lower() != "pass":
             return
-        from mino_nexus.services import nav_capture_store as cap_store
+        from mino_nexus.navigation.atlas import nav_capture_store as cap_store
 
         try:
             cap_store.patch_turn_action(

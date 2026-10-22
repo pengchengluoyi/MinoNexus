@@ -72,11 +72,11 @@ class ResolvedCase:
 
 
 def resolve_case(case, ctx, *, expected_build, started_at, max_steps):
-    from mino_nexus.services.case_semantic_integrity import operation_diagnostics, precondition_diagnostics
+    from mino_nexus.casework.case_semantic_integrity import operation_diagnostics, precondition_diagnostics
     issues = operation_diagnostics(case) + precondition_diagnostics(case)
     if issues:
         raise ContractError(issues[0]['reason'])
-    from mino_nexus.services.execution_binding import validate_binding
+    from mino_nexus.contract.binding import validate_binding
     from mino_nexus.loop.step_pointer import compute_case_wall_budget_sec
     from mino_nexus.catalog.registry import get_capability
     if str(getattr(ctx, 'platform', '') or '') != 'android':
@@ -130,8 +130,8 @@ def resolve_case(case, ctx, *, expected_build, started_at, max_steps):
 
 
 def persist_contract(resolved, writer):
-    from mino_nexus.services.session_atomic import append_batch
-    from mino_nexus.loop.observe.session_log import SessionPersistenceError
+    from mino_nexus.records.eventlog.atomic import append_batch
+    from mino_nexus.records.eventlog.writer import SessionPersistenceError
     writer.require_persisted()
     try:
         append_batch(writer.session_id, [], meta_patch={
@@ -147,19 +147,19 @@ def preparation_gate(ctx):
     resolved = getattr(ctx, 'resolved_case', None)
     if resolved is None:
         return
-    from mino_nexus.services.resource_preflight import claim_requires_clear_cache
+    from mino_nexus.resources.resource_preflight import claim_requires_clear_cache
     from mino_nexus.runtime.session_gate import required_session
-    from mino_nexus.services.login_evidence import can_commit
+    from mino_nexus.navigation.login.evidence import can_commit
     case = resolved.case
     scene = getattr(ctx, 'case_scene', None) or {}
-    from mino_nexus.services.case_semantic_integrity import precondition_diagnostics
+    from mino_nexus.casework.case_semantic_integrity import precondition_diagnostics
     if precondition_diagnostics({**case, 'case_scene': scene}):
         raise ContractError('precondition_coverage_missing', 'env_blocked')
     need_clear = claim_requires_clear_cache(case.get('resource_key'), scene, case.get('precondition', ''))
     cursor = getattr(ctx, '_step_cursor', None)
     if cursor is not None and getattr(cursor, 'phase', '') == 'prep':
         from mino_nexus.loop.milestones import read_state
-        from mino_nexus.services.step_requirements import condition_complete
+        from mino_nexus.resources.step_requirements import condition_complete
         rows = read_state(cursor).get('milestones') or []
         verified_login = all(any(row.get('id') == mid and row.get('status') == 'pass' for row in rows)
                              for mid in ('submit_login', 'login_state'))
@@ -179,7 +179,7 @@ def preparation_gate(ctx):
         if any(not complete(row) for row in rows if not row.get('optional')):
             raise ContractError('prepare_steps_incomplete', 'env_blocked')
     lease = getattr(ctx, 'resource_lease', None) or {}
-    from mino_nexus.loop.session_ensure import account_need_from_case
+    from mino_nexus.resources.session.ensure import account_need_from_case
     need = account_need_from_case(case, scene)
     needs_account = bool(need.get('need_account')) or required_session(scene=scene) == 'logged_in'
     if needs_account and (not lease.get('account_id') or lease.get('run_id') != resolved.run_id):
@@ -187,7 +187,25 @@ def preparation_gate(ctx):
     if need_clear and not getattr(ctx, 'prep_clear_done', False):
         raise ContractError('prepare_clear_incomplete', 'env_blocked')
     if not getattr(ctx, 'app_launch_confirmed', False):
-        raise ContractError('prepare_launch_unverified', 'env_blocked')
+        # 程序钩子跑通 prep_launch_app 与「已确认启动」等价：里程碑只有拿到启动证据才会 pass。
+        # 只看瞬态标志会让安卓前置路径在出口误判 prepare_launch_unverified。
+        cursor_launch = getattr(ctx, '_step_cursor', None)
+        launch_milestone = False
+        if cursor_launch is not None:
+            from mino_nexus.loop.milestones import read_state as _read_launch_ms
+
+            for _row in (_read_launch_ms(cursor_launch).get('milestones') or []):
+                if (
+                    isinstance(_row, dict)
+                    and str(_row.get('id') or '') == 'prep_launch_app'
+                    and str(_row.get('status') or '') == 'pass'
+                ):
+                    launch_milestone = True
+                    break
+        if launch_milestone:
+            ctx.app_launch_confirmed = True
+        else:
+            raise ContractError('prepare_launch_unverified', 'env_blocked')
     version = str(getattr(ctx, 'app_version', '') or '')
     if resolved.expected_build and version != resolved.expected_build:
         raise ContractError('app_build_mismatch' if version else 'app_build_unverified', 'env_blocked')

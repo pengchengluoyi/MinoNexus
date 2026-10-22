@@ -31,22 +31,6 @@ _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off"})
 
 
-def node_flag(node: dict[str, Any] | None, key: str) -> bool:
-    """checkable / checked / focused：协议可能给 bool 或 0/1 字符串。"""
-    if not isinstance(node, dict):
-        return False
-    val = node.get(key)
-    if isinstance(val, bool):
-        return val
-    if val is None:
-        return False
-    text = str(val).strip().lower()
-    if text in _TRUE:
-        return True
-    if text in _FALSE:
-        return False
-    return bool(val)
-
 
 def safe_int(value: Any, default: int = 0) -> int:
     """层级/VLM 坐标常夹杂空串、空格或浮点字符串，不能直接 int()。"""
@@ -70,17 +54,6 @@ def safe_int(value: Any, default: int = 0) -> int:
         except (TypeError, ValueError, OverflowError):
             return default
 
-
-def int_list(raw: Any, size: int) -> list[int]:
-    """只接受 list/tuple；字符串不当字符序列迭代。缺位补 0。"""
-    if size <= 0:
-        return []
-    if not isinstance(raw, (list, tuple)):
-        return [0] * size
-    out = [safe_int(item, 0) for item in list(raw)[:size]]
-    if len(out) < size:
-        out.extend([0] * (size - len(out)))
-    return out
 
 
 def observe_hierarchy_enabled(ctx: Any) -> bool:
@@ -455,3 +428,6 @@ def screen_contains(nodes: list[dict[str, Any]], term: str) -> bool:
     if not needle:
         return False
     return any(needle in _node_blob(n) for n in nodes or [])
+
+
+from mino_nexus.contract.ui_nodes import int_list, node_flag  # noqa: F401,E402

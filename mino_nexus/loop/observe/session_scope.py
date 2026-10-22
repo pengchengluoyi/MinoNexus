@@ -1,7 +1,7 @@
 """用例级会话作用域：并行/乱序跑批时不把登记簿或其它用例结论当本任务真源。"""
 from __future__ import annotations
 
-from mino_nexus.loop.login_transition import update_auth_state
+from mino_nexus.navigation.login.transition import update_auth_state
 
 from typing import Any
 
@@ -15,7 +15,7 @@ TAG = "SessionScope"
 def begin_case_session_scope(ctx: Any, *, case_id: str, scene: dict[str, Any] | None) -> None:
     """开跑时标记本任务须自证 session；清掉可继承的 login 流标记。"""
     cid = str(case_id or "").strip()
-    setattr(ctx, "case_session_scope_id", cid)
+    ctx.case_session_scope_id = cid
     mark_session_dirty(ctx, reason=f"case_start:{cid or '?'}")
     update_auth_state(ctx, session_fact={
         "session": "unknown",
@@ -31,11 +31,8 @@ def begin_case_session_scope(ctx: Any, *, case_id: str, scene: dict[str, Any] | 
     ctx.system_dialog_macro_done = False
     update_auth_state(ctx, login_auto_submit_attempts=0)
     ctx.otp_fetch_fail_streak = 0
-    for attr in (
-        "_login_flow_transition_emitted",
-        "login_flow_interrupt",
-        "picked_account",
-    ):
-        setattr(ctx, attr, False if attr != "picked_account" else {})
+    ctx._login_flow_transition_emitted = False
+    ctx.login_flow_interrupt = False
+    ctx.picked_account = {}
     req = required_session(scene=scene)
     SLog.i(TAG, f"scope case={cid or '?'} required_session={req} session_dirty=1")

@@ -1,7 +1,9 @@
 """登录身份取证的上下文保存与恢复；图像只在本次 cursor 内存中保留。"""
 from __future__ import annotations
 
-from mino_nexus.loop.login_transition import update_auth_state
+from mino_nexus.navigation.login.transition import update_auth_state
+from mino_nexus.navigation.login.evidence import scope as _scope
+from mino_nexus.navigation.login.reference import restore_execution_reference  # noqa: F401
 
 import hashlib
 import time
@@ -41,7 +43,7 @@ def remember_context(cursor: Any, ctx: Any, shot: Any) -> bool:
             break
     current = cursor.current() if callable(getattr(cursor, "current", None)) else None
     cursor.login_navigation_reference = {
-        "context_id": id(ctx), "scope": _evidence_scope(ctx), "image_base64": image,
+        "context_id": id(ctx), "scope": _scope(ctx), "image_base64": image,
         "image_mime": str(getattr(shot, "image_mime", "") or "image/png"),
         "image_hash": hashlib.sha256(image.encode()).hexdigest()[:20],
         "anchor": sanitize("、".join(labels))[:1000],
@@ -58,7 +60,7 @@ def navigation_title(cursor: Any, inspection: dict[str, Any], *, restore: bool) 
                 f"原步骤结果：{ref.get('expected') or '恢复原业务上下文'}。"
                 "恢复参考图是取证前真实页面，不得按预期文字想象页面。底栏切换后返回键可能退出应用；应按当前图选择原 Tab 或同一业务对象，禁止重复无效返回。"
                 "本轮只走一步导航；程序会对照原图独立核验，未恢复时继续下一步。禁止退出登录、切换账号、输入凭据或修改账号。")
-    from mino_nexus.services.login_evidence_policy import submitted_account_enabled, submission_current
+    from mino_nexus.navigation.login.bookkeeping import submitted_account_enabled, submission_current
     ctx = getattr(cursor, "run_context", None)
     if ctx is not None and submitted_account_enabled(ctx) and submission_current(ctx):
         return ("应用配置采用本次提交账号绑定，UI 身份不可观察。只导航一步到能看到登录专属个人资料或退出登录控件的页面，"
@@ -91,7 +93,7 @@ def observe_restore(cursor: Any, ctx: Any, shot: Any, *, block_id: str, writer: 
     failure = {"ok": False, "case_fail": True, "status": "blocked", "capability_id": "confirm_login_state",
                "milestone_id": "login_state", "step_id": "login_state", "block_id": block_id,
                "error_kind": "login_context_restore_unavailable", "session_logged": "flow_block"}
-    from mino_nexus.services.login_evidence import evidence_current, can_commit
+    from mino_nexus.navigation.login.evidence import evidence_current, can_commit
     if (not evidence_current(ctx, proof.get("evidence"))
             or not can_commit(ctx)
             or proof.get("context_id") != id(ctx) or ref.get("context_id") != id(ctx)
@@ -171,6 +173,7 @@ def rejected_navigation_action(cursor: Any, ctx: Any, cap: str, params: Any) -> 
 
 def observe_navigation_step(cursor: Any, ctx: Any, shot: Any, *, writer: Any = None) -> bool:
     """Page-change proof only; identity and business context are checked afterwards."""
+    from mino_nexus.loop.milestones import write_state
     from mino_nexus.loop.llm_step_context import step_scope_key
     from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
     from mino_nexus.loop.milestones import read_state
@@ -255,22 +258,3 @@ def observe_navigation_step(cursor: Any, ctx: Any, shot: Any, *, writer: Any = N
     else:
         cursor.navigation_frame_candidate = None
     return False
-
-
-def _evidence_scope(ctx):
-    from mino_nexus.services.login_evidence import scope
-    return scope(ctx)
-
-
-def restore_execution_reference(cursor, ctx):
-    """Reference image is an immutable navigation target, never current evidence."""
-    from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
-    from mino_nexus.loop.milestones import read_state
-    from mino_nexus.services.login_evidence import can_commit
-    row = in_progress_milestone(read_state(cursor)) or {}
-    ref = getattr(cursor, "login_navigation_reference", None) or {}
-    if (not str(row.get("id") or "").startswith("login_context_restore_")
-            or ref.get("context_id") != id(ctx) or ref.get("scope") != _evidence_scope(ctx)
-            or not ref.get("image_base64") or not can_commit(ctx)):
-        return {}
-    return {"image_base64": ref["image_base64"], "image_mime": ref["image_mime"]}

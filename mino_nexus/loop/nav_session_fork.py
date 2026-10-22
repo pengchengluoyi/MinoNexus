@@ -8,7 +8,7 @@ from typing import Any, Optional
 from mino_nexus.loop.step_contract import instruction_allows_login_flow
 from mino_nexus.loop.step_intent import instruction_required_intents
 from mino_nexus.loop.step_nav_plan import instruction_nav_target
-from mino_nexus.services.nav_route import click_label_from_nav_ref
+from mino_nexus.navigation.atlas.nav_route import click_label_from_nav_ref
 
 _LOGIN_DEST_EXPECT_RE = re.compile(
     r"登录页|登录界面|验证码登录|全屏.{0,8}登录|进入.{0,12}登录",
@@ -105,7 +105,7 @@ def format_guest_tab_fork_hint(fork: GuestTabLoginFork) -> str:
 def hierarchy_indicates_login_screen(nodes: list[dict[str, Any]] | None) -> bool:
     if not nodes:
         return False
-    from mino_nexus.loop.ui_sms_request import (
+    from mino_nexus.navigation.geometry.ui_sms_request import (
         find_phone_field,
         find_send_code_button,
         phone_field_filled,
@@ -117,10 +117,10 @@ def hierarchy_indicates_login_screen(nodes: list[dict[str, Any]] | None) -> bool
             return True
         if phone_field_filled(nodes):
             return True
-    from mino_nexus.loop.ui_consent import find_consent_control
+    from mino_nexus.navigation.geometry.ui_consent import find_consent_control
 
     if find_consent_control(nodes) is not None:
-        from mino_nexus.loop.ui_consent import any_focused_input
+        from mino_nexus.navigation.geometry.ui_consent import any_focused_input
 
         if any_focused_input(nodes):
             return True
@@ -191,7 +191,7 @@ def fsm_goal_conflicts_with_guest_fork(
         return True, format_guest_tab_fork_hint(fork)
     if exp and want not in exp and "登录" not in to_raw:
         # 口语目标仍是 Tab 名或个人页类
-        from mino_nexus.services.nav_route import click_label_from_nav_ref
+        from mino_nexus.navigation.atlas.nav_route import click_label_from_nav_ref
 
         oral = _fold_label(click_label_from_nav_ref(to_raw) or to_raw)
         if oral == tab:

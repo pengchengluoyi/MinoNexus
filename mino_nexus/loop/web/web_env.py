@@ -18,20 +18,12 @@ from mino_nexus.runtime.run_context import is_web_slot
 
 TAG = "WebEnv"
 
-# 框架 step_idx：与 agent 步骤 1..N 错开，且每个 case 独占一段。
-FRAME_STEP = 10_000
-# 每个 case 内 slot 0/1/9 留给 reset / launch / cleanup；agent 回合从 10 起。
-FRAME_AGENT_SLOT_BASE = 10
-
-
-def frame_step(case_seq: int, slot: int) -> int:
-    return FRAME_STEP + max(0, int(case_seq)) * 10 + int(slot)
-
-
-def agent_step_idx(case_seq: int, turn: int) -> int:
-    """Agent 第 turn 回合（1..N）对应的 Scout step_idx，与框架 slot 0/1/9 错开。"""
-    slot = FRAME_AGENT_SLOT_BASE + max(1, int(turn))
-    return frame_step(case_seq, slot)
+from mino_nexus.core.wire_step import (  # noqa: E402,F401
+    FRAME_AGENT_SLOT_BASE,
+    FRAME_STEP,
+    agent_step_idx,
+    frame_step,
+)
 
 
 def recovery_operation_step_idx() -> int:
@@ -80,7 +72,7 @@ def web_case_browser_policy(case: dict[str, Any] | None) -> WebBrowserPolicy:
     from mino_nexus.runtime.session_gate import ensure_case_scene, is_login_module_case
 
     scene = ensure_case_scene(case, scene_raw)
-    from mino_nexus.services.resource_preflight import claim_requires_clear_cache
+    from mino_nexus.resources.resource_preflight import claim_requires_clear_cache
 
     if claim_requires_clear_cache(
         rk,
@@ -99,7 +91,7 @@ def web_case_browser_policy(case: dict[str, Any] | None) -> WebBrowserPolicy:
         return "reset"
     if is_login_module_case(case, scene):
         return "reset"
-    from mino_nexus.loop.session_ensure import account_need_from_case
+    from mino_nexus.resources.session.ensure import account_need_from_case
 
     need = account_need_from_case(case, scene)
     session_hint = str(need.get("session") or "").strip().lower()
@@ -257,7 +249,7 @@ def release_devices_for_run(
     allow_unbound_cleanup: bool = True,
 ) -> None:
     """任务结束/取消：Web 关页 + 各平台通知 Scout cancel_run。"""
-    from mino_nexus.services.run_write_safety import protected
+    from mino_nexus.casework.run_write_safety import protected
     if protected(run_id):
         SLog.w(TAG, f"run={run_id} 存在未知写，保留隔离；不能用任务终态证明资源已释放")
         return

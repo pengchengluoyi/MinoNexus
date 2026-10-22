@@ -35,15 +35,15 @@ def finish_resources(ctx, *, attempt=None, storage_failed=False):
     Never release unknown writes or an outcome whose recording failed. The
     outer task owner retains its idempotent pre-admission fallback.
     """
-    from mino_nexus.services.run_write_safety import protected
+    from mino_nexus.casework.run_write_safety import protected
     run_id, sn = ctx.run_id, ctx.sn
     if storage_failed or protected(run_id, sn=sn):
         return False
-    from mino_nexus.services.account_lease import release_ctx_lease
+    from mino_nexus.resources.accounts.lease import release_ctx_lease
     release_ctx_lease(ctx)
     if attempt:
-        from mino_nexus.services.execution_resources import release
-        from mino_nexus.services.device_resource_lease import release_device_lease
+        from mino_nexus.casework.execution_resources import release
+        from mino_nexus.resources.device_resource_lease import release_device_lease
         release(run_id, sn, attempt_id=attempt['attempt_id'])
         release_device_lease(sn, ctx.target_package, run_id, attempt_id=attempt['attempt_id'])
     return True

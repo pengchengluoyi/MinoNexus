@@ -3,7 +3,8 @@ from __future__ import annotations
 
 
 from mino_nexus.action_space.scheme import normalize_action_scheme
-from mino_nexus.core.execution_user import user_thread, owned_job, require_user_id
+from mino_nexus.platform.identity import user_thread, require_user_id
+from mino_nexus.casework.job_owner import owned_job
 
 
 import threading
@@ -11,11 +12,11 @@ import time
 from datetime import datetime
 from typing import Any, Optional
 
-from mino_nexus.services import app_automation as aas
-from mino_nexus.services import project_store as ps
-from mino_nexus.services import run_store
-from mino_nexus.services import ui_devices
-from mino_nexus.ai.llm_client import resolve_regression_provider
+from mino_nexus.resources import app_automation as aas
+from mino_nexus.resources import project_store as ps
+from mino_nexus.casework import run_store
+from mino_nexus.resources import ui_devices
+from mino_nexus.platform.llm.client import resolve_regression_provider
 from mino_nexus.core.log import SLog
 from mino_nexus.loop.observe.agent_stream import emit_testing_task
 from mino_nexus.loop.observe.persist_run_finish import persist_run_finish
@@ -136,7 +137,7 @@ def run_cases(
     execution_mode = "agent"  # One current execution path; old request labels do not select an engine.
     action_scheme = normalize_action_scheme(action_scheme)
     require_user_id(plugin_user_id or None)
-    from mino_nexus.services.case_compilation import digest
+    from mino_nexus.core.stable_digest import digest
     if client_request_id and (len(client_request_id) > 160 or not all(character.isalnum() or character in "_.:-" for character in client_request_id)):
         raise ValueError("run_request_id_invalid")
     request_digest = digest({"app_id": app.get("id"), "sn": sn, "sns": sns, "coverage": coverage,
@@ -156,7 +157,7 @@ def run_cases(
                 if original is None:
                     raise ValueError("run_receipt_target_missing")
                 return run_store.to_task_json(original)
-    from mino_nexus.services.access_scope import require_owned_device
+    from mino_nexus.resources.access_scope import require_owned_device
     device_sns = _normalize_sns(sn, sns)
     for owned_sn in device_sns:
         require_owned_device(owned_sn)
@@ -188,7 +189,7 @@ def run_cases(
     requested_total = len(cases)
     skipped_cases: list[dict[str, Any]] = []
     if not instruction:
-        from mino_nexus.services.case_preflight import prepare_cases_for_execution
+        from mino_nexus.casework.case_preflight import prepare_cases_for_execution
 
         cases, preflight = prepare_cases_for_execution(str(app.get("project_id") or ""),
             [str(case["case_id"]) for case in cases])
@@ -198,7 +199,7 @@ def run_cases(
                                  report=preflight)
     mark("cases")
 
-    from mino_nexus.services.device_targets import select
+    from mino_nexus.resources.device_targets import select
     device_sns, device_targets = select(app, device_sns, surface=env_surface, profile=env_profile,
                                         headless=playwright_headless, action_scheme=action_scheme, allow_queue=False)
     platforms_by_sn = {dsn: str(device_targets[dsn]["platform"]) for dsn in device_sns}
@@ -217,7 +218,7 @@ def run_cases(
             env_doc = ps.project_env(project_id)
         except KeyError:
             env_doc = {}
-    from mino_nexus.services.project_env import resolve_run_env_profile
+    from mino_nexus.resources.project_env import resolve_run_env_profile
 
     plat_for_pkg = task_platform
     if task_platform == "desktop":
@@ -255,7 +256,7 @@ def run_cases(
             for i, c in enumerate(cases)
         ]
 
-    from mino_nexus.services.access_scope import require_owned_device
+    from mino_nexus.resources.access_scope import require_owned_device
     for owned_sn in device_sns:
         require_owned_device(owned_sn)
     provider, gate = resolve_regression_provider(str(provider_id or "").strip() or None)
@@ -384,11 +385,11 @@ def run_explore(
     from mino_nexus.loop.explore_case import build_explore_case
 
     require_user_id(plugin_user_id or None)
-    from mino_nexus.services.access_scope import require_owned_device
+    from mino_nexus.resources.access_scope import require_owned_device
     device_sns = _normalize_sns(sn, None)
     for owned_sn in device_sns:
         require_owned_device(owned_sn)
-    from mino_nexus.services.device_targets import select
+    from mino_nexus.resources.device_targets import select
     device_sns, device_targets = select(app, device_sns, surface=env_surface, profile=env_profile,
                                         headless=playwright_headless)
     platform = str(device_targets[device_sns[0]]["platform"])
@@ -415,7 +416,7 @@ def run_explore(
     playbook = aas.get_playbook(app)
     run_id = run_store.new_run_id()
     seeded = run_store.seed_case(run_id, explore_case, 0, sn=device_sns[0] if device_sns else "", coverage="once")
-    from mino_nexus.services.access_scope import require_owned_device
+    from mino_nexus.resources.access_scope import require_owned_device
     for owned_sn in device_sns:
         require_owned_device(owned_sn)
     provider, gate = resolve_regression_provider(str(provider_id or "").strip() or None)
@@ -494,7 +495,7 @@ def run_explore(
 
 
 def retry_failed(task_id: str, *, sn: str = "", execution_unit_ids=None, client_request_id="") -> dict[str, Any]:
-    from mino_nexus.services.run_retry import create, eligibility
+    from mino_nexus.casework.run_retry import create, eligibility
     if sn:
         return {"ok": False, "code": 409, "reason": "复跑必须保持原执行目标", "reason_code": "retry_target_changed"}
     try:
@@ -528,7 +529,7 @@ def _ensure_web_parallel_capacity(sn: str) -> None:
 class UiNotCoverable(Exception):
     def __init__(self, blocked: list[dict[str, Any]], *, compilation_jobs: list[dict[str, Any]] | None = None,
                  report: dict[str, Any] | None = None):
-        from mino_nexus.services.case_preflight import rejection_message
+        from mino_nexus.casework.case_preflight import rejection_message
 
         self.blocked = list(blocked or [])
         self.compilation_jobs = list(compilation_jobs or [])

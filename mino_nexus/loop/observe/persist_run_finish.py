@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mino_nexus.services import run_store
+from mino_nexus.casework import run_store
 from mino_nexus.core.log import SLog
 
 TAG = "PersistRunFinish"
@@ -16,7 +16,7 @@ def persist_run_finish(run_doc: dict[str, Any]) -> None:
     try:
         run_store.put(run_doc)
         try:
-            from mino_nexus.services.assistant_notify import on_run_finished
+            from mino_nexus.assistant.assistant_notify import on_run_finished
 
             on_run_finished(run_doc)
         except Exception as exc:

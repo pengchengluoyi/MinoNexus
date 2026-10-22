@@ -133,7 +133,7 @@ class DeviceDisplayGuard:
 
     def start(self, *, initial_timeout: float = 90.0) -> None:
         self._ready.clear()
-        from mino_nexus.core.execution_user import user_thread
+        from mino_nexus.platform.identity import user_thread
 
         self._failed.clear()
         self._thread = user_thread(

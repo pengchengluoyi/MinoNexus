@@ -33,7 +33,7 @@ def login_overlay_blocks_flow(
     nodes = list(hierarchy_nodes or [])
     if not nodes:
         return False
-    from mino_nexus.loop.ui_sms_request import (
+    from mino_nexus.navigation.geometry.ui_sms_request import (
         find_phone_field,
         find_send_code_button,
         phone_field_filled,
@@ -48,10 +48,10 @@ def login_overlay_blocks_flow(
             return True
         if phone_field_filled(nodes):
             return True
-    from mino_nexus.loop.ui_consent import find_consent_control
+    from mino_nexus.navigation.geometry.ui_consent import find_consent_control
 
     if find_consent_control(nodes) is not None:
-        from mino_nexus.loop.ui_consent import any_focused_input
+        from mino_nexus.navigation.geometry.ui_consent import any_focused_input
 
         if any_focused_input(nodes):
             return True

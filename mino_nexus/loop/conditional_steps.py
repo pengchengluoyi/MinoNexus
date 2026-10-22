@@ -1,9 +1,9 @@
 """Bounded, read-only applicability gate. No absence inference from an empty/partial tree."""
-from mino_nexus.services.step_requirements import contract, condition_complete
+from mino_nexus.resources.step_requirements import contract, condition_complete
 
 
 def classify(nodes, observation):
-    from mino_nexus.loop.ui_consent import find_consent_control
+    from mino_nexus.navigation.geometry.ui_consent import find_consent_control
     from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
     snapshot = observation.get('snapshot_id')
     if not snapshot or not nodes:
@@ -32,6 +32,7 @@ def classify(nodes, observation):
 
 
 def gate(row, state, cursor, ctx, proxy, *, turn_seq, writer=None):
+    from mino_nexus.loop.checkbox_observation import observe_checkbox
     if row.get('requirement') != 'conditional' or condition_complete(row):
         return None
     from mino_nexus.loop.milestones import write_state
@@ -70,7 +71,7 @@ def gate(row, state, cursor, ctx, proxy, *, turn_seq, writer=None):
     observation = dict(getattr(ctx, 'observation_contract', None) or {})
     resolution, reason = classify(list(getattr(ctx, 'nav_hierarchy_nodes', None) or []), observation)
     from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
-    from mino_nexus.loop.ui_consent import find_consent_control
+    from mino_nexus.navigation.geometry.ui_consent import find_consent_control
     observed_nodes = list(getattr(ctx, 'nav_hierarchy_nodes', None) or [])
     checkable_nodes = [n for n in observed_nodes if node_flag(n, 'checkable') or n.get('role') in {'checkbox', 'switch'}]
     target = find_consent_control(observed_nodes, require_unique=True)

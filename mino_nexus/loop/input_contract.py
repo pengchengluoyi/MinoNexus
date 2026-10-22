@@ -61,7 +61,7 @@ def _requires_focus_input(case: dict[str, Any]) -> bool:
             block_id = str(step.get("block_id") or "")
             if not block_id:
                 continue
-            from mino_nexus.services.nav_flow_block_catalog import resolve_effective_steps
+            from mino_nexus.navigation.atlas.nav_flow_block_catalog import resolve_effective_steps
 
             if any(
                 str(row.get("hook_cap") or row.get("device_cap") or "") == "input_text"
@@ -114,7 +114,7 @@ def focus_input_block_reason(ctx: Any) -> str:
     sn = str(getattr(ctx, "sn", "") or "")
     if not sn:
         return ""
-    from mino_nexus.services.node_registry import get_registry
+    from mino_nexus.resources.node_registry import get_registry
 
     node, why = get_registry().resolve(sn)
     if node is None:

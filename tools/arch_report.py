@@ -27,48 +27,43 @@ PKG = os.path.join(ROOT, "mino_nexus")
 
 # 目标分层（ring 越小越底层）。尚未迁移的旧包名单独标注，不参与强制校验。
 LAYER = {
+    # 0：地基。只互相依赖，不依赖任何业务概念
     "core": 0,
     "contract": 0,
     "models": 0,
-    # 环 1：能力域
+    # 1：事件与账本
     "records": 1,
-    "catalog": 1,
-    "navigation": 1,
-    "casework": 1,
-    "resources": 1,
-    "intelligence": 1,
-    "knowledge": 1,
-    "platform": 1,
-    # 环 2：执行与适配
-    "execution": 2,
-    "connectors": 2,
-    # 环 3/4
-    "assistant": 3,
-    "api": 4,
-    # 旧名（迁移期）：loop/ai 等同 execution/intelligence，单独列出以便看差值
-    "legacy:loop": 2,
-    "legacy:ai": 1,
-    "legacy:routers": 4,
-    "legacy:websocket": 4,
-    "legacy:runtime": 1,
-    "legacy:action_space": 1,
-    "legacy:semantic": 1,
-    "legacy:services": -1,  # 混合层，不参与校验
-    "legacy:prompts": -1,
-    "<root>": 5,  # 装配根（app.py / cli.py），允许 import api
+    # 2：身份、凭证、节点、集成插件
+    "platform": 2,
+    # 3：资源（设备 / 账号 / 项目 / 设计稿 / 文档库）
+    "resources": 3,
+    # 4：能力目录
+    "catalog": 4,
+    # 5：知识（政策 / 文档 / 意图面）
+    "knowledge": 5,
+    # 6：运行时（RunContext / 菜单 / 会话闸门）
+    "runtime": 6,
+    # 7：导航（图谱 / 几何 / 登录链 / 控件定位）
+    "navigation": 7,
+    # 8：动作空间与智能
+    "action_space": 8,
+    "ai": 8,
+    # 9：用例工作台
+    "casework": 9,
+    # 10：助手（对话 / 工作区协作 / 连接器）
+    "assistant": 10,
+    # 11：执行循环
+    "loop": 11,
+    # 12：HTTP 与实时通道
+    "api": 12,
+    # 13：装配根
+    "<root>": 13,
+    # 非代码目录
+    "prompts": -1,
 }
 
-LEGACY = {
-    "loop": "legacy:loop",
-    "ai": "legacy:ai",
-    "routers": "legacy:routers",
-    "websocket": "legacy:websocket",
-    "runtime": "legacy:runtime",
-    "action_space": "legacy:action_space",
-    "semantic": "legacy:semantic",
-    "services": "legacy:services",
-    "prompts": "legacy:prompts",
-}
+# 旧包名 → 新名。services/websocket/semantic/routers 已解散（2026-10-22），现在没有别名了。
+LEGACY: dict[str, str] = {}
 
 # 唯一允许 execution -> connectors 的文件
 WIRING_ALLOW = {"mino_nexus.execution.schedule.wiring", "mino_nexus.loop.case_runner"}
@@ -94,7 +89,12 @@ def imports_of(path: str) -> list[tuple[int, str]]:
     out: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("mino_nexus"):
-            out.append((node.lineno, node.module))
+            if node.module == "mino_nexus" and node.names:
+                # `from mino_nexus import models` 依赖的是子模块，不是包根
+                for alias in node.names:
+                    out.append((node.lineno, f"mino_nexus.{alias.name}"))
+            else:
+                out.append((node.lineno, node.module))
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name.startswith("mino_nexus"):
@@ -146,7 +146,10 @@ def scan() -> dict:
                     total_imports += 1
                     if node.col_offset > 0:
                         lazy_imports += 1
-                    deps.append(node.module)
+                    if node.module == "mino_nexus" and node.names:
+                        deps.extend(f"mino_nexus.{a.name}" for a in node.names)
+                    else:
+                        deps.append(node.module)
                 elif isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name.startswith("mino_nexus"):
@@ -200,7 +203,7 @@ def violations(data: dict) -> list[dict]:
             if pkg in {"core", "contract", "models"} and dst not in {"core", "contract", "models"}:
                 add("R1-base-imports-upper", mod, dep)
             # R2：records 是叶子
-            if pkg == "records" and dst not in {"core", "contract", "models"}:
+            if pkg == "records" and dst not in {"core", "contract", "models", "records"}:
                 add("R2-records-not-leaf", mod, dep)
             # R3：任何域不得 import api
             if pkg not in {"api", "legacy:routers", "legacy:websocket", "<root>"} and dst in {"api", "legacy:routers"}:
@@ -264,15 +267,25 @@ def cycles(data: dict) -> list[list[str]]:
     return result
 
 
-def package_cycles(data: dict) -> list[list[str]]:
-    """包级 SCC：跨包环才是"无法单独理解一个包"的原因。包内环单独看。"""
+def package_cycles(data: dict, *, collapse_base: bool = False) -> list[list[str]]:
+    """包级 SCC：跨包环才是"无法单独理解一个包"的原因。包内环单独看。
+
+    collapse_base=True 时把 ring 0（core/contract/models）并成一个 `ring0` 节点：
+    底座内部互相 import 是允许的（R1），不该在"包级环"里记成环。
+    """
+    def name(pkg: str) -> str:
+        if collapse_base and LAYER.get(pkg) == 0:
+            return "ring0(core+contract+models)"
+        return pkg
+
     graph: dict[str, set[str]] = collections.defaultdict(set)
     for info in data["modules"].values():
-        src = info["pkg"]
+        src = name(info["pkg"])
         for dep in info["deps"]:
             parts = dep.split(".")
             dst_raw = parts[1] if len(parts) > 1 else "<root>"
             dst = LEGACY.get(dst_raw, dst_raw)
+            dst = name(dst)
             if dst != src:
                 graph[src].add(dst)
     index: dict[str, int] = {}
@@ -342,8 +355,13 @@ def report(data: dict, top: int = 25) -> str:
     lines.append("")
 
     psccs = package_cycles(data)
-    lines.append(f"-- 包级环：{len(psccs)} 个 SCC " + "-" * 45)
+    lines.append(f"-- 包级环（原始）：{len(psccs)} 个 SCC " + "-" * 38)
     for comp in psccs:
+        lines.append(f"  [{len(comp)}] " + ", ".join(comp))
+    lines.append("")
+    rsccs = package_cycles(data, collapse_base=True)
+    lines.append(f"-- 包级环（底座合并）：{len(rsccs)} 个 SCC " + "-" * 34)
+    for comp in rsccs:
         lines.append(f"  [{len(comp)}] " + ", ".join(comp))
     lines.append("")
 
@@ -390,6 +408,7 @@ def main() -> int:
             "edges": {f"{s}->{d}": c for (s, d), c in data["edges"].items()},
             "cycles": cycles(data),
             "package_cycles": package_cycles(data),
+            "ring_cycles": package_cycles(data, collapse_base=True),
             "violations": violations(data),
             "fan_in": [{"module": m, "count": c} for m, c in fan_in(data)[: args.top]],
         }

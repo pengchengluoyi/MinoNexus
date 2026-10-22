@@ -5,7 +5,7 @@ from typing import Any
 
 from mino_nexus.catalog.exec_classes import BASE_KIND
 
-from mino_nexus.services.business_event_contract import RETIRED as RETIRED_BUSINESS_EVENTS
+from mino_nexus.contract.business_event_contract import RETIRED as RETIRED_BUSINESS_EVENTS
 
 V5_EXCLUDED_IDS = frozenset({"human_input_text", "persona_subtask", "hitl", "ai_persona", "signal_ask_human"})
 
@@ -253,23 +253,6 @@ def apply_channel_skip(row: dict[str, Any], platform: str) -> bool:
     return True
 
 
-def case_menu_ids(ctx: Any, phase: str) -> set[str]:
-    from mino_nexus.runtime.menu import available_menu_brief
-
-    if ctx is None:
-        return set()
-    extra: list[str] = []
-    if getattr(ctx, "allow_model_recovery", False):
-        pass  # Navigation is a plan policy, never a model-callable event.
-    rows = available_menu_brief(
-        ctx,
-        audience="case",
-        phase=str(phase or "do"),
-        platform=str(getattr(ctx, "platform", "") or ""),
-        extra_ids=extra,
-    )
-    return {canonical_cap(str(row.get("id") or "")) for row in rows if str(row.get("id") or "").strip()}
-
 
 def rewrite_milestone_aliases(raw: dict[str, Any]) -> dict[str, Any]:
     row = dict(raw)
@@ -296,7 +279,7 @@ def milestone_caps_registered(
         if cap in allowed:
             return True
         from mino_nexus.catalog.exec_classes import LOCAL_EXECUTOR_IDS
-        from mino_nexus.services.execution_requirements import LOCAL_EXECUTORS
+        from mino_nexus.contract.executor_sets import LOCAL_EXECUTORS
 
         # 本地 executor（vlm/internal/hitl/ai_persona）不经 Scout，目录里本来就不声明
         # implementations。用"有没有 Scout 实现"判它会把人挡住：confirm_login_state

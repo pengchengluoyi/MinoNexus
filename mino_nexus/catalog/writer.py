@@ -238,7 +238,7 @@ def _validate(kind: str, fields: dict[str, Any]) -> None:
     except ValueError as exc:
         raise CatalogWriteError(str(exc)) from exc
     from mino_nexus.catalog.skill_channel import V5_EXCLUDED_IDS
-    from mino_nexus.services.business_event_contract import RETIRED, references
+    from mino_nexus.contract.business_event_contract import RETIRED, references
     if str(fields.get('id') or '').startswith('guard.') and (kind != RECOVERY_KIND or not is_recovery_rule_payload(fields.get('payload_json') or {})):
         raise CatalogWriteError('guard_requires_policy_rule')
     if fields.get('id') in RETIRED or references(fields.get('payload_json') or {}):

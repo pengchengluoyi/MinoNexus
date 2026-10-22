@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mino_nexus.services import session_store
+from mino_nexus.records.eventlog import store as session_store
 
 
 def resolve_session_id(run_id: str, *, case_id: str = "") -> str:

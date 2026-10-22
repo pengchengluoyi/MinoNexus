@@ -9,39 +9,12 @@ port(nexus): 从上游 `server/services/shared/semantic/case_text_semantic_servi
 from __future__ import annotations
 
 import re
+
+from mino_nexus.core.case_text import parse_numbered_items_rules  # noqa: F401
 from typing import Any, Dict, List
 
 
-_NUMBERED_PATTERN = re.compile(r"(?:^|\n)\s*(\d+)[.、．)\）]\s*")
+from mino_nexus.core.case_text import _NUMBERED_PATTERN  # noqa: F401,E402
 
 
-def _strip_number_prefix(text: str) -> str:
-    return re.sub(r"^\s*\d+[.、．)\）]\s*", "", text or "").strip()
-
-
-def parse_numbered_items_rules(text: str) -> List[Dict[str, Any]]:
-    """规则解析带编号的单元格（步骤/预期列）。"""
-    raw = (text or "").strip()
-    if not raw:
-        return []
-    matches = list(_NUMBERED_PATTERN.finditer(raw))
-    if not matches:
-        return [{"num": 1, "text": raw, "parse_method": "rules"}]
-    items: List[Dict[str, Any]] = []
-    prefix = raw[: matches[0].start()].strip()
-    if prefix:
-        items.append({"num": 1, "text": prefix, "parse_method": "rules"})
-    for idx, match in enumerate(matches):
-        try:
-            num = int(match.group(1))
-        except ValueError:
-            continue
-        start = match.end()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(raw)
-        body = _strip_number_prefix(raw[start:end].strip())
-        if body:
-            items.append({"num": num, "text": body, "parse_method": "rules"})
-    if not items:
-        return [{"num": 1, "text": _strip_number_prefix(raw), "parse_method": "rules"}]
-    return items
-
+from mino_nexus.core.case_text import _strip_number_prefix  # noqa: F401,E402

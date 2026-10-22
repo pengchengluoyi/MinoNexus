@@ -1,7 +1,7 @@
 """登录链末段：OTP 已齐后程序点「登录」，避免 LLM snap 空烧步数。"""
 from __future__ import annotations
 
-from mino_nexus.loop.login_transition import update_auth_state
+from mino_nexus.navigation.login.transition import update_auth_state
 
 import re
 from typing import Any, Optional
@@ -65,7 +65,7 @@ def _sms_send_done(history: list[str], intents_done: set[str] | None) -> bool:
 def _email_login_kind(ctx: Any) -> bool:
     try:
         from mino_nexus.loop.local_executors import _otp_context
-        from mino_nexus.services.otp_resolve import login_kind_from_secrets
+        from mino_nexus.resources.otp_resolve import login_kind_from_secrets
 
         _doc, secrets, _otp = _otp_context(ctx)
         return login_kind_from_secrets(secrets) == "email"
@@ -177,7 +177,7 @@ def login_flow_do_may_finish(
 
     block = effective_session_block(ctx, "") if ctx is not None else ""
     sess = parse_session_value(block)
-    from mino_nexus.services.login_evidence import can_commit
+    from mino_nexus.navigation.login.evidence import can_commit
     if sess == "logged_in" and can_commit(ctx):
         return True, ""
     if not _final_login_submit_done(history_lines, ctx=ctx):
@@ -298,7 +298,7 @@ def try_auto_otp_fill(
 
             snap = capture(proxy, turn_id=int(turn_seq or 0))
             if snap.ok and snap.nodes:
-                setattr(ctx, "nav_hierarchy_nodes", [n for n in snap.nodes if isinstance(n, dict)])
+                ctx.nav_hierarchy_nodes = [n for n in snap.nodes if isinstance(n, dict)]
         except Exception:
             pass
         try:
@@ -433,7 +433,7 @@ def try_auto_login_submit(
             break
     if hit is None:
         return None
-    from mino_nexus.loop.ui_consent import tap_params_for_control
+    from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
 
     tap_params = tap_params_for_control(hit, nodes)
     res = _dispatch_device(

@@ -1,12 +1,13 @@
 """按任务文档逐条执行用例。任务的创建和落库在 case_runner。"""
 from __future__ import annotations
-from mino_nexus.core.execution_user import user_thread, owned_job, require_user_id
+from mino_nexus.platform.identity import user_thread, require_user_id
+from mino_nexus.casework.job_owner import owned_job
 
 
 import threading
 from typing import Any
 
-from mino_nexus.services import run_store
+from mino_nexus.casework import run_store
 from mino_nexus.core.log import SLog
 from mino_nexus.loop.observe.agent_stream import emit_testing_task
 from mino_nexus.loop.web.web_env import release_devices_for_run
@@ -24,7 +25,7 @@ def _case_trace_fields(run_id: str, case: dict[str, Any]) -> dict[str, Any]:
     """日志用真实 session_id。耗时只在有起止时间时给出，不用 0 充数。"""
     from datetime import datetime
 
-    from mino_nexus.services.session_store import get_meta, resolve_session_id
+    from mino_nexus.records.eventlog.store import get_meta, resolve_session_id
 
     cid = str(case.get("case_id") or "")
     sid = str(case.get("report_run_id") or "").strip() or run_store.report_run_id(
@@ -61,7 +62,7 @@ def _record_case_preflight_fail(
     status: str = "fail",
 ) -> None:
     """开跑前失败（租约/拒跑）也落 session，避免 Studio Session Log 404。"""
-    from mino_nexus.loop.observe.session_log import open_session
+    from mino_nexus.records.eventlog.writer import open_session
 
     cid = str(case.get("case_id") or "")
     stream_id = str(case.get("report_run_id") or "").strip() or run_store.report_run_id(
@@ -95,7 +96,7 @@ def _run_case_list(
     doc: dict[str, Any],
 ) -> None:
     from mino_nexus.loop.agent_loop import run_case
-    from mino_nexus.services.run_write_safety import protected
+    from mino_nexus.casework.run_write_safety import protected
     from mino_nexus.loop.device_run_continuity import (
         continuity_blockers,
         get_sn_state,
@@ -120,7 +121,7 @@ def _run_case_list(
             break
         cid = str(case.get("case_id") or "")
         sn = str(case.get("sn") or doc.get("sn") or "")
-        from mino_nexus.ai import dispatch_log
+        from mino_nexus.platform.llm import dispatch_log
         dispatch_log.bind(task_id=run_id, case_id=cid, case_step_index=0,
                           session_id=str(case.get("report_run_id") or run_store.report_run_id(run_id, cid, sn=sn, coverage=str(case.get("coverage") or ""))))
         run_store.patch_case(run_id, cid, target_sn=sn, status="running")
@@ -147,12 +148,12 @@ def _run_case_list(
             emit_testing_task({"event": "case_finished", "run_id": run_id, "task_id": run_id,
                 "case_id": cid, "sn": sn, "status": "blocked", "app_id": str(doc.get("app_id") or "")})
             continue
-        from mino_nexus.services import project_store as ps
-        from mino_nexus.services.case_resource_claim import (
+        from mino_nexus.resources import project_store as ps
+        from mino_nexus.resources.case_resource_claim import (
             ensure_resource_key_on_case,
             preflight_device_app_gap,
         )
-        from mino_nexus.services.resource_preflight import run_start_resource_blockers
+        from mino_nexus.resources.resource_preflight import run_start_resource_blockers
 
         app_id = str(doc.get("app_id") or "")
         project_id = ""
@@ -224,21 +225,20 @@ def _run_case_list(
             continue
         gaps = preflight_device_app_gap(rk, sn=sn, package_id=str(package or ""))
         if gaps:
-            from mino_nexus.core.log import SLog
 
             SLog.i("CaseRunner", f"resource preflight case={cid} " + "; ".join(gaps[:3]))
         platform = str(doc.get("platform") or case.get("platform") or "android")
         if isinstance(rk, dict) and rk.get("platform"):
             platform = str(rk.get("platform") or platform)
-        from mino_nexus.services.device_resource_lease import (
+        from mino_nexus.resources.device_resource_lease import (
             release_device_lease,
         )
-        from mino_nexus.services.execution_resources import admission, wait_for_admission, heartbeat, release as release_bundle
+        from mino_nexus.casework.execution_resources import admission, wait_for_admission, heartbeat, release as release_bundle
 
         device_held = False
         result = None
         try:
-            from mino_nexus.services.account_lease import ensure_case_account_lease
+            from mino_nexus.resources.accounts.lease import ensure_case_account_lease
             with admission(doc, case, project_id=project_id, package=package, platform=platform) as resource_attempt:
                 ok, lease_err = wait_for_admission(doc, case, resource_attempt, lambda wait_ms: ensure_case_account_lease(
                     run_id, app_id=app_id, env_profile=str(doc.get("env_profile") or "test"),
@@ -265,11 +265,11 @@ def _run_case_list(
                     "app_id": str(doc.get("app_id") or ""),
                 })
                 continue
-            from mino_nexus.services.resource_task_card import build_resource_card
+            from mino_nexus.resources.resource_task_card import build_resource_card
 
             lease_snap: dict = {}
             try:
-                from mino_nexus.services.account_lease import restore_lease_for_run
+                from mino_nexus.resources.accounts.lease import restore_lease_for_run
 
                 class _LeaseCtx:
                     pass
@@ -305,7 +305,7 @@ def _run_case_list(
                 "resource_card": resource_card,
             })
             next_case = cases[case_seq + 1] if case_seq + 1 < len(cases) else None
-            from mino_nexus.services.execution_policy import start_attempt
+            from mino_nexus.casework.execution_policy import start_attempt
             start_attempt(run_id, case)
             result = None
             with heartbeat(resource_attempt):
@@ -391,7 +391,7 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
     if not doc or not run_store.task_is_live(doc):
         return
     try:
-        from mino_nexus.services.resource_transition import mark_web_run_devices
+        from mino_nexus.casework.resource_transition import mark_web_run_devices
 
         mark_web_run_devices(run_id, "guest", source="task_start", package=package, doc=doc)
         cases = [case for case in doc.get("cases") or [] if case.get("status") in {None, "pending"}]
@@ -444,14 +444,14 @@ def _run_in_background(*, run_id: str, package: str, playbook: dict, provider_id
         except Exception:
             pass
     finally:
-        from mino_nexus.services.account_lease import release_run_lease
-        from mino_nexus.services.device_resource_lease import release_device_leases_for_run
+        from mino_nexus.resources.accounts.lease import release_run_lease
+        from mino_nexus.resources.device_resource_lease import release_device_leases_for_run
 
         latest = run_store.get(run_id) or doc
         app_id = str((latest or doc or {}).get("app_id") or "")
-        from mino_nexus.services.resource_transition import mark_web_run_devices
+        from mino_nexus.casework.resource_transition import mark_web_run_devices
 
-        from mino_nexus.services.run_write_safety import protected
+        from mino_nexus.casework.run_write_safety import protected
 
         if not protected(run_id):
             mark_web_run_devices(

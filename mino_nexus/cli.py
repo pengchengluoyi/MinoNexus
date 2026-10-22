@@ -14,6 +14,8 @@ from pathlib import Path
 
 from mino_nexus.core.log import SLog
 
+import mino_nexus.startup  # noqa: F401 — 装配根：注册启动种子（必须先于 ensure_db）
+
 TAG = "CLI"
 
 
@@ -144,6 +146,8 @@ def _session_cli(argv: list[str]) -> int:
 
 def _nav_cli(argv: list[str]) -> int:
     """NavFSM 配置与校准。没有 Studio 时的等价入口（docs/NAVIGATION_ATLAS.md §8.4、§8.5）。"""
+    from mino_nexus.resources import project_store as ps
+    from mino_nexus.navigation.atlas import nav_fsm_template as tpl
     import json
 
     ap = argparse.ArgumentParser(prog="mino-nexus nav", description="NavFSM 配置与真机校准")
@@ -201,8 +205,8 @@ def _nav_cli(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     from mino_nexus.core.database import ensure_db
-    from mino_nexus.services import nav_calibration_store as calib
-    from mino_nexus.services import nav_fsm_store as store
+    from mino_nexus.navigation.atlas import nav_calibration_store as calib
+    from mino_nexus.navigation.atlas import nav_fsm_store as store
 
     ensure_db()
 
@@ -222,14 +226,14 @@ def _nav_cli(argv: list[str]) -> int:
         return dump(store.list_apps())
 
     if args.cmd == "template":
-        from mino_nexus.services import nav_fsm_template as tpl
-        from mino_nexus.services import project_store as ps
+        from mino_nexus.navigation.atlas import nav_fsm_template as tpl
+        from mino_nexus.resources import project_store as ps
 
         app = ps.find_app(args.app_id)
         return dump(tpl.build_template(args.app_id, project_id=str((app or {}).get("project_id") or "")))
 
     if args.cmd == "start":
-        from mino_nexus.services import project_store as ps
+        from mino_nexus.resources import project_store as ps
 
         app = ps.find_app(args.app_id)
         manifest = calib.start(
@@ -273,7 +277,7 @@ def _nav_cli(argv: list[str]) -> int:
     if args.cmd == "draft-save":
         doc = json.loads(Path(args.path).read_text(encoding="utf-8"))
         calib.save_draft(args.app_id, doc)
-        from mino_nexus.services import nav_fsm_template as tpl
+        from mino_nexus.navigation.atlas import nav_fsm_template as tpl
 
         pending = tpl.pending_marks(doc)
         print(f"草稿已存。还差 {len(pending)} 个待校准字段" if pending else "草稿已存，且没有待校准字段")
@@ -290,7 +294,7 @@ def _nav_cli(argv: list[str]) -> int:
         return dump({"app_id": saved["app_id"], "states": len(saved["states"]), "edges": len(saved["edges"])})
 
     if args.cmd == "metrics":
-        from mino_nexus.services.nav_telemetry import aggregate_app
+        from mino_nexus.navigation.atlas.nav_telemetry import aggregate_app
 
         return dump(aggregate_app(args.app_id, run_id=args.run_id, limit=args.limit))
 
@@ -326,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
         from mino_nexus.core.service_cli import main as service_main
         return service_main(argv[1:])
     if argv and argv[0] == "probe":
-        from mino_nexus.core.maintenance_probe import main as probe_main
+        from mino_nexus.assistant.maintenance_probe import main as probe_main
         return probe_main(argv[1:])
     if argv and argv[0] == "migrate":
         return _migrate_cli(argv[1:])

@@ -1,13 +1,13 @@
 """通用逻辑块宏：确定性 dispatch 子 cap（登录 / 系统弹窗）。"""
 from __future__ import annotations
 
-from mino_nexus.loop.login_transition import update_auth_state
+from mino_nexus.navigation.login.transition import update_auth_state
 
 from typing import Any, Optional
 
 from mino_nexus.catalog.flow_block_seed import LOGIN_BLOCK_ID, SYSTEM_DIALOG_BLOCK_ID
 from mino_nexus.core.schemas import PlanEvent
-from mino_nexus.services.nav_flow_block_catalog import resolve_effective_steps
+from mino_nexus.navigation.atlas.nav_flow_block_catalog import resolve_effective_steps
 
 
 def _macro_done(ctx: Any) -> set[str]:
@@ -67,7 +67,7 @@ def _step_ready(
             ui_channel=ui_channel_label(ui_channel_from_ctx(ctx)),
         )
     if cap == "accept_legal_consent":
-        from mino_nexus.loop.ui_consent import find_consent_control
+        from mino_nexus.navigation.geometry.ui_consent import find_consent_control
 
         return find_consent_control(list(hierarchy_nodes or [])) is not None
     if cap == "get_otp":
@@ -91,7 +91,7 @@ def try_run_login_flow_macro(
     from mino_nexus.loop.milestones import read_state, write_state, prepend_login_block_milestones
     from mino_nexus.loop.milestone_orchestrator import ensure_single_in_progress
     from mino_nexus.loop.flow_block_executor import try_dispatch_block_hook
-    from mino_nexus.loop.observe.session_log import active_writer
+    from mino_nexus.records.eventlog.writer import active_writer
     cursor = getattr(ctx, "_step_cursor", None)
     if cursor is None:
         return None
@@ -142,18 +142,18 @@ def maybe_emit_login_flow_complete(
         return True
     if not login_block_required_steps_done(ctx, app_id=app_id, history_lines=history_lines):
         return False
-    from mino_nexus.services.resource_preflight import effective_device_session
+    from mino_nexus.resources.resource_preflight import effective_device_session
 
     sn = str(getattr(ctx, "sn", "") or "").strip()
     pkg = str(getattr(ctx, "target_package", "") or "").strip()
     sess = effective_device_session(ctx, sn=sn, package_id=pkg)
     if sess != "logged_in":
         return False
-    from mino_nexus.services.resource_transition_engine import fire_transition
+    from mino_nexus.casework.resource_transition_engine import fire_transition
 
     if not fire_transition(ctx, "login_flow_complete", source="flow_block"):
         return False
-    setattr(ctx, "_login_flow_transition_emitted", True)
+    ctx._login_flow_transition_emitted = True
     update_auth_state(ctx, login_flow_macro_active=False)
     return True
 
@@ -186,5 +186,5 @@ def try_run_system_dialog_macro(
         turn_seq=turn_seq,
     )
     if out and out.get("ok"):
-        setattr(ctx, "system_dialog_macro_done", True)
+        ctx.system_dialog_macro_done = True
     return out

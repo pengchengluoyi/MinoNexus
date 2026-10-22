@@ -82,11 +82,11 @@
 - `mino_nexus/models/task.py:5`：from mino_nexus.core.database import Base
 - `mino_nexus/models/token.py:5`：from mino_nexus.core.database import Base
 - `mino_nexus/models/ui_control.py:5`：from mino_nexus.core.database import Base
-- `mino_nexus/routers/rCaseRunner.py:337`：from mino_nexus.core.database import session_scope
-- `mino_nexus/routers/rPacks.py:160`：from mino_nexus.core.database import SessionLocal, ensure_db
-- `mino_nexus/routers/rPacks.py:163`：ensure_db()
-- `mino_nexus/routers/rSettings.py:844`：from mino_nexus.core.database import SessionLocal
-- `mino_nexus/routers/rSettings.py:885`：from mino_nexus.core.database import SessionLocal
+- `mino_nexus/api/rCaseRunner.py:337`：from mino_nexus.core.database import session_scope
+- `mino_nexus/api/rPacks.py:160`：from mino_nexus.core.database import SessionLocal, ensure_db
+- `mino_nexus/api/rPacks.py:163`：ensure_db()
+- `mino_nexus/api/rSettings.py:844`：from mino_nexus.core.database import SessionLocal
+- `mino_nexus/api/rSettings.py:885`：from mino_nexus.core.database import SessionLocal
 - `mino_nexus/services/account_facet_sync.py:245`：from mino_nexus.core.database import session_scope
 - `mino_nexus/services/app_intel.py:737`：from mino_nexus.core.database import SessionLocal, ensure_db
 - `mino_nexus/services/app_intel.py:778`：from mino_nexus.core.database import SessionLocal, ensure_db

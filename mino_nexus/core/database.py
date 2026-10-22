@@ -39,6 +39,21 @@ engine = _build_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+_model_loader = None
+
+
+def register_model_loader(fn) -> None:
+    """ORM 包在自己的 __init__ 里登记，base 层不反向 import models。"""
+    global _model_loader
+    _model_loader = fn
+
+
+def _load_models() -> None:
+    if _model_loader is None:
+        # 静默跳过会让建表拿不到 ORM 定义，问题在很远的地方才暴露。
+        raise RuntimeError("models_not_registered：入口需先 import mino_nexus.models")
+    _model_loader()
+
 _ready = False
 _booting = False
 
@@ -66,19 +81,33 @@ def session_scope() -> Iterator[Session]:
         db.close()
 
 
+_bootstrap_hook = None
+
+
+def register_bootstrap(fn) -> None:
+    """装配根注册启动种子；`core` 不 import 任何业务模块（V8 §0.8）。
+
+    由 `mino_nexus.startup` 在入口 import 时调用。
+    """
+    global _bootstrap_hook
+    _bootstrap_hook = fn
+
+
 def ensure_db() -> None:
     global _ready, _booting
     if _ready or _booting:
         return
     _booting = True
     try:
-        from mino_nexus import models  # noqa: F401 — 注册表
+        _load_models()
 
         from mino_nexus.core.schema_contract import initialize_current_schema
         initialize_current_schema(engine, Base.metadata)
-        from mino_nexus.core.bootstrap import bootstrap
+        if _bootstrap_hook is None:
+            # 显式失败：静默跳过种子会让能力目录为空，问题在很远的地方才暴露。
+            raise RuntimeError("bootstrap_not_registered：入口需先 import mino_nexus.startup")
 
-        bootstrap()
+        _bootstrap_hook()
         _ready = True
     finally:
         _booting = False

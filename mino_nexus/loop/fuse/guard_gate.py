@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from mino_nexus.services.nav_fsm import (
+from mino_nexus.navigation.atlas.nav_fsm import (
     STRENGTH_STRONG_TEXT,
     GuardHit,
 )

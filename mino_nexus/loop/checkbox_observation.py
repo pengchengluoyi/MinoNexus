@@ -43,7 +43,7 @@ def observe_checkbox(ctx, proxy, target, *, consent=False, login_scope=False):
     if (not image or width <= 0 or height <= 0 or not 0 <= bounds[0] < bounds[2] <= cw
             or not 0 <= bounds[1] < bounds[3] <= ch):
         return unavailable
-    from mino_nexus.ai.llm_client import resolve_regression_provider
+    from mino_nexus.platform.llm.client import resolve_regression_provider
     provider, gate = resolve_regression_provider()
     if provider is None:
         return unavailable
@@ -51,7 +51,7 @@ def observe_checkbox(ctx, proxy, target, *, consent=False, login_scope=False):
     prepared, mime = make_llm_jpeg(image, compress_ratio=1.0)
     if not prepared:
         return unavailable
-    from mino_nexus.ai.prompt_render import render
+    from mino_nexus.platform.llm.render import render
     box = [round(float(v) * 1000 / (cw if i % 2 == 0 else ch)) for i, v in enumerate(bounds)]
     schema = {"title": "checkbox_observation", "type": "object", "properties": {
         "target_matches": {"type": "boolean"}, "observable": {"type": "boolean"},
@@ -83,7 +83,7 @@ def observe_checkbox(ctx, proxy, target, *, consent=False, login_scope=False):
     result = {"verified": verified, "checked": raw["checked"] if verified and not login_scope else None,
               "snapshot_id": snapshot, "image_hash": hashlib.sha256(image.encode()).hexdigest()[:20],
               "bounds": list(bounds), "viewport_wh": [width, height], "verified_by": job, "scope_absent": bool(login_scope and verified)}
-    from mino_nexus.loop.observe.session_log import active_writer
+    from mino_nexus.records.eventlog.writer import active_writer
     writer = active_writer()
     if writer:
         writer.append("checkbox/visual_observation", result)

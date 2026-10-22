@@ -1,0 +1,225 @@
+"""业务知识条目。落 knowledge_entries。"""
+from __future__ import annotations
+
+import time
+import uuid
+from typing import Any
+
+from mino_nexus.models.knowledge import KnowledgeEntry
+
+
+def _normalize(raw: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    title = str(raw.get("title") or "").strip()
+    if not title:
+        return None
+    extra = {
+        k: v for k, v in raw.items()
+        if k not in {
+            "score", "match_pct", "used", "skip_reason",
+            "id", "title", "content", "category", "tags", "app_ids", "enabled",
+            "source", "review_status", "account_id", "account_ident",
+            "tags_json", "app_ids_json", "extra_json", "updated_at",
+        } and v not in (None, "", [], {})
+    }
+    extra.update(raw.get("extra") or raw.get("extra_json") or {})
+    src = str(raw.get("source") or "").strip().lower() or "manual"
+    st = str(raw.get("review_status") or "").strip().lower() or "approved"
+    return {
+        **extra,
+        "id": str(raw.get("id") or "").strip() or uuid.uuid4().hex[:12],
+        "title": title,
+        "content": str(raw.get("content") or "").strip(),
+        "category": str(raw.get("category") or "").strip() or "其他",
+        "tags": [str(t).strip() for t in (raw.get("tags") or raw.get("tags_json") or []) if str(t).strip()],
+        "app_ids": [str(a).strip() for a in (raw.get("app_ids") or raw.get("app_ids_json") or []) if str(a).strip()],
+        "enabled": raw.get("enabled", True) is not False,
+        "source": src,
+        "review_status": st if st in {"approved", "pending", "rejected"} else "approved",
+        "account_id": str(raw.get("account_id") or "").strip(),
+        "account_ident": str(raw.get("account_ident") or "").strip(),
+    }
+
+
+def _to_public(row: KnowledgeEntry) -> dict[str, Any]:
+    extra = dict(row.extra_json or {})
+    return {
+        **extra,
+        "id": row.id,
+        "title": row.title or "",
+        "content": row.content or "",
+        "category": row.category or "其他",
+        "tags": list(row.tags_json or []),
+        "app_ids": list(row.app_ids_json or []),
+        "enabled": row.enabled is not False,
+        "source": row.source or "manual",
+        "review_status": row.review_status or "approved",
+        "account_id": row.account_id or "",
+        "account_ident": row.account_ident or "",
+    }
+
+
+def _apply(row: KnowledgeEntry, data: dict[str, Any]) -> None:
+    known = {
+        "id", "title", "content", "category", "tags", "app_ids", "enabled",
+        "source", "review_status", "account_id", "account_ident",
+    }
+    row.title = data["title"]
+    row.content = data["content"]
+    row.category = data["category"]
+    row.tags_json = data["tags"]
+    row.app_ids_json = data["app_ids"]
+    row.enabled = data["enabled"]
+    row.source = data["source"]
+    row.review_status = data["review_status"]
+    row.account_id = data["account_id"]
+    row.account_ident = data["account_ident"]
+    row.extra_json = {k: v for k, v in data.items() if k not in known}
+    row.updated_at = int(time.time())
+
+
+def _scope_ids(*, app_id: str = "", project_id: str = "") -> set[str]:
+    out = {str(x).strip() for x in (app_id, project_id) if str(x).strip()}
+    return out
+
+
+def _match_filters(
+    row: dict[str, Any],
+    *,
+    app_id: str = "",
+    project_id: str = "",
+    account_id: str = "",
+    account_ident: str = "",
+) -> bool:
+    scope = _scope_ids(app_id=app_id, project_id=project_id)
+    bound = [str(x).strip() for x in (row.get("app_ids") or []) if str(x).strip()]
+    if scope and bound and not scope.intersection(bound):
+        return False
+    want_acc = str(account_id or "").strip()
+    want_ident = str(account_ident or "").strip()
+    row_acc = str(row.get("account_id") or "").strip()
+    row_ident = str(row.get("account_ident") or "").strip()
+    if (want_acc or want_ident) and (row_acc or row_ident):
+        if want_acc and row_acc and row_acc != want_acc:
+            return False
+        if want_ident and row_ident and row_ident != want_ident:
+            return False
+        if want_acc and not row_acc and row_ident and want_ident and row_ident != want_ident:
+            return False
+    return True
+
+
+def list_testing_knowledge(
+    *,
+    app_id: str = "",
+    project_id: str = "",
+    account_id: str = "",
+    account_ident: str = "",
+) -> list[dict[str, Any]]:
+    from mino_nexus.core.database import SessionLocal, ensure_db
+
+    ensure_db()
+    db = SessionLocal()
+    try:
+        rows = db.query(KnowledgeEntry).order_by(KnowledgeEntry.updated_at.desc(), KnowledgeEntry.id).all()
+        out: list[dict[str, Any]] = []
+        for raw in rows:
+            row = _to_public(raw)
+            if _match_filters(
+                row,
+                app_id=app_id,
+                project_id=project_id,
+                account_id=account_id,
+                account_ident=account_ident,
+            ):
+                out.append(row)
+        return out
+    finally:
+        db.close()
+
+
+def count_for_app(app_id: str) -> int:
+    aid = str(app_id or "").strip()
+    if not aid:
+        return 0
+    return len(list_testing_knowledge(app_id=aid))
+
+
+def save_testing_knowledge(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from mino_nexus.core.database import session_scope
+
+    cleaned: list[dict[str, Any]] = []
+    for raw in items or []:
+        row = _normalize(raw)
+        if row:
+            cleaned.append(row)
+    with session_scope() as db:
+        keep = {row["id"] for row in cleaned}
+        for existing in db.query(KnowledgeEntry).all():
+            if existing.id not in keep:
+                db.delete(existing)
+        for data in cleaned:
+            row = db.get(KnowledgeEntry, data["id"])
+            if row is None:
+                row = KnowledgeEntry(id=data["id"])
+                db.add(row)
+            _apply(row, data)
+    return cleaned
+
+
+def upsert_knowledge_item(item: dict[str, Any], *, skip_extract: bool = False) -> dict[str, Any]:
+    data = _normalize(item)
+    if not data:
+        raise ValueError("知识条目缺少标题")
+    from mino_nexus.core.database import session_scope
+
+    with session_scope() as db:
+        row = db.get(KnowledgeEntry, data["id"])
+        previous = _to_public(row) if row is not None else None
+        if row is None:
+            row = KnowledgeEntry(id=data["id"])
+            db.add(row)
+        from mino_nexus.knowledge.knowledge_situation import enrich_item
+
+        data = enrich_item(data, previous=previous, incoming=item, skip_extract=skip_extract)
+        _apply(row, data)
+    return data
+
+
+def delete_knowledge_item(kid: str) -> bool:
+    kid = str(kid or "").strip()
+    if not kid:
+        return False
+    from mino_nexus.core.database import session_scope
+
+    with session_scope() as db:
+        row = db.get(KnowledgeEntry, kid)
+        if row is None:
+            return False
+        db.delete(row)
+    return True
+
+
+def review_knowledge_item(kid: str, *, action: str, updates: dict[str, Any] | None = None) -> dict[str, Any]:
+    kid = str(kid or "").strip()
+    act = str(action or "").strip().lower()
+    if act not in {"approve", "reject"}:
+        raise ValueError("action 必须是 approve 或 reject")
+    existing = next((x for x in list_testing_knowledge() if str(x.get("id")) == kid), None)
+    if not existing:
+        raise KeyError(kid)
+    if act == "reject":
+        delete_knowledge_item(kid)
+        return {**existing, "review_status": "rejected", "deleted": True}
+    payload = dict(existing)
+    if isinstance(updates, dict):
+        payload.update({k: v for k, v in updates.items() if v is not None})
+    payload["id"] = kid
+    payload["review_status"] = "approved"
+    return upsert_knowledge_item(payload)
+
+
+from mino_nexus.contract.app_stats import register_knowledge_counter as _register_counter  # noqa: E402
+
+_register_counter(count_for_app)

@@ -62,7 +62,7 @@ def execution_result_metadata(result: Any) -> dict[str, Any]:
         out["scout"] = {key: scout[key][:256] for key in ("node_id", "sn", "platform", "os", "scout_version", "run_id", "scout_process_generation", "node_connection_generation") if isinstance(scout.get(key), str)}
         if isinstance(scout.get("step_idx"), int):
             out["scout"]["step_idx"] = scout["step_idx"]
-        from mino_nexus.services.execution_evidence import public_identity
+        from mino_nexus.casework.execution_evidence import public_identity
         out["scout"]["nexus_identity"] = public_identity(scout.get("nexus_identity"))
         receipt = scout.get("execution_identity")
         if isinstance(receipt, dict):

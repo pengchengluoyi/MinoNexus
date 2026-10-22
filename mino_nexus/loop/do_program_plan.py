@@ -13,8 +13,8 @@ from mino_nexus.loop.milestones import (
     write_state,
     _sync_scope,
 )
-from mino_nexus.services.case_step_key_compiler import step_bundle
-from mino_nexus.services.nav_flow_block_catalog import resolve_effective_steps
+from mino_nexus.casework.case_step_key_compiler import step_bundle
+from mino_nexus.navigation.atlas.nav_flow_block_catalog import resolve_effective_steps
 
 
 def _case_with_meta(case: dict[str, Any] | None) -> dict[str, Any]:
@@ -50,7 +50,7 @@ def milestones_from_do_program(plan: dict[str, Any], *, app_id: str = "", ctx: A
         kind = str(step.get("kind") or "visual_action").strip().lower()
         sid = str(step.get("id") or "").strip() or f"do_{len(rows)}"
         if kind == "remark" or str(step.get("run_policy") or "") == "skip":
-            from mino_nexus.services.case_semantic_integrity import explicit_remark
+            from mino_nexus.casework.case_semantic_integrity import explicit_remark
             if not explicit_remark(step.get("source_clause") or step.get("title")):
                 from mino_nexus.loop.resolved_case import ContractError
                 raise ContractError("required_operation_skipped")
@@ -101,7 +101,7 @@ def milestones_from_do_program(plan: dict[str, Any], *, app_id: str = "", ctx: A
             row["exec_caps"] = ["tap_element", "press_key"]
             row["nav_target"] = str(step.get("nav_target") or "")
             row["title"] = f"{row['title']}；到达项目导航目标 {row['nav_target']}，执行后核验目标页面"
-        from mino_nexus.services.step_requirements import contract
+        from mino_nexus.resources.step_requirements import contract
         row.update(contract(step))
         if row['requirement'] == 'conditional':
             row.update(optional=False, kind='hook')

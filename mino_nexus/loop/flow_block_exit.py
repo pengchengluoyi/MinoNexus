@@ -35,7 +35,7 @@ def _sent_vs_landing(
     landing = _landing_px(summary)
     if landing is None:
         return None, ""
-    from mino_nexus.ai.coords import landing_matches_sent, milli_to_viewport_px
+    from mino_nexus.contract.coords import landing_matches_sent, milli_to_viewport_px
 
     sent_px = milli_to_viewport_px(sent_x, sent_y, viewport_w, viewport_h)
     ok = landing_matches_sent(
@@ -265,7 +265,7 @@ def evaluate_login_block_exit_shadow(
                     issues.append("otp_fill_exit_eval_not_pass")
             elif not row.get("optional"):
                 issues.append("otp_fill_incomplete")
-    from mino_nexus.services.step_requirements import condition_complete
+    from mino_nexus.resources.step_requirements import condition_complete
     if any(r.get('requirement') == 'conditional' and not condition_complete(r) for r in ms):
         issues.append('conditional_requirement_unverified')
     login_result = next((r for r in ms if isinstance(r, dict) and r.get("id") == "login_state"), None)

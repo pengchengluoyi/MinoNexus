@@ -47,7 +47,7 @@ def bottom_tab_slot_count(ctx: Any) -> int:
     nodes = getattr(ctx, "nav_hierarchy_nodes", None) if ctx is not None else None
     if not isinstance(nodes, list) or not nodes:
         return 0
-    from mino_nexus.services.nav_tab_slots import find_bottom_tab_slots
+    from mino_nexus.navigation.atlas.nav_tab_slots import find_bottom_tab_slots
 
     return len(find_bottom_tab_slots(nodes))
 
@@ -111,13 +111,13 @@ def note_fsm_degrade_for_open_loop(
         if err not in ("same_page_repeat",):
             return
     if err in FSM_OPEN_LOOP_ERRORS or err == "same_page_repeat":
-        setattr(ctx, "nav_open_loop_active", True)
-        setattr(ctx, "nav_open_loop_reason", err or "fsm_degraded")
+        ctx.nav_open_loop_active = True
+        ctx.nav_open_loop_reason = err or "fsm_degraded"
         to_raw = nav_target_hint
         if not to_raw and isinstance(nav_attempt, dict):
             to_raw = str(nav_attempt.get("resolved_to") or nav_attempt.get("to") or "")
         if to_raw:
-            setattr(ctx, "nav_open_loop_blocked_target", _fold(to_raw))
+            ctx.nav_open_loop_blocked_target = _fold(to_raw)
 
 
 def format_open_loop_hint(
@@ -131,7 +131,7 @@ def format_open_loop_hint(
         if not st.active:
             return ""
     else:
-        setattr(ctx, "nav_open_loop_active", True)
+        ctx.nav_open_loop_active = True
     parts = [_OPEN_LOOP_HINT]
     st = open_loop_state(ctx)
     if st.blocked_nav_target and instruction:
@@ -169,6 +169,6 @@ def fsm_params_blocked_in_open_loop(ctx: dict[str, Any]) -> Optional[str]:
 
 def clear_open_loop_if_tabs_visible(ctx: Any) -> None:
     if bottom_tab_slot_count(ctx) >= 2:
-        setattr(ctx, "nav_open_loop_active", False)
-        setattr(ctx, "nav_open_loop_reason", "")
-        setattr(ctx, "nav_open_loop_blocked_target", "")
+        ctx.nav_open_loop_active = False
+        ctx.nav_open_loop_reason = ""
+        ctx.nav_open_loop_blocked_target = ""

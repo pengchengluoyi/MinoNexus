@@ -28,7 +28,7 @@ def picked_account_ready_for_login(ctx: Any) -> bool:
         aid = str(lease.get("account_id") or "").strip()
     if not aid:
         return False
-    from mino_nexus.services.account_credential_text import (
+    from mino_nexus.resources.account_credential_text import (
         lease_email_address,
         lease_phone_digits,
         login_kind_from_ctx,
@@ -68,8 +68,8 @@ def try_lease_on_login_surface(
         brief = str(getattr(ctx, "accounts_brief", "") or "").strip()
         return True, "", brief
 
-    from mino_nexus.loop.session_ensure import account_need_from_case
-    from mino_nexus.services.account_lease import format_accounts_brief, lease_for_context
+    from mino_nexus.resources.session.ensure import account_need_from_case
+    from mino_nexus.resources.accounts.lease import format_accounts_brief, lease_for_context
 
     case_row = case if isinstance(case, dict) else getattr(ctx, "case", None)
     scene = getattr(ctx, "case_scene", None) if ctx is not None else None
@@ -97,7 +97,7 @@ def try_lease_on_login_surface(
         SLog.i(TAG, f"leased on login surface: {brief[:120]}")
         return True, "", brief
     msg = str(err or "租号失败").strip()
-    from mino_nexus.services.account_credential_text import login_kind_from_ctx
+    from mino_nexus.resources.account_credential_text import login_kind_from_ctx
 
     if login_kind_from_ctx(ctx) == "email" and "email" not in msg.lower():
         msg = f"{msg}；当前环境 login.kind=email，号池须至少有一个账号填写 email（仅手机号不够）"

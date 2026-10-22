@@ -1,12 +1,14 @@
 """登录态写入 RunContext，校验阶段可读（不依赖当轮是否重跑 inspect-session）。"""
 from __future__ import annotations
 
-from mino_nexus.loop.login_transition import update_auth_state
+from mino_nexus.navigation.login.transition import update_auth_state
 
 import re
 from typing import Any
 
-from mino_nexus.loop.session_ensure import parse_session_value
+from mino_nexus.resources.session.ensure import parse_session_value
+
+from mino_nexus.navigation.login.state import mark_session_dirty  # noqa: E402,F401
 
 
 _LOGIN_EXPECT_RE = re.compile(r"登录成功|已登录|logged.?in|用户名称|昵称", re.I)
@@ -16,9 +18,9 @@ def stamp_session_observation(ctx: Any, row: dict[str, Any] | None, *, form_left
     """inspect-session 成功后写入 ctx.session_fact / task_session。"""
     if not isinstance(row, dict) or not row.get("ok"):
         return
-    from mino_nexus.services.login_evidence import record
+    from mino_nexus.navigation.login.evidence import record
     row, evidence = record(ctx, row, form_left=form_left)
-    from mino_nexus.services.session_match import normalize_device_session
+    from mino_nexus.resources.accounts.session_match import normalize_device_session
 
     session = normalize_device_session(row.get("session") or "")
     if session == "logged_in" and not evidence["login_state_verified"]:
@@ -41,47 +43,13 @@ def stamp_session_observation(ctx: Any, row: dict[str, Any] | None, *, form_left
     update_auth_state(ctx, device_session=session)
     update_auth_state(ctx, device_session_source="inspect_session")
     ctx.session_dirty = session not in {"logged_in", "logged_out", "guest"}
-    from mino_nexus.services.resource_transition import emit_inspect_session
+    from mino_nexus.casework.resource_transition import emit_inspect_session
 
     emit_inspect_session(ctx, row)
     return {**row, "session": session}
 
 
-def mark_session_dirty(ctx: Any, *, reason: str = "") -> None:
-    ctx.session_dirty = True
-    update_auth_state(ctx, device_session="unknown")
-    update_auth_state(ctx, device_session_source="invalidated")
-    update_auth_state(ctx, login_evidence={})
-    ctx.web_auth_hint = None
-    ctx.session_contradiction = None
-    if reason not in {"login_form_visible", "login_submission_transition"}:
-        from mino_nexus.services.login_evidence_policy import clear_submission
-        clear_submission(ctx)
-    prev = dict(getattr(ctx, "session_fact", None) or {})
-    prev["session"] = "unknown"
-    prev["login_state_verified"] = False
-    if reason:
-        prev["stale_reason"] = str(reason)[:200]
-    update_auth_state(ctx, session_fact=prev)
-    update_auth_state(ctx, task_session=dict(prev))
-
-
-def execution_context_session_line(ctx: Any) -> str:
-    """供 decide/assert 的紧凑登录态字段（与 session_block 互补）。"""
-    from mino_nexus.services.session_match import normalize_device_session
-
-    fact = dict(getattr(ctx, "session_fact", None) or {})
-    scene = dict(getattr(ctx, "case_scene", None) or {})
-    parts = [
-        f"session_dirty={bool(getattr(ctx, 'session_dirty', False))}",
-        f"required_session={str(scene.get('required_session') or 'any')}",
-        f"task_session={normalize_device_session(fact.get('session') or '')}",
-    ]
-    stale = str(fact.get("stale_reason") or "").strip()
-    if stale:
-        parts.append(f"stale_reason={stale[:80]}")
-    return "【执行上下文·会话】" + " ".join(parts)
-
+from mino_nexus.resources.session.view import execution_context_session_line  # noqa: F401
 
 def _strip_stacked_session_block(block: str) -> str:
     """历史 bug：run_context 行与 inspect 行用 | 叠在一起；保留 inspect 段。"""

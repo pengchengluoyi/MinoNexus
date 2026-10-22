@@ -19,7 +19,7 @@ _DISMISS_STEP: dict[str, Any] = {
 
 # Explicit ordinary-runtime policy, shared by requirement construction and recovery.
 # These actions remain subject to the committed binding, current epoch and write guard.
-BUILTIN_INTERRUPT_CAPS = ("tap_element", "wait_ms", "wait_screen_ready")
+from mino_nexus.contract.interrupt_caps import BUILTIN_INTERRUPT_CAPS  # noqa: F401,E402
 
 
 def builtin_obstacle_steps(kind: str) -> list[dict[str, Any]]:
@@ -59,7 +59,7 @@ def bound_recovery_ids(ctx: Any, phase: str) -> set[str]:
 
 
 def _trace_selection(kind: str, payload: dict[str, Any]) -> None:
-    from mino_nexus.loop.observe.session_log import active_writer
+    from mino_nexus.records.eventlog.writer import active_writer
     writer = active_writer()
     if writer is not None:
         writer.append(kind, payload)

@@ -9,6 +9,10 @@ _OPEN_RE = re.compile(r"打开|启动|进入应用|冷启动", re.I)
 _TAP_RE = re.compile(r"点击|点按|轻触|选中|勾选", re.I)
 _SWIPE_RE = re.compile(r"上滑|下滑|左滑|右滑|滑动|swipe", re.I)
 _INPUT_RE = re.compile(r"输入|填写|填入", re.I)
+import re
+
+from mino_nexus.core.step_text import precondition_requires_clear_cache  # noqa: F401,E402
+
 _CLEAR_RE = re.compile(r"清缓存|清除缓存|清理缓存|清除应用缓存|清除.{0,6}缓存|clear.?cache", re.I)
 
 _CAP_FAMILY: dict[str, str] = {
@@ -210,7 +214,3 @@ def step_actions_satisfied(
     if short:
         return False, f"本步操作次数不足：{', '.join(short)}"
     return True, ""
-
-
-def precondition_requires_clear_cache(precondition: str) -> bool:
-    return bool(_CLEAR_RE.search(str(precondition or "")))

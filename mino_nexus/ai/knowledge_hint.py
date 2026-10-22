@@ -221,7 +221,7 @@ def rank_for_intent(
     tokens = _intent_tokens(case_intent)
     scored: list[tuple[tuple, dict[str, Any]]] = []
     for row in rows or []:
-        from mino_nexus.services.knowledge_match import body_text
+        from mino_nexus.knowledge.knowledge_match import body_text
 
         title = str(row.get("title") or "")
         tags = " ".join(str(t) for t in (row.get("tags") or []))
@@ -264,7 +264,7 @@ def build_body_text(items: list[dict[str, Any]], *, max_chars: int = 800) -> str
 
     标题/引导语在 llm_jobs 的 knowledge_body 块里，这里只出正文。
     """
-    from mino_nexus.services.knowledge_match import prompt_snippet
+    from mino_nexus.knowledge.knowledge_match import prompt_snippet
 
     snippets = [prompt_snippet(it, max_chars=max_chars) for it in (items or [])[:1]]
     return "\n".join(s for s in snippets if s).strip()
@@ -272,7 +272,7 @@ def build_body_text(items: list[dict[str, Any]], *, max_chars: int = 800) -> str
 
 def should_auto_inject_do_body(rows: list[dict[str, Any]]) -> bool:
     """do 阶段：情境/绑定命中时自动展开正文，避免只靠目录索引被模型忽略。"""
-    from mino_nexus.services.knowledge_situation import SIT_MATCH_USED
+    from mino_nexus.knowledge.knowledge_situation import SIT_MATCH_USED
 
     for row in rows or []:
         if row.get("used") is False:

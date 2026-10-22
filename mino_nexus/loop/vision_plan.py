@@ -155,8 +155,8 @@ def filter_plan_milestones_append(
     rejected: list[dict[str, Any]] = []
     if not rows:
         return kept, rejected
+    from mino_nexus.loop.case_menu import case_menu_ids
     from mino_nexus.catalog.skill_channel import (
-        case_menu_ids,
         milestone_caps_registered,
         rewrite_milestone_aliases,
     )
@@ -428,7 +428,7 @@ def run_vision_plan_turn_if_enabled(
         inspect_slots["nav_assist"] = ""
     apply_vision_observation_slots(inspect_slots, cursor, writer=writer)
     case_step, phase = step_scope_key(cursor)
-    from mino_nexus.catalog.skill_channel import case_menu_ids
+    from mino_nexus.loop.case_menu import case_menu_ids
 
     criteria = dict(success_criteria_for_llm(cursor))
     recovery = str(getattr(cursor, "correction_hint", "") or "").strip()
@@ -550,7 +550,7 @@ def handle_screen_obstacle(cursor: Any, ctx: Any, plan: VisionPlanDecision, *, w
         write_state(cursor, state)
         return False
     if kind != 'loading':
-        from mino_nexus.loop.overlay_evidence import dialog_evidence, has_back
+        from mino_nexus.navigation.overlay_evidence import dialog_evidence, has_back
         import hashlib
         nodes = getattr(ctx, 'nav_hierarchy_nodes', None) or []
         image = str(getattr(shot, 'image_base64', '') or '')

@@ -41,7 +41,7 @@ def _load_capability_row(
     payload: dict[str, Any],
 ) -> None:
     from mino_nexus.catalog.skill_channel import V5_EXCLUDED_IDS
-    from mino_nexus.services.business_event_contract import RETIRED, tier_for
+    from mino_nexus.contract.business_event_contract import RETIRED, tier_for
     if row.id.startswith("guard.") or row.id in V5_EXCLUDED_IDS or row.id in RETIRED:
         return
     payload = dict(payload)
@@ -93,7 +93,7 @@ def _load_recovery_rule_row(
     row,
     payload: dict[str, Any],
 ) -> None:
-    from mino_nexus.services.business_event_contract import references
+    from mino_nexus.contract.business_event_contract import references
     if references(payload):
         errors.append(LoadError(path=f'catalog_entries/recovery/{row.id}', kind=RECOVERY_KIND,
                                message='business_event_migration_required：恢复规则包含已迁出事件，请审阅新的逻辑块/launch_app 候选'))

@@ -69,7 +69,7 @@ def run_dom_structured_check(
     writer: Any = None,
     provider_id: str = "",
 ) -> AssertResult:
-    from mino_nexus.services.checkpoint_text_policy import text_policy
+    from mino_nexus.knowledge.checkpoint_text_policy import text_policy
     from mino_nexus.loop.text_assert import checkpoint_report, run_dom_text_checks
 
     nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]

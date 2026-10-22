@@ -69,7 +69,7 @@ def available_capabilities(
         platform=plat,
     )
     if plat in {"desktop", "mac", "win"}:
-        from mino_nexus.services.desktop_catalog import CAPABILITY_IDS, capabilities
+        from mino_nexus.knowledge.desktop_catalog import CAPABILITY_IDS, capabilities
 
         available = [cap for cap in available if cap.id not in CAPABILITY_IDS]
         if flags.get("desktop") and "generic" in kinds:
@@ -78,7 +78,7 @@ def available_capabilities(
 
 
 def _bound_menu_ids(ctx: RunContext, phase: str) -> set[str]:
-    from mino_nexus.services.execution_binding import CONTRACT
+    from mino_nexus.contract.binding import CONTRACT
 
     if getattr(ctx, "execution_contract_version", "") != CONTRACT or not getattr(ctx, "execution_binding", None):
         return set()
@@ -128,7 +128,7 @@ def available_menu_brief(
             continue
         cap = plugin_registry.get_capability(cap_id)
         if plat in {"desktop", "mac", "win"}:
-            from mino_nexus.services.desktop_catalog import CAPABILITY_IDS, capabilities
+            from mino_nexus.knowledge.desktop_catalog import CAPABILITY_IDS, capabilities
 
             if cap_id in CAPABILITY_IDS:
                 native = capabilities(ctx.desktop_capabilities, ctx.desktop_os, platform=plat) if ctx.connectivity_flags.get("desktop") else []
@@ -154,7 +154,7 @@ def available_menu_brief(
             row["parameters"] = parameters
         out.append(row)
         seen.add(cap.id)
-    from mino_nexus.services.local_tool_dependencies import evaluate
+    from mino_nexus.resources.local_tool_dependencies import evaluate
     # Keep unmet tools visible with a safe reason; never label them not_applicable.
     for row in out:
         facts = evaluate(row["id"], ctx=ctx)
@@ -164,7 +164,7 @@ def available_menu_brief(
 
 
 def recovery_menu_brief(ctx: RunContext, *, platform: str = "") -> list[dict[str, Any]]:
-    from mino_nexus.loop.observe.session_log import active_writer
+    from mino_nexus.records.eventlog.writer import active_writer
 
     writer = active_writer()
     allowed = _bound_menu_ids(ctx, writer.phase if writer else "prep")

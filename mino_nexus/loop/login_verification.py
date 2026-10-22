@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
+from mino_nexus.resources.otp_resolve import is_web_email_login, login_kind_for_ctx  # noqa: F401
 
 
 def record_verification_send(ctx: Any) -> None:
@@ -16,23 +17,6 @@ def record_verification_send(ctx: Any) -> None:
         ctx.otp_sent_at = time.time()
 
 
-def login_kind_for_ctx(ctx: Any | None) -> str:
-    if ctx is None:
-        return "phone"
-    try:
-        from mino_nexus.loop.local_executors import _otp_context
-        from mino_nexus.services.otp_resolve import login_kind_from_secrets
-
-        _doc, secrets, _otp = _otp_context(ctx)
-        return login_kind_from_secrets(secrets)
-    except Exception:
-        return "phone"
-
-
-def is_web_email_login(ctx: Any | None) -> bool:
-    if ctx is None:
-        return False
-    return ui_channel_from_ctx(ctx) == UiChannel.WEB and login_kind_for_ctx(ctx) == "email"
 
 
 def verification_send_required_message(ctx: Any | None) -> str:
@@ -80,7 +64,7 @@ def compile_verification_send_menu_hint(
         return ""
     if not has_tap_element:
         return ""
-    from mino_nexus.loop.ui_sms_request import (
+    from mino_nexus.navigation.geometry.ui_sms_request import (
         credential_field_for_login,
         credential_field_filled,
         find_send_code_button,

@@ -9,21 +9,22 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
-from mino_nexus.routers.deps import current_session
+from mino_nexus.api.deps import current_session
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import mino_nexus.startup  # noqa: F401 — 装配根：注册启动种子（必须先于 ensure_db）
 from mino_nexus.core import protocol as P
 from mino_nexus.catalog import registry as catalog
-from mino_nexus.core.client_gate import ClientGateMiddleware
+from mino_nexus.api.client_gate import ClientGateMiddleware
 from mino_nexus.core.log import SLog
 from mino_nexus.loop.router_proxy import RouterProxy, is_local_cap
-from mino_nexus.services.node_registry import get_registry
+from mino_nexus.resources.node_registry import get_registry
 
 from mino_nexus.core.paths import data_dir
-from mino_nexus.routers import (
+from mino_nexus.api import (
     rAppAutomation,
     rAppIntel,
     rAssistant,
@@ -47,8 +48,8 @@ from mino_nexus.routers import (
     rMinoBots,
 )
 from mino_nexus.core.schemas import PlanEvent
-from mino_nexus.websocket import node as node_ws
-from mino_nexus.websocket import observers as ui_ws
+from mino_nexus.api.ws import node as node_ws
+from mino_nexus.api.ws import observers as ui_ws
 
 TAG = "App"
 
@@ -63,18 +64,18 @@ async def lifespan(app: FastAPI):
     ensure_db()
     from mino_nexus.core.build_info import initialize_instance_id
     initialize_instance_id()
-    from mino_nexus.services.auth_store import ensure_seed_users
-    from mino_nexus.services.run_store import reconcile_stale_running_runs
+    from mino_nexus.platform.auth_store import ensure_seed_users
+    from mino_nexus.casework.run_store import reconcile_stale_running_runs
 
     ensure_seed_users()
     stale = reconcile_stale_running_runs()
     if stale:
         SLog.w(TAG, f"启动清扫 {len(stale)} 条僵尸 running 任务: {stale[:5]}")
-        from mino_nexus.services.device_resource_lease import release_device_leases_for_run
+        from mino_nexus.resources.device_resource_lease import release_device_leases_for_run
 
         for rid in stale:
             release_device_leases_for_run(rid)
-    from mino_nexus.services.device_resource_lease import purge_expired_device_leases
+    from mino_nexus.resources.device_resource_lease import purge_expired_device_leases
 
     purged = purge_expired_device_leases()
     if purged:
@@ -92,7 +93,7 @@ async def lifespan(app: FastAPI):
         while True:
             await asyncio.sleep(60)
             try:
-                from mino_nexus.services.doc_sync import doc_sync_tick
+                from mino_nexus.casework.doc_sync import doc_sync_tick
 
                 n = await asyncio.to_thread(doc_sync_tick)
                 if n:
@@ -102,7 +103,7 @@ async def lifespan(app: FastAPI):
 
     doc_sync_task = asyncio.create_task(_doc_sync_loop())
     async def _assistant_delivery_loop() -> None:
-        from mino_nexus.services.assistant_notify import retry_pending_notifications
+        from mino_nexus.assistant.assistant_notify import retry_pending_notifications
         while True:
             try:
                 await asyncio.to_thread(retry_pending_notifications)
@@ -113,7 +114,7 @@ async def lifespan(app: FastAPI):
     delivery_task = asyncio.create_task(_assistant_delivery_loop())
     async def _case_compile_loop() -> None:
         import uuid
-        from mino_nexus.services.case_compilation import interrupt_expired, run_one
+        from mino_nexus.casework.case_compilation import interrupt_expired, run_one
         worker_id = "nexus-" + uuid.uuid4().hex
         while True:
             try:
@@ -127,7 +128,7 @@ async def lifespan(app: FastAPI):
     compile_task = asyncio.create_task(_case_compile_loop())
 
     async def _collab_loop() -> None:
-        from mino_nexus.services.workspace_automation import tick
+        from mino_nexus.assistant.workspace.workspace_automation import tick
         while True:
             try:
                 await asyncio.to_thread(tick)
@@ -136,15 +137,15 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(2)
 
     collab_task = asyncio.create_task(_collab_loop())
-    from mino_nexus.services.collab_message_queue import recover_interrupted, worker as message_worker
+    from mino_nexus.assistant.workspace.collab_message_queue import recover_interrupted, worker as message_worker
     await asyncio.to_thread(recover_interrupted)
     message_task = asyncio.create_task(message_worker())
-    from mino_nexus.services.development import worker as development_worker
+    from mino_nexus.api.development import worker as development_worker
     development_task = asyncio.create_task(development_worker())
-    from mino_nexus.services.scout_updates import worker as scout_update_worker
+    from mino_nexus.resources.scout_updates import worker as scout_update_worker
     scout_update_task = asyncio.create_task(scout_update_worker())
-    from mino_nexus.core.execution_user import execution_user, user_thread
-    from mino_nexus.services import run_store
+    from mino_nexus.platform.identity import execution_user, user_thread
+    from mino_nexus.casework import run_store
     from mino_nexus.loop.case_exec import _run_in_background
     for rid in stale:
         recovered = run_store.get(rid)
@@ -155,7 +156,7 @@ async def lifespan(app: FastAPI):
                 "playbook": recovered.get("playbook") or {}, "provider_id": recovered.get("provider_id") or ""},
                 daemon=True, name="recovered-" + rid).start()
     async def execution_policy_worker():
-        from mino_nexus.services.execution_policy import expire_runs
+        from mino_nexus.casework.execution_policy import expire_runs
         while True:
             try:
                 await asyncio.to_thread(expire_runs)
@@ -210,7 +211,7 @@ class ExecuteBody(BaseModel):
 def create_app() -> FastAPI:
     app = FastAPI(title="MinoNexus", version=NEXUS_VERSION, lifespan=lifespan)
 
-    from mino_nexus.core.execution_user import ExecutionUserMiddleware
+    from mino_nexus.api.middleware import ExecutionUserMiddleware
 
     app.add_middleware(ExecutionUserMiddleware)
     app.add_middleware(ClientGateMiddleware)
@@ -226,16 +227,16 @@ def create_app() -> FastAPI:
 
     from mino_nexus.core.request_timing import RequestTimingMiddleware
     app.add_middleware(RequestTimingMiddleware)
-    from mino_nexus.routers import rCaseSources
+    from mino_nexus.api import rCaseSources
     app.include_router(rCaseSources.router)
-    from mino_nexus.routers import rExecutionResources
+    from mino_nexus.api import rExecutionResources
     app.include_router(rExecutionResources.router)
     app.include_router(rSys.router)
     app.include_router(rAuth.router)
     app.include_router(rMe.router)
-    from mino_nexus.routers import rDevelopment
+    from mino_nexus.api import rDevelopment
     app.include_router(rDevelopment.router)
-    from mino_nexus.routers import rDevelopmentEvidence
+    from mino_nexus.api import rDevelopmentEvidence
     app.include_router(rDevelopmentEvidence.router)
     app.include_router(rRuntime.router)
     app.include_router(rReleases.router)
@@ -247,7 +248,7 @@ def create_app() -> FastAPI:
     app.include_router(rPacks.router)
     app.include_router(rProject.router)
     app.include_router(rProjectCases.router)
-    from mino_nexus.routers import rApplicationUnderstanding
+    from mino_nexus.api import rApplicationUnderstanding
     app.include_router(rApplicationUnderstanding.router)
     app.include_router(rApplicationUnderstanding.resource_router)
     app.include_router(rAppAutomation.router)
@@ -258,7 +259,7 @@ def create_app() -> FastAPI:
     app.include_router(rMinoBots.router)
     app.include_router(rAssistant.router)
     app.include_router(rMcp.router)
-    from mino_nexus.services.assistant_tools import bind_app
+    from mino_nexus.assistant.assistant_tools import bind_app
 
     bind_app(app)
 
@@ -285,13 +286,13 @@ def create_app() -> FastAPI:
 
     @app.get("/nodes")
     def nodes(sess: dict = Depends(current_session)) -> dict[str, Any]:
-        from mino_nexus.services.node_store import filter_nodes
+        from mino_nexus.resources.node_store import filter_nodes
         return {"nodes": filter_nodes([n.brief() for n in get_registry().nodes()], sess)}
 
     @app.get("/devices")
     def devices(sess: dict = Depends(current_session)) -> dict[str, Any]:
         """连通性来自 Scout 上报，不是 Nexus 自己探的（CLAUDE.md §6）。"""
-        from mino_nexus.services.ui_devices import ui_devices
+        from mino_nexus.resources.ui_devices import ui_devices
         return {"devices": ui_devices()}
 
     @app.get("/capabilities")
@@ -309,7 +310,7 @@ def create_app() -> FastAPI:
                     for c in caps
                 ],
             }
-        from mino_nexus.services.access_scope import require_owned_device
+        from mino_nexus.resources.access_scope import require_owned_device
         require_owned_device(sn)
         node, why = get_registry().resolve(sn)
         if node is None:

@@ -163,7 +163,7 @@ def input_focus_field(cursor: Any, ctx: Any) -> str:
     if following.get("id") == "otp_fill":
         return "sms_code"
     if following.get("id") == "account_fill":
-        from mino_nexus.services.account_credential_text import (
+        from mino_nexus.resources.account_credential_text import (
             lease_email_address, lease_phone_digits, login_kind_from_ctx,
         )
 
@@ -285,8 +285,8 @@ def recover_input_focus(
                 "limit": 1,
             },
         )
-    setattr(ctx, "focus_action_ref", "")
-    setattr(ctx, "focus_action_field", "")
+    ctx.focus_action_ref = ""
+    ctx.focus_action_field = ""
     setattr(cursor, "visual_prior", None)
     setattr(cursor, "pending_visual_review", None)
     setattr(cursor, "visual_turn_pending", False)
@@ -360,7 +360,7 @@ def defer_visual_pass(
 
     from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
     from mino_nexus.loop.milestones import read_state
-    from mino_nexus.semantic.intent_surface import row_has_surface
+    from mino_nexus.knowledge.intent_surface import row_has_surface
 
     row = in_progress_milestone(read_state(cursor))
     if not isinstance(row, dict):
@@ -406,9 +406,9 @@ def defer_visual_pass(
         else:
             cursor.navigation_dispatch_reference = None
     if mid == "submit_login" and cap in {"tap_element", "tap_xy"}:
-        from mino_nexus.loop.login_transition import bind_submit_frame
+        from mino_nexus.navigation.login.transition import bind_submit_frame
         bind_submit_frame(cursor, ctx, attempt_ref=pending["attempt_ref"], writer=writer)
-        from mino_nexus.services.login_evidence_policy import note_submit_result
+        from mino_nexus.navigation.login.bookkeeping import note_submit_result
         note_submit_result(ctx, passed=True, attempt_ref=pending["attempt_ref"],
             observation_ref=str(getattr(ctx, "decision_screenshot_hash", "") or ""))
     setattr(cursor, "pending_visual_review", pending)
@@ -845,7 +845,7 @@ def apply_same_turn_prior(
             writer=writer, details={"capability_id": action_cap},
         )
     if following and not following.get("program_owned") and not confirmation and not repeated:
-        from mino_nexus.semantic.intent_surface import classify_label, landed_labels
+        from mino_nexus.knowledge.intent_surface import classify_label, landed_labels
         params = getattr(action, "params", None)
         labels = landed_labels(params if isinstance(params, dict) else {}, "")
         if labels and (following.get("match") or following.get("match_when") or following.get("exclude")):
@@ -1022,7 +1022,7 @@ def _landed_at_dispatch(
     params: dict[str, Any],
     summary: str,
 ) -> list[str]:
-    from mino_nexus.semantic.intent_surface import landed_labels
+    from mino_nexus.knowledge.intent_surface import landed_labels
 
     labels = landed_labels(params, summary)
     if cap != "tap_element" or ctx is None:
@@ -1091,7 +1091,7 @@ def _tap_evidence(
     landed: list[str],
     nodes: list[dict[str, Any]] | None = None,
 ) -> tuple[bool, str, str]:
-    from mino_nexus.semantic.intent_surface import classify_label, landed_labels, row_has_surface
+    from mino_nexus.knowledge.intent_surface import classify_label, landed_labels, row_has_surface
 
     if not row_has_surface(row):
         return False, "visual_review_required", ""
@@ -1115,7 +1115,7 @@ def _tap_evidence(
 
 
 def node_text(node: dict[str, Any]) -> list[str]:
-    from mino_nexus.semantic.intent_surface import node_labels
+    from mino_nexus.knowledge.intent_surface import node_labels
 
     return node_labels(node)
 
@@ -1131,7 +1131,7 @@ def _node_at_milli(nodes: list[dict[str, Any]], x: Any, y: Any, ctx: Any) -> dic
         px, py = fx, fy
     else:
         px, py = fx / 1000.0 * width, fy / 1000.0 * height
-    from mino_nexus.loop.ui_consent import _bounds, _size
+    from mino_nexus.navigation.geometry.ui_consent import _bounds, _size
 
     best: dict[str, Any] | None = None
     best_area = 0
@@ -1282,7 +1282,7 @@ def _confirm_visual_prior(
         break
     if changed:
         if milestone_id == "account_fill" and capability_id == "input_text":
-            from mino_nexus.services.login_evidence_policy import confirm_account_fill
+            from mino_nexus.navigation.login.bookkeeping import confirm_account_fill
             prior = getattr(cursor, "visual_prior", None) or {}
             confirm_account_fill(ctx, prior.get("params") or {},
                 attempt_ref=str(prior.get("attempt_ref") or ""),

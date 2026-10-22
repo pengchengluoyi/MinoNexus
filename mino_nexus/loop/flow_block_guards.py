@@ -65,7 +65,7 @@ def evaluate_flow_block_guards(ctx: dict[str, Any], cursor: Any) -> Optional[Flo
     block_id = str((state.get("block_ref") or {}).get("block_id") or "")
     run_ctx = ctx.get("run_ctx") or ctx.get("ctx")
     app_id = str(getattr(run_ctx, "app_id", "") or ctx.get("app_id") or "")
-    from mino_nexus.services.nav_flow_block_catalog import resolve_effective_steps
+    from mino_nexus.navigation.atlas.nav_flow_block_catalog import resolve_effective_steps
 
     steps = resolve_effective_steps(app_id=app_id, block_id=block_id) if block_id else []
 

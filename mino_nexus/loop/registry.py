@@ -192,6 +192,7 @@ def _guard_block_login_after_guest(ctx: dict[str, Any]) -> Optional[str]:
 
 def _guard_require_do_work(ctx: dict[str, Any]) -> Optional[str]:
     """供 agent_loop 在 signal_done 前调用。"""
+    from mino_nexus.loop.step_pointer import _expected_defers_to_check
     if str(ctx.get("phase") or "") != "do":
         return None
     if str(ctx.get("intent") or "") != "signal_done":
@@ -348,7 +349,7 @@ def _guard_block_prep_guest_mine_tab(ctx: dict[str, Any]) -> Optional[str]:
 
     if required_session(scene=scene) != "guest":
         return None
-    from mino_nexus.loop.session_ensure import parse_session_value
+    from mino_nexus.resources.session.ensure import parse_session_value
 
     session = parse_session_value(str(ctx.get("session_block") or ""))
     if session != "logged_in":
@@ -426,6 +427,7 @@ def _guard_block_repeat_get_otp_when_ready(ctx: dict[str, Any]) -> Optional[str]
 
 
 def _guard_require_sms_send_before_otp(ctx: dict[str, Any]) -> Optional[str]:
+    from mino_nexus.loop.login_verification import verification_send_required_message
     from mino_nexus.loop.flow_block_guards import registry_login_guards_suppressed
 
     if registry_login_guards_suppressed(ctx):
@@ -615,7 +617,7 @@ def _guard_require_session(ctx: dict[str, Any]) -> Optional[str]:
         fact_sess = str(ctx.get("session_fact_session") or "").lower()
         if fact_sess in ("logged_out", "guest"):
             return None
-    from mino_nexus.loop.session_prep_trust import prep_session_signal_done_block_reason
+    from mino_nexus.resources.session.prep_trust import prep_session_signal_done_block_reason
 
     reason = prep_session_signal_done_block_reason(
         scene=scene,
@@ -767,12 +769,12 @@ def _guard_block_fsm_off_step_target(ctx: dict[str, Any]) -> Optional[str]:
     exp = str(getattr(cur, "expected", "") or "").strip() if cur else ""
     from mino_nexus.loop.step_nav_plan import instruction_nav_target
     from mino_nexus.loop.step_pointer import _expected_defers_to_check
-    from mino_nexus.services.nav_route import (
+    from mino_nexus.navigation.atlas.nav_route import (
         click_label_from_nav_ref,
         load_fsm_doc,
         tab_root_label_for_state,
     )
-    from mino_nexus.services.nav_state_resolve import plan_route_resolved
+    from mino_nexus.navigation.atlas.nav_state_resolve import plan_route_resolved
 
     oral = instruction_nav_target(instr) or click_label_from_nav_ref(instr)
     if not oral:

@@ -29,9 +29,9 @@ from mino_nexus.core import protocol as P
 from mino_nexus.core.wire_identity import next_auxiliary_step_idx
 from mino_nexus.catalog import registry as catalog
 from mino_nexus.catalog.exec_classes import LOCAL_EXECUTOR_IDS as LOCAL_CAPS
-from mino_nexus.services.device_secrets import get_lock_password
+from mino_nexus.resources.device_secrets import get_lock_password
 from mino_nexus.core.log import SLog
-from mino_nexus.services.node_registry import NodeSession, get_registry
+from mino_nexus.resources.node_registry import NodeSession, get_registry
 from mino_nexus.core.schemas import CapturedScreen, EventResult, EventStatus, PlanEvent
 
 TAG = "RouterProxy"
@@ -92,7 +92,7 @@ def _trace_device_result(
     message = f"[{req.run_id}] result cap={req.capability_id} step={req.step_idx} purpose={_DIAGNOSTIC_PURPOSES[purpose]} {details}"
     (SLog.i if status == "pass" else SLog.w)(TAG, message)
     if req.binding_id or req.step_idx > 0 or req.capability_id == "get_foreground_app" or purpose in ("recovery_evidence", "recovery_action"):
-        from mino_nexus.loop.observe.session_log import active_writer
+        from mino_nexus.records.eventlog.writer import active_writer
 
         writer = active_writer()
         if writer is not None and writer.session_id == req.run_id:
@@ -102,7 +102,7 @@ def _trace_device_result(
 # case_runner 在后台线程跑同步 agent_loop，Scout WS 却在 FastAPI 主 loop。
 # 若用 asyncio.run() 临时 loop 去 await node.send，RESULT 回在主 loop 上，
 # waiter 永远等不到 → observe/action 每次都顶满 timeout+pad（17s / 35s）。
-_MAIN_LOOP: Optional[asyncio.AbstractEventLoop] = None
+from mino_nexus.core.async_util import run_sync as _run_sync, set_main_loop  # noqa: E402
 _OBSERVE_TIMEOUT_SEC = 8.0
 _OBSERVE_PAD_SEC = 2.0
 _MUTATE_TIMEOUT_SEC = 10.0
@@ -121,10 +121,6 @@ def _next_wire_step_idx(run_id: str) -> int:
         _WIRE_STEPS[run_id] = next_step
         return next_step
 
-
-def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
-    global _MAIN_LOOP
-    _MAIN_LOOP = loop
 
 # 本地 executor 不出网（CLAUDE.md §2.3）。名单在 exec_classes.LOCAL_EXECUTOR_IDS。
 LOCAL_CAP_PREFIXES = ("human_", "recover_", "signal_")
@@ -152,7 +148,7 @@ class RouterProxy:
         execution_mode: str = "agent",
         execution_control: Any = None,
     ):
-        from mino_nexus.services.access_scope import require_owned_device
+        from mino_nexus.resources.access_scope import require_owned_device
         require_owned_device(sn)
         self.sn = sn
         self.run_id = run_id
@@ -174,8 +170,8 @@ class RouterProxy:
     def bind_execution(self, requirements, *, session_id, env_profile='', env_surface='', probe_url='', deadline=None):
         """Enable the new contract only after its binding transaction commits."""
         from copy import deepcopy
-        from mino_nexus.services.execution_binding_runtime import bind_attempt
-        from mino_nexus.services.execution_binding import CONTRACT
+        from mino_nexus.casework.execution_binding_runtime import bind_attempt
+        from mino_nexus.contract.binding import CONTRACT
         self._binding_required = True
         self.execution_binding = None
         self._binding_requirements = self._binding_target = None
@@ -198,8 +194,8 @@ class RouterProxy:
         return deepcopy(binding)
 
     def _binding_projection(self, event, options):
-        from mino_nexus.services.execution_binding_runtime import BindingAdmissionError, committed_projection
-        from mino_nexus.loop.observe.session_log import active_writer
+        from mino_nexus.casework.execution_binding_runtime import BindingAdmissionError, committed_projection
+        from mino_nexus.records.eventlog.writer import active_writer
         writer = active_writer()
         phase = options.get('binding_phase') or self._binding_phase_override or (writer.phase if writer else '')
         if getattr(self.run_context, 'resolved_case', None) is not None:
@@ -223,7 +219,7 @@ class RouterProxy:
 
     def binding_menu(self, phase):
         """Menus use the same committed/fresh projection as dispatch; fail closed."""
-        from mino_nexus.services.execution_binding_runtime import committed_projection, menu_projection
+        from mino_nexus.casework.execution_binding_runtime import committed_projection, menu_projection
         binding = self.execution_binding
         if not binding or self._task_aborted():
             return set()
@@ -238,7 +234,7 @@ class RouterProxy:
         except Exception as exc:
             # Preserve the actual admission failure. An empty bound menu must
             # never erase an epoch/resource failure into a generic missing tool.
-            from mino_nexus.loop.observe.session_log import active_writer
+            from mino_nexus.records.eventlog.writer import active_writer
             writer = active_writer()
             if writer is not None:
                 writer.append("binding/menu_blocked", {
@@ -260,7 +256,7 @@ class RouterProxy:
         if not tid:
             return False
         try:
-            from mino_nexus.services import run_store
+            from mino_nexus.casework import run_store
 
             return run_store.task_cancelled(tid)
         except Exception:
@@ -299,7 +295,7 @@ class RouterProxy:
         """替代上游的 `capture_screen(ctx, ...)`，返回值保持 CapturedScreen 形状。"""
         plat = ""
         if kind == "screenshot":
-            from mino_nexus.services.settings import (
+            from mino_nexus.platform.settings import (
                 channel_screenshot_compress_ratio,
                 note_channel_capture_ratio,
             )
@@ -364,7 +360,7 @@ class RouterProxy:
 
         # N0 复用当前 session，后续 N2 在同一守卫上加入绑定事务。
         # 观察也可能带副作用前置（如开启浏览器），因此持久化失效后不再派发。
-        from mino_nexus.loop.observe.session_log import active_writer
+        from mino_nexus.records.eventlog.writer import active_writer
 
         session_writer = active_writer()
         if session_writer is not None:
@@ -463,7 +459,7 @@ class RouterProxy:
             return _fail(event, started, t0, why, executor_used="router_proxy")
 
         if _device_platform(self.sn, node) in {"desktop", "mac", "win"}:
-            from mino_nexus.services.device_admission import owns_desktop
+            from mino_nexus.resources.device_admission import owns_desktop
             dev = node.devices.get(self.sn)
             hint = self._device_hint(node)
             task_id = self.task_id or (run_id or self.run_id).split("::", 1)[0]
@@ -588,9 +584,9 @@ class RouterProxy:
         register_inputs(req.params)
         register_inputs(req.device_hint)
         SLog.i(TAG, f"[{req.run_id}] dispatch cap={req.capability_id} step={req.step_idx} purpose={_DIAGNOSTIC_PURPOSES[purpose]} order={order} impl={(impl or {}).get('id')}")
-        from mino_nexus.services import run_write_safety
+        from mino_nexus.casework import run_write_safety
         # Unknown capabilities are conservatively writes; only known framework reads are exempt.
-        from mino_nexus.services.execution_binding import effect_class
+        from mino_nexus.contract.binding import effect_class
         is_write = effect_class(req.capability_id) != "read"
         try:
             ticket = run_write_safety.begin(self.task_id, req, node_id=node.node_id, scout_process_generation=node.scout_process_generation) if is_write and self.task_id else ""
@@ -626,7 +622,7 @@ class RouterProxy:
 
     async def _dispatch_v5(self, event, run_id, started, t0, options):
         from mino_nexus.core.secret_redaction import register_inputs
-        from mino_nexus.services.web_v5_contract import PROFILE
+        from mino_nexus.contract.web_v5_contract import PROFILE
         reads = {"probe", "read_web_target_facts", "screenshot"}
         cleanup = {"cancel_run", "close_web_v5"}
         writes = {"open_web_v5", "tap_target", "input_target"}
@@ -701,8 +697,8 @@ class RouterProxy:
         return result
 
     async def _dispatch_bound_otp(self, event, *, started, t0, run_id, options):
-        from mino_nexus.services.otp_binding import GMAIL_EVENT, GMAIL_EXECUTOR, OTP_CHILD
-        from mino_nexus.services.local_tool_dependencies import evaluate
+        from mino_nexus.resources.otp_binding import GMAIL_EVENT, GMAIL_EXECUTOR, OTP_CHILD
+        from mino_nexus.resources.local_tool_dependencies import evaluate
         ctx = options.get('ctx') or self.run_context
         try:
             child = OTP_CHILD.get()
@@ -718,7 +714,7 @@ class RouterProxy:
             if projection['runs_on'] != 'scout' or projection['executor_order'] != [GMAIL_EXECUTOR]:
                 raise ValueError('binding_plugin_assembly_invalid')
             node, _ = await asyncio.to_thread(get_registry().resolve, self.sn)
-            from mino_nexus.core.execution_user import require_user_id
+            from mino_nexus.platform.identity import require_user_id
             if node is None or node.owner_user_id != require_user_id():
                 raise ValueError('plugin_node_unavailable')
             left = float(event.params['deadline_ts']) - time.time()
@@ -775,12 +771,12 @@ class RouterProxy:
         node, why = await asyncio.to_thread(get_registry().resolve, self.sn)
         if node is None:
             return _fail(event, started, t0, why, executor_used="router_proxy")
-        from mino_nexus.core.execution_user import require_user_id
+        from mino_nexus.platform.identity import require_user_id
         uid = require_user_id()
         if node.owner_user_id != uid:
             return _fail(event, started, t0, "plugin_node_unavailable", executor_used="router_proxy")
         if event.capability_id == "plugin.gmail.fetch_otp":
-            from mino_nexus.services.execution_dependencies import plugin_fact
+            from mino_nexus.resources.execution_dependencies import plugin_fact
             dependency = plugin_fact([node], {"kind": "plugin", "class": "mail",
                 "plugin_id": "gmail", "node_id": node.node_id}, uid)
             if dependency["status"] != "ready":
@@ -829,7 +825,8 @@ class RouterProxy:
         compress_ratio: float | None = None,
         diagnostic_purpose: str = "loop_observation",
     ) -> CapturedScreen:
-        from mino_nexus.loop.observe.session_log import active_writer
+        from mino_nexus.platform.settings import note_channel_capture_ratio
+        from mino_nexus.records.eventlog.writer import active_writer
         session_writer = active_writer()
         if session_writer is not None:
             session_writer.require_persisted()
@@ -843,13 +840,13 @@ class RouterProxy:
 
         plat = _device_platform(self.sn, node)
         if compress_ratio is None and kind == "screenshot":
-            from mino_nexus.services.settings import channel_screenshot_compress_ratio
+            from mino_nexus.platform.settings import channel_screenshot_compress_ratio
 
             compress_ratio = channel_screenshot_compress_ratio(plat)
         elif compress_ratio is None:
             compress_ratio = 1.0
         if kind == "screenshot":
-            from mino_nexus.services.settings import note_channel_capture_ratio
+            from mino_nexus.platform.settings import note_channel_capture_ratio
 
             note_channel_capture_ratio(float(compress_ratio or 1.0), authoritative=plat in {"desktop", "mac", "win"})
         family = set(executors_for_platform(plat))
@@ -938,7 +935,7 @@ class RouterProxy:
         plat = _device_platform(self.sn, node)
         cap = catalog.get_capability(event.capability_id)
         if plat in {"desktop", "mac", "win"}:
-            from mino_nexus.services.desktop_catalog import CAPABILITY_IDS, capabilities
+            from mino_nexus.knowledge.desktop_catalog import CAPABILITY_IDS, capabilities
 
             if event.capability_id in CAPABILITY_IDS:
                 dev = node.devices.get(self.sn)
@@ -988,8 +985,8 @@ class RouterProxy:
         if self.target_package:
             hint["target_package"] = self.target_package
         if plat in {"desktop", "mac", "win"}:
-            from mino_nexus.services import run_store
-            from mino_nexus.services.device_admission import owns_desktop
+            from mino_nexus.casework import run_store
+            from mino_nexus.resources.device_admission import owns_desktop
             task_id = self.task_id or self.run_id.split("::", 1)[0]
             task = run_store.get(task_id) if task_id else None
             target = (task or {}).get("device_targets", {}).get(self.sn) or {}
@@ -1025,7 +1022,7 @@ class RouterProxy:
         *,
         pad_sec: Optional[float] = None,
     ) -> Optional[P.Result]:
-        from mino_nexus.services import run_store
+        from mino_nexus.casework import run_store
         task_id = self.task_id or str(getattr(payload, "run_id", "") or self.run_id).split("::", 1)[0]
         task = await asyncio.to_thread(run_store.get, task_id) if task_id else None
         if task:
@@ -1033,7 +1030,7 @@ class RouterProxy:
             allowed = task.get("allowed_node_ids")
             if (target.get("node_id") and target["node_id"] != node.node_id) or (allowed is not None and node.node_id not in allowed):
                 raise NoRouteError("device_owner_drift: 设备已不属于准入时固定节点")
-            from mino_nexus.services.execution_policy import remaining
+            from mino_nexus.casework.execution_policy import remaining
             case = next((row for row in task.get("cases") or [] if row.get("sn") == self.sn and row.get("status") == "running"), None)
             left = remaining(task, case)
             if left is not None:
@@ -1062,20 +1059,7 @@ class RouterProxy:
 # ---------------- 小工具 ----------------
 
 
-def executors_for_platform(platform: str) -> tuple[str, ...]:
-    """这台设备类型允许的通道。家族互斥：Web 没有 adb，安卓/iOS 没有 playwright。"""
-    plat = str(platform or "").strip().lower()
-    if plat in ("web", "browser", "playwright"):
-        return ("playwright",)
-    if plat in ("ios",):
-        return ("ios_wda", "remote")
-    if plat in {"desktop", "mac", "win"}:
-        return ("desktop",)
-    if plat == "android":
-        return ("adb", "remote")
-    return ()
-
-
+from mino_nexus.contract.executors import executors_for_platform  # noqa: E402,F401
 def _binding_wire_fields(projection):
     if projection is None:
         return {}
@@ -1084,50 +1068,13 @@ def _binding_wire_fields(projection):
         'scout_process_generation', 'capability_revision')}
 
 
-def _device_platform(sn: str, node: NodeSession) -> str:
-    from mino_nexus.runtime.run_context import is_web_slot
-
-    if is_web_slot(sn):
-        return "web"
-    dev = node.devices.get(sn)
-    plat = str(getattr(dev, "platform", "") or "").strip().lower()
-    if plat:
-        return plat
-    return "unknown"
-
-
-_CHANNEL_EXEC = (("desktop", "desktop"), ("playwright", "playwright"), ("adb", "adb"), ("remote", "remote"), ("ios", "ios_wda"))
-_ONLINE = frozenset({"connected", "online", "available", "authenticated"})
-
-
-def _channel_state(raw: Any) -> str:
-    if isinstance(raw, dict):
-        return str(raw.get("state") or raw.get("status") or "").strip().lower()
-    return str(raw or "").strip().lower()
-
-
-def executors_for_device(sn: str, node: NodeSession) -> list[str]:
-    """这台 sn 此刻能走的 executor。
-
-    节点上 adb 插件在（哪怕手机全离线）不构成「给 Web 槽发 adb」的理由。
-    """
-    plat = _device_platform(sn, node)
-    family = list(executors_for_platform(plat))
-    avail = set(node.available_executors())
-    ordered = [ex for ex in family if ex in avail]
-    dev = node.devices.get(sn)
-    connected: list[str] = []
-    if dev is not None and isinstance(dev.channels, dict):
-        for ch, ex in _CHANNEL_EXEC:
-            if ex not in family:
-                continue
-            if _channel_state((dev.channels or {}).get(ch)) in _ONLINE:
-                connected.append(ex)
-    if plat in {"desktop", "mac", "win"}:
-        return [ex for ex in ordered if ex in connected] if dev and dev.desktop_state == "ready" else []
-    if connected:
-        return [ex for ex in ordered if ex in set(connected)]
-    return ordered
+from mino_nexus.resources.executor_channels import (  # noqa: E402
+    executors_for_device,
+    device_platform as _device_platform,
+    channel_state as _channel_state,
+    _CHANNEL_EXEC,
+    _ONLINE,
+)
 
 
 def _timeout_for(event: PlanEvent) -> float:
@@ -1231,24 +1178,7 @@ def _event_result_from(event: PlanEvent, res: P.Result, started: str, *, node=No
 
 def _dispatch_local_in_runtime(event: PlanEvent, *, ctx: Any, **kwargs: Any) -> EventResult:
     from mino_nexus.loop.local_executors import dispatch_local
-    from mino_nexus.services.control_registry import registry_runtime
+    from mino_nexus.knowledge.control_registry import registry_runtime
 
     with registry_runtime(getattr(ctx, "execution_mode", "agent")):
         return dispatch_local(event, ctx=ctx, **kwargs)
-
-
-def _run_sync(coro):
-    """同步壳。agent_loop 在后台线程；Scout WS 在主 loop —— 必须桥接。"""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        main = _MAIN_LOOP
-        if main is not None and main.is_running():
-            fut = asyncio.run_coroutine_threadsafe(coro, main)
-            return fut.result()
-        return asyncio.run(coro)
-    coro.close()
-    raise RuntimeError(
-        "当前线程已有事件循环：请改用 dispatch_async / observe_async，"
-        "或把同步循环放进 asyncio.to_thread"
-    )

@@ -160,7 +160,7 @@ def enrich_tap_params(
         if isinstance(node, dict):
             pool.append(node)
     sw, sh = _screen_wh(pool) if pool else (0, 0)
-    from mino_nexus.services.nav_tab_slots import find_bottom_tab_slots
+    from mino_nexus.navigation.atlas.nav_tab_slots import find_bottom_tab_slots
 
     slots = find_bottom_tab_slots(pool) if pool else []
     labels = _hint_labels(out, hint)
@@ -226,7 +226,7 @@ def enrich_tap_params(
                 break
 
     _promote_fallback_xy(out, screen_w=sw, screen_h=sh)
-    from mino_nexus.loop.ui_consent import retarget_tap_to_consent_control
+    from mino_nexus.navigation.geometry.ui_consent import retarget_tap_to_consent_control
 
     out = retarget_tap_to_consent_control(out, pool)
     return out

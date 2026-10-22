@@ -29,15 +29,7 @@ def _new_id(prefix: str = "m") -> str:
     return f"{prefix}{uuid.uuid4().hex[:8]}"
 
 
-def read_state(cursor: Any) -> dict[str, Any]:
-    raw = getattr(cursor, "success_criteria_state", None)
-    if isinstance(raw, dict) and raw.get("schema"):
-        return dict(raw)
-    return empty_success_criteria(cursor)
-
-
-def write_state(cursor: Any, state: dict[str, Any]) -> None:
-    cursor.success_criteria_state = dict(state)
+from mino_nexus.runtime.cursor_state import read_state, write_state  # noqa: F401
 
 
 def _sync_scope(cursor: Any, state: dict[str, Any]) -> dict[str, Any]:
@@ -161,7 +153,7 @@ def milestones_from_flow_steps(
         }
         if kind == "nav" and step.get("nav_target"):
             row.update(kind="hook", tier="policy", nav_target=str(step["nav_target"]), exec_caps=["tap_element", "press_key"])
-        from mino_nexus.services.step_requirements import contract
+        from mino_nexus.resources.step_requirements import contract
         row.update(contract(step))
         if row['requirement'] == 'conditional':
             row.update(optional=False, kind='hook')
@@ -208,7 +200,7 @@ def should_seed_login_block_milestones(ctx: Any, cursor: Any) -> bool:
         return False
     fact = dict(getattr(ctx, "session_fact", None) or {}) if ctx is not None else {}
     sess = str(fact.get("session") or "").strip().lower()
-    from mino_nexus.services.login_evidence import can_commit
+    from mino_nexus.navigation.login.evidence import can_commit
     if sess == "logged_in" and can_commit(ctx):
         return False
     return True
@@ -216,7 +208,7 @@ def should_seed_login_block_milestones(ctx: Any, cursor: Any) -> bool:
 
 def _milestone_passed(row: dict[str, Any]) -> bool:
     st = str(row.get("status") or "pending").strip().lower()
-    from mino_nexus.services.step_requirements import condition_complete
+    from mino_nexus.resources.step_requirements import condition_complete
     return condition_complete(row) if row.get("requirement") == "conditional" else st in _TERMINAL
 
 
@@ -312,12 +304,23 @@ def rewind_otp_field_for_refocus(cursor: Any, *, writer: Any = None) -> bool:
 
 
 def _record_tap_milli(ctx: Any, params: dict[str, Any] | None, attr: str) -> None:
+    """记下最近一次点击的屏幕坐标。
+
+    `attr` 只可能是下面两个字段之一（由调用点固定），所以显式赋值，
+    不做 `setattr` —— 属性名写死才能被检索和类型检查看见。
+    """
     if ctx is None or not isinstance(params, dict):
+        return
+    if attr not in ("web_sms_code_tap_milli", "web_input_tap_milli"):
         return
     try:
         x, y = params.get("x"), params.get("y")
         if x is not None and y is not None:
-            setattr(ctx, attr, (int(x), int(y)))
+            value = (int(x), int(y))
+            if attr == "web_sms_code_tap_milli":
+                ctx.web_sms_code_tap_milli = value
+            else:
+                ctx.web_input_tap_milli = value
     except (TypeError, ValueError):
         pass
 
@@ -483,6 +486,8 @@ def note_tool_pass_milestone(
     ctx: Any = None,
 ) -> bool:
     """工具 pass 后推进对应子里程碑（优先 in_progress；hook_cap / id 匹配）。"""
+    from mino_nexus.loop.login_verification import record_verification_send
+    from mino_nexus.loop.intent_tap import tap_surface_blocks_pass
     cap = str(capability_id or "").strip()
     if cap == "wait_screen_ready":
         setattr(cursor, "wait_ready_passes", int(getattr(cursor, "wait_ready_passes", 0) or 0) + 1)
@@ -821,26 +826,26 @@ def note_tool_pass_milestone(
                 if not _milestone_passed(row):
                     row["otp_ready"] = True
     if ctx is not None and isinstance(row, dict) and row.get("status") == "pass":
-        from mino_nexus.services.login_evidence_policy import confirm_account_fill, note_submit_result
+        from mino_nexus.navigation.login.bookkeeping import confirm_account_fill, note_submit_result
         attempt = f"{getattr(writer, 'session_id', '')}:{getattr(writer, 'turn', 0)}" if writer else ""
         observation = str(getattr(ctx, "decision_screenshot_hash", "") or "")
         if row.get("id") == "account_fill" and cap == "input_text":
             confirm_account_fill(ctx, p, attempt_ref=attempt, observation_ref=observation)
         elif row.get("id") == "submit_login" and cap in {"tap_element", "tap_xy"}:
-            from mino_nexus.loop.login_transition import bind_submit_frame
+            from mino_nexus.navigation.login.transition import bind_submit_frame
             bind_submit_frame(cursor, ctx, attempt_ref=attempt, writer=writer)
             note_submit_result(ctx, passed=True, attempt_ref=attempt, observation_ref=observation)
     state["milestones"] = ms
     state["status"] = "in_progress"
     write_state(cursor, state)
     if ctx is not None and cap in ("clear_app_cache", "system_pkg_clear"):
-        from mino_nexus.services.resource_transition import emit_clear_app_cache
+        from mino_nexus.casework.resource_transition import emit_clear_app_cache
 
         emit_clear_app_cache(ctx)
     if ctx is not None and cap == "close_app":
         plat = str(getattr(ctx, "platform", "") or "").strip().lower()
         if plat in ("web", "browser", "playwright"):
-            from mino_nexus.services.resource_transition import emit_device_logout
+            from mino_nexus.casework.resource_transition import emit_device_logout
 
             emit_device_logout(ctx, source="browser_close")
             from mino_nexus.loop.login_state_probe import note_web_context_closed
@@ -859,7 +864,7 @@ def note_tool_pass_milestone(
                 and str(row.get("id") or "") == "login_state"
                 and str(row.get("status") or "") == "pass"
             ):
-                from mino_nexus.services.resource_transition import emit_login_complete
+                from mino_nexus.casework.resource_transition import emit_login_complete
 
                 cursor.login_state_committed = emit_login_complete(ctx)
                 break
@@ -946,7 +951,7 @@ def prepend_login_block_milestones(
     ctx: Any,
     app_id: str,
 ) -> dict[str, Any]:
-    from mino_nexus.services.nav_flow_block_catalog import resolve_effective_steps
+    from mino_nexus.navigation.atlas.nav_flow_block_catalog import resolve_effective_steps
 
     block_id = login_block_id_for_ctx(ctx)
     if str((state.get("block_ref") or {}).get("block_id") or "") == block_id:
@@ -1298,7 +1303,7 @@ def evaluate_milestones(
         if not isinstance(row, dict):
             continue
         st = str(row.get("status") or "pending").strip().lower()
-        from mino_nexus.services.step_requirements import condition_complete
+        from mino_nexus.resources.step_requirements import condition_complete
         if row.get('requirement') == 'conditional' and not condition_complete(row):
             pending_required.append(str(row.get('title') or row.get('id')))
             continue

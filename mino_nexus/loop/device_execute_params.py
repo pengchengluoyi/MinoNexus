@@ -88,7 +88,7 @@ def enrich_web_tap_params(params: dict[str, Any], ctx: Any | None = None) -> dic
 
 def _coords_from_web_focus(ctx: Any) -> dict[str, Any]:
     from mino_nexus.loop.web.web_progress import normalize_web_focus
-    from mino_nexus.loop.ui_consent import tap_params_for_control
+    from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
 
     focus = normalize_web_focus(getattr(ctx, "web_focus", None) if ctx else None)
     if not focus.get("editable_ready"):
@@ -102,7 +102,7 @@ def _coords_from_web_focus(ctx: Any) -> dict[str, Any]:
 
 
 def _dom_node_is_email_like(node: dict[str, Any]) -> bool:
-    from mino_nexus.loop.ui_consent import _label_text
+    from mino_nexus.navigation.geometry.ui_consent import _label_text
 
     lab = _label_text(node)
     if "@" in lab:
@@ -117,7 +117,7 @@ def _dom_nodes_same_place(
     *,
     tol_px: float = 28.0,
 ) -> bool:
-    from mino_nexus.loop.ui_consent import _bounds, _center
+    from mino_nexus.navigation.geometry.ui_consent import _bounds, _center
 
     ax, ay = _center(_bounds(a))
     bx, by = _center(_bounds(b))
@@ -137,10 +137,10 @@ def resolve_web_sms_code_tap_params(
         except (TypeError, ValueError):
             pass
     pool = _tap_node_pool(ctx, hierarchy_nodes)
-    from mino_nexus.loop.ui_consent import tap_params_for_control
+    from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
 
     if pool:
-        from mino_nexus.loop.ui_dom import (
+        from mino_nexus.navigation.geometry.ui_dom import (
             find_dom_email_field,
             find_dom_otp_field,
             find_dom_text_input_below,
@@ -186,7 +186,7 @@ def _coords_from_login_field(
 ) -> dict[str, Any]:
     nodes = pool if pool is not None else _tap_node_pool(ctx, None)
     from mino_nexus.contract.execution.ui import ui_channel_label, ui_channel_from_ctx
-    from mino_nexus.loop.ui_consent import tap_params_for_control
+    from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
 
     fld = str(field or "").strip().lower()
     if fld in ("email", "login_email") and ctx is not None:
@@ -198,7 +198,7 @@ def _coords_from_login_field(
             except (TypeError, ValueError):
                 cached_xy = None
         if nodes:
-            from mino_nexus.loop.ui_dom import find_dom_email_field
+            from mino_nexus.navigation.geometry.ui_dom import find_dom_email_field
 
             email_n = find_dom_email_field(nodes)
             if email_n is not None:
@@ -229,10 +229,10 @@ def _coords_from_login_field(
 
     if not nodes:
         return {}
-    from mino_nexus.loop.ui_sms_request import credential_field_for_login
+    from mino_nexus.navigation.geometry.ui_sms_request import credential_field_for_login
 
     ch = ui_channel_label(ui_channel_from_ctx(ctx))
-    from mino_nexus.services.account_credential_text import login_kind_from_ctx
+    from mino_nexus.resources.account_credential_text import login_kind_from_ctx
 
     kind = login_kind_from_ctx(ctx)
     if fld in ("email", "login_email"):
@@ -269,7 +269,7 @@ def _cached_sms_milli(ctx: Any) -> tuple[int, int] | None:
 
 def _same_sent_point(ax: Any, ay: Any, bx: Any, by: Any, ctx: Any, *, tol_px: int = 40) -> bool:
     """两个派单坐标都按视口换像素后再比，避免千分比和像素直接相减。"""
-    from mino_nexus.ai.coords import milli_to_viewport_px
+    from mino_nexus.contract.coords import milli_to_viewport_px
 
     w, h = _viewport_wh(ctx)
     if w <= 0 or h <= 0:
@@ -296,8 +296,8 @@ def email_tap_lands_on_otp(ctx: Any | None, params: dict[str, Any] | None) -> bo
     pool = _tap_node_pool(ctx, None)
     if not pool:
         return False
-    from mino_nexus.loop.ui_consent import tap_params_for_control
-    from mino_nexus.loop.ui_dom import find_dom_otp_field
+    from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
+    from mino_nexus.navigation.geometry.ui_dom import find_dom_otp_field
 
     otp = find_dom_otp_field(pool)
     if otp is None:
@@ -317,8 +317,8 @@ def _steer_email_off_otp(out: dict[str, Any], ctx: Any | None, field: str) -> di
     pool = _tap_node_pool(ctx, None)
     if not pool:
         return out
-    from mino_nexus.loop.ui_consent import tap_params_for_control
-    from mino_nexus.loop.ui_dom import find_dom_email_field, find_dom_otp_field
+    from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
+    from mino_nexus.navigation.geometry.ui_dom import find_dom_email_field, find_dom_otp_field
 
     otp = find_dom_otp_field(pool)
     if otp is None:
@@ -331,7 +331,7 @@ def _steer_email_off_otp(out: dict[str, Any], ctx: Any | None, field: str) -> di
         out.pop("x", None)
         out.pop("y", None)
         out.pop("email_coords_from_prior_tap_only", None)
-        setattr(ctx, "web_email_tap_milli", None)
+        ctx.web_email_tap_milli = None
         return out
     email_xy = tap_params_for_control(email, pool)
     if email_xy.get("x") is None:
@@ -339,7 +339,7 @@ def _steer_email_off_otp(out: dict[str, Any], ctx: Any | None, field: str) -> di
     out["x"] = email_xy["x"]
     out["y"] = email_xy["y"]
     out.pop("email_coords_from_prior_tap_only", None)
-    setattr(ctx, "web_email_tap_milli", (int(out["x"]), int(out["y"])))
+    ctx.web_email_tap_milli = (int(out["x"]), int(out["y"]))
     return out
 
 
@@ -411,8 +411,8 @@ def enrich_web_input_text_params(params: dict[str, Any], ctx: Any | None = None)
         if field in ("sms_code", "验证码", "otp") and extra.get("x") is not None:
             pool = _tap_node_pool(ctx, None)
             if pool:
-                from mino_nexus.loop.ui_dom import find_dom_email_field
-                from mino_nexus.loop.ui_consent import tap_params_for_control
+                from mino_nexus.navigation.geometry.ui_dom import find_dom_email_field
+                from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
 
                 email_n = find_dom_email_field(pool)
                 if email_n is not None:
@@ -421,7 +421,7 @@ def enrich_web_input_text_params(params: dict[str, Any], ctx: Any | None = None)
                     ox, oy = int(extra.get("x") or -1), int(extra.get("y") or -1)
                     if ex >= 0 and ox >= 0 and _same_sent_point(ex, ey, ox, oy, ctx):
                         extra = {}
-                        setattr(ctx, "web_sms_code_tap_milli", None)
+                        ctx.web_sms_code_tap_milli = None
         locked = bool(out.get("otp_coords_from_prior_tap_only")) and out.get("x") is not None
         locked_email = (
             bool(out.get("email_coords_from_prior_tap_only")) and out.get("x") is not None
@@ -465,5 +465,5 @@ def enrich_web_input_text_params(params: dict[str, Any], ctx: Any | None = None)
         and out.get("y") is not None
         and not out.get("otp_coords_from_prior_tap_only")
     ):
-        setattr(ctx, "web_sms_code_tap_milli", (int(out["x"]), int(out["y"])))
+        ctx.web_sms_code_tap_milli = (int(out["x"]), int(out["y"]))
     return _steer_email_off_otp(out, ctx, field)

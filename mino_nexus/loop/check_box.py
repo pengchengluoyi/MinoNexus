@@ -3,6 +3,8 @@ import time
 
 
 def execute(event, *, ctx, router, t0):
+    from mino_nexus.records.eventlog.writer import active_writer
+    from mino_nexus.loop.checkbox_observation import observe_checkbox
     from mino_nexus.core.protocol import EventStatus
     from mino_nexus.loop.local_executors import _result, _dispatch_device, _exec_ok, _hierarchy_nodes
     from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
@@ -75,7 +77,7 @@ def execute(event, *, ctx, router, t0):
                        'execution': {'execution_started': 'no', 'phase': 'resolve', 'reason_code': 'state_already_satisfied'}})
     if ('enabled' in node and not node_flag(node, 'enabled')) or ('visible' in node and not node_flag(node, 'visible')):
         return result(EventStatus.BLOCKED, 'checkbox_target_not_actionable')
-    from mino_nexus.loop.ui_consent import tap_params_for_control
+    from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
     tap_params = tap_params_for_control(node, _hierarchy_nodes(ctx))
     if visual_target_verified and not resource and not ref:
         width, height = visual_before['viewport_wh']
@@ -83,7 +85,7 @@ def execute(event, *, ctx, router, t0):
         tap_params = {'x': round((left + right) * 500 / width), 'y': round((top + bottom) * 500 / height),
                       'point_policy': 'coordinate'}
         from mino_nexus.action_space.scheme import use_visual_fallback
-        from mino_nexus.loop.observe.session_log import active_writer
+        from mino_nexus.records.eventlog.writer import active_writer
         # 已用当前截图正向核对这个精确原生控件，坐标动作必须同步切换观察策略。
         # 否则 device_execute_params 会把 point_policy 改回 node，拒绝实际有效的视觉目标。
         use_visual_fallback(ctx, reason='native_checkbox_positive_visual_state', writer=active_writer())
@@ -110,7 +112,7 @@ def execute(event, *, ctx, router, t0):
         visual_after = observe_checkbox(ctx, router, observed)
     after_known = state_known(observed) or visual_after.get('verified') is True
     after_checked = visual_after['checked'] if visual_after.get('verified') else (node_flag(observed, 'checked') if after_known else None)
-    from mino_nexus.loop.observe.session_log import active_writer
+    from mino_nexus.records.eventlog.writer import active_writer
     writer = active_writer()
     if writer:
         writer.append('checkbox/observation', {

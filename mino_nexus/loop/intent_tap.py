@@ -6,7 +6,7 @@ from typing import Any, Optional
 from mino_nexus.ai.schemas import AgentAction, AgentDecision
 from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
 from mino_nexus.loop.milestones import read_state
-from mino_nexus.semantic.intent_surface import classify_node, row_has_surface
+from mino_nexus.knowledge.intent_surface import classify_node, row_has_surface
 
 
 def tap_surface_blocks_pass(
@@ -25,7 +25,7 @@ def tap_surface_blocks_pass(
         return False
     if not row_has_surface(row):
         return False
-    from mino_nexus.semantic.intent_surface import classify_label, landed_labels
+    from mino_nexus.knowledge.intent_surface import classify_label, landed_labels
 
     nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
     labels = landed_labels(params, summary)
@@ -93,7 +93,7 @@ def dom_intent_tap_decision(cursor: Any, ctx: Any, writer: Any = None) -> Option
             )
         return None
     node, phrase = hits[0]
-    from mino_nexus.loop.ui_consent import tap_params_for_control
+    from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
 
     params = tap_params_for_control(node, nodes)
     params["selector_text"] = phrase
@@ -164,7 +164,7 @@ def dom_checkbox_tap_decision(
                           "execution_started": False})
         advance_in_progress_focus(cursor, writer=writer)
         return False, None
-    from mino_nexus.loop.ui_consent import tap_params_for_control
+    from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
 
     tap = tap_params_for_control(node, nodes)
     phrase = label or str(node.get("text") or node.get("content_desc") or "")

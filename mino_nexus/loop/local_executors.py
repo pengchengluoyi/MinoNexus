@@ -5,8 +5,8 @@ import time
 from datetime import datetime
 from typing import Any
 
-from mino_nexus.services.account_lease import format_accounts_brief, lease_for_context
-from mino_nexus.services.project_env import account_ident
+from mino_nexus.resources.accounts.lease import format_accounts_brief, lease_for_context
+from mino_nexus.resources.project_env import account_ident
 from mino_nexus.loop.router_proxy import LOCAL_CAPS, LOCAL_CAP_PREFIXES, is_local_cap
 from mino_nexus.core.protocol import EventStatus
 from mino_nexus.core.schemas import EventResult, PlanEvent
@@ -61,7 +61,7 @@ def _visible_bottom_tab_slots(ctx: Any) -> list[dict[str, Any]]:
     nodes = getattr(ctx, "nav_hierarchy_nodes", None) if ctx is not None else None
     if not isinstance(nodes, list) or not nodes:
         return []
-    from mino_nexus.services.nav_tab_slots import find_bottom_tab_slots
+    from mino_nexus.navigation.atlas.nav_tab_slots import find_bottom_tab_slots
 
     return find_bottom_tab_slots(nodes)
 
@@ -106,7 +106,7 @@ def _tap_selector_likely_on_screen(params: dict[str, Any], nodes: list[dict[str,
 
 
 def _visible_tab_labels(ctx: Any) -> list[str]:
-    from mino_nexus.services.nav_tab_slots import find_bottom_tab_slots
+    from mino_nexus.navigation.atlas.nav_tab_slots import find_bottom_tab_slots
 
     nodes = getattr(ctx, "nav_hierarchy_nodes", None) if ctx is not None else None
     if not isinstance(nodes, list):
@@ -119,6 +119,13 @@ def _visible_tab_labels(ctx: Any) -> list[str]:
         if lab and lab not in out:
             out.append(lab)
     return out
+
+
+from mino_nexus.resources.otp_resolve import (
+    lease_email_for_otp as _lease_email_for_otp,
+    otp_context as _otp_context,
+    resolve_otp as _resolve_otp,
+)
 
 
 def dispatch_local(
@@ -141,10 +148,10 @@ def dispatch_local(
             error="capability_disabled",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
-    from mino_nexus.services.local_tool_dependencies import evaluate
+    from mino_nexus.resources.local_tool_dependencies import evaluate
     dependencies = evaluate(cap, ctx=ctx, shot=shot, execution=True)
     if dependencies:
-        from mino_nexus.loop.observe.session_log import active_writer
+        from mino_nexus.records.eventlog.writer import active_writer
         writer = active_writer()
         if writer is not None:
             writer.append("dependency/check", {"capability_id": cap, "facts": dependencies})
@@ -263,10 +270,39 @@ def dispatch_local(
             executor = "internal"
         known = session in {"logged_in", "logged_out", "guest"}
         mismatch = req == "guest" and session == "logged_in"
-        error = "initial_session_required" if preserve_initial else "login_observation_unavailable" if not known else "session_requirement_mismatch" if mismatch else ""
+        if not known and not preserve_initial:
+            # 这个能力只回答"当前是不是登录页"：登录有 loading 态，模型分析完界面可能已经切走，
+            # 所以它用来卡住"在登录页上继续跑后续步骤"，不承担账号身份举证。
+            # 证不出登录态不等于失败（2026-10-22：商品页上无法举证 guest，用例被整体 blocked）。
+            from mino_nexus.loop.login_account_lease import login_surface_detected
+
+            on_login_page = login_surface_detected(ctx)
+            if req in {"guest", "logged_out"}:
+                # 例外：用例明确要求未登录。这时"证不出"不能算通过 —— 放行会在已登录设备上
+                # 找一个根本不存在的登录入口（2026-10-22 api-1-218：页面上是「续命研究员」的
+                # 账号中心，模型被要求点登录入口，连点两次「我的」后按回看策略停止）。
+                # 交回 prep 调度：按应用配置导航取证 / 受限退出后重新观察，仍证不出再明确阻断。
+                return _result(
+                    event,
+                    status=EventStatus.FAIL,
+                    summary=(
+                        "当前在登录页，尚不能确认未登录；先按配置导航取证或退出后重新观察"
+                        if on_login_page
+                        else "当前不在登录页，但用例要求未登录且尚未取证；先按配置导航取证或退出后重新观察"
+                    )[:500],
+                    error="login_observation_unavailable",
+                    executor=executor,
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                )
+            summary = (
+                "当前在登录页（登录中或未提交），只报告页面性质，不判定账号状态"
+                if on_login_page
+                else "当前不在登录页，不把登录态作为后续步骤的前置"
+            )
+        error = "initial_session_required" if preserve_initial else "session_requirement_mismatch" if mismatch else ""
         return _result(
             event,
-            status=EventStatus.BLOCKED if preserve_initial or not known else EventStatus.FAIL if mismatch else EventStatus.PASS,
+            status=EventStatus.BLOCKED if preserve_initial else EventStatus.FAIL if mismatch else EventStatus.PASS,
             summary=summary[:500],
             error=error,
             executor=executor,
@@ -274,7 +310,7 @@ def dispatch_local(
         )
     if cap == "lease_account":
         params = dict(event.params or {})
-        from mino_nexus.loop.session_ensure import account_need_from_case
+        from mino_nexus.resources.session.ensure import account_need_from_case
 
         scene = getattr(ctx, "case_scene", None) if ctx is not None else None
         case_row = getattr(ctx, "case", None) if ctx is not None else None
@@ -286,13 +322,13 @@ def dispatch_local(
         if tid:
             need["template_id"] = tid
         if isinstance(params.get("requirements"), dict):
-            from mino_nexus.services.account_pool_templates import merge_need_requirements
+            from mino_nexus.resources.accounts.pool_templates import merge_need_requirements
 
             need["requirements"] = merge_need_requirements(
                 need.get("requirements") if isinstance(need.get("requirements"), dict) else {},
                 params.get("requirements"),
             )
-        from mino_nexus.services.account_lease import INTERACTIVE_ACQUIRE_WAIT_MS
+        from mino_nexus.resources.accounts.lease import INTERACTIVE_ACQUIRE_WAIT_MS
 
         row, err = lease_for_context(
             ctx,
@@ -368,7 +404,7 @@ def _dispatch_device(
 
     merged = prepare_device_execute_params(cap, dict(params or {}), ctx)
     if ctx is not None:
-        setattr(ctx, "last_device_execute_params", dict(merged))
+        ctx.last_device_execute_params = dict(merged)
     event = PlanEvent(
         seq=seq,
         capability_id=cap,
@@ -387,81 +423,17 @@ def _exec_ok(result: Any) -> bool:
     return st in ("pass", "done")
 
 
-def _otp_context(ctx: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    """(env_doc, effective_secrets, otp_slot) — 失败时返回空 dict。"""
-    try:
-        from mino_nexus.services import project_store as ps
-        from mino_nexus.services.otp_resolve import resolve_effective_secrets
 
-        app_id = str(getattr(ctx, "app_id", "") or "").strip() if ctx is not None else ""
-        if not app_id:
-            return {}, {}, {}
-        app = ps.require_app(app_id)
-        project_id = str(app.get("project_id") or "").strip()
-        if not project_id:
-            return {}, {}, {}
-        env_doc = ps.project_env(project_id)
-        env_key = str(getattr(ctx, "env_profile", "") or "test") if ctx is not None else "test"
-        surface = str(getattr(ctx, "env_surface", "") or "").strip()
-        secrets = resolve_effective_secrets(
-            env_doc,
-            env_profile=env_key,
-            env_surface=surface,
-        )
-        otp = secrets.get("otp") if isinstance(secrets, dict) else {}
-        if not isinstance(otp, dict):
-            otp = {}
-        return env_doc, secrets, otp
-    except Exception:
-        return {}, {}, {}
-
-
-def _resolve_otp(ctx: Any) -> tuple[str, str]:
-    acc = getattr(ctx, "picked_account", None) if ctx is not None else None
-    if isinstance(acc, dict):
-        for key in ("otp", "sms_code", "code"):
-            val = str(acc.get(key) or "").strip()
-            if val:
-                return val, "account"
-    env_doc, _secrets, otp = _otp_context(ctx)
-    if not otp:
-        return "", "missing"
-    fixed = str(otp.get("fixed") or "").strip()
-    mode = str(otp.get("mode") or "auto").strip().lower()
-    if mode == "hitl":
-        return "", "hitl"
-    if fixed and mode in ("fixed", "auto"):
-        return fixed, "env_fixed"
-    if mode == "gmail":
-        return "", "gmail"
-    if mode == "auto":
-        from mino_nexus.services.otp_resolve import resolve_gmail_inbox
-
-        if resolve_gmail_inbox(env_doc, ctx):
-            return "", "gmail"
-    if mode == "fixed" and not fixed:
-        return "", "missing"
-    return "", "missing"
-
-
-def _lease_email_for_otp(ctx: Any) -> str:
-    acc = getattr(ctx, "picked_account", None) if ctx is not None else None
-    if isinstance(acc, dict):
-        for key in ("email", "login_email"):
-            val = str(acc.get(key) or "").strip()
-            if val:
-                return val
-    return ""
 
 
 def _fetch_gmail_otp(ctx: Any, router: Any) -> str:
     from mino_nexus.core.schemas import PlanEvent
-    from mino_nexus.services.gmail_otp import GmailOtpError
+    from mino_nexus.resources.gmail_otp import GmailOtpError
 
     hint = "请在这台 Scout 节点的「邮箱 / Gmail」里填写收件箱和应用专用密码"
     if router is None:
         raise GmailOtpError(hint)
-    from mino_nexus.services.otp_binding import request_params, OTP_CHILD
+    from mino_nexus.resources.otp_binding import request_params, OTP_CHILD
     params = request_params(ctx)
     event = PlanEvent(
         seq=0,
@@ -509,7 +481,7 @@ def _get_otp(event: PlanEvent, *, ctx: Any, t0: float, router: Any = None) -> Ev
             code = _fetch_gmail_otp(ctx, router)
             source = "gmail"
         except Exception as exc:
-            from mino_nexus.services.gmail_otp import GmailOtpError
+            from mino_nexus.resources.gmail_otp import GmailOtpError
 
             summary = str(exc) if isinstance(exc, GmailOtpError) else f"Gmail 取码失败：{exc}"
             if "已取消" in summary or "超过用例时间" in summary:
@@ -522,11 +494,7 @@ def _get_otp(event: PlanEvent, *, ctx: Any, t0: float, router: Any = None) -> Ev
                     elapsed_ms=int((time.time() - t0) * 1000),
                 )
             if ctx is not None:
-                setattr(
-                    ctx,
-                    "otp_fetch_fail_streak",
-                    int(getattr(ctx, "otp_fetch_fail_streak", 0) or 0) + 1,
-                )
+                ctx.otp_fetch_fail_streak = int(getattr(ctx, "otp_fetch_fail_streak", 0) or 0) + 1
             return _result(
                 event,
                 status=EventStatus.FAIL,
@@ -554,7 +522,7 @@ def _get_otp(event: PlanEvent, *, ctx: Any, t0: float, router: Any = None) -> Ev
         acc = dict(getattr(ctx, "picked_account", None) or {})
         acc["otp"] = code
         ctx.picked_account = acc
-        setattr(ctx, "otp_fetch_fail_streak", 0)
+        ctx.otp_fetch_fail_streak = 0
     return _result(
         event,
         status=EventStatus.PASS,
@@ -573,7 +541,7 @@ def _dismiss_ime(
     t0: float,
 ) -> EventResult:
     from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
-    from mino_nexus.loop.ui_consent import any_focused_input
+    from mino_nexus.navigation.geometry.ui_consent import any_focused_input
 
     if ui_channel_from_ctx(ctx) == UiChannel.WEB:
         return _result(

@@ -68,7 +68,7 @@ def _role(
 
 
 def _job_prompt(role_or_job_id: str) -> str:
-    from mino_nexus.services.job_store import job_system_text, resolve_job_id
+    from mino_nexus.ai.job_store import job_system_text, resolve_job_id
 
     jid = ROLE_JOB_MAP.get(role_or_job_id) or resolve_job_id(role_or_job_id)
     return job_system_text(jid)
@@ -86,7 +86,7 @@ def _apply_role_prompt(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _roles_from_files(group: str) -> list[dict[str, Any]]:
-    from mino_nexus.ai.prompt_repo import role_specs
+    from mino_nexus.platform.llm.repo import role_specs
 
     rows: list[dict[str, Any]] = []
     for spec in role_specs():
@@ -151,7 +151,7 @@ def list_playbooks() -> list[dict[str, Any]]:
 
 def list_roles() -> dict[str, Any]:
     from mino_nexus.ai.layer_stack import get_stack
-    from mino_nexus.services.skill_store import list_skills
+    from mino_nexus.ai.skill_store import list_skills
 
     product = [_apply_role_prompt(row) for row in _product_roles()]
     runtime = [_apply_role_prompt(row) for row in _runtime_roles()]
@@ -210,7 +210,7 @@ def get_role(role_id: str) -> Optional[dict[str, Any]]:
         if row["id"] == rid:
             return _apply_role_prompt(row)
     try:
-        from mino_nexus.services.skill_store import get_skill, skill_prompt
+        from mino_nexus.ai.skill_store import get_skill, skill_prompt
 
         skill = get_skill(rid)
         if skill:
@@ -250,7 +250,7 @@ def chat_with_role(*, role_id: str, messages: Any, explain_mode: bool = False, j
     if not role:
         raise ValueError(f"未知角色：{role_id}")
     if job_id:
-        from mino_nexus.ai.prompt_repo import get_job
+        from mino_nexus.platform.llm.repo import get_job
         spec = get_job(job_id)
         if job_id not in role.get("chat_jobs", []) or not spec or spec.get("engine") not in ("text_chat", "chat_reply"):
             raise ValueError("该角色不允许调用此对话 job")
@@ -258,8 +258,8 @@ def chat_with_role(*, role_id: str, messages: Any, explain_mode: bool = False, j
     if not history or history[-1]["role"] != "user":
         raise ValueError("请先发送一条用户消息")
 
-    from mino_nexus.ai.llm_client import call_chat_plain, parse_token_usage, resolve_regression_provider
-    from mino_nexus.services.job_store import job_system_text, resolve_job_id
+    from mino_nexus.platform.llm.client import call_chat_plain, parse_token_usage, resolve_regression_provider
+    from mino_nexus.ai.job_store import job_system_text, resolve_job_id
 
     provider, gate = resolve_regression_provider()
     if not provider:

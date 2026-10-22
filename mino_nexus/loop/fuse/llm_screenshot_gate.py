@@ -14,7 +14,7 @@ WITHHOLD_HINT = (
 
 
 def reset_case_llm_image_gate(ctx: Any) -> None:
-    setattr(ctx, "allow_foreign_foreground_llm_image", False)
+    ctx.allow_foreign_foreground_llm_image = False
 
 
 def case_foreign_image_policy(ctx: Any) -> str:
@@ -78,10 +78,10 @@ def parse_allow_foreign_flag(decision: AgentDecision) -> Optional[bool]:
 def apply_allow_foreign_flag(ctx: Any, decision: AgentDecision) -> None:
     parsed = parse_allow_foreign_flag(decision)
     if parsed is True:
-        setattr(ctx, "allow_foreign_foreground_llm_image", True)
+        ctx.allow_foreign_foreground_llm_image = True
     elif parsed is False:
-        setattr(ctx, "allow_foreign_foreground_llm_image", False)
+        ctx.allow_foreign_foreground_llm_image = False
 
 
 def clear_transient_llm_image_gate(ctx: Any) -> None:
-    setattr(ctx, "allow_foreign_foreground_llm_image", False)
+    ctx.allow_foreign_foreground_llm_image = False

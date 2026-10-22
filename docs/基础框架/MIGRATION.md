@@ -70,8 +70,8 @@
 
 | 上游 | 本仓 |
 |---|---|
-| `server/routers/*` | `mino_nexus/routers/*`（保持 `r*` 命名） |
-| `server/websocket/*` | `mino_nexus/websocket/*`，**新增 node 接入侧**（REGISTER / HEARTBEAT / 按 `sn` 路由到 `node_id`） |
+| `server/routers/*` | `mino_nexus/api/*`（保持 `r*` 命名） |
+| `server/websocket/*` | `mino_nexus/api/ws/*`，**新增 node 接入侧**（REGISTER / HEARTBEAT / 按 `sn` 路由到 `node_id`） |
 | `server/services/ai/**` | `mino_nexus/ai/**` |
 | `server/services/plugins/*` + `plugins/**.yaml` | `mino_nexus/catalog/*` + `catalog_entries`（空库 `builtin_seed`） |
 | `server/services/regression/agent_executor.py` | `mino_nexus/loop/agent_executor.py`（**代码基本不动**，见下） |

@@ -1,6 +1,6 @@
 """Agent 步骤缓冲：进程内存，供 Studio AgentRun 回填。重启即丢，批次结论在 app_regression_runs。"""
 from __future__ import annotations
-from mino_nexus.core.execution_user import user_thread, current_user_id
+from mino_nexus.platform.identity import user_thread, current_user_id
 
 
 import base64
@@ -107,52 +107,7 @@ def get_run_events(run_id: str) -> dict[str, Any] | None:
 _LLM_JPEG_QUALITY = 82
 
 
-def make_llm_jpeg(
-    raw_b64: str,
-    *,
-    compress_ratio: float | None = None,
-    quality: int = _LLM_JPEG_QUALITY,
-) -> tuple[str, str]:
-    """喂给大模型的图：转 JPEG。采集端已经按渠道压缩比缩过的图不再套 plan_compress_ratio。
-
-    1.0 不缩小。点按仍用千分比，不依赖像素。
-    返回 ``(jpeg_b64, image/jpeg)``；失败则 ``("", "")``，调用方回落原图。
-    """
-    if not raw_b64:
-        return "", ""
-    try:
-        from PIL import Image
-
-        blob = raw_b64.strip()
-        if blob.startswith("data:") and "," in blob:
-            blob = blob.split(",", 1)[1]
-        img = Image.open(BytesIO(base64.b64decode(blob))).convert("RGB")
-        w, h = img.size
-        ratio = compress_ratio
-        if ratio is None:
-            from mino_nexus.services.settings import llm_shrink_after_capture
-
-            ratio = llm_shrink_after_capture()
-        try:
-            ratio = float(ratio)
-        except (TypeError, ValueError):
-            ratio = 3.0
-        if ratio < 1.0:
-            ratio = 1.0
-        if ratio > 1.0 and w > 0 and h > 0:
-            img = img.resize(
-                (max(1, int(round(w / ratio))), max(1, int(round(h / ratio)))),
-                Image.Resampling.LANCZOS,
-            )
-        q = int(quality or _LLM_JPEG_QUALITY)
-        buf = BytesIO()
-        img.save(buf, format="JPEG", quality=max(40, min(90, q)))
-        return base64.b64encode(buf.getvalue()).decode("ascii"), "image/jpeg"
-    except Exception as e:
-        SLog.d(TAG, f"make_llm_jpeg failed: {e}")
-        return "", ""
-
-
+from mino_nexus.platform.llm_image import make_llm_jpeg  # noqa: F401,E402
 def make_thumb(png_b64: str, *, width: int = 360, quality: int = 70, web: bool = False) -> str:
     if not png_b64:
         return ""
@@ -186,7 +141,7 @@ def make_thumb(png_b64: str, *, width: int = 360, quality: int = 70, web: bool =
 def emit_agent_event(data: dict[str, Any]) -> None:
     _buffer(data)
     try:
-        from mino_nexus.loop.observe.session_log import mirror_stream_event
+        from mino_nexus.records.eventlog.writer import mirror_stream_event
 
         seq = mirror_stream_event(data)
         if seq:
@@ -194,11 +149,11 @@ def emit_agent_event(data: dict[str, Any]) -> None:
     except Exception as exc:
         SLog.d(TAG, f"session log mirror failed: {exc!r}")
     try:
-        from mino_nexus.websocket import observers as ui_ws
+        from mino_nexus.contract.events import publish_event
 
         slim = dict(data)
         slim.pop("image_base64", None)
-        ui_ws.broadcast_sync({"type": "agent_step", "data": slim})
+        publish_event({"type": "agent_step", "data": slim})
     except Exception as exc:
         SLog.d(TAG, f"emit_agent_event broadcast failed: {exc}")
 
@@ -206,19 +161,19 @@ def emit_agent_event(data: dict[str, Any]) -> None:
 def emit_testing_task(data: dict[str, Any]) -> None:
     SLog.d(TAG, f"testing_task {data.get('event') or ''} run={data.get('run_id') or data.get('task_id') or ''}")
     try:
-        from mino_nexus.websocket import observers as ui_ws
+        from mino_nexus.contract.events import publish_event
 
         payload = dict(data)
         if payload.get("run_id") and not payload.get("task_id"):
             payload["task_id"] = payload["run_id"]
-        ui_ws.broadcast_sync({"type": "testing_task", "data": payload})
+        publish_event({"type": "testing_task", "data": payload})
         if payload.get("event") == "task_finished":
             import threading
 
-            from mino_nexus.services.assistant_notify import on_run_finished
+            from mino_nexus.assistant.assistant_notify import on_run_finished
 
-            from mino_nexus.services import run_store
-            from mino_nexus.core.execution_user import execution_user
+            from mino_nexus.casework import run_store
+            from mino_nexus.platform.identity import execution_user
             doc = run_store.get(str(payload.get("run_id") or payload.get("task_id") or "")) or {}
             owner = str(doc.get("owner_user_id") or "")
             if owner:

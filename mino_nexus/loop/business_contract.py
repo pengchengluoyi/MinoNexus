@@ -10,7 +10,7 @@ def required_business_milestones(
     """只取显式绑定的结构化规则；规则不存在时不猜测业务顺序。"""
     if not app_id and not project_id:
         return []
-    from mino_nexus.services.knowledge_match import _eligible
+    from mino_nexus.knowledge.knowledge_match import _eligible
 
     result: list[dict[str, Any]] = []
     for item in _eligible(app_id, project_id):

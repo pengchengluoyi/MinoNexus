@@ -165,7 +165,7 @@ def read_field(
         return ""
 
     if channel == UiChannel.WEB:
-        from mino_nexus.loop.ui_dom import find_dom_email_field, find_dom_phone_field
+        from mino_nexus.navigation.geometry.ui_dom import find_dom_email_field, find_dom_phone_field
 
         hit = None
         if fld in ("email", "login_email"):
@@ -212,46 +212,33 @@ def capture_decision_frame(proxy: Any, ctx: Any, *, hierarchy: bool = True) -> t
 
     desktop = ui_channel_from_ctx(ctx) == UiChannel.DESKTOP
     if desktop:
-        setattr(ctx, "nav_hierarchy_nodes", [])
-        setattr(ctx, "web_focus", {})
+        ctx.nav_hierarchy_nodes = []
+        ctx.web_focus = {}
     snap = capture(proxy, turn_id=0) if hierarchy and not desktop else None
     if hierarchy:
-        setattr(ctx, "nav_hierarchy_nodes", [])
-        setattr(ctx, "observation_contract", {"missing": ["capture_failed"]})
+        ctx.nav_hierarchy_nodes = []
+        ctx.observation_contract = {"missing": ["capture_failed"]}
     if snap is not None and getattr(snap, "ok", False):
-        setattr(ctx, "observation_contract", dict(getattr(snap, "observation", None) or {}))
-        setattr(
-            ctx,
-            "nav_hierarchy_nodes",
-            [n for n in (getattr(snap, "nodes", None) or []) if isinstance(n, dict)],
-        )
+        ctx.observation_contract = dict(getattr(snap, "observation", None) or {})
+        ctx.nav_hierarchy_nodes = [n for n in (getattr(snap, "nodes", None) or []) if isinstance(n, dict)]
         focus = getattr(snap, "web_focus", None)
         if isinstance(focus, dict) and focus:
-            setattr(ctx, "web_focus", dict(focus))
-    setattr(ctx, "viewport_wh", (0, 0))
+            ctx.web_focus = dict(focus)
+    ctx.viewport_wh = (0, 0)
     shot = None
     try:
         shot = proxy.observe("screenshot", force_fresh=True)
     except Exception:
         shot = None
     if shot is not None and int(getattr(shot, "width", 0) or 0) > 0 and int(getattr(shot, "height", 0) or 0) > 0:
-        setattr(ctx, "viewport_wh", (int(shot.width), int(shot.height)))
+        ctx.viewport_wh = (int(shot.width), int(shot.height))
     thumb = ""
     if shot is not None and getattr(shot, "has_image", lambda: False)():
         thumb = make_thumb(shot.image_base64) or ""
     return shot, thumb
 
 
-def login_credential_form_open(nodes: list[dict[str, Any]] | None) -> bool:
-    """手机号/邮箱凭证框与验证码框同时存在时，提交仍停留在登录表单。"""
-    from mino_nexus.loop.ui_dom import find_dom_phone_field, find_dom_email_field, find_dom_otp_field
-
-    rows = [n for n in (nodes or []) if isinstance(n, dict)]
-    credential = find_dom_phone_field(rows) or find_dom_email_field(rows)
-    if credential is None:
-        return False
-    return find_dom_otp_field(rows, email_field=credential) is not None
-
+from mino_nexus.navigation.geometry.ui_dom import login_credential_form_open  # noqa: F401,E402
 
 def read_field_after_input(ctx: Any, proxy: Any, field: str) -> str | None:
     """动作后读回。纯视觉没有层级，返回 None：这次没读，不是框里是空的。"""
@@ -273,10 +260,10 @@ def bind_fresh_observation(ctx: Any, proxy: Any) -> None:
     from mino_nexus.navigation.geometry.hierarchy_slots import capture
 
     snap = capture(proxy, turn_id=0)
-    setattr(ctx, "nav_hierarchy_nodes", list(snap.nodes or []) if snap.ok else [])
-    setattr(ctx, "observation_contract", dict(snap.observation or {}) if snap.ok else {"missing": ["capture_failed"]})
+    ctx.nav_hierarchy_nodes = list(snap.nodes or []) if snap.ok else []
+    ctx.observation_contract = dict(snap.observation or {}) if snap.ok else {"missing": ["capture_failed"]}
     if isinstance(snap.web_focus, dict) and snap.web_focus:
-        setattr(ctx, "web_focus", normalize_web_focus(snap.web_focus))
+        ctx.web_focus = normalize_web_focus(snap.web_focus)
 
 
 def attach_input_readback(ctx: Any, params: dict[str, Any] | None) -> dict[str, Any]:
@@ -290,24 +277,24 @@ def attach_input_readback(ctx: Any, params: dict[str, Any] | None) -> dict[str, 
     hit = None
     if ui_channel_from_ctx(ctx) == UiChannel.WEB:
         if fld in ("email", "login_email"):
-            from mino_nexus.loop.ui_dom import find_dom_email_field
+            from mino_nexus.navigation.geometry.ui_dom import find_dom_email_field
 
             hit = find_dom_email_field(rows)
         elif fld in ("phone", "tel"):
-            from mino_nexus.loop.ui_dom import find_dom_phone_field
+            from mino_nexus.navigation.geometry.ui_dom import find_dom_phone_field
 
             hit = find_dom_phone_field(rows)
         elif fld in ("sms_code", "otp", "验证码"):
-            from mino_nexus.loop.ui_dom import find_dom_otp_field
+            from mino_nexus.navigation.geometry.ui_dom import find_dom_otp_field
 
             hit = find_dom_otp_field(rows) or _focused_input(rows)
     else:
         if fld in ("email", "login_email"):
-            from mino_nexus.loop.ui_sms_request import find_android_email_field
+            from mino_nexus.navigation.geometry.ui_sms_request import find_android_email_field
 
             hit = find_android_email_field(rows)
         elif fld in ("phone", "tel"):
-            from mino_nexus.loop.ui_sms_request import find_phone_field
+            from mino_nexus.navigation.geometry.ui_sms_request import find_phone_field
 
             hit = find_phone_field(rows)
         else:

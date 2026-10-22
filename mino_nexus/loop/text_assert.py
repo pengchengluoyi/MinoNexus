@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from mino_nexus.ai.schemas import AssertResult
-from mino_nexus.services.checkpoint_text_policy import expected_text, language_matches, text_policy
+from mino_nexus.knowledge.checkpoint_text_policy import expected_text, language_matches, text_policy
 
 _MAX_NODES = 32
 _MAX_CHARS = 6000

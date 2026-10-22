@@ -338,7 +338,7 @@ def build_run_context(sn: str, **kwargs: Any) -> RunContext:
     找不到节点时返回一个**通道全空**的 RunContext —— `has_control_channel` 为 False，
     上层应据此 decline，而不是拿着空菜单去问 LLM。
     """
-    from mino_nexus.services.node_registry import get_registry
+    from mino_nexus.resources.node_registry import get_registry
 
     node, why = get_registry().resolve(sn)
     if node is None:
@@ -347,8 +347,11 @@ def build_run_context(sn: str, **kwargs: Any) -> RunContext:
                          run_id=str(kwargs.get("run_id") or ""),
                          app_id=str(kwargs.get("app_id") or ""),
                          batch_id=str(kwargs.get("batch_id") or kwargs.get("run_id") or ""))
-        for attr in ("adb", "remote", "ios", "playwright"):
-            setattr(ctx, attr, _channel("disconnected", reason=why))
+        # 每个通道各自独立的对象：原来循环里每次都会新建，不能共用一份
+        ctx.adb = _channel("disconnected", reason=why)
+        ctx.remote = _channel("disconnected", reason=why)
+        ctx.ios = _channel("disconnected", reason=why)
+        ctx.playwright = _channel("disconnected", reason=why)
         ctx.vlm = _probe_vlm(str(kwargs.get("provider_id") or ""), str(kwargs.get("model_name") or ""))
         ctx.hitl = _probe_hitl()
         return ctx
@@ -359,7 +362,7 @@ def build_run_context(sn: str, **kwargs: Any) -> RunContext:
 
 def bind_case_project(ctx: RunContext, case: dict[str, Any]) -> str:
     """在恢复租约、知识检索及设备执行前绑定真实项目；旧用例可省略项目键。"""
-    from mino_nexus.services import project_store
+    from mino_nexus.resources import project_store
 
     app_id = str(ctx.app_id or "").strip()
     if not app_id:
@@ -386,7 +389,7 @@ def bind_case_project(ctx: RunContext, case: dict[str, Any]) -> str:
 def _probe_vlm(provider_id: str = "", model_name: str = "") -> dict[str, Any]:
     """有没有配可用的 LLM provider。这是本仓的设置，不是设备状态。"""
     try:
-        from mino_nexus.services import settings
+        from mino_nexus.platform import settings
 
         provider = settings.get_ai_provider_credentials(provider_id or None)
         if provider.get("configured") and provider.get("api_key"):
@@ -419,7 +422,7 @@ def _looks_ios_token(value: str) -> bool:
 
 
 # 单 Scout 节点 Web 槽 Playwright 并行上限（与 MinoScout PLAYWRIGHT_PARALLEL_LANES 一致）
-WEB_PLAYWRIGHT_PARALLEL_LANES = 4
+from mino_nexus.core.slots import WEB_PLAYWRIGHT_PARALLEL_LANES, version_string_looks_invalid  # noqa: F401,E402
 
 
 
@@ -460,16 +463,6 @@ def version_from_execute_result(raw: dict[str, Any] | None) -> str:
         return version_from_execute_result(extra)
     return ""
 
-
-def version_string_looks_invalid(ver: str) -> bool:
-    v = str(ver or "").strip().lower()
-    if not v:
-        return True
-    if "强停" in ver or "force-stop" in v or "force_stop" in v:
-        return True
-    if v.startswith("fail") or "error" in v[:24]:
-        return True
-    return False
 
 
 def execute_result_ok(result: Any) -> bool:

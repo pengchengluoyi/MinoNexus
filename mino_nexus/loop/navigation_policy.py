@@ -15,8 +15,8 @@ def plan_and_dispatch_next(
     router: Any = None,
 ) -> EventResult:
     """当前屏 → 目标屏：规划最短路并执行第一步 tap（非仅 advise）。"""
-    from mino_nexus.services import nav_route
-    from mino_nexus.services.nav_state_resolve import plan_route_resolved
+    from mino_nexus.navigation.atlas import nav_route
+    from mino_nexus.navigation.atlas.nav_state_resolve import plan_route_resolved
 
     params = dict(event.params or {})
     from_raw = str(
@@ -102,7 +102,7 @@ def plan_and_dispatch_next(
             _attempt(plan_ok=False, plan_error="missing fsm"),
         )
 
-    from mino_nexus.services.nav_route import coerce_oral_nav_ref
+    from mino_nexus.navigation.atlas.nav_route import coerce_oral_nav_ref
 
     to_raw = coerce_oral_nav_ref(fsm, to_raw)
     if from_raw:
@@ -219,7 +219,7 @@ def plan_and_dispatch_next(
                     if not isinstance(hits, dict):
                         hits = {}
                         if ctx is not None:
-                            setattr(ctx, "_fsm_same_page_hits", hits)
+                            ctx._fsm_same_page_hits = hits
                     same_key = (
                         f"{nav_attempt.get('resolved_from') or from_raw}"
                         f"->{nav_attempt.get('resolved_to') or to_raw}"
@@ -349,7 +349,7 @@ def plan_and_dispatch_next(
                 nodes,
                 hint=str(step_params.get("selector_text") or ""),
             )
-            from mino_nexus.ai.coords import lift_selector_target
+            from mino_nexus.contract.coords import lift_selector_target
 
             lift_selector_target(step_params)
 

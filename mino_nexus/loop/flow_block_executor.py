@@ -9,7 +9,7 @@ from mino_nexus.loop.milestones import (
     note_tool_pass_milestone,
     read_state,
 )
-from mino_nexus.services.nav_flow_block_catalog import resolve_effective_steps
+from mino_nexus.navigation.atlas.nav_flow_block_catalog import resolve_effective_steps
 
 
 def skip_login_entry_if_form_visible(cursor: Any, ctx: Any, *, writer: Any = None) -> bool:
@@ -24,8 +24,8 @@ def skip_login_entry_if_form_visible(cursor: Any, ctx: Any, *, writer: Any = Non
     if not nodes:
         return False
     from mino_nexus.contract.execution.ui import ui_channel_from_ctx, ui_channel_label
-    from mino_nexus.loop.ui_sms_request import credential_field_for_login
-    from mino_nexus.services.account_credential_text import login_kind_from_ctx
+    from mino_nexus.navigation.geometry.ui_sms_request import credential_field_for_login
+    from mino_nexus.resources.account_credential_text import login_kind_from_ctx
 
     kind = login_kind_from_ctx(ctx)
     channel = ui_channel_label(ui_channel_from_ctx(ctx))
@@ -65,6 +65,11 @@ def try_dispatch_block_hook(
     writer: Any = None,
 ) -> Optional[dict[str, Any]]:
     """若当前里程碑有待执行 hook，dispatch 对应 cap（与 catalog 步骤对齐）。"""
+    from mino_nexus.loop.milestones import write_state
+    from mino_nexus.navigation.geometry.ui_consent import find_consent_control, tap_params_for_control
+    from mino_nexus.loop.milestones import write_state
+    from mino_nexus.loop.milestones import _mark_hook_ready_flag, write_state
+    from mino_nexus.loop.milestones import write_state
     from mino_nexus.loop.navigation_policy import dispatch_pending
     navigation = dispatch_pending(proxy, ctx, cursor, turn_seq=turn_seq, writer=writer)
     if navigation is not None:
@@ -200,7 +205,7 @@ def try_dispatch_block_hook(
 
     if cap == "lease_account" and mid == "account_fill":
         from mino_nexus.loop.email_login_auto import _email_input_done
-        from mino_nexus.services.account_credential_text import (
+        from mino_nexus.resources.account_credential_text import (
             lease_email_address,
             lease_phone_digits,
         )
@@ -237,7 +242,7 @@ def try_dispatch_block_hook(
         from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
         from mino_nexus.loop.milestones import write_state
         from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
-        from mino_nexus.loop.ui_consent import find_consent_control, tap_params_for_control
+        from mino_nexus.navigation.geometry.ui_consent import find_consent_control, tap_params_for_control
 
         nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
         ctrl = find_consent_control(nodes)
@@ -393,7 +398,7 @@ def try_dispatch_block_hook(
     if ok and pending.get('requirement') == 'conditional':
         from mino_nexus.loop.milestones import write_state
         pending['condition_resolution'] = 'satisfied'
-        from mino_nexus.services.step_requirements import checkbox_post_proof
+        from mino_nexus.resources.step_requirements import checkbox_post_proof
         checked_observation = (res.raw_response if isinstance(res.raw_response, dict) else {}).get('checked_observation')
         proof = checkbox_post_proof(pending.get('condition_proof'), checked_observation)
         if proof is None:
@@ -440,7 +445,7 @@ def _dispatch_email_fill(
     from mino_nexus.core.protocol import EventStatus
     from mino_nexus.loop.device_execute_params import enrich_web_input_text_params
     from mino_nexus.loop.local_executors import _dispatch_device
-    from mino_nexus.services.account_credential_text import (
+    from mino_nexus.resources.account_credential_text import (
         lease_email_address,
         lease_phone_digits,
         login_kind_from_ctx,
@@ -838,7 +843,7 @@ def _schedule_login_evidence_navigation(cursor, *, ctx=None, shot=None, block_id
     goal["status"] = "pending"
     count += 1
     nav_id = f"login_context_restore_{count}" if restore else f"login_evidence_nav_{count}"
-    from mino_nexus.services.login_evidence_policy import policy_for_context, submitted_account_enabled
+    from mino_nexus.navigation.login.policy import policy_for_context, submitted_account_enabled
     policy = policy_for_context(ctx) if not restore and submitted_account_enabled(ctx) else {}
     navigation_hint = policy.get("authenticated_content_hint") or policy.get("logout_navigation_hint", "")
     rows.insert(rows.index(goal), {"id": nav_id, "kind": "visual_action", "status": "in_progress",
@@ -886,7 +891,7 @@ def _complete_login_state(cursor, ctx, *, block_id, writer=None, frame_thumb="",
     # This function completes a submission milestone, not an authenticated session.
     transition = getattr(cursor, 'login_transition_result', None) or {}
     reference = getattr(cursor, 'login_submit_reference', None) or {}
-    from mino_nexus.services.login_evidence import scope
+    from mino_nexus.navigation.login.evidence import scope
     result = transition.get('result') or {}
     if (reference.get('context_id') != id(ctx) or reference.get('scope') != scope(ctx)
             or not reference.get('attempt_ref')

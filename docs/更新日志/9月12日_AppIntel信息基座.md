@@ -186,7 +186,7 @@
 | POST | `/proposals` | 提交待审（封装 DOC_LEARN / nav draft / 失败分析） |
 
 实现模块（规划）：`mino_nexus/services/app_intel.py`  
-路由（规划）：`mino_nexus/routers/rAppIntel.py` 或挂在 `rNavFsm` / 新 router。
+路由（规划）：`mino_nexus/api/rAppIntel.py` 或挂在 `rNavFsm` / 新 router。
 
 ### 7.1 `POST /context-pack`（P0 核心）
 

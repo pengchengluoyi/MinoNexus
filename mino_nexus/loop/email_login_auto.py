@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from mino_nexus.core.schemas import PlanEvent
 from mino_nexus.loop.step_contract import instruction_allows_login_flow
-from mino_nexus.services.otp_resolve import login_kind_from_secrets
+from mino_nexus.resources.otp_resolve import login_kind_from_secrets
 
 
 def _login_kind(ctx: Any) -> str:
@@ -56,7 +56,7 @@ def _login_surface_visible(ctx: Any, nodes: list[dict[str, Any]]) -> bool:
     """登录弹窗/表单已出现（含邮箱框、Email 标签或发码区），否则应先点入口登录。"""
     if not nodes:
         return False
-    from mino_nexus.loop.ui_sms_request import credential_field_for_login
+    from mino_nexus.navigation.geometry.ui_sms_request import credential_field_for_login
 
     ch = _ui_channel_key(ctx)
     if credential_field_for_login(nodes, login_kind="email", channel=ch):
@@ -91,7 +91,7 @@ def _email_tab_in_hierarchy(nodes: list[dict[str, Any]]) -> Optional[dict[str, A
 
 
 def _lease_email(ctx: Any) -> str:
-    from mino_nexus.services.account_credential_text import lease_email_address
+    from mino_nexus.resources.account_credential_text import lease_email_address
 
     acc = dict(getattr(ctx, "picked_account", None) or {})
     return lease_email_address(acc)
@@ -132,6 +132,7 @@ def run_email_login_ui_chain(
     login_module_case: bool = False,
 ) -> list[dict[str, Any]]:
     """严格 UI 顺序：选 Email → input_text(邮箱) → request_sms_code。不含 get_otp。"""
+    from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
     if _login_kind(ctx) != "email":
         return []
     if not instruction_allows_login_flow(instruction, login_module_case=login_module_case):
@@ -160,7 +161,7 @@ def run_email_login_ui_chain(
             snap = capture(proxy, turn_id=int(turn_seq or 0))
             if snap.ok and snap.nodes:
                 nodes = [n for n in snap.nodes if isinstance(n, dict)]
-                setattr(ctx, "nav_hierarchy_nodes", nodes)
+                ctx.nav_hierarchy_nodes = nodes
         except Exception:
             pass
     if not _login_surface_visible(ctx, nodes):
@@ -204,7 +205,7 @@ def run_email_login_ui_chain(
 
     out: list[dict[str, Any]] = []
     ch = _ui_channel_key(ctx)
-    from mino_nexus.loop.ui_sms_request import credential_field_for_login
+    from mino_nexus.navigation.geometry.ui_sms_request import credential_field_for_login
 
     email_field = credential_field_for_login(nodes, login_kind="email", channel=ch)
 
@@ -212,7 +213,7 @@ def run_email_login_ui_chain(
         tab_node = _email_tab_in_hierarchy(nodes)
         if tab_node is None:
             return []
-        from mino_nexus.loop.ui_consent import tap_params_for_control
+        from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
 
         tab_params = tap_params_for_control(tab_node, nodes)
         tab = _dispatch_step(
@@ -230,7 +231,7 @@ def run_email_login_ui_chain(
     if not _email_input_done(history_lines, intents_done):
         if ch == "web_dom" and proxy is not None:
             from mino_nexus.loop.web.web_progress import refresh_web_focus, web_editable_focus_ready
-            from mino_nexus.loop.ui_consent import tap_params_for_control
+            from mino_nexus.navigation.geometry.ui_consent import tap_params_for_control
 
             refresh_web_focus(ctx, proxy)
             if not web_editable_focus_ready(ctx):
@@ -251,7 +252,7 @@ def run_email_login_ui_chain(
                         return out
                     refresh_web_focus(ctx, proxy)
 
-        from mino_nexus.catalog.tool_schema import fill_input_text_from_ctx
+        from mino_nexus.resources.credential_fill import fill_input_text_from_ctx
         from mino_nexus.loop.device_execute_params import prepare_device_execute_params
 
         fill_params = prepare_device_execute_params(

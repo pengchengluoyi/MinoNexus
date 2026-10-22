@@ -371,7 +371,7 @@ def resolve_node_from_params(ctx: Any, params: dict[str, Any] | None) -> Optiona
     except (TypeError, ValueError):
         return None
     from mino_nexus.loop.device_execute_params import _viewport_wh
-    from mino_nexus.ai.coords import milli_to_viewport_px
+    from mino_nexus.contract.coords import milli_to_viewport_px
 
     w, h = _viewport_wh(ctx)
     # No current viewport means no coordinate evidence. Do not compare milli

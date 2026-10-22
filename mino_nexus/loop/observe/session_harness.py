@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from mino_nexus.loop.observe.session_project import project_turns
-from mino_nexus.services import session_store
+from mino_nexus.records.eventlog import store as session_store
 
 
 def _events(session_id: str) -> list[dict[str, Any]]:
@@ -155,7 +155,7 @@ def project_eval(
                 checks[key] = None
 
     # NavFSM 指标（设计稿 §9）。没跑导航图的 session 这里全是 0 / None，不影响原有字段。
-    from mino_nexus.services.nav_telemetry import aggregate_session
+    from mino_nexus.navigation.atlas.nav_telemetry import aggregate_session
 
     metrics["nav"] = aggregate_session(sid, events=events)
 

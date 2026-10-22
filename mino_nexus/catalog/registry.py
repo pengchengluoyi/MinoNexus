@@ -95,8 +95,8 @@ def runtime_contract_diagnostics(capabilities: dict[str, Capability]) -> list[di
     No enablement changes or inferred implementations. A configured disable is
     explicit, and target-specific connectivity still belongs to live binding.
     """
-    from mino_nexus.loop.interrupt_recovery import BUILTIN_INTERRUPT_CAPS
-    from mino_nexus.services.execution_requirements import CHILDREN
+    from mino_nexus.contract.interrupt_caps import BUILTIN_INTERRUPT_CAPS
+    from mino_nexus.contract.executor_sets import CHILDREN
     expected = {cid: {"prep", "do"} for cid in BUILTIN_INTERRUPT_CAPS}
     expected.update({cid: {"prep", "do", "check", "cleanup"}
                      for cid in ("wake_screen", "dismiss_keyguard", "probe_device_state", "get_foreground_app")})

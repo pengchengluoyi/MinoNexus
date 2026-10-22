@@ -11,13 +11,13 @@ def stamp_launch_grace(ctx: Any, *, seconds: float = DEFAULT_LAUNCH_GRACE_SEC) -
     if ctx is None:
         return
     sec = max(3.0, min(float(seconds or DEFAULT_LAUNCH_GRACE_SEC), 60.0))
-    setattr(ctx, "launch_grace_until_mono", time.monotonic() + sec)
+    ctx.launch_grace_until_mono = time.monotonic() + sec
 
 
 def clear_launch_grace(ctx: Any) -> None:
     if ctx is None:
         return
-    setattr(ctx, "launch_grace_until_mono", 0.0)
+    ctx.launch_grace_until_mono = 0.0
 
 
 def in_launch_grace(ctx: Any) -> bool:

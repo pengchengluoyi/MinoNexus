@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from mino_nexus.loop.fuse.action_fuse import ProgressGate
 from mino_nexus.loop.step_pointer import SeqNode
-from mino_nexus.services.nav_screen_registry import explore_progress_block, explore_screen_identity
+from mino_nexus.navigation.atlas.nav_screen_registry import explore_progress_block, explore_screen_identity
 
 
 @dataclass

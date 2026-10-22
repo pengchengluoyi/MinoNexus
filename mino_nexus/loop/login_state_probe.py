@@ -1,7 +1,7 @@
 """当前屏正向证据确认登录；凭据与旧登记仅作线索。"""
 from __future__ import annotations
 
-from mino_nexus.loop.login_transition import update_auth_state
+from mino_nexus.navigation.login.transition import update_auth_state
 
 import json
 from typing import Any
@@ -27,7 +27,7 @@ def note_web_context_start(ctx: Any) -> None:
     if not key.strip("|") or key in _OPEN_BROWSERS:
         return
     _OPEN_BROWSERS.add(key)
-    from mino_nexus.services.resource_transition import mark_web_run_devices
+    from mino_nexus.casework.resource_transition import mark_web_run_devices
 
     sn, pkg = _sn_pkg(ctx)
     if not sn or not pkg:
@@ -61,11 +61,12 @@ def _sn_pkg(ctx: Any) -> tuple[str, str]:
 
 def remember_session(ctx: Any, session: str, source: str) -> None:
     """写入本趟上下文，并在有设备标识时落到 device_app_sessions。"""
-    from mino_nexus.services.session_match import normalize_device_session
+    from mino_nexus.resources.device_app_session_store import upsert_session
+    from mino_nexus.resources.accounts.session_match import normalize_device_session
 
     sess = normalize_device_session(session)
     if sess == "logged_in":
-        from mino_nexus.services.login_evidence import can_commit
+        from mino_nexus.navigation.login.evidence import can_commit
         if not can_commit(ctx):
             sess = "unknown"
     if sess != "logged_in":
@@ -84,17 +85,17 @@ def remember_session(ctx: Any, session: str, source: str) -> None:
     if not sn or not pkg:
         return
     if sess == "logged_in":
-        from mino_nexus.services.resource_transition import emit_login_complete
+        from mino_nexus.casework.resource_transition import emit_login_complete
 
         emit_login_complete(ctx, package_id=pkg)
         return
     if sess == "logged_out":
-        from mino_nexus.services.resource_transition import emit_device_logout
+        from mino_nexus.casework.resource_transition import emit_device_logout
 
         emit_device_logout(ctx, package_id=pkg, source=src or "probe", sync_account=True)
         return
     if sess == "guest":
-        from mino_nexus.services.device_app_session_store import upsert_session
+        from mino_nexus.resources.device_app_session_store import upsert_session
 
         upsert_session(
             sn,
@@ -107,7 +108,7 @@ def remember_session(ctx: Any, session: str, source: str) -> None:
             source=src or "probe",
         )
         return
-    from mino_nexus.services.device_app_session_store import upsert_session
+    from mino_nexus.resources.device_app_session_store import upsert_session
 
     upsert_session(
         sn,
@@ -124,8 +125,8 @@ def stored_session(ctx: Any) -> tuple[str, str]:
     sn, pkg = _sn_pkg(ctx)
     if not sn or not pkg:
         return "unknown", "没有当前设备会话证据，须观察确认"
-    from mino_nexus.services.device_app_session_store import get_session
-    from mino_nexus.services.session_match import normalize_device_session
+    from mino_nexus.resources.device_app_session_store import get_session
+    from mino_nexus.resources.accounts.session_match import normalize_device_session
 
     if bool(getattr(ctx, "session_dirty", False)) or _is_web_ctx(ctx):
         return "unknown", "当前作用域须重新观察，不能继承登记簿"
@@ -207,7 +208,7 @@ def probe_web_auth(ctx: Any, router: Any) -> dict[str, Any] | None:
     )
     run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
     from mino_nexus.loop.observe.program_tool_log import log_program_tool
-    from mino_nexus.loop.observe.session_log import active_writer
+    from mino_nexus.records.eventlog.writer import active_writer
 
     writer = active_writer()
     try:
@@ -279,7 +280,7 @@ def ensure_read_web_auth_capability() -> int:
 def _log_probe_diagnostic(ctx: Any, event_type: str, payload: dict[str, Any]) -> None:
     """Only attach probe diagnostics to the current case's session."""
     from mino_nexus.core.log import SLog
-    from mino_nexus.loop.observe.session_log import active_writer
+    from mino_nexus.records.eventlog.writer import active_writer
 
     writer = active_writer()
     sid = str(getattr(ctx, "session_id", "") or "").strip()
@@ -291,6 +292,7 @@ def _log_probe_diagnostic(ctx: Any, event_type: str, payload: dict[str, Any]) ->
 
 def observe_login_state(ctx: Any, router: Any, shot: Any) -> tuple[str, str]:
     """当前接口或界面证明登录态；缺少证据时保留 unknown。"""
+    from mino_nexus.loop.observe.session_persist import stamp_session_observation
     ctx.web_auth_hint = None
     ctx.session_contradiction = None
     if _is_web_ctx(ctx):
@@ -327,7 +329,7 @@ def observe_login_state(ctx: Any, router: Any, shot: Any) -> tuple[str, str]:
         screen_h=int(getattr(shot, "height", 0) or 0) if shot else 0,
     )
     if screen_proves_session(row):
-        from mino_nexus.services.session_match import normalize_device_session
+        from mino_nexus.resources.accounts.session_match import normalize_device_session
 
         observed_session = normalize_device_session(row.get("session") or "")
         stored, _stored_note = stored_session(ctx)

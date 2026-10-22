@@ -97,7 +97,7 @@ def launch_if_hierarchy_away(
     pkg = str(getattr(ctx, "target_package", "") or "").strip()
     if not pkg:
         return None
-    from mino_nexus.services.nav_capture_store import run_guard_foreground
+    from mino_nexus.navigation.atlas.nav_capture_store import run_guard_foreground
 
     fg = run_guard_foreground(
         nodes or [],
@@ -114,7 +114,7 @@ def launch_if_hierarchy_away(
         params={"package": pkg},
         label="hierarchy 判定前台不是被测 App，程序启动",
     )
-    setattr(ctx, "_program_launched_app", True)
+    ctx._program_launched_app = True
     return {
         "status": "pass" if ok else "fail",
         "summary": f"程序启动 {pkg}（前台不是被测应用）",
