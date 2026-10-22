@@ -91,7 +91,7 @@ def chrome_has_nav_back(chrome: list[str]) -> bool:
 
 def is_feed_surface_chrome(title: str) -> bool:
     """主列表/个人页顶栏统计、货号等 —— 不用于拆子页桶。"""
-    from mino_nexus.services.nav_layout import is_volatile_text
+    from mino_nexus.navigation.geometry.nav_layout import is_volatile_text
 
     val = str(title or "").strip()
     if not val or is_volatile_text(val):
@@ -113,7 +113,7 @@ def chrome_cluster_discriminator(
     exclude_tabs: set[str] | None,
 ) -> str:
     """子页拆分：真实标题拆桶；主 Feed 面统一为 main。"""
-    from mino_nexus.services.nav_layout import stable_chrome_texts
+    from mino_nexus.navigation.geometry.nav_layout import stable_chrome_texts
 
     fw = framework or {}
     kind = str(fw.get("kind") or "")
@@ -924,11 +924,11 @@ def merge_skeleton_wireframe(
 
 
 def chrome_header_title(chrome_texts: list[str], *, tab: str = "", tab_labels: list[str] | None = None) -> str:
-    from mino_nexus.services.nav_layout import is_volatile_text
+    from mino_nexus.navigation.geometry.nav_layout import is_volatile_text
 
     tabs = {str(t or "").strip() for t in (tab_labels or []) if str(t or "").strip()}
     skip = tabs | {str(tab or "").strip(), "返回"}
-    from mino_nexus.services.nav_layout import is_status_bar_chrome_text
+    from mino_nexus.navigation.geometry.nav_layout import is_status_bar_chrome_text
 
     for text in chrome_texts:
         val = str(text or "").strip()

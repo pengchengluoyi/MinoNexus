@@ -10,7 +10,7 @@ _LAYOUT_CLASS_RE = re.compile(r"(Layout|View|Widget|Frame|Group)$", re.I)
 
 
 def _bounds(node: dict[str, Any]) -> tuple[int, int, int, int] | None:
-    from mino_nexus.loop.hierarchy_slots import int_list
+    from mino_nexus.navigation.geometry.hierarchy_slots import int_list
 
     raw = node.get("bounds")
     if not isinstance(raw, (list, tuple)) or len(raw) < 4:
@@ -55,7 +55,7 @@ def _node_tab_label(node: dict[str, Any]) -> tuple[str, str]:
 
 def find_bottom_tab_slots(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """最底水平 Tab 行 → 槽位列表（含无文案图标槽），按 x 从左到右。"""
-    from mino_nexus.services.nav_screen_layout import infer_tab_bar_band
+    from mino_nexus.navigation.geometry.nav_screen_layout import infer_tab_bar_band
 
     if not nodes:
         return []

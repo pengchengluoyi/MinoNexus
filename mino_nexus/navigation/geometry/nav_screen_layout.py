@@ -15,7 +15,7 @@ _BOTTOM_CHROME_RE = re.compile(
 
 
 def _bounds(node: dict[str, Any]) -> tuple[int, int, int, int] | None:
-    from mino_nexus.loop.hierarchy_slots import int_list
+    from mino_nexus.navigation.geometry.hierarchy_slots import int_list
 
     b = int_list(node.get("bounds"), 4)
     if b[2] <= b[0] and b[3] <= b[1]:

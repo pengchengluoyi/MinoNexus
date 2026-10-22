@@ -496,7 +496,7 @@ def _guard_block_repeat_email_tab(ctx: dict[str, Any]) -> Optional[str]:
         return None
     if str(ctx.get("phase") or "") != "do":
         return None
-    from mino_nexus.loop.ui_channel import ui_channel_from_ctx, UiChannel
+    from mino_nexus.contract.execution.ui import ui_channel_from_ctx, UiChannel
 
     run_ctx = ctx.get("run_ctx") or ctx.get("ctx")
     if ui_channel_from_ctx(run_ctx) != UiChannel.WEB:
@@ -695,7 +695,7 @@ def _guard_action_fuse(ctx: dict[str, Any]) -> Optional[str]:
         instr,
         login_module_case=bool(ctx.get("login_module_case")),
     )
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
     run_ctx = ctx.get("run_ctx")
     web_channel = ui_channel_from_ctx(run_ctx) == UiChannel.WEB

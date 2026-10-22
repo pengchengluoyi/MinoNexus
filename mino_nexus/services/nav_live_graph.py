@@ -10,7 +10,7 @@ from mino_nexus.services import nav_capture_store as capture
 from mino_nexus.services import nav_fsm_store as store
 from mino_nexus.services.nav_candidate_compiler import build_fsm_from_captures, prepare_publish
 from mino_nexus.services.nav_capture_store import infer_screen_package, is_system_screen
-from mino_nexus.services.nav_screen_layout import (
+from mino_nexus.navigation.geometry.nav_screen_layout import (
     merge_layout_views,
     sanitize_wireframe,
     wireframe_from_hierarchy,
@@ -477,7 +477,7 @@ def _index_capture_wireframes(
     turn_tabs: list[str] = []
     band_top = 0
     if tab_labels and len(filtered) >= 1:
-        from mino_nexus.services.nav_screen_layout import infer_content_bands
+        from mino_nexus.navigation.geometry.nav_screen_layout import infer_content_bands
         from mino_nexus.services.nav_synthesis import _tab_bar_band
 
         bands = infer_content_bands((filtered[0].get("nodes") or []))

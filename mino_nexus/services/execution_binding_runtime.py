@@ -331,14 +331,23 @@ def committed_projection(session_id, binding_id, requirements, target_context, *
             'profile': binding['target']['env_profile'], 'identifier': dynamic_target})
         if target_ref != binding['target']['target_ref']:
             raise BindingAdmissionError('binding_target_changed')
-    operations = [row for row in binding['operations'] if row['event_id'] == event_id
-                  and row['phase'] == phase
-                  and (not operation_ref or row['operation_ref'] == operation_ref)
-                  and (input_combination is None or row.get('input_combination') == input_combination)]
-    if not phase or not operations or any(row['phase'] != phase for row in operations):
-        raise BindingAdmissionError('binding_phase_mismatch')
-    if len(operations) != 1:
-        raise BindingAdmissionError('binding_operation_ambiguous')
+    scoped = [row for row in binding['operations'] if row['event_id'] == event_id
+              and (not operation_ref or row['operation_ref'] == operation_ref)]
+    if not scoped:
+        raise BindingAdmissionError('event_not_registered')
+    operations = [row for row in scoped
+                  if input_combination is None or row.get('input_combination') == input_combination]
+    if not operations:
+        # 同一事件绑定了，但没有这条输入组合：不是阶段问题，别报成阶段失败。
+        raise BindingAdmissionError('input_combination_unsupported')
+    if len(operations) > 1:
+        # 同一事件在多个阶段各绑一份（screenshot 有 4 份）时，优先当前阶段，
+        # 否则按阶段顺序取第一条：语义等价，不再误报 binding_operation_ambiguous。
+        order = {'prep': 0, 'do': 1, 'check': 2, 'cleanup': 3}
+        operations.sort(key=lambda row: (0 if str(row.get('phase') or '') == str(phase or '') else 1,
+                                         order.get(str(row.get('phase') or ''), 9),
+                                         str(row.get('operation_ref') or '')))
+        operations = operations[:1]
     return {**dispatch_projection(binding, operations[0]['operation_ref']),
             'input_combination': deepcopy(operations[0].get('input_combination') or {})}
 

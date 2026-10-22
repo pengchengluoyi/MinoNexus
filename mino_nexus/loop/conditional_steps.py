@@ -4,7 +4,7 @@ from mino_nexus.services.step_requirements import contract, condition_complete
 
 def classify(nodes, observation):
     from mino_nexus.loop.ui_consent import find_consent_control
-    from mino_nexus.loop.hierarchy_slots import node_flag
+    from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
     snapshot = observation.get('snapshot_id')
     if not snapshot or not nodes:
         return 'unknown', 'observation_missing'
@@ -69,7 +69,7 @@ def gate(row, state, cursor, ctx, proxy, *, turn_seq, writer=None):
         pass
     observation = dict(getattr(ctx, 'observation_contract', None) or {})
     resolution, reason = classify(list(getattr(ctx, 'nav_hierarchy_nodes', None) or []), observation)
-    from mino_nexus.loop.hierarchy_slots import node_flag
+    from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
     from mino_nexus.loop.ui_consent import find_consent_control
     observed_nodes = list(getattr(ctx, 'nav_hierarchy_nodes', None) or [])
     checkable_nodes = [n for n in observed_nodes if node_flag(n, 'checkable') or n.get('role') in {'checkbox', 'switch'}]

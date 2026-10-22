@@ -23,7 +23,7 @@ from typing import Any, Optional
 
 from mino_nexus.core.log import SLog
 from mino_nexus.loop.fuse.guard_gate import ACTION_ALLOW, GuardGate, Verdict
-from mino_nexus.loop.hierarchy_slots import (
+from mino_nexus.navigation.geometry.hierarchy_slots import (
     HierarchySnapshot,
     capture,
     hierarchy_is_weak,
@@ -260,7 +260,7 @@ class NavRuntime:
         state_wfs = meta.get("state_wireframes") if isinstance(meta.get("state_wireframes"), dict) else {}
         cur_wf: dict[str, Any] = {}
         if nodes:
-            from mino_nexus.services.nav_screen_layout import wireframe_from_hierarchy
+            from mino_nexus.navigation.geometry.nav_screen_layout import wireframe_from_hierarchy
 
             cur_wf = wireframe_from_hierarchy(nodes)
         vlm_h = getattr(self, "_pending_vlm_hierarchy", None)

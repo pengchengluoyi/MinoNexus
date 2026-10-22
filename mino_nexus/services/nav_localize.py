@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from mino_nexus.loop.hierarchy_slots import match_any, node_matches
+from mino_nexus.navigation.geometry.hierarchy_slots import match_any, node_matches
 
 # 默认权重，与设计稿 §2.2 的「高/中/低」对应
 DEFAULT_WEIGHTS: dict[str, float] = {
@@ -250,7 +250,7 @@ def _eval_signal(
     if name == "tab_bar":
         return _eval_tab_bar(spec, nodes)
     if name == "layout_framework":
-        from mino_nexus.services.nav_layout import match_layout_framework
+        from mino_nexus.navigation.geometry.nav_layout import match_layout_framework
 
         return match_layout_framework(nodes, spec)
     if name == "text_landmarks":
@@ -298,7 +298,7 @@ def _eval_tab_bar(spec: dict[str, Any], nodes: list[dict[str, Any]]) -> Optional
 
 def _landmark_terms_are_noise(terms: Any) -> bool:
     """状态栏/通知头不得当 required landmark，否则整页 required_miss。"""
-    from mino_nexus.services.nav_layout import is_status_bar_chrome_text
+    from mino_nexus.navigation.geometry.nav_layout import is_status_bar_chrome_text
 
     rows = [str(t).strip() for t in (terms or []) if str(t).strip()]
     if not rows:

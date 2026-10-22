@@ -112,7 +112,7 @@ def _order_tabs_left_to_right(tab_labels: list[str], samples: list[dict[str, Any
 
 def _tab_bar_band(samples: list[dict[str, Any]], *, bottom_ratio: float = 0.14) -> tuple[int, int]:
     """返回 (band_top_px, band_bottom_px) 底栏垂直带。"""
-    from mino_nexus.services.nav_screen_layout import infer_content_bands
+    from mino_nexus.navigation.geometry.nav_screen_layout import infer_content_bands
 
     height = _screen_height(samples)
     y_bottom = _tab_bar_y_min(samples, bottom_ratio=bottom_ratio)
@@ -125,7 +125,7 @@ def _tab_bar_band(samples: list[dict[str, Any]], *, bottom_ratio: float = 0.14) 
 
 def _horizontal_tab_row_labels(turn: dict[str, Any]) -> list[str]:
     """底栏 Tab：最底水平行聚类（nav_screen_layout），无屏幕百分比阈值。"""
-    from mino_nexus.services.nav_screen_layout import find_bottom_horizontal_tab_row
+    from mino_nexus.navigation.geometry.nav_screen_layout import find_bottom_horizontal_tab_row
 
     nodes = turn.get("nodes") or []
     row = find_bottom_horizontal_tab_row(nodes)
@@ -136,7 +136,7 @@ def _horizontal_tab_row_labels(turn: dict[str, Any]) -> list[str]:
 
 def _center_tab_slot_label(nodes: list[dict[str, Any]], side_labels: list[str]) -> str:
     """两侧有文案、中间为图标槽时，用 content_desc / resource-id 作 Tab 标签。"""
-    from mino_nexus.services.nav_screen_layout import _button_items, infer_tab_bar_band
+    from mino_nexus.navigation.geometry.nav_screen_layout import _button_items, infer_tab_bar_band
 
     sides = {str(t or "").strip() for t in side_labels if str(t or "").strip()}
     if len(sides) < 2 or not nodes:
@@ -184,7 +184,7 @@ def extract_tab_bar_slots(
     from mino_nexus.services.nav_capture_store import synthesis_turns
     from mino_nexus.services.nav_tab_slots import find_bottom_tab_slots, tab_labels_from_slots
 
-    from mino_nexus.services.nav_screen_layout import is_modal_button_stack
+    from mino_nexus.navigation.geometry.nav_screen_layout import is_modal_button_stack
 
     app_samples = synthesis_turns(samples, scope=scope)
     if not app_samples:
@@ -195,13 +195,13 @@ def extract_tab_bar_slots(
         nodes = sample.get("nodes") or []
         if is_modal_button_stack(nodes):
             continue
-        from mino_nexus.services.nav_screen_layout import infer_tab_bar_band, screen_size
+        from mino_nexus.navigation.geometry.nav_screen_layout import infer_tab_bar_band, screen_size
 
         sh = screen_size(nodes)[1] or 1920
         band = infer_tab_bar_band(nodes)
         band_top = int(band.get("band_top_px") or 0)
         band_bottom = int(band.get("band_bottom_px") or 0)
-        from mino_nexus.services.nav_screen_layout import DEFAULT_CONTENT_BOTTOM
+        from mino_nexus.navigation.geometry.nav_screen_layout import DEFAULT_CONTENT_BOTTOM
 
         if band_bottom < int(sh * DEFAULT_CONTENT_BOTTOM):
             continue
@@ -296,7 +296,7 @@ def extract_tab_bar_labels(
     app_id: str = "",
 ) -> list[str]:
     from mino_nexus.services.nav_capture_store import synthesis_turns
-    from mino_nexus.services.nav_screen_layout import find_bottom_horizontal_tab_row, infer_tab_bar_band, screen_size
+    from mino_nexus.navigation.geometry.nav_screen_layout import find_bottom_horizontal_tab_row, infer_tab_bar_band, screen_size
     from mino_nexus.services.nav_tab_slots import tab_labels_from_slots
 
     slots = extract_tab_bar_slots(samples, scope=scope, app_id=app_id)
@@ -314,7 +314,7 @@ def extract_tab_bar_labels(
             continue
         sh = screen_size(nodes)[1] or 1920
         band = infer_tab_bar_band(nodes)
-        from mino_nexus.services.nav_screen_layout import DEFAULT_CONTENT_BOTTOM
+        from mino_nexus.navigation.geometry.nav_screen_layout import DEFAULT_CONTENT_BOTTOM
 
         if int(band.get("band_bottom_px") or 0) < int(sh * DEFAULT_CONTENT_BOTTOM):
             continue
@@ -483,7 +483,7 @@ def _segment_signature(
     y_tab: int,
     exclude: set[str],
 ) -> tuple[str, str, tuple[str, ...]]:
-    from mino_nexus.services.nav_layout import (
+    from mino_nexus.navigation.geometry.nav_layout import (
         detect_layout_framework,
         framework_fingerprint,
         semantic_page_role,
@@ -633,7 +633,7 @@ def _build_identify_block(
     include_framework: bool = True,
     is_entry: bool = False,
 ) -> dict[str, Any]:
-    from mino_nexus.services.nav_layout import is_volatile_text
+    from mino_nexus.navigation.geometry.nav_layout import is_volatile_text
 
     required: list[dict[str, Any]] = []
     if tab:
@@ -658,7 +658,7 @@ def build_from_tab_bar(
 ) -> dict[str, Any] | None:
     from mino_nexus.services import nav_fsm_template as tpl
     from mino_nexus.services.nav_candidate_compiler import autofill_draft_from_captures
-    from mino_nexus.services.nav_layout import (
+    from mino_nexus.navigation.geometry.nav_layout import (
         detect_layout_framework,
         framework_fingerprint,
         merge_frameworks,
@@ -675,7 +675,7 @@ def build_from_tab_bar(
     if len(tab_labels) < 2:
         return None
 
-    from mino_nexus.services.nav_screen_layout import infer_content_bands
+    from mino_nexus.navigation.geometry.nav_screen_layout import infer_content_bands
 
     sample_nodes = (app_turns[0].get("nodes") or []) if app_turns else []
     bands = infer_content_bands(sample_nodes)

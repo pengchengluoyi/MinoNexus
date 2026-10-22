@@ -769,7 +769,7 @@ def finalize_for_publish(app_id: str, draft: dict[str, Any]) -> dict[str, Any]:
         if isinstance(e, dict) and str(e.get("kind") or "nav") == "nav"
     ]
     doc = scrub_calibrate_marks(doc, landmark=top_text, resource_re=top_rid)
-    from mino_nexus.services.nav_layout import drop_volatile_landmark_states
+    from mino_nexus.navigation.geometry.nav_layout import drop_volatile_landmark_states
 
     doc, _dropped = drop_volatile_landmark_states(doc)
     return ensure_unique_state_ids(doc)
@@ -947,8 +947,8 @@ def _framework_kind_from_state(st: dict[str, Any]) -> str:
 
 def ensure_unique_state_ids(doc: dict[str, Any]) -> dict[str, Any]:
     """保证 states.id 全局唯一；冲突时按 Tab/结构重新分配，并同步边的 from/to。"""
-    from mino_nexus.services.nav_layout import sub_page_identity_from_state
-    from mino_nexus.services.nav_layout import semantic_page_role
+    from mino_nexus.navigation.geometry.nav_layout import sub_page_identity_from_state
+    from mino_nexus.navigation.geometry.nav_layout import semantic_page_role
     from mino_nexus.services.nav_synthesis import _slug_semantic_sub, _slug_tab
 
     states_in = [dict(s) for s in (doc.get("states") or []) if isinstance(s, dict)]
@@ -1076,7 +1076,7 @@ def merge_synthesized_doc(
     synthesized: dict[str, Any],
 ) -> dict[str, Any]:
     """累积合并：新采集追加节点/边；Tab 入口可被新证据整体替换（无页数上限）。"""
-    from mino_nexus.services.nav_layout import sub_page_identity_from_state
+    from mino_nexus.navigation.geometry.nav_layout import sub_page_identity_from_state
 
     if not synthesized:
         return existing
@@ -1212,7 +1212,7 @@ def merge_synthesized_doc(
             meta["recover"] = {**recover, "default_state_id": home_id}
     meta["capture_merge_at"] = int(__import__("time").time())
     out["meta"] = meta
-    from mino_nexus.services.nav_layout import drop_volatile_landmark_states
+    from mino_nexus.navigation.geometry.nav_layout import drop_volatile_landmark_states
 
     out, _dropped = drop_volatile_landmark_states(out)
     return ensure_unique_state_ids(out)

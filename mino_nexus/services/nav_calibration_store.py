@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from mino_nexus.core.paths import nav_calibration_dir
-from mino_nexus.loop.hierarchy_slots import HIERARCHY_FORMAT
+from mino_nexus.navigation.geometry.hierarchy_slots import HIERARCHY_FORMAT
 
 MANIFEST_NAME = "manifest.json"
 WALKTHROUGH_NAME = "walkthrough.json"
@@ -98,7 +98,7 @@ def append_step(
 
     body = hierarchy_text
     if not body and nodes is not None:
-        from mino_nexus.loop.hierarchy_slots import flatten
+        from mino_nexus.navigation.geometry.hierarchy_slots import flatten
 
         body = flatten(nodes)
     path = root / rel

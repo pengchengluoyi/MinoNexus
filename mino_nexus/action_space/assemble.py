@@ -38,6 +38,25 @@ def stamp_scheme_params(cap_id: str, params: dict[str, Any] | None, scheme: str)
     return apply_visual_point(out, keep_text=False)
 
 
+def input_combination(cap_id: str, params: dict[str, Any] | None, scheme: str,
+                      platform: str = "") -> dict[str, Any]:
+    """绑定和派发必须算出同一个输入组合，否则绑定里没有这条 operation。
+
+    Android 当前焦点只实现 append（Scout `input_contract` v2），这里和
+    `assemble_execute_params` 用同一条规则：避免绑定按 replace 建、派发按
+    append 找，最后报成"阶段不匹配"。
+    """
+    stamped = stamp_scheme_params(cap_id, params, scheme)
+    target = str(stamped.get("target_mode") or stamped.get("point_policy") or "").strip()
+    mode = str(stamped.get("mode") or "replace").strip().lower()
+    if mode not in ("replace", "append"):
+        mode = "replace"
+    if str(cap_id or "").strip() == "input_text" and str(platform or "").strip().lower() == "android":
+        # Android 只有 current_focus + append 一种输入契约，绑定必须按这个建。
+        target, mode = "current_focus", "append"
+    return {"contract_version": 2, "target_mode": target, "write_mode": mode}
+
+
 def visual_point_missing(cap_id: str, params: dict[str, Any] | None) -> bool:
     """看图的点、长按、连点必须带 x,y。输入写当前焦点，不带坐标。方向滑动可以只有 direction。"""
     cid = str(cap_id or "").strip()
@@ -65,14 +84,24 @@ def assemble_execute_params(
         return out
     from mino_nexus.ai.coords import prepare_xy_params_for_execute
     from mino_nexus.action_space.scheme import execution_scheme as action_scheme
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
     prepare_xy_params_for_execute(out, int(width or 0), int(height or 0))
     scheme = action_scheme(ctx)
-    if ui_channel_from_ctx(ctx) == UiChannel.WEB and cid in _POINT_CAPS and scheme != "dom":
+    channel = ui_channel_from_ctx(ctx)
+    if channel == UiChannel.WEB and cid in _POINT_CAPS and scheme != "dom":
         from mino_nexus.action_space.web import apply_web_point
 
         out = apply_web_point(out)
+    if cid == "input_text" and channel == UiChannel.ANDROID:
+        # Android 侧不存在"按节点写文本"的契约：Scout adb 只实现
+        # current_focus + append（input_contract v2），dom 的 node 输入在原生端不成立。
+        # 定位交给前一次 tap_element，这里只写当前焦点。
+        from mino_nexus.action_space.visual import apply_focus_input, bind_focus_ref
+
+        out = apply_focus_input(out)
+        out["mode"] = "append"
+        return bind_focus_ref(out, ctx)
     if scheme == "dom" and cid in ("tap_element", "input_text"):
         from mino_nexus.action_space.scheme import structure_target_nodes
 
@@ -85,7 +114,4 @@ def assemble_execute_params(
         from mino_nexus.action_space.visual import bind_focus_ref
 
         out = bind_focus_ref(out, ctx)
-        if out.get("target_mode") == "current_focus" and ui_channel_from_ctx(ctx) == UiChannel.ANDROID:
-            # ADB 当前焦点只实现 append（Scout input_contract），replace 会被节点拒绝。
-            out["mode"] = "append"
     return out

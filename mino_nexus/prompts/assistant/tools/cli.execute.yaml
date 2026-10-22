@@ -1,5 +1,5 @@
 id: cli.execute
-version: 1
+version: 2
 title: 执行飞书和 Meego CLI 操作
 description: >-
   根据用户明确请求，在本人 Scout 的飞书或 Meego 上创建或修改业务数据。
@@ -10,6 +10,8 @@ description: >-
   唯一可用的空间、缺陷类型和模板可直接使用；多项无法区分时询问用户名称，不要求用户填写内部字段或模板 ID。不假设类型 key 为 bug，不猜字段 ID 或模板 ID。
   例如 command=[workitem,create]，options={project-key:空间KEY,work-item-type:缺陷类型KEY,params:{fields:[{field_key:name,field_value:标题},{field_key:template,field_value:模板ID}]}}。
   复现步骤、预期结果、实际结果等使用查询得到的字段 key 加入 fields。
+  用户要求把截图或文件放入新 Bug 时，使用消息提供的附件 ref，在同一次 workitem create 的 attachments 中传 ref、查询到的 field_key、resource_type（文件附件为15，富文本图片为16）及 filename；不先创建空 Bug 再声称附件已关联。
+  独立上传或给已有工作项准备附件可用 command=[attachment,+upload]，attachment_ref 为消息提供的 ref，options 含 project-key、work-item-id（未创建时用 work-item-type）、resource-type、field-key；上传成功的 file_token/file_url 还需写入对应字段或评论，不能把仅上传说成已关联。
   dry-run=true 仅预览，不能称已创建。成功必须以工具回执为准，保留工作项 ID。
   不提供删除、任意 Shell、节点本地文件读取或 CLI 登录配置修改。
 route: POST /runtime/cli/execute
@@ -31,6 +33,23 @@ params_schema:
       type: object
       description: CLI 长参数及业务数据；JSON 参数直接传对象，不传文件路径。
     node_id: {type: string}
+    attachment_ref:
+      type: string
+      pattern: '^media-[0-9a-f]{32}$'
+      description: 仅用于 attachment +upload 的会话附件引用，不接受路径或 URL。
+    attachments:
+      type: array
+      maxItems: 4
+      description: 与 workitem create 同次提交的图片或文件；全部上传完成后才创建工作项。
+      items:
+        type: object
+        additionalProperties: false
+        properties:
+          ref: {type: string, pattern: '^media-[0-9a-f]{32}$'}
+          field_key: {type: string, minLength: 1}
+          resource_type: {type: integer, enum: [15, 16]}
+          filename: {type: string, maxLength: 200}
+        required: [ref, field_key, resource_type]
   required: [plugin, command]
 result_pick: [data]
 surfaces: [im]

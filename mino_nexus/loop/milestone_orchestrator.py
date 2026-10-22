@@ -298,7 +298,7 @@ def _login_form_mismatches_focus(ctx: Any, row: dict[str, Any]) -> bool:
     nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
     if not nodes:
         return False
-    from mino_nexus.loop.ui_channel import ui_channel_from_ctx, ui_channel_label
+    from mino_nexus.contract.execution.ui import ui_channel_from_ctx, ui_channel_label
     from mino_nexus.loop.ui_sms_request import credential_field_for_login
     from mino_nexus.services.account_credential_text import login_kind_from_ctx
 
@@ -393,7 +393,7 @@ def _login_finished_but_form_open(state: dict[str, Any], ctx: Any) -> bool:
     nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
     if not nodes:
         return False
-    from mino_nexus.loop.ui_channel import ui_channel_from_ctx, ui_channel_label
+    from mino_nexus.contract.execution.ui import ui_channel_from_ctx, ui_channel_label
     from mino_nexus.loop.ui_sms_request import credential_field_for_login
     from mino_nexus.services.account_credential_text import login_kind_from_ctx
 

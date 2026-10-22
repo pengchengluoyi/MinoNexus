@@ -194,7 +194,8 @@ def run_cases(
             [str(case["case_id"]) for case in cases])
         skipped_cases = preflight["blocked"]
         if not cases:
-            raise UiNotCoverable(skipped_cases, compilation_jobs=preflight.get("compilation_jobs"))
+            raise UiNotCoverable(skipped_cases, compilation_jobs=preflight.get("compilation_jobs"),
+                                 report=preflight)
     mark("cases")
 
     from mino_nexus.services.device_targets import select
@@ -525,12 +526,14 @@ def _ensure_web_parallel_capacity(sn: str) -> None:
 
 
 class UiNotCoverable(Exception):
-    def __init__(self, blocked: list[dict[str, Any]], *, compilation_jobs: list[dict[str, Any]] | None = None):
+    def __init__(self, blocked: list[dict[str, Any]], *, compilation_jobs: list[dict[str, Any]] | None = None,
+                 report: dict[str, Any] | None = None):
         from mino_nexus.services.case_preflight import rejection_message
 
         self.blocked = list(blocked or [])
         self.compilation_jobs = list(compilation_jobs or [])
-        super().__init__(rejection_message({"blocked": self.blocked, "compilation_jobs": self.compilation_jobs}))
+        self.report = report or {"blocked": self.blocked, "compilation_jobs": self.compilation_jobs}
+        super().__init__(rejection_message(self.report))
 
 
 class DeviceBusy(Exception):

@@ -173,8 +173,7 @@ def model_fact(uid, provider_id='', *, explicit_selection=False):
     config = list_ai_providers(user_id=uid)
     provider_id = provider_id or find_case_execution_provider_id(user_id=uid)
     row = next((r for r in config['providers'] if r['id'] == provider_id), {})
-    gate = bool(explicit_selection and provider_id) or bool(
-        config['usage'].get('case_execution_enabled') and row.get('case_execution_use'))
+    gate = bool(explicit_selection and provider_id) or bool(row.get('case_execution_use'))
     ready = bool(gate and row.get('configured') and row.get('enabled') and row.get('model'))
     return (fact('ready', 'model_configured', provider_id=provider_id, model=row['model'])
             if ready else fact('needs_input', 'model_configuration_missing'))

@@ -295,6 +295,15 @@ def milestone_caps_registered(
     def _cap_ok(cap: str) -> bool:
         if cap in allowed:
             return True
+        from mino_nexus.catalog.exec_classes import LOCAL_EXECUTOR_IDS
+        from mino_nexus.services.execution_requirements import LOCAL_EXECUTORS
+
+        # 本地 executor（vlm/internal/hitl/ai_persona）不经 Scout，目录里本来就不声明
+        # implementations。用"有没有 Scout 实现"判它会把人挡住：confirm_login_state
+        # 就是这么被永久 blocked 的。
+        local = cap in LOCAL_EXECUTORS or cap in LOCAL_EXECUTOR_IDS or cap.startswith(("recover_", "signal_"))
+        if local:
+            return capability_dispatch_ok(cap) and channel_supports(cap, platform)
         if not (allow_program and (is_program_caller(cap) or system_device_dispatch(cap))):
             return False
         from mino_nexus.catalog.registry import get_capability
@@ -338,6 +347,10 @@ def _ensure_core_execution_rows(db: Any) -> int:
 
     Existing rows, including disabled rows and custom implementations, remain
     authoritative. Declaring an implementation does not bypass Scout admission.
+
+    这份声明必须覆盖"编译产物里可能成为必填项"的原语：准入按目录判
+    `catalog_capability_missing`，漏一个就等于该用例永远跑不了。缺 `input_text`
+    会让所有要打字的用例在 72ms 内 `execution_started: no` 结束。
     """
     from mino_nexus.models.catalog import CatalogEntry
     from mino_nexus.catalog.tool_schema import PARAM_DEFAULTS, schema_to_param_rows
@@ -347,6 +360,18 @@ def _ensure_core_execution_rows(db: Any) -> int:
         ("press_key", "按键", "case", "adb", "key_event", ["android"]),
         ("launch_app", "启动被测应用", "program", "adb", "app_launch_native", ["android"]),
         ("lease_account", "筛选并租用账号", "program", "internal", "", ["mac", "win", "android", "web"]),
+        # 以下原语 Scout adb 已原生实现（按 capability_id 分派，low_level 留空），
+        # 只是 Nexus 侧一直没登记，于是编译能过、准入必挂。
+        ("input_text", "输入文本", "case", "adb", "ui_input_text", ["android"]),
+        ("multi_tap", "连续点击", "case", "adb", "ui_native_input", ["android"]),
+        ("long_press_element", "长按元素", "case", "adb", "ui_native_input", ["android"]),
+        ("swipe_direction", "按方向滑动", "case", "adb", "ui_native_input", ["android"]),
+        ("swipe_element_to_element", "两点滑动", "case", "adb", "ui_native_input", ["android"]),
+        ("kill_app", "结束被测应用", "case", "adb", "app_force_stop", ["android"]),
+        # 程序派发但从不进模型菜单的观测/管理原语。缺行时 add() 对 optional 静默丢弃，
+        # prep 程序照旧派发，最后由阶段门报成"超出阶段"——真正的病是目录缺行。
+        ("get_app_version", "读取应用版本", "system", "adb", "read_system_data", ["android"]),
+        ("close_app", "关闭被测应用", "system", "adb", "app_force_stop", ["android"]),
     )
     added = 0
     for eid, title, caller, executor, abstract, platforms in specs:

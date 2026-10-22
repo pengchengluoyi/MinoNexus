@@ -19,6 +19,9 @@ port(nexus): `RunContext` 这个 dataclass 原样搬自 MiniOrangeServer
 """
 from __future__ import annotations
 
+# 设备谓词已下沉到契约层；此处 re-export，保持 `from mino_nexus.runtime.run_context import is_web_slot` 可用。
+from mino_nexus.contract.execution.device import is_per_node_web_sn, is_web_slot  # noqa: F401
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -422,16 +425,6 @@ WEB_PLAYWRIGHT_PARALLEL_LANES = 4
 
 
 
-def is_web_slot(sn: str = "", platform: str = "") -> bool:
-    s = str(sn or "")
-    valid = s.startswith("web") and len(s)>3 and s[3:].isascii() and s[3:].isalnum() and s==s.lower()
-    return valid and (not platform or platform=="web")
-
-
-def is_per_node_web_sn(sn: str = "") -> bool:
-    """`web` + [a-z0-9]+ — the post-upgrade Playwright slot, not `web-local`."""
-    s = str(sn or "").strip().lower()
-    return s.startswith("web") and len(s) > 3 and s[3:].isalnum()
 
 
 def device_platform_kind(device_type: str = "", channels: Any = None, sn: str = "") -> str:

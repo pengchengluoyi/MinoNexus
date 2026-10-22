@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from mino_nexus.loop.hierarchy_slots import match_any
+from mino_nexus.navigation.geometry.hierarchy_slots import match_any
 
 _PREFIXES = (
     "跳转到",

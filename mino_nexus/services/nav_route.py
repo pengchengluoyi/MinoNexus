@@ -718,7 +718,7 @@ def tap_params_for_edge(fsm: dict[str, Any], edge: dict[str, Any]) -> dict[str, 
                     out["selector_text"] = label
                     out["text"] = label
                 if isinstance(bounds, (list, tuple)) and len(bounds) >= 4:
-                    from mino_nexus.loop.hierarchy_slots import int_list
+                    from mino_nexus.navigation.geometry.hierarchy_slots import int_list
 
                     bb = int_list(bounds, 4)
                     out["fallback_xy"] = [(bb[0] + bb[2]) // 2, (bb[1] + bb[3]) // 2]

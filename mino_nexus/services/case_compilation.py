@@ -162,7 +162,17 @@ def _queue(db, row, revision, *, request_id, parent_job_id="", initial_status="q
         if key not in {"review_history", "resource_key"}:
             meta.pop(key, None)
     meta["resource_key"] = deepcopy(revision.compile_input.get("resource_key"))
-    meta["ui_automation"] = {"coverable": False, "blocked_by": []}
+    meta["ui_automation"] = {
+        "schema": "mino.ui_automation.v2",
+        "status": "blocked",
+        "coverable": False,
+        "runnable_now": False,
+        "ui_plan": "none",
+        "setup": {"state": "unknown", "verified": False, "items": []},
+        "oracle": {"state": "unknown", "manual": False, "missing_items": []},
+        "coverage": {"total_steps": 0, "covered_steps": 0, "manual": 0},
+        "blocked_by": [],
+    }
     extra["meta"] = meta
     row.extra = extra
     return job

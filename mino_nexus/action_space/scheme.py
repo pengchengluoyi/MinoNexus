@@ -44,7 +44,7 @@ def _visual_input_focus_active(ctx: Any, cursor: Any) -> bool:
 
 def select_observation(ctx: Any, *, cursor: Any = None, writer: Any = None) -> str:
     nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
-    from mino_nexus.loop.hierarchy_slots import flatten
+    from mino_nexus.navigation.geometry.hierarchy_slots import flatten
 
     usable_nodes = [n for n in nodes if not n.get("cross_origin") and n.get("visible", True)]
     usable = bool(flatten(usable_nodes).strip()) and any(

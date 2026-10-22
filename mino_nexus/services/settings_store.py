@@ -213,6 +213,9 @@ def _save_ai(ai: dict[str, Any], user_id: str | None = None) -> None:
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.settings import Settings
     uid = require_user_id(user_id)
+    ai = dict(ai)
+    if "_usage" in ai:
+        ai["_usage"] = _normalize_ai_usage(ai["_usage"])
     with session_scope() as db:
         db.merge(Settings(id=f"ai-user:{uid}", payload=ai))
 
@@ -275,15 +278,19 @@ def _provider_public(provider_id: str, raw: Optional[dict[str, Any]] = None) -> 
     }
 
 
-def get_ai_usage(user_id: str | None = None) -> dict[str, Any]:
-    usage = _ai_root(user_id).get("_usage") if isinstance(_ai_root(user_id).get("_usage"), dict) else {}
+def _normalize_ai_usage(raw: Any) -> dict[str, Any]:
+    usage = raw if isinstance(raw, dict) else {}
+    mode = usage.get("mode") or "local_first"
     return {
         "copilot_enabled": bool(usage.get("copilot_enabled", False)),
-        "case_execution_enabled": bool(usage.get("case_execution_enabled", False)),
         "case_execution_provider_id": str(usage.get("case_execution_provider_id") or "").strip().lower(),
-        "mode": usage.get("mode") or "local_first",
+        "mode": mode if mode in ("local_first", "ai_first") else "local_first",
         "plan_compress_image": bool(usage.get("plan_compress_image", True)),
     }
+
+
+def get_ai_usage(user_id: str | None = None) -> dict[str, Any]:
+    return _normalize_ai_usage(_ai_root(user_id).get("_usage"))
 
 
 def list_ai_providers(user_id: str | None = None) -> dict[str, Any]:
@@ -398,16 +405,7 @@ def delete_ai_provider(provider_id: str, user_id: str | None = None) -> None:
 @_ai_write
 def save_ai_usage(payload: dict[str, Any], user_id: str | None = None) -> dict[str, Any]:
     ai = _ai_root(user_id)
-    mode = payload.get("mode") or "local_first"
-    if mode not in ("local_first", "ai_first"):
-        mode = "local_first"
-    ai["_usage"] = {
-        "copilot_enabled": bool(payload.get("copilot_enabled", False)),
-        "case_execution_enabled": bool(payload.get("case_execution_enabled", False)),
-        "case_execution_provider_id": str(payload.get("case_execution_provider_id") or "").strip().lower(),
-        "mode": mode,
-        "plan_compress_image": bool(payload.get("plan_compress_image", True)),
-    }
+    ai["_usage"] = _normalize_ai_usage(payload)
     _save_ai(ai, user_id)
     return get_ai_usage(user_id)
 
@@ -469,7 +467,7 @@ def should_use_ai_planning(channel: str, provider_id: str | None = None, user_id
     normalized = (channel or "copilot").strip().lower()
     explicit = bool(str(provider_id or "").strip())
     if normalized in {"case", "case_execution", "regression", "feishu"}:
-        scope_enabled = bool(usage.get("case_execution_enabled"))
+        scope_enabled = True
     elif normalized == "copilot" and explicit:
         scope_enabled = True
     else:

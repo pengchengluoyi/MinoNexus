@@ -372,7 +372,9 @@ def _asgi_request(method: str, url: str, rest: dict[str, Any], headers: dict[str
     except RuntimeError:
         return asyncio.run(_once())
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(lambda: asyncio.run(_once())).result()
+        import contextvars
+        context = contextvars.copy_context()
+        return pool.submit(context.run, lambda: asyncio.run(_once())).result()
 
 
 def run_tool(spec: dict[str, Any], args: dict[str, Any], *, user_id: str, profile: dict[str, Any] | None = None, surface: str = "im", target: dict[str, Any] | None = None) -> ToolOutcome:
@@ -665,6 +667,8 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         identifiers = {k: receipt_data[k] for k in ("task_id", "run_id", "id", "status") if isinstance(receipt_data.get(k), (str, int))}
         if spec.get('id') == 'cli.execute' and ok:
             identifiers['dry_run'] = bool(receipt_data.get('dry_run'))
+            identifiers.update({key: receipt_data[key] for key in ('file_token', 'file_url', 'name', 'mime_type', 'size', 'attachment_count')
+                                if isinstance(receipt_data.get(key), (str, int))})
         if spec.get("id") == "collab.scope_update":
             identifiers["topic_id"] = receipt_data.get("topic_id", args.get("topic_id", ""))
         if spec.get("id", "").startswith(("workbench.update", "nexus.update")):

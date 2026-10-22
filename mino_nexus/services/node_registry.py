@@ -163,6 +163,8 @@ def sanitize_plugins(raw: Any) -> list[dict[str, Any]] | None:
             "configured": bool(row.get("configured")),
         }
         status = _plugin_status(row.get("status"))
+        if kind == 'cli' and pid == 'meego' and type(row.get('attachment_upload_version')) is int and row['attachment_upload_version'] == 1:
+            item['attachment_upload_version'] = 1
         if status:
             item["status"] = status
         values = _plain_values(row.get("values"))

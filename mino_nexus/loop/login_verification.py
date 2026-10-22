@@ -7,7 +7,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
 
 def record_verification_send(ctx: Any) -> None:

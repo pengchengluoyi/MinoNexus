@@ -210,11 +210,11 @@ class RouterProxy:
             raise BindingAdmissionError('binding_run_mismatch')
         combination = None
         if event.capability_id == 'input_text':
-            from mino_nexus.action_space.assemble import stamp_scheme_params
+            from mino_nexus.action_space.assemble import input_combination
             from mino_nexus.action_space.scheme import execution_scheme
-            params = stamp_scheme_params(event.capability_id, event.params, execution_scheme(self.run_context or self))
-            combination = {'contract_version': 2, 'target_mode': params.get('target_mode') or params.get('point_policy'),
-                           'write_mode': params.get('mode') or 'replace'}
+            combination = input_combination(event.capability_id, event.params,
+                execution_scheme(self.run_context or self),
+                str(getattr(self.run_context, 'platform', '') or getattr(self, 'platform', '') or ''))
         return committed_projection(self._binding_session_id, self.execution_binding['binding_id'],
             self._binding_requirements, self._binding_target, event_id=event.capability_id,
             operation_ref=options.get('operation_ref') or getattr(event, 'operation_ref', ''), phase=phase,
@@ -376,8 +376,16 @@ class RouterProxy:
                           requested_phase=kwargs.get('binding_phase') or self._binding_phase_override)
         except ContractError as exc:
             if session_writer:
+                resolved = getattr(self.run_context, 'resolved_case', None)
+                cursor = getattr(self.run_context, '_step_cursor', None)
+                bound_phases = sorted({str(row.get('phase') or '')
+                    for row in (getattr(resolved, 'capability_snapshot', []) or [])
+                    if row.get('event_id') == event.capability_id})
                 session_writer.append('contract/blocked', {'reason_code': exc.reason_code,
-                    'error_kind': exc.reason_code, 'status': exc.status, 'execution_started': 'no'})
+                    'error_kind': exc.reason_code, 'status': exc.status, 'execution_started': 'no',
+                    'capability_id': event.capability_id,
+                    'phase': str(getattr(cursor, 'phase', '') or ''),
+                    'bound_phases': bound_phases})
             # Stop the ordinary loop; a failed dispatch cannot be recovered into Do.
             raise
 
@@ -536,7 +544,7 @@ class RouterProxy:
                 "当前视觉操作缺少完整坐标，未派发到节点；普通步骤、逻辑块和恢复步骤均需提供有效操作参数",
                 executor_used="router_proxy", local_reason="visual_coordinates_missing",
             )
-        if event.capability_id == "input_text" and params.get("target_mode") == "current_focus" and scheme != "dom":
+        if event.capability_id == "input_text" and params.get("target_mode") == "current_focus":
             dispatch_run_id = run_id or self.run_id
             prefix = f"focus:{dispatch_run_id}:"
             if not dispatch_run_id or not focus_ref.startswith(prefix) or not focus_ref[len(prefix):].isdigit():

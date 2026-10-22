@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from mino_nexus.loop.hierarchy_slots import match_any, match_none
+from mino_nexus.navigation.geometry.hierarchy_slots import match_any, match_none
 
 # guard 强度（§8.3）。medium / weak 永远不得进 block/stop 计数。
 STRENGTH_STRONG_ID = "strong_id"

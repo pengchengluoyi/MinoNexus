@@ -196,6 +196,136 @@ def _blocked_item(
     return row
 
 
+_CAPABILITY_BLOCK_REASONS = frozenset(
+    {"unavailable_cap", "uncoverable_event", "platform_unsupported", "capability_disabled"}
+)
+
+
+def _block_class(item: dict[str, Any]) -> str:
+    phase = str(item.get("phase") or "")
+    reason = str(item.get("reason") or "")
+    if phase == "prep":
+        return "setup"
+    if phase == "check":
+        return "oracle"
+    if reason in _CAPABILITY_BLOCK_REASONS:
+        return "operation"
+    return "source"
+
+
+def _enrich_blocker(item: dict[str, Any]) -> dict[str, Any]:
+    row = dict(item)
+    row["class"] = str(row.get("class") or _block_class(row))
+    reason = str(row.get("reason") or "")
+    if row["class"] == "setup":
+        row["severity"] = "degraded"
+    elif reason in ("human_only", "advisory"):
+        row["severity"] = reason
+    else:
+        row["severity"] = str(row.get("severity") or "blocking")
+    return row
+
+
+def _has_manual_check(step_keys: dict[str, Any]) -> bool:
+    for bundle in step_keys.values():
+        if not isinstance(bundle, dict):
+            continue
+        plan = bundle.get("check_program_plan") if isinstance(bundle.get("check_program_plan"), dict) else {}
+        for step in plan.get("checkpoints") or []:
+            if not isinstance(step, dict):
+                continue
+            assert_payload = step.get("assert") if isinstance(step.get("assert"), dict) else {}
+            if (str(step.get("key_ref") or "") == "expected.human_review"
+                    or str(assert_payload.get("mode") or "") == "human_only"):
+                return True
+    return False
+
+
+def _setup_state(case: dict[str, Any]) -> str:
+    from mino_nexus.services.case_semantic_integrity import coverage_matches, precondition_lines
+
+    precondition = str(case.get("precondition") or case.get("precondition_raw") or "")
+    if not precondition_lines(precondition):
+        return "ready"
+    claim = case.get("resource_key") or (case.get("meta") or {}).get("resource_key") or {}
+    rows = claim.get("precondition_coverage") or []
+    if not rows:
+        return "unknown"
+    if any(str(row.get("status") or "mapped") == "source" for row in rows if isinstance(row, dict)):
+        return "blocked"
+    if any(str(row.get("status") or "mapped") != "mapped" for row in rows if isinstance(row, dict)):
+        return "needs_setup"
+    if any(not coverage_matches(row, claim) for row in rows if isinstance(row, dict)):
+        return "needs_setup"
+    return "ready"
+
+
+def _build_ui_automation(case: dict[str, Any], step_keys: dict[str, Any],
+                         blocked: list[dict[str, Any]]) -> dict[str, Any]:
+    do_steps = 0
+    check_steps = 0
+    for bundle in step_keys.values():
+        if not isinstance(bundle, dict):
+            continue
+        do_steps += len((bundle.get("do_program_plan") or {}).get("steps") or [])
+        check_steps += len((bundle.get("check_program_plan") or {}).get("checkpoints") or [])
+    blocking = [item for item in blocked if str(item.get("severity") or "blocking") == "blocking"]
+    ui_blocking = [item for item in blocking if str(item.get("class") or "") in {"operation", "source"}]
+    oracle_blocking = [item for item in blocking if str(item.get("class") or "") == "oracle"]
+    setup_items = [item for item in blocked if str(item.get("class") or "") == "setup"]
+    setup_state = _setup_state(case)
+    manual_oracle = _has_manual_check(step_keys)
+    if not do_steps and not check_steps:
+        ui_plan = "none"
+    elif ui_blocking:
+        ui_plan = "partial"
+    else:
+        ui_plan = "complete"
+    if oracle_blocking:
+        oracle_state = "missing"
+    elif manual_oracle:
+        oracle_state = "manual"
+    else:
+        oracle_state = "automated"
+    source_in_prep = any(
+        str(item.get("class") or "") == "source" and str(item.get("phase") or "") == "prep"
+        for item in blocking
+    )
+    if ui_plan == "none" or source_in_prep or setup_state == "blocked":
+        status = "blocked"
+    elif ui_plan == "partial" or oracle_state == "missing":
+        status = "partial"
+    elif setup_state != "ready":
+        status = "needs_setup"
+    else:
+        status = "runnable"
+    coverable = status in {"runnable", "needs_setup"}
+    total = do_steps + check_steps
+    return {
+        "schema": "mino.ui_automation.v2",
+        "status": status,
+        "coverable": coverable,
+        "runnable_now": status == "runnable",
+        "ui_plan": ui_plan,
+        "setup": {
+            "state": setup_state,
+            "verified": setup_state == "ready",
+            "items": setup_items,
+        },
+        "oracle": {
+            "state": oracle_state,
+            "manual": manual_oracle,
+            "missing_items": oracle_blocking,
+        },
+        "coverage": {
+            "total_steps": total,
+            "covered_steps": max(0, total - len(ui_blocking) - len(oracle_blocking)),
+            "manual": 1 if manual_oracle else 0,
+        },
+        "blocked_by": blocked,
+    }
+
+
 def _drop_coords(step: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(step, dict):
         return step
@@ -1212,23 +1342,33 @@ def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
             all_warnings.append({"case_step": item.get("case_step"), "layer": "operation", "blocked": item})
     from mino_nexus.services.case_semantic_integrity import precondition_diagnostics
     for issue in precondition_diagnostics(case):
-        all_warnings.append({"case_step": 0, "layer": "precondition", "line": issue["source_clause"],
-            "blocked": _blocked_item(phase="prep", case_step=0, clause=issue["source_clause"],
-                reason=issue["reason"], user_message=issue["user_message"])})
+        all_warnings.append({
+            "case_step": 0,
+            "layer": "precondition",
+            "line": issue.get("source_clause") or "",
+            "blocked": {
+                "phase": "prep",
+                "case_step": 0,
+                "source_clause": str(issue.get("source_clause") or ""),
+                "reason": str(issue.get("reason") or "manual_prerequisite_required"),
+                "class": str(issue.get("class") or "setup"),
+                "severity": str(issue.get("severity") or "degraded"),
+                "user_message": str(issue.get("user_message") or ""),
+                "detail": str(issue.get("detail") or ""),
+                **({"setup": issue["setup"]} if isinstance(issue.get("setup"), dict) else {}),
+            },
+        })
     blocked: list[dict[str, Any]] = []
     for w in all_warnings:
         item = w.get("blocked") if isinstance(w, dict) else None
         if isinstance(item, dict):
+            item = _enrich_blocker(item)
+            w["blocked"] = item
             blocked.append(item)
-    blocking = [b for b in blocked if str(b.get("severity") or "blocking") == "blocking"]
     return {
         "step_program_keys": step_keys,
         "key_compile_warnings": all_warnings,
-        "ui_automation": {
-            "schema": "mino.ui_automation.v1",
-            "coverable": not blocking,
-            "blocked_by": blocked,
-        },
+        "ui_automation": _build_ui_automation(case, step_keys, blocked),
     }
 
 

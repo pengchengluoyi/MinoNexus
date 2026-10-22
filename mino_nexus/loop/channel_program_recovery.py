@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
 # 仅 Android / iOS 程序恢复；Web 走浏览器前台逻辑
 _NATIVE_ONLY_CAPS = frozenset(

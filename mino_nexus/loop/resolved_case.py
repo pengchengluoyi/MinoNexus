@@ -221,10 +221,12 @@ def dispatch_gate(ctx, event_id, *, requested_phase=''):
         raise ContractError('dispatch_phase_mismatch')
     if phase == 'done':
         raise ContractError('dispatch_after_case_done')
-    rows = [row for row in resolved.capability_snapshot if row['event_id'] == event_id and row['phase'] == phase]
+    # 判据只看"这个事件在不在本案绑定里"，阶段只用于证据与提示。
+    # 阶段分桶原本为控制 prompt 体积，不该变成派发权限。
+    rows = [row for row in resolved.capability_snapshot if row['event_id'] == event_id]
     if not rows:
-        raise ContractError('capability_outside_resolved_phase')
-    if phase == 'check' and any(row['kind'] != 'check' for row in rows):
+        raise ContractError('event_not_registered')
+    if phase == 'check' and all(row.get('kind') != 'check' for row in rows):
         raise ContractError('check_mutation_forbidden')
     if phase == 'do':
         preparation_gate(ctx)

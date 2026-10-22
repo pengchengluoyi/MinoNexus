@@ -101,7 +101,7 @@ def confirm_submission_transition(proxy, ctx, cursor, *, shot=None, writer=None)
     contract = current.get('contract', {}) if fresh else {}
     # DOM is read only once if this turn has no usable hierarchy already.
     if not _dom_available(nodes, contract):
-        from mino_nexus.loop.hierarchy_slots import capture
+        from mino_nexus.navigation.geometry.hierarchy_slots import capture
         snap = capture(proxy, turn_id=int(getattr(writer, 'turn', 0) or 0))
         nodes = _nodes(getattr(snap, 'nodes', None)) if getattr(snap, 'ok', False) else []
         contract = dict(getattr(snap, 'observation', None) or {}) if getattr(snap, 'ok', False) else {'missing': ['capture_failed']}

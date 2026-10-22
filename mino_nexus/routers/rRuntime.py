@@ -74,24 +74,47 @@ class NodePluginCallBody(BaseModel):
     params: dict[str, Any] = {}
 
 
+class CliAttachmentBody(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    ref: str = Field(pattern=r'^media-[0-9a-f]{32}$')
+    field_key: str = Field(min_length=1, max_length=128)
+    resource_type: Literal[15, 16] = 15
+    filename: str = Field(default='', max_length=200)
+
+
 class CliCommandBody(BaseModel):
     model_config = ConfigDict(extra='forbid')
     plugin: Literal['feishu', 'meego']
     node_id: str = Field(default='', max_length=128)
     command: list[str] = Field(min_length=1, max_length=8)
     options: dict[str, Any] = Field(default_factory=dict)
+    attachment_ref: str = Field(default='', pattern=r'^(media-[0-9a-f]{32})?$')
+    attachments: list[CliAttachmentBody] = Field(default_factory=list, max_length=4)
 
 
 async def _cli_command(body: CliCommandBody, sess: dict, mode: str):
     from mino_nexus.core.execution_user import execution_user
-    from mino_nexus.services.node_plugin_call import PluginCallError, call_plugin
+    from mino_nexus.services.node_plugin_call import PluginCallError, PluginCapabilityError, call_plugin
     import asyncio
 
     def execute():
         with execution_user(str(sess.get('user_id') or '')):
-            return call_plugin(kind='cli', plugin_id=body.plugin, node_id=body.node_id,
+            params = {'action': 'command', 'mode': mode, 'command': body.command, 'options': body.options}
+            node_id = body.node_id
+            if body.attachment_ref or body.attachments:
+                from mino_nexus.ai.dispatch_log import ctx
+                from mino_nexus.services.assistant_store import require_im_binding
+                origin = ctx().get('assistant_origin') or {}
+                if (mode != 'write' or body.plugin != 'meego' or not origin.get('channel')
+                        or not origin.get('node_id') or (node_id and node_id != origin['node_id'])):
+                    raise HTTPException(status_code=422, detail='附件必须来自当前已绑定会话，并在持有原附件的节点上传。')
+                require_im_binding(str(sess.get('user_id') or ''), origin['channel'], origin['node_id'], origin)
+                node_id = origin['node_id']
+                params.update(attachment_origin=origin, attachment_ref=body.attachment_ref,
+                              attachments=[item.model_dump() for item in body.attachments])
+            return call_plugin(kind='cli', plugin_id=body.plugin, node_id=node_id,
                                capability_id='plugin.cli.' + body.plugin,
-                               params={'action': 'command', 'mode': mode, 'command': body.command, 'options': body.options}, timeout=110)
+                               params=params, timeout=110 + 100 * len(body.attachments))
     try:
         data = await asyncio.to_thread(execute)
         data = {key: value for key, value in data.items() if key != 'plugins'}
@@ -100,6 +123,8 @@ async def _cli_command(body: CliCommandBody, sess: dict, mode: str):
             raise HTTPException(status_code=status if status in (403, 422, 503) else 503,
                                 detail={**data, 'message': str(data.get('summary') or 'CLI 操作未完成')})
         return ok(data, msg=str(data.get('summary') or ''))
+    except PluginCapabilityError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except PluginCallError as exc:
         # 写入可能已抵达第三方（含超时、CLI 部分成功），保留 uncertain 回执，禁止自动重放。
         raise HTTPException(status_code=503 if mode == 'write' else 409, detail=str(exc)) from exc

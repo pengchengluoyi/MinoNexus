@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from mino_nexus.ai.schemas import AgentAction, AgentDecision
 from mino_nexus.core.paths import data_dir
-from mino_nexus.loop.hierarchy_slots import int_list, rid_short
+from mino_nexus.navigation.geometry.hierarchy_slots import int_list, rid_short
 from mino_nexus.loop.llm_step_context import step_scope_key
 from mino_nexus.loop.milestones import read_state
 

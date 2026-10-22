@@ -47,8 +47,15 @@ def recovery_step_diagnostics(steps: list[dict[str, Any]], bound_ids: set[str]) 
 
 
 def bound_recovery_ids(ctx: Any, phase: str) -> set[str]:
+    """恢复动作的可用集合。菜单在绑定/纪元抖动时会 fail-closed 成空集，
+    恢复能力不该跟着消失，所以退回本次绑定的全部事件。"""
     check = getattr(ctx, "execution_binding_menu", None)
-    return set(check(phase) or ()) if callable(check) else set()
+    ids = set(check(phase) or ()) if callable(check) else set()
+    if ids:
+        return ids
+    binding = getattr(ctx, "execution_binding", None) or {}
+    return {str(op.get("event_id") or "") for op in (binding.get("operations") or [])
+            if isinstance(op, dict) and str(op.get("event_id") or "")}
 
 
 def _trace_selection(kind: str, payload: dict[str, Any]) -> None:

@@ -47,7 +47,7 @@ def send_code(
     router: Any,
     t0: float,
 ) -> EventResult:
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx, ui_channel_label
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx, ui_channel_label
     from mino_nexus.services.otp_resolve import login_kind_from_secrets
 
     from mino_nexus.loop.ui_sms_request import (

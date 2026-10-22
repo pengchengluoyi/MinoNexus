@@ -110,7 +110,7 @@ def topmost_skeleton_title(
     skip: set[str],
 ) -> str:
     """无侧栏选中时：骨架线框中最靠上（y 最小）的可读文案。"""
-    from mino_nexus.services.nav_layout import is_status_bar_chrome_text, is_volatile_text
+    from mino_nexus.navigation.geometry.nav_layout import is_status_bar_chrome_text, is_volatile_text
 
     best_y = 2.0
     best_lbl = ""
@@ -144,7 +144,7 @@ def _top_content_title(
     y_tab: int,
     skip: set[str],
 ) -> str:
-    from mino_nexus.services.nav_layout import (
+    from mino_nexus.navigation.geometry.nav_layout import (
         filter_app_chrome_texts,
         is_status_bar_chrome_text,
         is_volatile_text,

@@ -74,7 +74,8 @@ def run_one():
         with execution_user(owner), session_scope() as db:
             try:
                 topic = ws.owned(db, pid, tid)
-                ws.message(db, topic, '本轮处理未完成：' + error + '。消息已保留，未确认的动作不会自动重发。')
+                ws.message(db, topic, '本轮处理未完成：' + error + '。消息已保留，未确认的动作不会自动重发。',
+                    origin='message:' + mid)
             except KeyError:
                 pass
     with session_scope() as db:

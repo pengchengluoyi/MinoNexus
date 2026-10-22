@@ -113,7 +113,9 @@ def scope_options(project_id, sess):
     devices = [{k: d.get(k) for k in ('sn', 'model', 'platform', 'node_id')} for d in registry.devices()
                if d.get('node_alive') and d.get('node_id') in nodes]
     env = ps.project_env(project_id)
-    return {'modules': modules, 'cases': cases, 'requirements': list_project_requirements(project_id),
+    project = ps.require_project(project_id)
+    return {'project': {'id': project_id, 'name': project.get('name') or project_id},
+        'modules': modules, 'cases': cases, 'requirements': list_project_requirements(project_id),
         'apps': [{'id': a['id'], 'name': a.get('name', a['id'])} for a in ps.list_apps(project_id)],
         'environments': [{'key': e['key'], 'label': e.get('label', e['key'])} for e in env.get('environments', [])],
         'channels': [{'id': c['id'], 'app_id': c['app_id'], 'platform': c.get('platform', ''),
@@ -157,6 +159,12 @@ def resolve_target(opts, view, args=None):
     A value saved on the workspace is only a hint and is ignored once it is stale."""
     args = args or {}
     channels, envs = opts['channels'], opts['environments']
+    project_name = (opts.get('project') or {}).get('name')
+    project_label = f'项目「{project_name}」' if project_name else '当前项目'
+    if args.get('app_id'):
+        channels = [channel for channel in channels if channel['app_id'] == args['app_id']]
+    if not channels:
+        raise ValueError(project_label + '的目标应用尚未配置测试渠道，请先确认应用与渠道；本轮未执行用例。')
     env_keys = [e['key'] for e in envs]
     env = str(args.get('env_profile') or '')
     if env and env not in env_keys:
@@ -182,7 +190,7 @@ def resolve_target(opts, view, args=None):
             same = [c for c in pool if c['platform'] == view['platform']]
             surface = same[0]['id'] if len(same) == 1 else ''
     if not surface:
-        raise ValueError('这个项目有多个应用渠道，请告诉我测哪一个：' + '、'.join(c['label'] for c in channels) + '。')
+        raise ValueError(project_label + '有多个应用渠道，请告诉我测哪一个：' + '、'.join(c['label'] for c in channels) + '。')
     ch = ids[surface]
     return {'app_id': ch['app_id'], 'env_surface': surface, 'platform': ch['platform'], 'env_profile': env, 'label': ch['label']}
 
@@ -349,7 +357,7 @@ def snapshot(project_id, topic, owner):
         'blocked': list(blocked.values()), 'cases': [{'case_id': c['case_id'],
             'title': c.get('name') or c.get('title') or c['case_id'], 'module': c.get('module', ''),
             'priority': c.get('priority') or (c.get('meta') or {}).get('priority', ''),
-            'status': 'blocked' if c['case_id'] in blocked else 'ready',
+            'status': (blocked.get(c['case_id']) or {}).get('status') or ('blocked' if c['case_id'] in blocked else 'ready'),
             'reasons': blocked.get(c['case_id'], {}).get('reasons', []), 'updated_at': c.get('updated_at', '')}
             for c in cases], 'resources': {**res, 'compile_ready': len(check.get('runnable', [])),
                 'binding_ready': len(check.get('runnable', []))}}

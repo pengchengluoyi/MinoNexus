@@ -19,7 +19,7 @@ class UiChannel(str, Enum):
 def ui_channel_from_ctx(ctx: Any | None) -> UiChannel:
     if ctx is None:
         return UiChannel.ANDROID
-    from mino_nexus.runtime.run_context import is_web_slot
+    from mino_nexus.contract.execution.device import is_web_slot
 
     sn = str(getattr(ctx, "sn", "") or "")
     plat = str(getattr(ctx, "platform", "") or "").strip().lower()

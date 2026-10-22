@@ -57,7 +57,7 @@ def find_dom_phone_field(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]
             score += 90
         if "tel" in str(node.get("class") or "").lower():
             score += 30
-        from mino_nexus.loop.hierarchy_slots import node_flag
+        from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
 
         if node_flag(node, "focused"):
             score += 20
@@ -99,7 +99,7 @@ def find_dom_email_field(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]
         low = label.lower()
         if "email" in low or "mail" in low:
             score += 40
-        from mino_nexus.loop.hierarchy_slots import node_flag
+        from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
 
         if node_flag(node, "focused"):
             score += 20
@@ -168,7 +168,7 @@ def find_dom_otp_field(
             score += 15
         if _OTP_DIGITS_RE.match(label.replace(" ", "")):
             score += 25
-        from mino_nexus.loop.hierarchy_slots import node_flag
+        from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
 
         if node_flag(node, "focused"):
             score += 40

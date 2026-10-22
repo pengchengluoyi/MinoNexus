@@ -55,7 +55,7 @@ async def _dispatch_set_input_method(sn: str, *, ime: str) -> dict[str, Any]:
         params={"ime": ime},
         executor_order=["adb"],
         low_level={},
-        selected_impl={},
+        selected_impl={"executor": "adb", "runs_on": "scout"},
         device_hint=_device_hint(key, node),
         timeout_sec=30.0,
         device_id=key,

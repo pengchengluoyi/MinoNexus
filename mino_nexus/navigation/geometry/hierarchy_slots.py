@@ -308,7 +308,7 @@ def _cls_short(cls: str) -> str:
 
 def flatten(nodes: list[dict[str, Any]]) -> str:
     """节点 → 供 prompt 的紧凑文本。只留有语义的节点，纯布局容器不进。"""
-    from mino_nexus.services.nav_layout import is_status_bar_chrome_text
+    from mino_nexus.navigation.geometry.nav_layout import is_status_bar_chrome_text
 
     lines: list[str] = []
     for node in nodes or []:

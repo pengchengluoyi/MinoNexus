@@ -7,7 +7,7 @@ import re
 from typing import Any, Optional
 
 from mino_nexus.core.schemas import PlanEvent
-from mino_nexus.loop.hierarchy_slots import match_any
+from mino_nexus.navigation.geometry.hierarchy_slots import match_any
 from mino_nexus.loop.step_contract import instruction_allows_login_flow
 from mino_nexus.loop.step_intent import instruction_required_intents
 
@@ -294,7 +294,7 @@ def try_auto_otp_fill(
 
     if proxy is not None and ctx is not None:
         try:
-            from mino_nexus.loop.hierarchy_slots import capture
+            from mino_nexus.navigation.geometry.hierarchy_slots import capture
 
             snap = capture(proxy, turn_id=int(turn_seq or 0))
             if snap.ok and snap.nodes:

@@ -99,7 +99,7 @@ def _guard_block_repeat_email(
     if not has_guard:
         return None
 
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
     run_ctx = ctx.get("run_ctx") or ctx.get("ctx")
     if ui_channel_from_ctx(run_ctx) != UiChannel.WEB:

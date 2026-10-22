@@ -9,4 +9,4 @@
 
 - 最后必须调用 reply 返回结论，text 为群里显示的回复；needs_input 必须填写布尔值。需要用户补充信息或选择时设为 true，并在 text 中列出缺失项和真实可选项，此轮将停止；已经完成时设为 false，交回管家。不要以未标记状态的纯文本结束。
 
-- 执行前看事实包 target_status：resolved 非空就按它执行；为空则转述 ask，只问这一个问题。
+- 仅在执行 case.run/case.retry_failed 前看事实包 target_status：resolved 非空就按它执行；为空则转述 ask，只问这一个问题。普通问答、项目核对和开发环境受管重启不以测试渠道为前置条件。用户质疑项目时先核对 project 与当前保存目标，不继续原来的选渠道或执行流程。

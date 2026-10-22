@@ -21,10 +21,17 @@ CAPABILITIES = {"unavailable_cap", "capability_disabled", "uncoverable_event", "
     "scheme_unsupported", "action_unmapped", "capability_unavailable", "event_not_registered", "event_disabled",
     "event_platform_unsupported", "implementation_unavailable", "input_combination_unsupported",
     "execution_binding_unsupported", "execution_contract_unsupported", "dependency_contract_unsupported", "unsupported_scope", "unsupported_resource_platform", "unsupported_resource_precondition"}
-PARSING = {"layer_mismatch", "ambiguous_clause", "expected_unmapped", "required_check_missing"}
+PARSING = {"layer_mismatch", "ambiguous_clause", "expected_unmapped", "required_check_missing",
+    "uncovered", "quote_miss", "unmapped", "precondition_is_action", "required_operation_skipped",
+    "compound_clause", "ui_partial"}
+EXTERNAL = {"external_evidence_required", "manual_prerequisite_required", "evidence_boundary",
+    "fixture_required", "ui_state_precondition", "device_state_setup_required",
+    "device_session_setup_required", "fixture_id_required",
+    "precondition_not_executable", "precondition_account_field_unavailable"}
 TOOLCHAIN = {"catalog_version_changed", "invalid_after_operation", "invalid_operation_identity",
     "invalid_wait_policy", "operation_contract_invalid", "operation_ref_duplicate", "capability_snapshot_invalid",
-    "capability_snapshot_stale", "capability_target_mismatch", "dependency_snapshot_invalid", "invalid_predicate", "sensitive_predicate_forbidden"}
+    "capability_snapshot_stale", "capability_target_mismatch", "dependency_snapshot_invalid", "invalid_predicate",
+    "sensitive_predicate_forbidden", "precondition_coverage_missing", "precondition_scene_mismatch"}
 
 
 def _classification(item):
@@ -39,7 +46,7 @@ def _classification(item):
         return "execution_toolchain", "wait" if code in {"compile_queued", "compile_running"} else "recover_compile" if code in {"compile_model_call_failed", "compile_model_response_incomplete", "compile_failed", "compile_interrupted", "compile_cancelled", "compile_required", "compile_artifact_unavailable"} else "platform_fix", "pending_review"
     if code in {"assertion_scope_missing", "expected_value_missing", "source_information_missing"}:
         return "case_definition", "edit_source", "needs_input"
-    if code in {"external_evidence_required", "manual_prerequisite_required", "evidence_boundary"}:
+    if code in EXTERNAL:
         return "external_evidence", "provide_evidence", "pending_review"
     if item.get("responsibility") in {"configuration", "runtime", "authorization", "input"} and item.get("origin") in {"execution_binding", "resource_preflight"}:
         return "configuration", "configure", "pending_review"
@@ -96,7 +103,15 @@ def _item(case, raw, origin, context=None):
 def requirements(case):
     """Saved compiler output only; no network/model calls."""
     meta = case.get("meta") or {}
-    result = [_item(case, row, "compiler") for row in (meta.get("ui_automation") or {}).get("blocked_by") or [] if isinstance(row, dict)]
+    stored = (meta.get("ui_automation") or {}).get("blocked_by") or []
+    # Preconditions are re-read through the deterministic classifier so legacy
+    # v1 rows do not keep showing "precondition_not_executable" after the v2
+    # setup/source split.
+    from mino_nexus.services.case_semantic_integrity import precondition_diagnostics
+    result = [_item(case, row, "compiler") for row in stored
+              if isinstance(row, dict) and str(row.get("phase") or "") != "prep"]
+    result.extend(_item(case, row, "compiler") for row in precondition_diagnostics(case)
+                  if isinstance(row, dict))
     issue = readiness(case)
     if issue:
         diagnostics = (case.get("compile_job") or {}).get("diagnostics") or []
@@ -105,8 +120,14 @@ def requirements(case):
                       for row in diagnostics if isinstance(row, dict)]
         if not result or issue != "compile_failed" or not diagnostics:
             result = [_item(case, {"reason_code": issue}, "compile_job")]
-    elif not result and (meta.get("ui_automation") or {}).get("coverable") is not True:
-        result.append(_item(case, {"reason_code": "compile_required"}, "compiler"))
+    elif not result:
+        automation = meta.get("ui_automation") or {}
+        if automation.get("status") == "needs_setup":
+            result.append(_item(case, {"reason_code": "fixture_required"}, "compiler"))
+        elif automation.get("status") == "partial":
+            result.append(_item(case, {"reason_code": "ui_partial"}, "compiler"))
+        elif automation.get("coverable") is not True:
+            result.append(_item(case, {"reason_code": "compile_required"}, "compiler"))
     return result
 
 

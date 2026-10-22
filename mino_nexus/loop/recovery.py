@@ -726,7 +726,7 @@ def ensure_target_app_foreground(
     stopped = _write_stop(ctx)
     if stopped is not None:
         return stopped
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
     if ui_channel_from_ctx(ctx) == UiChannel.DESKTOP:
         return None

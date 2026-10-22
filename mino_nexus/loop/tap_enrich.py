@@ -19,7 +19,7 @@ def _labeled_anchor(slot: dict[str, Any]) -> str:
 def _center_xy(bounds: Any) -> list[int] | None:
     if not isinstance(bounds, (list, tuple)) or len(bounds) < 4:
         return None
-    from mino_nexus.loop.hierarchy_slots import int_list
+    from mino_nexus.navigation.geometry.hierarchy_slots import int_list
 
     bb = int_list(bounds, 4)
     if bb[2] <= bb[0] or bb[3] <= bb[1]:
@@ -49,7 +49,7 @@ def _hint_labels(params: dict[str, Any], hint: str) -> list[str]:
 
 
 def _screen_wh(nodes: list[dict[str, Any]]) -> tuple[int, int]:
-    from mino_nexus.services.nav_screen_layout import screen_size
+    from mino_nexus.navigation.geometry.nav_screen_layout import screen_size
 
     return screen_size(nodes)
 
@@ -86,7 +86,7 @@ def _promote_fallback_xy(out: dict[str, Any], *, screen_w: int, screen_h: int) -
 
 
 def _node_score(node: dict[str, Any], label: str, *, prefer_bottom: bool, sw: int, sh: int) -> tuple[int, int] | None:
-    from mino_nexus.loop.hierarchy_slots import int_list
+    from mino_nexus.navigation.geometry.hierarchy_slots import int_list
 
     text = str(node.get("text") or "").strip()
     desc = str(node.get("content_desc") or "").strip()

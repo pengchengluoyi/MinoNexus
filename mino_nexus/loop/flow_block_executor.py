@@ -23,7 +23,7 @@ def skip_login_entry_if_form_visible(cursor: Any, ctx: Any, *, writer: Any = Non
     nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
     if not nodes:
         return False
-    from mino_nexus.loop.ui_channel import ui_channel_from_ctx, ui_channel_label
+    from mino_nexus.contract.execution.ui import ui_channel_from_ctx, ui_channel_label
     from mino_nexus.loop.ui_sms_request import credential_field_for_login
     from mino_nexus.services.account_credential_text import login_kind_from_ctx
 
@@ -234,9 +234,9 @@ def try_dispatch_block_hook(
 
     if cap == "operation.check_box" and mid == "legal_consent":
         from mino_nexus.action_space.scheme import execution_scheme, structure_target_available, use_visual_fallback
-        from mino_nexus.loop.hierarchy_slots import node_flag
+        from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
         from mino_nexus.loop.milestones import write_state
-        from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+        from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
         from mino_nexus.loop.ui_consent import find_consent_control, tap_params_for_control
 
         nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(n, dict)]
@@ -464,7 +464,7 @@ def _dispatch_email_fill(
     _mark_hook_ready_flag(state, mid, "lease_ready")
     write_state(cursor, state)
     fill_params: dict[str, Any] = {"field": field, "text": text}
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
     if ui_channel_from_ctx(ctx) != UiChannel.WEB:
         from mino_nexus.loop.program_device_fallback import vision_fallback_result
@@ -483,7 +483,7 @@ def _dispatch_email_fill(
     from mino_nexus.loop.channel_observation import read_field_after_input
     from mino_nexus.loop.flow_block_exit import device_input_text_exit
     from mino_nexus.loop.observe.program_tool_log import log_program_tool
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
     res = _dispatch_device(
         proxy,
@@ -557,7 +557,7 @@ def _dispatch_otp_fill(
     if not code:
         return None
     from mino_nexus.loop.milestones import milestone_by_id, read_state
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
     if ui_channel_from_ctx(ctx) == UiChannel.DESKTOP:
         from mino_nexus.loop.program_device_fallback import vision_fallback_result

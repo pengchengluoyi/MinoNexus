@@ -29,7 +29,7 @@ _WIDGET_ORDER = (
 
 
 def _bounds(node: dict[str, Any]) -> tuple[int, int, int, int] | None:
-    from mino_nexus.loop.hierarchy_slots import int_list
+    from mino_nexus.navigation.geometry.hierarchy_slots import int_list
 
     raw = node.get("bounds")
     if not isinstance(raw, (list, tuple)) or len(raw) < 4:
@@ -67,7 +67,7 @@ def _chrome_vertical_px(
     y_tab_max: int,
 ) -> tuple[int, int]:
     """App 顶栏 chrome 纵坐标带：排除状态栏（content_top 以上）。"""
-    from mino_nexus.services.nav_screen_layout import infer_content_bands
+    from mino_nexus.navigation.geometry.nav_screen_layout import infer_content_bands
 
     nodes = sample.get("nodes") or []
     bands = infer_content_bands(nodes)
@@ -117,7 +117,7 @@ def stable_chrome_texts(
 ) -> list[str]:
     """Tab 内子页可用的稳定 chrome 文案：App 顶栏短文本，不含状态栏/通知/feed 流式内容。"""
     out: list[str] = []
-    from mino_nexus.loop.hierarchy_slots import is_system_ui_noise
+    from mino_nexus.navigation.geometry.hierarchy_slots import is_system_ui_noise
 
     y_min, y_max = _chrome_vertical_px(sample, y_tab_max=y_tab_max)
     for node in sample.get("nodes") or []:
@@ -182,7 +182,7 @@ def _profile_stat_hits(
     exclude: set[str],
 ) -> int:
     """个人页顶栏常见多组「数字 + 短标签」结构，不依赖 App 文案。"""
-    from mino_nexus.loop.hierarchy_slots import is_system_ui_noise
+    from mino_nexus.navigation.geometry.hierarchy_slots import is_system_ui_noise
 
     hits = 0
     y_min, y_max = _chrome_vertical_px({"nodes": nodes}, y_tab_max=y_tab_max)
@@ -298,7 +298,7 @@ def detect_layout_framework(
     if _nodes_are_web_dom(nodes):
         return {"kind": "web_document", "columns": 0, "widgets": [], "channel": "web"}
 
-    from mino_nexus.services.nav_screen_layout import infer_content_bands
+    from mino_nexus.navigation.geometry.nav_screen_layout import infer_content_bands
 
     bands = infer_content_bands(nodes)
     screen_w = int(bands.get("screen_w") or _screen_width(nodes))

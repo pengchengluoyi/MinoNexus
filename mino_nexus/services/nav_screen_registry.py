@@ -22,12 +22,12 @@ def fingerprint_turn(
     exclude: set[str] | None = None,
 ) -> str:
     """细粒度证据指纹（探索进度等）；架构图聚类用 synthesis 同款 role/chrome_key。"""
-    from mino_nexus.services.nav_layout import (
+    from mino_nexus.navigation.geometry.nav_layout import (
         detect_layout_framework,
         framework_fingerprint,
         stable_chrome_texts,
     )
-    from mino_nexus.services.nav_screen_layout import infer_content_bands
+    from mino_nexus.navigation.geometry.nav_screen_layout import infer_content_bands
 
     nodes = turn.get("nodes") or []
     exclude = exclude or set()
@@ -363,7 +363,7 @@ def _title_from_chrome(
     tab_labels: list[str],
 ) -> str:
     """子页标题：顶栏第一个非 Tab、非噪声短文案。"""
-    from mino_nexus.services.nav_layout import is_status_bar_chrome_text, is_volatile_text
+    from mino_nexus.navigation.geometry.nav_layout import is_status_bar_chrome_text, is_volatile_text
 
     tabs = {str(t or "").strip() for t in tab_labels if str(t or "").strip()}
     tab_s = str(tab or "").strip()
@@ -596,7 +596,7 @@ def _pick_tab_hotspot(prev_turn: dict[str, Any], target_tab: str) -> str:
         return ""
     wf = _turn_wireframe(prev_turn)
     chrome = wf.get("chrome") or {}
-    from mino_nexus.services.nav_screen_layout import DEFAULT_CONTENT_BOTTOM
+    from mino_nexus.navigation.geometry.nav_screen_layout import DEFAULT_CONTENT_BOTTOM
 
     bottom = float(chrome.get("bottom") or DEFAULT_CONTENT_BOTTOM)
     best = ""
@@ -998,7 +998,7 @@ def _add_atlas_tab_bar_weak_nav_edges(
 
 def _fsm_state_is_atlas_noise(st: dict[str, Any]) -> bool:
     """旧 FSM 中仅由百分比/时间等易变文案命中的状态，不补进 Screen Atlas。"""
-    from mino_nexus.services.nav_layout import identify_is_volatile_only
+    from mino_nexus.navigation.geometry.nav_layout import identify_is_volatile_only
 
     return identify_is_volatile_only(st)
 
@@ -1266,7 +1266,7 @@ def atlas_page_label(
     page_role: str = "",
 ) -> tuple[str, dict[str, Any], list[str]]:
     """逻辑页名 + 框架/chrome（chrome 仅进 identify，不进标题）。"""
-    from mino_nexus.services.nav_layout import detect_layout_framework, is_volatile_text, stable_chrome_texts
+    from mino_nexus.navigation.geometry.nav_layout import detect_layout_framework, is_volatile_text, stable_chrome_texts
 
     exclude = exclude or set()
     fw = detect_layout_framework(turn, y_tab_max=y_tab, exclude=exclude)
@@ -1459,7 +1459,7 @@ def _atlas_cluster_doc(
     cap_meta: dict[str, Any],
 ) -> dict[str, Any] | None:
     """按骨骼 lane + 线框相似度合并为关系结构（state_id=page.sk*，Tab 仅用于边标签/命名）。"""
-    from mino_nexus.services.nav_layout import (
+    from mino_nexus.navigation.geometry.nav_layout import (
         detect_layout_framework,
         framework_fingerprint,
         merge_frameworks,
@@ -1494,7 +1494,7 @@ def _atlas_cluster_doc(
     timeline: list[dict[str, Any]] = []
     for turn in filtered:
         fw = detect_layout_framework(turn, y_tab_max=y_tab, exclude=exclude_tabs)
-        from mino_nexus.services.nav_layout import filter_app_chrome_texts
+        from mino_nexus.navigation.geometry.nav_layout import filter_app_chrome_texts
 
         chrome = filter_app_chrome_texts(
             stable_chrome_texts(turn, y_tab_max=y_tab, exclude=exclude_tabs)
@@ -2475,7 +2475,7 @@ def _inject_pinned_capture_states(
     home_tab: str,
 ) -> None:
     """把钉死/拆分的采集补成独立 architecture state（聚类键覆盖不到时）。"""
-    from mino_nexus.services.nav_layout import detect_layout_framework, semantic_page_role
+    from mino_nexus.navigation.geometry.nav_layout import detect_layout_framework, semantic_page_role
 
     known = {str(r.get("id") or "") for r in screen_rows}
     for pk, sid in pin_map.items():
@@ -2638,7 +2638,7 @@ def save_atlas_capture_split(
     turn = capture.read_turn(app_id, sess, tid)
     if not turn:
         return {"ok": False, "reason": "采集不存在"}
-    from mino_nexus.services.nav_screen_layout import infer_content_bands
+    from mino_nexus.navigation.geometry.nav_screen_layout import infer_content_bands
     from mino_nexus.services.nav_synthesis import assign_turn_tabs, extract_tab_bar_labels
     from mino_nexus.services.nav_target_scope import resolve_app_target_scope
 
@@ -3632,7 +3632,7 @@ def build_atlas(
             "updated_at": int(cap_meta.get("latest_at") or 0) or max((int(t.get("at") or 0) for t in ordered), default=0),
         }
 
-    from mino_nexus.services.nav_screen_layout import infer_content_bands
+    from mino_nexus.navigation.geometry.nav_screen_layout import infer_content_bands
 
     ys: list[int] = []
     for turn in filtered:
@@ -3730,13 +3730,13 @@ def explore_progress_block(
 
 def explore_screen_identity(nodes: list[dict[str, Any]]) -> tuple[str, str]:
     """与架构图同一套骨骼聚类键 + 可读名，供 ExploreCursor idle / 进度块使用。"""
-    from mino_nexus.services.nav_layout import (
+    from mino_nexus.navigation.geometry.nav_layout import (
         detect_layout_framework,
         semantic_page_role,
         stable_chrome_texts,
     )
     from mino_nexus.services.nav_app_skeleton import chrome_header_title
-    from mino_nexus.services.nav_screen_layout import infer_content_bands
+    from mino_nexus.navigation.geometry.nav_screen_layout import infer_content_bands
 
     turn = {"nodes": nodes or []}
     bands = infer_content_bands(nodes or [])

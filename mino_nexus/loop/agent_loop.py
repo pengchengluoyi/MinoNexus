@@ -273,7 +273,7 @@ def _note_control_locator(writer: Any, ctx: Any, cap_id: str, params: dict[str, 
 
 
 def _program_executor(ctx: Any) -> str:
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
     channel = ui_channel_from_ctx(ctx)
     if channel == UiChannel.WEB:
@@ -725,7 +725,13 @@ def run_case(
                    "steps": steps, "execution_started": "no" if not execution_admitted else "unknown",
                    "failure_stage": getattr(failed_cursor, "phase", "admission"),
                    "case_step": 0 if getattr(failed_cursor, "phase", "") == "prep" else getattr(failed_node, "n", 0)}
-        writer.append("contract/blocked", {"reason_code": exc.reason_code, "error_kind": exc.reason_code})
+        blocked_node = failed_node if isinstance(failed_node, dict) else {}
+        writer.append("contract/blocked", {"reason_code": exc.reason_code, "error_kind": exc.reason_code,
+            "phase": str(getattr(failed_cursor, "phase", "") or ""),
+            "case_step": outcome["case_step"],
+            "capability_id": str(blocked_node.get("capability_id") or blocked_node.get("device_cap")
+                or blocked_node.get("hook_cap") or blocked_node.get("event_id") or ""),
+            "step_id": str(blocked_node.get("id") or blocked_node.get("step_id") or "")})
         return outcome
     except SessionPersistenceError as exc:
         storage_failed = True
@@ -896,7 +902,7 @@ def _record(
 
 
 def _progress_gate_web_kwargs(ctx: Any, proxy: Any) -> dict[str, Any]:
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
     from mino_nexus.loop.web.web_progress import refresh_web_focus, web_focus_fingerprint
 
     if ui_channel_from_ctx(ctx) != UiChannel.WEB:
@@ -2350,7 +2356,7 @@ def _run_loop(
             )
             if otp_line:
                 prep_hints.append(otp_line)
-            from mino_nexus.loop.ui_channel import ui_channel_from_ctx, ui_channel_label
+            from mino_nexus.contract.execution.ui import ui_channel_from_ctx, ui_channel_label
 
             from mino_nexus.loop.login_verification import compile_verification_send_menu_hint
 
@@ -2809,7 +2815,7 @@ def _run_loop(
                             cursor.record_step_op(cap_auto)
                         from mino_nexus.loop.channel_observation import bind_fresh_observation
                         from mino_nexus.loop.milestones import note_tool_pass_milestone
-                        from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+                        from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
                         if cap_auto == "input_text" and ui_channel_from_ctx(ctx) == UiChannel.WEB:
                             bind_fresh_observation(ctx, proxy)
@@ -2896,7 +2902,7 @@ def _run_loop(
                     gate = getattr(cursor, "progress_gate", None)
                     if gate is not None:
                         gate.record_fail(cap_id=cap_auto, params=fuse_params)
-                        from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+                        from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
                         fuse_reason = gate.check(
                             phase=str(getattr(cursor, "phase", "") or "do"),
@@ -4621,7 +4627,7 @@ def _run_loop(
                 if not _bid_fb:
                     _bid_fb = login_block_id_for_ctx(ctx)
                 from mino_nexus.loop.flow_block_executor import _dispatch_otp_fill
-                from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+                from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
                 _fill_otp = None
                 _remediate_fill = True
@@ -4822,7 +4828,7 @@ def _run_loop(
                     from mino_nexus.loop.local_executors import _dispatch_device
 
                     try:
-                        from mino_nexus.loop.hierarchy_slots import capture
+                        from mino_nexus.navigation.geometry.hierarchy_slots import capture
 
                         _snap_em = capture(proxy, turn_id=int(seq or 0))
                         if _snap_em.ok and _snap_em.nodes:

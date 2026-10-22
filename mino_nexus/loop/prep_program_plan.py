@@ -15,7 +15,7 @@ from mino_nexus.loop.milestones import (
     _sync_scope,
 )
 from mino_nexus.loop.session_ensure import account_need_from_case
-from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 from mino_nexus.services.case_resource_claim import _case_resource_key
 from mino_nexus.services.case_resource_key_catalog import catalog_payload
 from mino_nexus.services.resource_preflight import claim_requires_clear_cache, _claim_from_case

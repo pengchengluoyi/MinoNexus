@@ -10,9 +10,9 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from mino_nexus.loop.hierarchy_slots import dom_structure_fingerprint
+from mino_nexus.navigation.geometry.hierarchy_slots import dom_structure_fingerprint
 from mino_nexus.loop.step_pointer import screen_fingerprint
-from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 from mino_nexus.loop.web.web_progress import normalize_web_focus
 
 _WEB_DIALOG_RE = re.compile(r"\b(dialog|alertdialog|modal)\b", re.I)
@@ -78,12 +78,12 @@ def android_page_key(nodes: list[dict[str, Any]] | None) -> str:
     rows = _nodes(nodes)
     if not rows:
         return "android|empty"
-    from mino_nexus.services.nav_layout import (
+    from mino_nexus.navigation.geometry.nav_layout import (
         detect_layout_framework,
         framework_fingerprint,
         stable_chrome_texts,
     )
-    from mino_nexus.services.nav_screen_layout import infer_content_bands
+    from mino_nexus.navigation.geometry.nav_screen_layout import infer_content_bands
 
     bands = infer_content_bands(rows)
     y_tab = int(bands.get("content_bottom_px") or 0) or 9999
@@ -181,7 +181,7 @@ def read_field(
             return focus_val
         return ""
 
-    from mino_nexus.loop.hierarchy_slots import node_flag
+    from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
 
     for node in rows:
         cls = str(node.get("class") or "")
@@ -196,7 +196,7 @@ def read_field(
 
 
 def _focused_input(nodes: list[dict[str, Any]]) -> dict[str, Any] | None:
-    from mino_nexus.loop.hierarchy_slots import node_flag
+    from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
 
     for node in nodes:
         blob = f"{node.get('class') or ''} {node.get('role') or ''}"
@@ -208,7 +208,7 @@ def _focused_input(nodes: list[dict[str, Any]]) -> dict[str, Any] | None:
 def capture_decision_frame(proxy: Any, ctx: Any, *, hierarchy: bool = True) -> tuple[Any, str]:
     """先采层级，再截屏。截屏不早于这次层级，卡片和判断用同一时刻。纯视觉只截屏。"""
     from mino_nexus.loop.observe.agent_stream import make_thumb
-    from mino_nexus.loop.hierarchy_slots import capture
+    from mino_nexus.navigation.geometry.hierarchy_slots import capture
 
     desktop = ui_channel_from_ctx(ctx) == UiChannel.DESKTOP
     if desktop:
@@ -270,7 +270,7 @@ def bind_fresh_observation(ctx: Any, proxy: Any) -> None:
         return
     if ui_channel_from_ctx(ctx) == UiChannel.DESKTOP:
         return
-    from mino_nexus.loop.hierarchy_slots import capture
+    from mino_nexus.navigation.geometry.hierarchy_slots import capture
 
     snap = capture(proxy, turn_id=0)
     setattr(ctx, "nav_hierarchy_nodes", list(snap.nodes or []) if snap.ok else [])

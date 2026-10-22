@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from typing import Any
 
 from mino_nexus.services.case_resource_key_catalog import catalog_payload
@@ -72,39 +73,65 @@ def nav_screen_key_refs(app_id: str) -> dict[str, str]:
     return out
 
 
+def _ui_automation_view(ua: dict[str, Any] | None) -> dict[str, Any]:
+    row = ua if isinstance(ua, dict) else {}
+    status = str(row.get("status") or "")
+    if status not in {"runnable", "needs_setup", "partial", "blocked"}:
+        blockers = [item for item in row.get("blocked_by") or [] if isinstance(item, dict)]
+        if row.get("coverable") is True:
+            status = "runnable"
+        elif any(str(item.get("phase") or "") in {"do", "check"} for item in blockers):
+            status = "partial"
+        elif any(str(item.get("phase") or "") == "prep" for item in blockers):
+            status = "needs_setup"
+        else:
+            status = "blocked"
+    out: dict[str, Any] = {
+        "schema": "mino.ui_automation.v2",
+        "status": status,
+        "coverable": status in {"runnable", "needs_setup"},
+        "runnable_now": status == "runnable",
+        "ui_plan": str(row.get("ui_plan") or ("complete" if status in {"runnable", "needs_setup"} else "partial")),
+        "setup": deepcopy(row.get("setup") if isinstance(row.get("setup"), dict) else {
+            "state": "ready" if status == "runnable" else "unknown",
+            "verified": status == "runnable",
+            "items": [],
+        }),
+        "oracle": deepcopy(row.get("oracle") if isinstance(row.get("oracle"), dict) else {
+            "state": "unknown", "manual": False, "missing_items": [],
+        }),
+        "coverage": deepcopy(row.get("coverage") if isinstance(row.get("coverage"), dict) else {}),
+        "blocked_by": [x for x in (row.get("blocked_by") or []) if isinstance(x, dict)][:24],
+    }
+    return out
+
+
 def ui_automation_summary(case: dict[str, Any] | None) -> dict[str, Any]:
-    """Studio 选用例 / 详情：能否 UI 自动化 + blocked_by。"""
-    empty = {"schema": "mino.ui_automation.v1", "coverable": True, "blocked_by": []}
+    """Workbench 选用例 / 详情：UI 覆盖、前置状态、是否现在可跑。"""
+    empty = _ui_automation_view({"schema": "mino.ui_automation.v2", "status": "runnable"})
     if not isinstance(case, dict):
-        return dict(empty)
+        return empty
     meta = case.get("meta") if isinstance(case.get("meta"), dict) else {}
     ua = meta.get("ui_automation") if isinstance(meta.get("ui_automation"), dict) else None
-    if isinstance(ua, dict) and "coverable" in ua:
-        return {
-            "schema": str(ua.get("schema") or "mino.ui_automation.v1"),
-            "coverable": ua.get("coverable") is not False,
-            "blocked_by": [x for x in (ua.get("blocked_by") or []) if isinstance(x, dict)][:24],
-        }
+    if isinstance(ua, dict) and ("coverable" in ua or "status" in ua):
+        return _ui_automation_view(ua)
     try:
         from mino_nexus.services.case_step_key_compiler import compile_case_step_program_keys
 
         compiled = compile_case_step_program_keys(case)
         row = compiled.get("ui_automation")
         if isinstance(row, dict):
-            return {
-                "schema": str(row.get("schema") or "mino.ui_automation.v1"),
-                "coverable": row.get("coverable") is not False,
-                "blocked_by": [x for x in (row.get("blocked_by") or []) if isinstance(x, dict)][:24],
-            }
+            return _ui_automation_view(row)
     except Exception:  # noqa: BLE001
         pass
-    return dict(empty)
+    return empty
 
 
 def step_keys_summary_for_case(case: dict[str, Any] | None) -> dict[str, Any]:
-    """Console 用例详情：密钥编译摘要（不重复全文 warnings）。"""
+    """Workbench 用例详情：密钥编译摘要（不重复全文 warnings）。"""
     if not isinstance(case, dict):
-        return {"telemetry": "muted", "warning_count": 0, "fallback_count": 0, "steps": {}}
+        return {"telemetry": "muted", "warning_count": 0, "fallback_count": 0,
+                "status": "unknown", "runnable_now": False, "steps": {}}
     meta = case.get("meta") if isinstance(case.get("meta"), dict) else {}
     warnings = list(meta.get("key_compile_warnings") or [])
     spk = meta.get("step_program_keys") if isinstance(meta.get("step_program_keys"), dict) else {}
@@ -113,25 +140,76 @@ def step_keys_summary_for_case(case: dict[str, Any] | None) -> dict[str, Any]:
     # Never invoke compilation or trust an old coverable flag on this read path.
     from mino_nexus.services.case_preflight import partition_cases
     runnable, report = partition_cases([case])
-    stored = meta.get("ui_automation") or {}
+    case_id = str(case.get("case_id") or "")
+    verdict = (report.get("verdicts") or {}).get(case_id) or {}
+    stored = meta.get("ui_automation") if isinstance(meta.get("ui_automation"), dict) else {}
+    ua = _ui_automation_view(stored)
+    status = str(verdict.get("status") or ua.get("status") or "blocked")
+    rejected = report.get("blocked") or []
+    matched = next((item for item in rejected if str(item.get("case_id") or "") == case_id), None)
+    reasons = list((matched or {}).get("reasons") or [])
+    blockers = [item for item in (matched or {}).get("blocked_by") or [] if isinstance(item, dict)]
+    if matched and not blockers:
+        blockers = [{"reason": "compile_required", "class": "infra",
+                     "severity": "blocking", "user_message": reasons[0] if reasons else ""}]
     advisory = [item for item in stored.get("blocked_by") or []
                 if isinstance(item, dict) and str(item.get("severity") or "blocking") != "blocking"]
-    rejected = report["blocked"]
-    reasons = rejected[0]["reasons"] if rejected else []
-    blockers = rejected[0]["blocked_by"] if rejected else []
-    if rejected and not blockers:
-        blockers = [{"reason": "compile_required", "user_message": reasons[0]}]
-    ua = {"schema": "mino.ui_automation.v1", "coverable": bool(runnable),
-          "blocked_by": blockers + advisory}
+    ua.update({
+        "status": status,
+        "coverable": status in {"runnable", "needs_setup"},
+        "runnable_now": status == "runnable",
+        "ui_plan": "complete" if status in {"runnable", "needs_setup"} else (
+            "partial" if status == "partial" else str(ua.get("ui_plan") or "none")),
+        "blocked_by": blockers + [item for item in advisory if item not in blockers],
+    })
     blocked = ua.get("blocked_by") or []
     blocking_items = [
-        item for item in blocked if isinstance(item, dict) and str(item.get("severity") or "blocking") == "blocking"
+        item for item in blocked
+        if isinstance(item, dict)
+        and str(item.get("severity") or "blocking") == "blocking"
+        and str(item.get("class") or "") != "setup"
+    ]
+    setup_items = [
+        item for item in blocked
+        if isinstance(item, dict) and str(item.get("class") or "") == "setup"
     ]
     advisory_items = [
         item
         for item in blocked
-        if isinstance(item, dict) and str(item.get("severity") or "") in ("human_only", "advisory")
+        if isinstance(item, dict)
+        and str(item.get("severity") or "") in ("human_only", "advisory")
     ]
+    ua["setup"] = {
+        **(ua.get("setup") if isinstance(ua.get("setup"), dict) else {}),
+        "state": "ready" if status == "runnable" else (
+            "needs_setup" if setup_items or status == "needs_setup" else "unknown"),
+        "verified": not setup_items and status in {"runnable", "partial"},
+        "items": setup_items,
+    }
+    manual_oracle = False
+    for bundle in spk.values():
+        if not isinstance(bundle, dict):
+            continue
+        plan = bundle.get("check_program_plan") if isinstance(bundle.get("check_program_plan"), dict) else {}
+        for check in plan.get("checkpoints") or []:
+            if not isinstance(check, dict):
+                continue
+            assert_payload = check.get("assert") if isinstance(check.get("assert"), dict) else {}
+            if (str(check.get("key_ref") or "") == "expected.human_review"
+                    or str(assert_payload.get("mode") or "") == "human_only"):
+                manual_oracle = True
+                break
+        if manual_oracle:
+            break
+    oracle_missing = [item for item in blocking_items if str(item.get("class") or "") == "oracle"]
+    ua["oracle"] = {
+        **(ua.get("oracle") if isinstance(ua.get("oracle"), dict) else {}),
+        "state": "missing" if oracle_missing else (
+            "manual" if manual_oracle else (
+                "automated" if status in {"runnable", "needs_setup", "partial"} else "unknown")),
+        "manual": manual_oracle,
+        "missing_items": oracle_missing,
+    }
     blocked_by_step: dict[str, list[dict[str, Any]]] = {}
     for item in blocking_items:
         blocked_by_step.setdefault(str(item.get("case_step") or ""), []).append(item)
@@ -190,17 +268,19 @@ def step_keys_summary_for_case(case: dict[str, Any] | None) -> dict[str, Any]:
             "blocked_by": list(blocked_by_step.get(str(key), [])),
             "lights": lights,
         }
-    coverable = ua.get("coverable") is not False
-    telemetry = "red" if not coverable else ("yellow" if advisory_items else "green")
+    telemetry = "green" if status == "runnable" else ("yellow" if status in {"needs_setup", "partial"} else "red")
     return {
         "telemetry": telemetry,
+        "status": status,
+        "runnable_now": status == "runnable",
         "warning_count": len(warnings),
         "fallback_count": fb,
         "blocking_issue_count": len(blocking_items),
+        "setup_issue_count": len(setup_items),
         "advisory_issue_count": len(advisory_items),
         "warnings_preview": warnings[:12],
         "ui_automation": ua,
-        "coverable": coverable,
+        "coverable": status in {"runnable", "needs_setup"},
         "reasons": reasons,
         "steps": steps_out,
     }
@@ -334,6 +414,16 @@ _BLOCK_REASON_ZH = {
     "unmapped": "未映射到事件",
     "uncoverable_event": "当前不能做",
     "unavailable_cap": "事件已下线",
+    "fixture_required": "需准备业务数据",
+    "manual_prerequisite_required": "需人工准备",
+    "ui_state_precondition": "需确认起点界面",
+    "device_state_setup_required": "需准备设备状态",
+    "device_session_setup_required": "需准备登录态",
+    "precondition_is_action": "前置里写入了操作",
+    "precondition_coverage_missing": "前置未编译",
+    "precondition_scene_mismatch": "前置与场景不一致",
+    "ui_partial": "仅部分可执行",
+    "required_operation_skipped": "必需操作被跳过",
 }
 
 
@@ -476,13 +566,15 @@ def stored_preview_lines(case: dict[str, Any] | None) -> tuple[list[str], list[s
 
 
 def compile_preview_view(case: dict[str, Any] | None, *, compiled_case: dict[str, Any] | None = None) -> dict[str, Any]:
-    """导入预览：把程序图和未映射句编成步骤/预期/备注文案。"""
+    """导入预览：把程序图、前置状态和未映射句编成可读文案。"""
     if not isinstance(case, dict):
         return {
             "steps_parsed": [],
             "expected_parsed": [],
             "remark": "",
-            "ui_automation": {"schema": "mino.ui_automation.v1", "coverable": True, "blocked_by": []},
+            "status": "runnable",
+            "runnable_now": True,
+            "ui_automation": _ui_automation_view({"schema": "mino.ui_automation.v2", "status": "runnable"}),
         }
     from mino_nexus.services.case_step_key_compiler import sync_case_step_program_keys
 
@@ -498,7 +590,7 @@ def compile_preview_view(case: dict[str, Any] | None, *, compiled_case: dict[str
         if not isinstance(item, dict):
             continue
         n = int(item.get("case_step") or 0) or 1
-        message = str(item.get("user_message") or "").strip()
+        message = str(item.get("user_message") or item.get("detail") or "").strip()
         if message:
             remarks.append(message)
             continue
@@ -509,12 +601,21 @@ def compile_preview_view(case: dict[str, Any] | None, *, compiled_case: dict[str
         else:
             remarks.append(f"第{n}步{reason}")
     remark = ""
-    if remarks:
-        remark = "无法 UI 自动化：" + "；".join(remarks[:8])
+    prefix = ""
+    if ua.get("status") == "needs_setup":
+        prefix = "前置/数据待准备："
+    elif ua.get("status") == "partial":
+        prefix = "部分无法 UI 自动化："
+    elif ua.get("status") == "blocked":
+        prefix = "无法 UI 自动化："
+    if remarks and prefix:
+        remark = prefix + "；".join(remarks[:8])
     return {
         "steps_parsed": steps_parsed[:40],
         "expected_parsed": expected_parsed[:40],
         "remark": remark[:800],
+        "status": ua.get("status"),
+        "runnable_now": bool(ua.get("runnable_now")),
         "ui_automation": ua,
     }
 
@@ -524,27 +625,58 @@ def _import_automation_details(case: dict[str, Any], env_doc: dict[str, Any] | N
 
     details: dict[str, list[dict[str, Any]]] = {"pre": [], "op": [], "ex": []}
     automation = ui_automation_summary(case)
-    for index, line in enumerate(str(case.get("precondition") or "").splitlines(), 1):
-        text = re.sub(r"^\s*\d+[.)、．]\s*", "", line).strip()
-        if not text:
-            continue
-        claim = compile_resource_key_from_precondition(text, env_doc=env_doc, platform=str(case.get("platform") or ""))
-        requirements = claim.get("account", {}).get("requirements", {})
-        value = re.split(r"[：:]", text, maxsplit=1)[-1].strip()
-        coverable = bool(
-            claim.get("case_scene", {}).get("required_session") != "any"
-            or claim.get("device_app", {}).get("prep")
-            or requirements.get("all") or requirements.get("prefer")
-            or value in ("无", "无需", "不限", "任意")
-        )
-        blockers = [item for item in automation.get("blocked_by") or [] if item.get("phase") == "prep" and item.get("source_clause") == text]
-        reason = "已映射为登录态、账号筛选或环境准备条件" if coverable else "未映射为可执行的准备条件，需要人工准备或补充资源规则"
-        if blockers:
-            coverable = False
-            reason = str(blockers[0].get("user_message") or blockers[0].get("detail") or reason)
-        elif value in ("无", "无需", "不限", "任意"):
-            reason = "无额外准备要求"
-        details["pre"].append({"step": index, "text": text, "coverable": coverable, "reason": reason})
+    claim = case.get("resource_key") or (case.get("meta") or {}).get("resource_key") or {}
+    coverage = [row for row in (claim.get("precondition_coverage") or []) if isinstance(row, dict)]
+    if coverage:
+        for index, row in enumerate(coverage, 1):
+            status = str(row.get("status") or "mapped")
+            coverable = status == "mapped"
+            if coverable:
+                from mino_nexus.services.case_semantic_integrity import coverage_matches
+                coverable = coverage_matches(row, claim)
+            klass = str(row.get("class") or ("setup" if not coverable else "ui"))
+            if coverable:
+                reason = "已映射为登录态、账号筛选或环境准备条件"
+            elif status == "mapped":
+                reason = "前置与执行场景不一致，请重新编译"
+            else:
+                reason = str(row.get("detail") or row.get("user_message") or
+                             "需要 fixture、接口造数或人工准备；UI 步骤仍可执行")
+            details["pre"].append({
+                "step": index,
+                "text": str(row.get("source") or ""),
+                "coverable": coverable,
+                "class": klass,
+                "reason": reason,
+                **({"setup": row["setup"]} if isinstance(row.get("setup"), dict) else {}),
+            })
+    else:
+        for index, line in enumerate(str(case.get("precondition") or "").splitlines(), 1):
+            text = re.sub(r"^\s*\d+[.)、．]\s*", "", line).strip()
+            if not text:
+                continue
+            claim_line = compile_resource_key_from_precondition(
+                text, env_doc=env_doc, platform=str(case.get("platform") or ""))
+            requirements = claim_line.get("account", {}).get("requirements", {})
+            value = re.split(r"[：:]", text, maxsplit=1)[-1].strip()
+            coverable = bool(
+                claim_line.get("case_scene", {}).get("required_session") != "any"
+                or claim_line.get("device_app", {}).get("prep")
+                or requirements.get("all") or requirements.get("prefer")
+                or value in ("无", "无需", "不限", "任意")
+            )
+            blockers = [item for item in automation.get("blocked_by") or []
+                        if item.get("phase") == "prep" and item.get("source_clause") == text]
+            reason = "已映射为登录态、账号筛选或环境准备条件" if coverable else "未映射为可执行的准备条件，需要人工准备或补充资源规则"
+            klass = "setup" if not coverable else "ui"
+            if blockers:
+                coverable = False
+                klass = str(blockers[0].get("class") or "setup")
+                reason = str(blockers[0].get("user_message") or blockers[0].get("detail") or reason)
+            elif value in ("无", "无需", "不限", "任意"):
+                reason = "无额外准备要求"
+            details["pre"].append({"step": index, "text": text, "coverable": coverable,
+                                   "class": klass, "reason": reason})
     bundles = (case.get("meta") or {}).get("step_program_keys") or {}
     for key, bundle in bundles.items():
         for kind, plan_key, items_key, phase in (("op", "do_program_plan", "steps", "do"), ("ex", "check_program_plan", "checkpoints", "check")):
@@ -565,29 +697,69 @@ def _import_automation_details(case: dict[str, Any], env_doc: dict[str, Any] | N
                 assert_payload = item.get("assert") if isinstance(item.get("assert"), dict) else {}
                 if item_kind == "remark" or key_ref == "operation.author_remark":
                     details[kind].append(
-                        {"step": int(key), "text": text, "coverable": True, "reason": "说明步骤，执行时自动跳过"}
+                        {"step": int(key), "text": text, "coverable": True, "class": "ui",
+                         "reason": "说明步骤，执行时自动跳过"}
                     )
                     continue
                 if key_ref == "expected.human_review" or str(assert_payload.get("mode") or "") == "human_only":
                     details[kind].append(
-                        {"step": int(key), "text": text, "coverable": True, "reason": "需人工复核，不阻断自动跑批"}
+                        {"step": int(key), "text": text, "coverable": True, "class": "oracle_manual",
+                         "reason": "需人工复核，不计入自动通过"}
                     )
                     continue
                 if run_policy == "skip" and item_kind != "checkpoint":
                     details[kind].append(
-                        {"step": int(key), "text": text, "coverable": True, "reason": "执行策略为跳过，不阻断跑批"}
+                        {"step": int(key), "text": text, "coverable": True, "class": "ui",
+                         "reason": "执行策略为跳过，不阻断跑批"}
                     )
                     continue
-                matches = [(index, blocked) for index, blocked in enumerate(blockers) if not blocked.get("source_clause") or blocked.get("source_clause") in text or text in str(blocked.get("source_clause"))]
+                matches = [(index, blocked) for index, blocked in enumerate(blockers)
+                           if not blocked.get("source_clause") or blocked.get("source_clause") in text
+                           or text in str(blocked.get("source_clause"))]
                 used.update(index for index, _blocked in matches)
                 reason = _format_plan_line(item, case_step=int(key)).split(". ", 1)[-1]
+                klass = "ui"
                 if matches:
-                    reason = "；".join(str(blocked.get("user_message") or blocked.get("detail") or _block_reason_zh(blocked.get("reason"))) for _index, blocked in matches)
-                details[kind].append({"step": int(key), "text": text, "coverable": not matches, "reason": reason})
+                    klass = str(matches[0][1].get("class") or "source")
+                    reason = "；".join(
+                        str(blocked.get("user_message") or blocked.get("detail") or _block_reason_zh(blocked.get("reason")))
+                        for _index, blocked in matches
+                    )
+                details[kind].append({"step": int(key), "text": text,
+                                      "coverable": not matches, "class": klass, "reason": reason})
             for index, blocked in enumerate(blockers):
                 if index not in used:
-                    details[kind].append({"step": int(key), "text": str(blocked.get("source_clause") or plan.get("source") or ""), "coverable": False, "reason": str(blocked.get("user_message") or blocked.get("detail") or _block_reason_zh(blocked.get("reason")))})
+                    details[kind].append({
+                        "step": int(key),
+                        "text": str(blocked.get("source_clause") or plan.get("source") or ""),
+                        "coverable": False,
+                        "class": str(blocked.get("class") or "source"),
+                        "reason": str(blocked.get("user_message") or blocked.get("detail") or
+                                      _block_reason_zh(blocked.get("reason"))),
+                    })
     return details
+
+
+def _automatability(ua: dict[str, Any]) -> dict[str, str]:
+    status = str(ua.get("status") or "blocked")
+    blockers = [item for item in ua.get("blocked_by") or [] if isinstance(item, dict)]
+    reason = ""
+    for item in blockers:
+        message = str(item.get("user_message") or item.get("detail") or "").strip()
+        if message:
+            reason = message
+            break
+    if status == "runnable":
+        return {"class": "A", "label": "可直接执行", "reason": ""}
+    if status == "needs_setup":
+        return {"class": "B", "label": "需准备前置/数据", "reason": reason}
+    if status == "partial":
+        return {"class": "C", "label": "仅部分可 UI 自动化", "reason": reason}
+    classes = {str(item.get("class") or "") for item in blockers}
+    reasons = {str(item.get("reason") or "") for item in blockers}
+    if "source" in classes or any(code.startswith("compile_") for code in reasons):
+        return {"class": "E", "label": "定义/编译无效", "reason": reason}
+    return {"class": "D", "label": "非 UI 或需拆段", "reason": reason}
 
 
 def import_row_key_summary(row: dict[str, Any], *, project_id: str, app_id: str = "", env_doc: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -601,27 +773,40 @@ def import_row_key_summary(row: dict[str, Any], *, project_id: str, app_id: str 
         "steps_raw": row.get("steps_raw") or "",
         "expected_raw": row.get("expected_raw") or "",
     }
-    synced = sync_case_step_program_keys(case_like)
-    v = validate_case_step_keys(case_like, app_id=app_id, compiled_case=synced)
-    view = compile_preview_view(case_like, compiled_case=synced)
+    # Preview must use the same scene/precondition compiler as the durable job.
+    # The old keyword-only path could say "coverable" and the runtime then
+    # reject the same row as precondition_not_executable.
+    from mino_nexus.services.case_resource_claim import compile_execution_scene
+
+    source = compile_execution_scene(case_like, project_id=project_id)
+    synced = sync_case_step_program_keys(source)
+    v = validate_case_step_keys(source, app_id=app_id, compiled_case=synced)
+    view = compile_preview_view(source, compiled_case=synced)
     ua = view.get("ui_automation") or {}
     details = _import_automation_details(synced, env_doc)
-    for item in details["pre"]:
-        if not item["coverable"]:
-            ua["coverable"] = False
-            ua.setdefault("blocked_by", []).append({"phase": "prep", "case_step": 0, "source_clause": item["text"], "reason": "unmapped", "user_message": item["reason"]})
     synced["meta"]["ui_automation"] = ua
     blocked = [x for x in (ua.get("blocked_by") or []) if isinstance(x, dict)]
-    blocking_count = sum(1 for x in blocked if str(x.get("severity") or "blocking") == "blocking")
+    blocking_count = sum(
+        1 for x in blocked
+        if str(x.get("severity") or "blocking") == "blocking"
+        and str(x.get("class") or "") != "setup"
+    )
+    setup_count = sum(1 for x in blocked if str(x.get("class") or "") == "setup")
     advisory_count = sum(
         1 for x in blocked if str(x.get("severity") or "") in ("human_only", "advisory")
     )
+    auto = _automatability(ua)
+    telemetry = "green" if auto["class"] == "A" else ("yellow" if auto["class"] in {"B", "C"} else "red")
     return {
-        "telemetry": "red" if v.get("issues") or not ua.get("coverable", True) else "green",
+        "telemetry": telemetry,
+        "status": ua.get("status"),
+        "runnable_now": bool(ua.get("runnable_now")),
+        "automatability": auto,
         "fallback_count": v.get("fallback_count"),
         "unknown_block_count": v.get("unknown_block_count"),
         "unknown_screen_count": v.get("unknown_screen_count"),
         "blocking_issue_count": blocking_count,
+        "setup_issue_count": setup_count,
         "advisory_issue_count": advisory_count,
         "issues": (v.get("issues") or [])[:24],
         "ui_automation": ua,

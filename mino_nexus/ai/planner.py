@@ -231,7 +231,7 @@ def _parse_assert_result(
     width: int = 1080,
     height: int = 1920,
 ) -> AssertResult:
-    from mino_nexus.services.nav_screen_layout import normalize_vision_layout
+    from mino_nexus.navigation.geometry.nav_screen_layout import normalize_vision_layout
 
     warnings: list[str] = []
     passed = raw.get("passed")
@@ -513,7 +513,7 @@ def _parse_agent_decision(raw: dict[str, Any], width: int, height: int) -> Agent
         published = {k: v for k, v in raw_pub.items() if v not in (None, "", [])}
     elif isinstance(raw_pub, str) and raw_pub.strip() and raw_pub.strip().lower() not in {"null", "none"}:
         published = {"note": raw_pub.strip()}
-    from mino_nexus.services.nav_screen_layout import normalize_vision_layout
+    from mino_nexus.navigation.geometry.nav_screen_layout import normalize_vision_layout
 
     raw_layout = raw.get("screen_layout")
     screen_layout = (
@@ -1041,7 +1041,7 @@ def _parse_inspect_session_raw(
     width: int = 1080,
     height: int = 1920,
 ) -> dict[str, Any]:
-    from mino_nexus.services.nav_screen_layout import normalize_vision_layout
+    from mino_nexus.navigation.geometry.nav_screen_layout import normalize_vision_layout
 
     from mino_nexus.services.session_match import normalize_device_session
 

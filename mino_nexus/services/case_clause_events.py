@@ -475,4 +475,14 @@ def user_message(
         return f"{head}无法执行：事件 {name}{capability} 当前不可用（未注册或已停用）。"
     if reason == "uncoverable_event":
         return f"{head}无法执行：事件 {event_name or '该能力'} 当前不能做。"
+    if reason == "precondition_is_action":
+        return f"前置「{text}」写成了操作：请移到步骤，或改成可执行的准备项。"
+    if reason == "fixture_required":
+        return f"前置「{text}」需要业务数据夹具或接口造数；UI 步骤可执行，准备完成前为待准备。"
+    if reason == "manual_prerequisite_required":
+        return f"前置「{text}」需要人工准备或补充夹具；UI 步骤可执行，准备完成前为待准备。"
+    if reason == "ui_state_precondition":
+        return f"前置「{text}」是起点界面状态：请改成【导航:...】或首步操作。"
+    if reason in ("device_state_setup_required", "device_session_setup_required"):
+        return f"前置「{text}」需要设备/账号状态准备；请补齐 Prep 或机态登记。"
     return f"{head}无法执行：{detail or reason or '无法覆盖'}。"

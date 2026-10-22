@@ -1,0 +1,79 @@
+==============================================================================
+MinoNexus 架构体检（只读）
+==============================================================================
+模块数（含 __init__）       493
+mino_nexus import 总数       4204
+其中函数内 import（延迟）    3278  (78.0%)
+setattr(...) 总数            229
+setattr(ctx, ...)            114
+含 setattr 的文件            46
+
+-- 包间依赖（只列跨包，按条数） ----------------------------------------
+  legacy:services          -> core                     324
+  legacy:routers           -> legacy:services          302
+  legacy:services          -> models                   283
+  legacy:loop              -> legacy:services          272
+  legacy:services          -> legacy:ai                83
+  legacy:loop              -> core                     81
+  legacy:routers           -> core                     55
+  legacy:services          -> legacy:loop              54
+  models                   -> core                     50
+  legacy:loop              -> legacy:action_space      50
+  legacy:loop              -> legacy:ai                44
+  legacy:loop              -> catalog                  43
+  legacy:loop              -> legacy:runtime           39
+  <root>                   -> legacy:services          25
+  <root>                   -> core                     24
+  legacy:services          -> catalog                  21
+  legacy:routers           -> legacy:loop              20
+  catalog                  -> core                     19
+  legacy:ai                -> legacy:services          18
+  catalog                  -> models                   16
+  legacy:services          -> legacy:runtime           16
+  legacy:routers           -> models                   15
+  legacy:routers           -> legacy:ai                15
+  legacy:ai                -> core                     13
+  legacy:websocket         -> legacy:services          12
+  legacy:websocket         -> core                     11
+  legacy:runtime           -> legacy:services          11
+  <root>                   -> legacy:loop              9
+  catalog                  -> legacy:services          8
+  <root>                   -> legacy:routers           7
+
+-- 模块级环：3 个 SCC（>1 模块） ------------------------------
+  [303] action_space.assemble, action_space.scheme, ai.dispatch_log, ai.knowledge_hint, ai.layer_stack, ai.llm_client, ai.model_sdk, ai.planner ...
+  [3] loop.hierarchy_slots, services.nav_layout, services.nav_screen_layout
+  [2] services.plugins_store, services.wechat_ilink
+
+-- 分层规则违规：18 条 ----------------------------------------
+  R1-base-imports-upper                14
+      core.bootstrap -> ai.prompt_repo
+      core.bootstrap -> catalog.recovery_seed
+      core.bootstrap -> catalog.resource_transition_seed
+      core.bootstrap -> catalog.flow_block_seed
+      core.bootstrap -> loop.login_state_probe
+      core.bootstrap -> catalog.skill_channel
+      core.bootstrap -> catalog.development_seed
+      core.bootstrap -> services.v5_capabilities
+  R3-domain-imports-api                4
+      core.execution_user -> routers.deps
+      services.development -> routers.deps
+      services.development -> routers.rRuntime
+      services.scout_install -> routers.rReleases
+
+-- fan-in 前 15 ----------------------------------------
+   313  services
+   254  core.database
+   108  loop.milestones
+    94  core.execution_user
+    60  core.log
+    51  action_space.scheme
+    47  services.case_store
+    46  loop.hierarchy_slots
+    45  loop.milestone_orchestrator
+    44  services.account_pool_templates
+    41  services.project_env
+    41  loop.observe.session_log
+    38  services.node_registry
+    37  services.case_compilation
+    36  models.assistant

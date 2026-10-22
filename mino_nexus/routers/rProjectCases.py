@@ -59,6 +59,7 @@ class CaseImportCommitBody(BaseModel):
     default_on_conflict: str = "skip"
     default_platform: str = ""
     block_on_step_key_issues: bool | None = None
+    import_policy: str = ""
     rows: list[CaseImportCommitRow] = Field(default_factory=list)
 
 
@@ -738,10 +739,13 @@ def import_commit(project_id: str, body: CaseImportCommitBody, _sess: dict = Dep
             default_on_conflict=default_action,
             default_platform=str(body.default_platform or "").strip(),
             block_on_step_key_issues=resolve_block_on_step_key_issues(body.block_on_step_key_issues),
+            import_policy=body.import_policy,
             client_request_id=body.client_request_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409 if str(exc) == "import_request_conflict" else 400, detail=str(exc)) from exc
+    if data.get("blocked") and not data.get("created") and not data.get("updated"):
+        return ok(data, msg="没有可导入的 UI 可执行用例；阻断项和前置准备项见导入结果")
     return ok(data, msg="用例已导入")
 
 

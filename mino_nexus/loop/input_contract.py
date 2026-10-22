@@ -31,7 +31,7 @@ def supports_focus_input(capabilities: Any, *, executor: str, platform: str, wri
 
 
 def _executor_for(ctx: Any) -> tuple[str, str]:
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
     channel = ui_channel_from_ctx(ctx)
     if channel == UiChannel.WEB:

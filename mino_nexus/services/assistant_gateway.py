@@ -407,13 +407,17 @@ def _process_claimed_inbound(inbound: dict[str, Any], owner: str, key: str) -> N
     try:
         store.require_im_binding(user_id, channel, str(inbound.get("node_id") or ""), inbound["reply_ctx"])
         stage = "history"
-        history = confirmed_history(inbound, binding) or store.recent_im_history(user_id, inbound, binding)
+        history = confirmed_history(inbound, binding)
+        saved_history = store.recent_im_history(user_id, inbound, binding)
+        history = history + [row for row in saved_history if row.get('attachment')] if history else saved_history
         stage = "record"
         store.save_turn({**turn_base, "status": "processing", "detail": route_detail})
         evidence = []
-        if inbound.get("attachments"):
+        if inbound.get("attachments") or inbound.get('media_error'):
             stage = "media"
             from mino_nexus.services.assistant_media import ingest
+            route_detail['_attachments'] = [{key: item.get(key) for key in ('kind', 'ref', 'name', 'mime', 'size')}
+                                             for item in inbound.get('attachments') or [] if item.get('ref')]
             try:
                 text, evidence = ingest(inbound, origin)
             except ValueError as exc:

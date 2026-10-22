@@ -196,7 +196,7 @@ def try_recover_pending_system_permission(
 ) -> Optional[dict[str, Any]]:
     """业务动作待回看时先处理明确的 Android 系统权限，不裁定原业务动作。"""
     from mino_nexus.action_space.scheme import action_scheme
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
     prior = getattr(cursor, "visual_prior", None)
     if (not isinstance(prior, dict) or not prior or action_scheme(ctx) != "dom_preferred"

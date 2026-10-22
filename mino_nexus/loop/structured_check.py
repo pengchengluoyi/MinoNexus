@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from mino_nexus.ai.schemas import AssertResult
-from mino_nexus.loop.hierarchy_slots import node_flag
+from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
 
 _STRUCTURED_MODES = frozenset({"copy", "language_intent", "style", "dialog", "input_value", "spatial", "ui_absent"})
 

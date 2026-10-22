@@ -5,7 +5,7 @@ from typing import Any
 
 
 def _iou(a: list[Any], b: list[Any]) -> float:
-    from mino_nexus.loop.hierarchy_slots import int_list
+    from mino_nexus.navigation.geometry.hierarchy_slots import int_list
 
     aa = int_list(a, 4)
     bb = int_list(b, 4)
@@ -28,7 +28,7 @@ def merge_vlm_into_nodes(
     iou_min: float = 0.35,
 ) -> list[dict[str, Any]]:
     """冲突以 Scout 坐标为准，VLM 补 text/desc/clickable。"""
-    from mino_nexus.loop.hierarchy_slots import int_list, normalize_nodes
+    from mino_nexus.navigation.geometry.hierarchy_slots import int_list, normalize_nodes
 
     base = [dict(n) for n in (scout_nodes or []) if isinstance(n, dict)]
     vlm_clean = [n for n in (vlm_nodes or []) if isinstance(n, dict)]
@@ -75,7 +75,7 @@ def vlm_landmark_signals_for_states(
     nodes = (vlm_hierarchy or {}).get("nodes") if isinstance(vlm_hierarchy, dict) else None
     if not isinstance(nodes, list) or not nodes:
         return {}
-    from mino_nexus.loop.hierarchy_slots import match_any
+    from mino_nexus.navigation.geometry.hierarchy_slots import match_any
 
     out: dict[str, dict[str, float]] = {}
     for state in states or []:

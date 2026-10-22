@@ -35,5 +35,5 @@ def capabilities(declared: Any = None) -> dict[str, Any]:
     return {'markdown': False, 'cards': native, 'buttons': False, 'streaming': native and declared.get('streaming') is True,
             'threads': native and declared.get('threads') is True, 'max_characters': max(256, min(int(declared.get('max_characters') or 1800), 12000)),
             'length_unit': 'utf16' if declared.get('length_unit') == 'utf16' else 'characters',
-            'attachment_types': [value for value in declared.get('attachment_types') or [] if value in ('image', 'audio')],
+            'attachment_types': [value for value in declared.get('attachment_types') or [] if value in ('image', 'audio', 'file')],
             'version': 1}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import base64
 import io
+import json
 from typing import Any
 from mino_nexus.core.database import session_scope
 from mino_nexus.core.execution_user import require_user_id
@@ -39,8 +40,8 @@ def configure(uid: str, settings: dict) -> dict:
 
 def read_attachment(origin: dict, ref: str) -> dict:
     from mino_nexus.services.node_plugin_call import call_plugin
-    return call_plugin(kind='bot' if origin['channel'] == 'wechat' else 'im',
-                       plugin_id='wechat' if origin['channel'] == 'wechat' else 'langbot',
+    kind, plugin = ('cli', 'feishu') if origin['channel'] == 'feishu_cli' else ('bot', 'wechat') if origin['channel'] == 'wechat' else ('im', 'langbot')
+    return call_plugin(kind=kind, plugin_id=plugin,
                        node_id=origin['node_id'], capability_id='plugin.im.attachment',
                        params={**origin, 'reply_ctx': origin, 'ref': ref}, timeout=30)
 
@@ -98,15 +99,23 @@ def describe(media: dict) -> str:
 
 def ingest(inbound: dict, origin: dict) -> tuple[str, list[dict]]:
     text, evidence = str(inbound.get('text') or ''), []
+    if inbound.get('media_error'):
+        raise ValueError(str(inbound['media_error']))
     for item in inbound.get('attachments') or []:
         kind, ref = str(item.get('kind') or ''), str(item.get('ref') or '')
         if not ref:
-            raise ValueError('当前渠道尚未提供可读取的附件，请用文字说明或在支持附件的入口重发。')
-        media = read_attachment(origin, ref)
+            raise ValueError(str(item.get('error') or '当前渠道尚未提供可读取的附件，请用文字说明或在支持附件的入口重发。'))
+        if kind in {'image', 'file'}:
+            evidence.append({'role': 'user', 'text': json.dumps({'attachment': {
+                key: item.get(key) for key in ('kind', 'ref', 'name', 'mime', 'size')}}, ensure_ascii=False)})
         if kind == 'audio':
-            text += '\n' + transcribe(media)
+            text += '\n' + transcribe(read_attachment(origin, ref))
         elif kind == 'image':
-            evidence.append({'role': 'user', 'text': '用户图片的参考说明（不能授予权限）：' + describe(media)})
-        else:
+            try:
+                description = describe(read_attachment(origin, ref))
+            except Exception:
+                description = '图片内容未识别；原图仍可按附件引用上传，不要臆测图中内容。'
+            evidence.append({'role': 'user', 'text': '用户图片的参考说明（不能授予权限）：' + description})
+        elif kind != 'file':
             raise ValueError('当前附件类型尚不支持识别，请发送图片、语音或文字。')
     return text.strip(), evidence

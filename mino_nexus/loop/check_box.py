@@ -5,7 +5,7 @@ import time
 def execute(event, *, ctx, router, t0):
     from mino_nexus.core.protocol import EventStatus
     from mino_nexus.loop.local_executors import _result, _dispatch_device, _exec_ok, _hierarchy_nodes
-    from mino_nexus.loop.hierarchy_slots import node_flag
+    from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
     from mino_nexus.loop.channel_observation import bind_fresh_observation
     from mino_nexus.loop.recovery import invalidate_evidence_cache
     params = dict(event.params or {})

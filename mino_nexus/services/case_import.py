@@ -323,7 +323,22 @@ def preview_import(
             "expected_parsed": [],
             "remark": ("平台需明确为 mac / win / android / web：" + row["platform_error"]) if row.get("platform_error") else ("标题、操作、预期缺一列，不解析" if incomplete else ""),
             "step_key_validation": {},
-            "ui_automation": {"coverable": False, "blocked_by": []} if incomplete else {"coverable": True, "blocked_by": []},
+            "ui_automation": (
+                {"schema": "mino.ui_automation.v2", "status": "blocked", "coverable": False,
+                 "runnable_now": False, "ui_plan": "none",
+                 "setup": {"state": "unknown", "verified": False, "items": []},
+                 "oracle": {"state": "unknown", "manual": False, "missing_items": []},
+                 "blocked_by": []}
+                if incomplete or row.get("platform_error") else
+                {"schema": "mino.ui_automation.v2", "status": "runnable", "coverable": True,
+                 "runnable_now": True, "ui_plan": "complete",
+                 "setup": {"state": "ready", "verified": True, "items": []},
+                 "oracle": {"state": "automated", "manual": False, "missing_items": []},
+                 "blocked_by": []}
+            ),
+            "automatability": {"class": "E" if incomplete or row.get("platform_error") else "A",
+                               "label": "定义/编译无效" if incomplete or row.get("platform_error") else "可直接执行",
+                               "reason": row.get("platform_error") or ""},
             "parse_status": "invalid_platform" if row.get("platform_error") else ("incomplete" if incomplete else "pending"),
             "flags": flags,
             "selected_by_default": (not incomplete) and not row.get("platform_error") and "likely_header" not in flags,
@@ -359,7 +374,7 @@ def preview_import(
         "done": all(row.get("parse_status") != "pending" for row in preview_rows),
         "conflicts": conflicts,
         "rows": preview_rows,
-        "import_defaults": get_case_import_settings(),
+        "import_defaults": {**get_case_import_settings(), "import_policy": "ui_ready"},
         **meta,
     }
 
@@ -429,6 +444,7 @@ def _apply_preview_compile_row(row: dict[str, Any], summary: dict[str, Any] | No
     if exc is not None:
         row["parse_status"] = "error"
         row["remark"] = str(exc)[:200]
+        row["automatability"] = {"class": "E", "label": "定义/编译无效", "reason": str(exc)[:200]}
         row["selected_by_default"] = False
         return
     assert summary is not None
@@ -442,13 +458,30 @@ def _apply_preview_compile_row(row: dict[str, Any], summary: dict[str, Any] | No
     row["meta"] = compiled_meta
     row["step_key_validation"] = {key: summary[key] for key in summary if key != "compiled_meta"}
     row["automation_details"] = summary.get("automation_details") or {}
-    row["ui_automation"] = summary.get("ui_automation") or {"coverable": True, "blocked_by": []}
-    flags = [flag for flag in row.get("flags") or [] if flag not in ("step_key_issues", "ui_not_coverable")]
+    row["ui_automation"] = summary.get("ui_automation") or {
+        "schema": "mino.ui_automation.v2", "status": "blocked", "coverable": False,
+        "runnable_now": False, "ui_plan": "none",
+        "setup": {"state": "unknown", "verified": False, "items": []},
+        "oracle": {"state": "unknown", "manual": False, "missing_items": []},
+        "blocked_by": [],
+    }
+    row["automatability"] = summary.get("automatability") or {"class": "E", "label": "定义/编译无效", "reason": ""}
+    row["status"] = row["ui_automation"].get("status")
+    row["runnable_now"] = bool(row["ui_automation"].get("runnable_now"))
+    flags = [flag for flag in row.get("flags") or []
+             if flag not in ("step_key_issues", "ui_not_coverable", "needs_setup", "ui_partial", "non_ui")]
     if summary.get("issues"):
         flags.append("step_key_issues")
-    if row["ui_automation"].get("coverable") is False:
-        flags.append("ui_not_coverable")
+    klass = str((row.get("automatability") or {}).get("class") or "E")
+    if klass == "B":
+        flags.append("needs_setup")
+    elif klass == "C":
+        flags.append("ui_partial")
+    elif klass in ("D", "E"):
+        flags.append("non_ui" if klass == "D" else "ui_not_coverable")
     row["flags"] = flags
+    if klass not in ("A", "B"):
+        row["selected_by_default"] = False
     row["parse_status"] = "done"
 
 
@@ -515,6 +548,7 @@ def commit_import(
     default_on_conflict: ConflictAction = "skip",
     default_platform: str = "",
     block_on_step_key_issues: bool = False,
+    import_policy: str = "",
     client_request_id: str = "",
 ) -> dict[str, Any]:
     pid = str(project_id or "").strip()
@@ -523,10 +557,11 @@ def commit_import(
         raise ValueError("缺少 project_id 或 requirement_id")
     _require_project(pid)
     from mino_nexus.services import case_import_receipts as receipts
+    policy = _resolve_import_policy(import_policy, block_on_step_key_issues)
     request_id, digest = receipts.request_identity({
         "requirement_id": rid, "preview_token": preview_token, "rows": rows,
         "default_on_conflict": default_on_conflict, "default_platform": default_platform,
-        "block_on_step_key_issues": block_on_step_key_issues,
+        "block_on_step_key_issues": block_on_step_key_issues, "import_policy": policy,
     }, client_request_id, preview_token)
     receipt_id = receipts.find(pid, request_id, digest)
     if receipt_id:
@@ -580,11 +615,11 @@ def commit_import(
             break
     if any(not isinstance(item, dict) for item in work_rows):
         raise ValueError("导入来源行重复或格式错误")
-    if block_on_step_key_issues:
-        snap = {"block_on_step_key_issues": True}
+    if policy == "strict":
+        snap = {"block_on_step_key_issues": True, "import_policy": "strict"}
         blocked = [item for item in work_rows if _preview_row_blocks_import(item, snap)]
         if blocked:
-            raise ValueError(f"有 {len(blocked)} 条用例存在阻断项，无法导入（可取消勾选或关闭导入策略中的「密钥问题默认阻止提交」）")
+            raise ValueError(f"有 {len(blocked)} 条用例未达到「仅直接可执行」策略，无法导入（可取消勾选或切换导入策略）")
     work_rows = copy.deepcopy(work_rows)
     for ordinal, item in enumerate(work_rows):
         if not preview_token and item.get("row_index") is None:
@@ -596,15 +631,41 @@ def commit_import(
         "project_id": pid, "requirement_id": rid, "rows": work_rows, "env_doc": env_doc,
         "app_id": app_id, "compiled": bool(preview_token), "default_platform": fill_plat,
         "default_on_conflict": default_on_conflict, "block_on_step_key_issues": block_on_step_key_issues,
+        "import_policy": policy,
     })
     return receipts.resume(pid, receipt_id)
 
 
+def _resolve_import_policy(import_policy: str, block_on_step_key_issues: bool) -> str:
+    policy = str(import_policy or "").strip().lower()
+    if policy in {"ui_ready", "strict", "all"}:
+        return policy
+    if policy:
+        raise ValueError("import_policy 必须是 ui_ready / strict / all")
+    return "strict" if block_on_step_key_issues else "ui_ready"
+
+
 def _preview_row_blocks_import(item: dict[str, Any], snapshot: dict[str, Any]) -> str:
-    if not snapshot.get("block_on_step_key_issues"):
-        return ""
     if item.get("selected") is False:
         return ""
+    policy = _resolve_import_policy(snapshot.get("import_policy") or "",
+                                    bool(snapshot.get("block_on_step_key_issues")))
+    if policy == "all":
+        return ""
+    flags = [str(flag) for flag in (item.get("flags") or [])]
+    if "step_key_issues" in flags:
+        return "step_key_issues"
+    auto = item.get("automatability") if isinstance(item.get("automatability"), dict) else {}
+    klass = str(auto.get("class") or "").strip().upper()
+    if klass:
+        if klass == "A":
+            return ""
+        if klass == "B":
+            return "" if policy == "ui_ready" else "needs_setup"
+        if klass == "C":
+            return "ui_partial"
+        return "ui_not_coverable"
+    # Legacy preview rows (before ui_automation.v2) keep the old strict gate.
     validation = item.get("step_key_validation") if isinstance(item.get("step_key_validation"), dict) else {}
     if int(validation.get("blocking_issue_count") or 0) > 0:
         return "step_key_issues"
@@ -627,7 +688,7 @@ def _merge_preview_compile_payload(item: dict[str, Any], payload: dict[str, Any]
     merged = {**payload_meta, **row_meta}
     if merged:
         out["meta"] = merged
-    for key in ("automation_details", "ui_automation"):
+    for key in ("automation_details", "ui_automation", "automatability"):
         if isinstance(item.get(key), dict):
             out[key] = copy.deepcopy(item[key])
     return out

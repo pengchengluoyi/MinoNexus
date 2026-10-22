@@ -57,7 +57,6 @@ class AIProviderSaveBody(BaseModel):
 
 class AIUsageSaveBody(BaseModel):
     copilot_enabled: bool = False
-    case_execution_enabled: bool = False
     case_execution_provider_id: str = ""
     mode: str = "local_first"
     plan_compress_image: bool = True

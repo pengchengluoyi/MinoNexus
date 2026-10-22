@@ -62,7 +62,7 @@ def facts(project_id, topic_id, sess, content):
         target_status = {'resolved': None, 'ask': str(exc), 'available_channels': opts['channels']}
     return {
         'members': list_members(project_id, topic_id, sess),
-        'project_id': project_id, 'topic_id': topic_id,
+        'project_id': project_id, 'project': opts['project'], 'topic_id': topic_id,
         'scope': {k: view[k] for k in ('title', 'requirement_id', 'modules', 'app_id', 'env_profile', 'env_surface', 'platform', 'paused')},
         'cases': {'total': snap['total'], 'executable': len(snap['executable']), 'blocked': len(snap['blocked']),
                   'case_ids': snap['case_ids'][:200], 'items': snap['cases'][:50], 'truncated': len(snap['case_ids']) > 200},
@@ -78,7 +78,7 @@ def _say(project_id, topic_id, body, card='', ref=''):
         ws.message(db, ws.owned(db, project_id, topic_id), body, card=card, ref=ref, role='conductor')
 
 
-def execution_args(project_id, topic_id, sess, spec, args):
+def execution_args(project_id, topic_id, sess, spec, args, requested_target=None):
     """Resolve workspace selection before invoking the unchanged execution tool."""
     args = dict(args)
     with session_scope() as db:
@@ -88,7 +88,25 @@ def execution_args(project_id, topic_id, sess, spec, args):
     if view['paused'] and spec.get('risk') == 'write':
         raise ValueError('工作区已暂停，请在菜单中恢复后再提交操作。')
     if args.get('project_id', project_id) != project_id:
-        raise ValueError('请使用当前工作区所属项目。')
+        raise ValueError('所选项目与当前对话所属项目不一致，请先切换项目；本轮未提交操作。')
+    requested_target = requested_target or {}
+    if requested_target.get('project_id', project_id) != project_id:
+        raise ValueError('本条消息指定的项目与当前对话不一致，请先切换项目；本轮未提交操作。')
+    props = (spec.get('params_schema') or {}).get('properties') or {}
+    for key in ('app_id', 'env_surface', 'env_profile'):
+        if key in props and requested_target.get(key):
+            if args.get(key) and args[key] != requested_target[key]:
+                raise ValueError('工具目标与本条消息明确指定的目标不一致；本轮未提交操作。')
+            if not args.get(key):
+                args[key] = requested_target[key]
+    if args.get('app_id'):
+        from mino_nexus.services.project_store import require_app
+        try:
+            app = require_app(str(args['app_id']))
+        except KeyError as exc:
+            raise ValueError('所选应用不存在，请重新确认当前项目的应用。') from exc
+        if app.get('project_id') != project_id:
+            raise ValueError('所选应用不属于当前对话的项目，请先切换项目；本轮未提交操作。')
     if spec['id'].startswith('collab.'):
         if args.get('topic_id', topic_id) != topic_id:
             raise ValueError('请使用当前工作区。')
@@ -146,7 +164,7 @@ def run_one_tool(project_id, topic_id, sess, owner, spec, args, state, target):
     if spec.get('risk') == 'write' and state['wrote']:
         return {'stop': '本条消息已提交过写操作，不会重复提交。' + state['summary']}
     try:
-        args = execution_args(project_id, topic_id, sess, spec, args)
+        args = execution_args(project_id, topic_id, sess, spec, args, state.get('requested_target'))
         if spec['id'] == 'collab.decision':
             args['request_id'] = state['source']
     except ValueError as exc:
@@ -181,6 +199,39 @@ def run_one_tool(project_id, topic_id, sess, owner, spec, args, state, target):
 
 
 MEMBER_STEPS = 5
+
+
+def finish_read_loop(messages, meta, deadline, *, trace):
+    from mino_nexus.ai.prompt_repo import prompts_dir
+    from mino_nexus.services.assistant_agent import _parse_args, _call_model
+    from mino_nexus.services.assistant_tools import openai_tools
+    fallback = '查询已停止，但尚未形成能回答你这条消息的结论；不会将查询停止当作任务完成，也不会继续提交操作。'
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return fallback
+    final_messages = list(messages)
+    last_call = next((index for index in range(len(final_messages) - 1, -1, -1)
+                      if final_messages[index].get('tool_calls')), None)
+    if last_call is not None:
+        answered = {item.get('tool_call_id') for item in final_messages[last_call + 1:] if item['role'] == 'tool'}
+        for call in final_messages[last_call]['tool_calls']:
+            call_id = call.get('id') or (call.get('function') or {}).get('name')
+            if call_id not in answered:
+                final_messages.append({'role': 'tool', 'tool_call_id': call_id, 'content': bounded_json({
+                    'ok': False, 'executed': False, 'reason': 'repeated_query',
+                })})
+    rules = (prompts_dir() / 'assistant' / 'jobs' / 'workspace-route' / 'system' / '40-query-summary.md').read_text(encoding='utf-8')
+    final_messages.append({'role': 'system', 'content': rules})
+    tools = [tool for tool in openai_tools() if tool['function']['name'] == 'reply']
+    call_meta = {**meta, 'call': {**meta.get('call', {}), 'timeout_sec': min(remaining, 60)}}
+    reply, calls, model_meta = _call_model(final_messages, call_meta, tools=tools, trace=trace)
+    if model_meta.get('error') and not reply and not calls:
+        raise ValueError('大模型暂时不可用：' + str(model_meta['error'])[:200])
+    for call in calls:
+        function = call.get('function') or {}
+        if function.get('name') == 'reply':
+            return str(_parse_args(function.get('arguments')).get('text') or reply or fallback)
+    return reply or fallback
 
 
 def member_result(body, *, stopped=False, needs_input=False):
@@ -234,7 +285,9 @@ def member_loop(project_id, topic_id, sess, member, job, question, target, conte
                 return member_result('成员请求了未授权的工具，本轮已停止。', stopped=True)
             sig = json.dumps([spec['id'], args], sort_keys=True, ensure_ascii=False)
             if sig in seen:
-                return member_result('相同查询没有新信息，已停止继续查询。' + state['summary'], stopped=True)
+                body = finish_read_loop(messages, meta, deadline, trace={
+                    'job': job, 'trigger': 'workspace_member', 'source': 'workspace_member_loop', 'role': member})
+                return member_result(body, stopped=True)
             seen.add(sig)
             res = run_one_tool(project_id, topic_id, sess, owner, spec, args, state, {'project_id': project_id})
             if 'stop' in res:
@@ -260,12 +313,24 @@ def process(project_id, topic_id, sess, content, *, source_message_id, read_only
     from mino_nexus.services.assistant_tools import openai_tools, tool_by_function_name
 
     fact = facts(project_id, topic_id, sess, content)
+    from mino_nexus.services.assistant_targets import named_target
+    requested_target = named_target(content)
+    fact['message_target'] = requested_target
+    if requested_target.get('project_id', project_id) != project_id:
+        current = fact['project']['name']
+        requested = requested_target.get('project_name') or requested_target['project_id']
+        _say(project_id, topic_id,
+            f'当前对话属于「{current}」项目，你这条消息提到的是「{requested}」，项目不一致。'
+            f'本条消息未提交执行操作，也不会改用「{current}」的测试渠道。请切换到「{requested}」项目的对话后继续。',
+            card='project', ref=requested_target['project_id'])
+        return
     fact['automation_context'] = {'read_only': read_only, **(event_context or {})}
     recent_messages = fact['recent_messages']
     history = '\n'.join(f"{'用户' if m['author'] == 'user' else '助手'}：{m['body']}" for m in recent_messages)
     messages, meta = render('workspace-route', {'persona_block': _persona({}),
         'workspace_facts': bounded_json(fact), 'recent_turns': history, 'utterance': content})
-    target = {'project_id': project_id}
+    target = {'project_id': project_id, **{key: requested_target[key]
+              for key in ('app_id', 'env_surface', 'env_profile') if requested_target.get(key)}}
     from mino_nexus.ai.prompt_repo import list_assistant_tools
     from mino_nexus.services.workspace_assign import assign
     assign_spec = next(s for s in list_assistant_tools() if s['id'] == 'member.assign')
@@ -273,7 +338,8 @@ def process(project_id, topic_id, sess, content, *, source_message_id, read_only
         'description': assign_spec['description'], 'parameters': assign_spec['params_schema']}}]
     deadline = time.monotonic() + float((meta.get('call') or {}).get('total_timeout_sec', 300))
     seen, answer = set(), ''
-    state = {'wrote': False, 'summary': '', 'source': source_message_id, 'read_only': read_only}
+    state = {'wrote': False, 'summary': '', 'source': source_message_id, 'read_only': read_only,
+             'requested_target': requested_target}
     assignments = 0
     assignment_results = []
     token = dispatch_log.bind(assistant_mutation_scope=source_message_id)
@@ -348,7 +414,8 @@ def process(project_id, topic_id, sess, content, *, source_message_id, read_only
                     break
                 sig = json.dumps([spec['id'], args], sort_keys=True, ensure_ascii=False)
                 if sig in seen:
-                    answer = '相同查询没有新信息，已停止继续查询。' + state['summary']
+                    answer = finish_read_loop(messages, meta, deadline, trace={
+                        'job': 'workspace-route', 'trigger': 'workspace_chat', 'source': 'workspace_agent', 'role': 'conductor'})
                     break
                 seen.add(sig)
                 if spec['id'] == 'member.assign':

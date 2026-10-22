@@ -186,6 +186,8 @@ Nexus 不直连 adb；经在线 Scout 下发 `set_input_method`。设备未安�
 | POST | `/device/{sn}/ime/adbkeyboard` | 将该 sn 对应 Android 设备默认输入法切到 ADB Keyboard。设备离线或 Scout 无应答时 409/502 |
 | POST | `/device/{sn}/ime/system` | 关闭 ADB Keyboard，切回其它已启用系统输入法（经 Scout `set_input_method` + `ime=system`） |
 
+两条输入法接口共用 `device_ime._dispatch_set_input_method`，固定下发 `executor_order=["adb"]` 和 `selected_impl={"executor":"adb","runs_on":"scout"}`。管理操作即使 `run_id` 为空，也必须满足普通设备动作的唯一执行器合同；不得省略 `selected_impl.executor` 或让 Scout 自动补选。无可用系统输入法、设备离线和 Scout 执行失败仍返回实际错误，不视为切换成功。
+
 旧 `POST /app-automation/qa-process/import/{app_id}` 的 `kind=cases` 已停用，请走上述 preview/commit。
 
 ## Jobs（LLM prompt 真源）

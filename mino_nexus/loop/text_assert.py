@@ -104,7 +104,7 @@ def _bounds(node: dict[str, Any]) -> tuple[float, float, float, float] | None:
 
 def dom_text_observation(checkpoint: dict[str, Any], ctx: Any) -> dict[str, Any]:
     from mino_nexus.core.secret_redaction import sanitize
-    from mino_nexus.loop.hierarchy_slots import node_flag
+    from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
     nodes = [row for row in (getattr(ctx, "nav_hierarchy_nodes", None) or []) if isinstance(row, dict)]
     contract = dict(getattr(ctx, "observation_contract", None) or {})
     element = checkpoint.get("element") if isinstance(checkpoint.get("element"), dict) else {}

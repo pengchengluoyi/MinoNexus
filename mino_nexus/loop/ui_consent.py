@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from mino_nexus.loop.hierarchy_slots import int_list, node_flag
+from mino_nexus.navigation.geometry.hierarchy_slots import int_list, node_flag
 
 LONG_LABEL_MIN_CHARS = 8
 SMALL_MAX_PX = 96

@@ -47,7 +47,7 @@ def _hierarchy_nodes(ctx: Any) -> list[dict[str, Any]]:
 
 
 def _ui_channel_key(ctx: Any) -> str:
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx, ui_channel_label
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx, ui_channel_label
 
     return ui_channel_label(ui_channel_from_ctx(ctx))
 
@@ -61,7 +61,7 @@ def _login_surface_visible(ctx: Any, nodes: list[dict[str, Any]]) -> bool:
     ch = _ui_channel_key(ctx)
     if credential_field_for_login(nodes, login_kind="email", channel=ch):
         return True
-    from mino_nexus.loop.hierarchy_slots import match_any
+    from mino_nexus.navigation.geometry.hierarchy_slots import match_any
 
     if match_any(
         nodes,
@@ -78,7 +78,7 @@ def _login_surface_visible(ctx: Any, nodes: list[dict[str, Any]]) -> bool:
 
 
 def _email_tab_in_hierarchy(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
-    from mino_nexus.loop.hierarchy_slots import match_any
+    from mino_nexus.navigation.geometry.hierarchy_slots import match_any
 
     return match_any(
         nodes,
@@ -155,7 +155,7 @@ def run_email_login_ui_chain(
         except Exception:
             pass
         try:
-            from mino_nexus.loop.hierarchy_slots import capture
+            from mino_nexus.navigation.geometry.hierarchy_slots import capture
 
             snap = capture(proxy, turn_id=int(turn_seq or 0))
             if snap.ok and snap.nodes:

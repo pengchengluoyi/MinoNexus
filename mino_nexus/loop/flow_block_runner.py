@@ -37,7 +37,7 @@ def _web_point_missing(ctx: Any, cap: str, params: dict[str, Any]) -> bool:
     if cap not in _WEB_POINT_CAPS:
         return False
     from mino_nexus.loop.device_execute_params import prepare_device_execute_params
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
     if ui_channel_from_ctx(ctx) != UiChannel.WEB:
         return False
@@ -58,7 +58,7 @@ def _step_ready(
         return False
     if cap == "request_sms_code":
         from mino_nexus.loop.sms_auto import sms_send_geometry_ready
-        from mino_nexus.loop.ui_channel import ui_channel_from_ctx, ui_channel_label
+        from mino_nexus.contract.execution.ui import ui_channel_from_ctx, ui_channel_label
 
         return sms_send_geometry_ready(
             accounts_brief=str(getattr(ctx, "accounts_brief", "") or ""),

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from mino_nexus.core.paths import nav_capture_dir
-from mino_nexus.loop.hierarchy_slots import HIERARCHY_FORMAT, flatten, rid_short
+from mino_nexus.navigation.geometry.hierarchy_slots import HIERARCHY_FORMAT, flatten, rid_short
 
 INDEX_NAME = "index.json"
 MAX_TEXT_CHARS = 8000
@@ -158,7 +158,7 @@ def is_overlay_screen(turn: dict[str, Any]) -> bool:
         rid_tokens.add(tail)
     if _OVERLAY_RID_HINTS & rid_tokens:
         return True
-    from mino_nexus.services.nav_screen_layout import is_modal_button_stack
+    from mino_nexus.navigation.geometry.nav_screen_layout import is_modal_button_stack
 
     if not is_modal_button_stack(nodes):
         return False
@@ -286,7 +286,7 @@ def append_turn(
 
     from mino_nexus.services.nav_target_scope import TargetScope, scope_from_values
 
-    from mino_nexus.loop.hierarchy_slots import normalize_nodes
+    from mino_nexus.navigation.geometry.hierarchy_slots import normalize_nodes
 
     store_nodes = normalize_nodes(nodes or [])
     scope = TargetScope.from_dict(target_scope) if target_scope else scope_from_values(platform, target_package)
@@ -430,7 +430,7 @@ def read_turn(app_id: str, session_id: str, turn_id: int) -> dict[str, Any] | No
         target_scope=target_scope_dict,
     )
     row.update(pkg)
-    from mino_nexus.services.nav_screen_layout import (
+    from mino_nexus.navigation.geometry.nav_screen_layout import (
         merge_layout_views,
         sanitize_wireframe,
         wireframe_from_hierarchy,

@@ -37,7 +37,7 @@ def success_criteria_for_llm(cursor: Any) -> dict[str, Any]:
 
 def build_task_context_json(ctx: Any) -> dict[str, Any]:
     """批次 / 设备渠道上下文（不含账号明细）。"""
-    from mino_nexus.loop.ui_channel import ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import ui_channel_from_ctx
 
     ch = ui_channel_from_ctx(ctx)
     return {

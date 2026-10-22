@@ -11,7 +11,7 @@ def prepare_device_execute_params(
 ) -> dict[str, Any]:
     out = dict(params or {})
     cid = str(cap_id or "").strip()
-    from mino_nexus.loop.ui_channel import UiChannel, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
     if ui_channel_from_ctx(ctx) != UiChannel.WEB:
         return out
@@ -185,7 +185,7 @@ def _coords_from_login_field(
     prior_otp_tap_only: bool = False,
 ) -> dict[str, Any]:
     nodes = pool if pool is not None else _tap_node_pool(ctx, None)
-    from mino_nexus.loop.ui_channel import ui_channel_label, ui_channel_from_ctx
+    from mino_nexus.contract.execution.ui import ui_channel_label, ui_channel_from_ctx
     from mino_nexus.loop.ui_consent import tap_params_for_control
 
     fld = str(field or "").strip().lower()

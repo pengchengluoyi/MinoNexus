@@ -56,7 +56,7 @@ def find_phone_field(nodes: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
         score = min(40, w // max(1, min_w // 4))
         if _phone_digits_in_node(node):
             score += 80
-        from mino_nexus.loop.hierarchy_slots import node_flag
+        from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
 
         if node_flag(node, "focused"):
             score += 25
@@ -79,7 +79,7 @@ def _is_send_action_chip(node: dict[str, Any], *, sw: int, sh: int) -> bool:
     if is_long_label(node):
         return False
     if is_small_control(node, sw=sw, sh=sh):
-        from mino_nexus.loop.hierarchy_slots import node_flag
+        from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
 
         if node_flag(node, "checkable"):
             return False
@@ -122,7 +122,7 @@ def find_android_email_field(nodes: list[dict[str, Any]]) -> Optional[dict[str, 
             score += 90
         if "email" in low or "邮箱" in label or "mail" in low:
             score += 50
-        from mino_nexus.loop.hierarchy_slots import node_flag
+        from mino_nexus.navigation.geometry.hierarchy_slots import node_flag
 
         if node_flag(node, "focused"):
             score += 25
@@ -231,7 +231,7 @@ def credential_field_for_login(
     login_kind: str = "phone",
     channel: str = "android",
 ) -> Optional[dict[str, Any]]:
-    from mino_nexus.loop.ui_channel import UiChannel
+    from mino_nexus.contract.execution.ui import UiChannel
     from mino_nexus.loop.ui_dom import find_dom_email_field, find_dom_phone_field
 
     kind = str(login_kind or "phone").strip().lower()
@@ -251,7 +251,7 @@ def credential_field_filled(
     login_kind: str = "phone",
     channel: str = "android",
 ) -> bool:
-    from mino_nexus.loop.ui_channel import UiChannel
+    from mino_nexus.contract.execution.ui import UiChannel
     from mino_nexus.loop.ui_dom import dom_email_field_filled, dom_phone_field_filled
 
     kind = str(login_kind or "phone").strip().lower()

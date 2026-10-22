@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import secrets
 import time
@@ -396,6 +397,10 @@ def recent_im_history(user_id: str, inbound: dict[str, Any], binding: dict[str, 
         rows = query.order_by(AssistantTurn.created_at.desc(), AssistantTurn.turn_id.desc()).limit(4).all()
         history = []
         for row in reversed(rows):
+            for item in (row.detail_json or {}).get('_attachments') or []:
+                if isinstance(item, dict) and item.get('ref') and item.get('kind') in {'image', 'file'}:
+                    history.append({'role': 'user', 'text': json.dumps({'attachment': item}, ensure_ascii=False),
+                                    'ts': row.created_at, 'attachment': True})
             for role, key in (("user", "user_text"), ("assistant", "assistant_text")):
                 detail = row.detail_json or {}
                 if role == "assistant" and detail.get("delivery_status") != "sent":

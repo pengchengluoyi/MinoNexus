@@ -232,7 +232,7 @@ def load_with_reason(
     finally:
         db.close()
 
-    from mino_nexus.services.nav_layout import drop_volatile_landmark_states
+    from mino_nexus.navigation.geometry.nav_layout import drop_volatile_landmark_states
 
     cleaned, dropped = drop_volatile_landmark_states(doc)
     if dropped:

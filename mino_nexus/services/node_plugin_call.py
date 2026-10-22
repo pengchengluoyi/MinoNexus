@@ -30,6 +30,10 @@ class PluginCallError(Exception):
     pass
 
 
+class PluginCapabilityError(PluginCallError):
+    pass
+
+
 def node_for_plugin(kind: str, plugin_id: str, node_id: str = ""):
     from mino_nexus.core.execution_user import require_user_id
     uid = require_user_id()
@@ -68,6 +72,10 @@ def call_plugin(
     if capability_id not in _ALLOWED:
         raise PluginCallError(f"不允许的插件能力 {capability_id}")
     node = node_for_plugin(kind, plugin_id, node_id)
+    if capability_id == 'plugin.cli.meego' and (params.get('attachments') or params.get('attachment_ref')):
+        if not any(row.get('class') == 'cli' and row.get('id') == 'meego' and row.get('attachment_upload_version') == 1
+                   for row in node.plugins or []):
+            raise PluginCapabilityError('当前 Scout 尚未声明受控附件上传能力，请更新 Scout 并等待重新上报；本次没有上传或创建工作项。')
     payload = P.Execute(
         run_id="",
         step_idx=-1,
