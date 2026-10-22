@@ -1,0 +1,87 @@
+name: Recover image release
+on:
+  push:
+    branches: [main]
+    paths: ['.github/release-image-recovery.json']
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+  packages: write
+concurrency:
+  group: recover-image-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Validate original release and build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PYTHON'
+          import json, os, re, subprocess
+          from pathlib import Path
+          request = json.loads(Path('.github/release-image-recovery.json').read_text())
+          tag = request['release_tag']
+          run_id = request['source_run_id']
+          commit = request['source_commit']
+          assert re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag)
+          assert isinstance(run_id, int) and run_id > 0
+          assert re.fullmatch(r'[0-9a-f]{40}', commit)
+          repository = os.environ['GITHUB_REPOSITORY']
+          original = json.loads(subprocess.check_output(['gh', 'api', f'repos/{repository}/actions/runs/{run_id}'], text=True))
+          assert original['head_sha'] == commit
+          assert original['head_branch'] == tag and original['event'] == 'push'
+          assert original['path'] == '.github/workflows/release-wheel.yml'
+          assert subprocess.check_output(['git', 'rev-parse', f'{tag}^{{commit}}'], text=True).strip() == commit
+          published = json.loads(subprocess.check_output(['gh', 'release', 'view', tag, '--json', 'tagName,isDraft'], text=True))
+          assert published['tagName'] == tag and not published['isDraft']
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write(f'SOURCE_RUN_ID={run_id}\nRELEASE_TAG={tag}\nVERSION={tag[1:]}\n')
+          print(f'Reusing artifacts from {tag} ({commit[:7]}) run {run_id}')
+          PYTHON
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          pattern: image-*
+          path: offline
+          merge-multiple: true
+      - name: Verify original image archives
+        working-directory: offline
+        run: |
+          for arch in amd64 arm64; do
+            test -f "mino-nexus-$VERSION-linux-$arch.tar.gz"
+            sha256sum --check "SHA256SUMS-linux-$arch.txt"
+          done
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish existing images
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/mino-nexus"
+          for arch in amd64 arm64; do
+            gunzip -c "offline/mino-nexus-$VERSION-linux-$arch.tar.gz" | docker load
+            pushed=false
+            for attempt in 1 2 3; do
+              if docker push "$image:$VERSION-$arch"; then
+                pushed=true
+                break
+              fi
+              if [ "$attempt" -lt 3 ]; then sleep 5; fi
+            done
+            test "$pushed" = true
+          done
+          docker manifest create "$image:$VERSION" "$image:$VERSION-amd64" "$image:$VERSION-arm64"
+          docker manifest push "$image:$VERSION"
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: offline/*
+          fail_on_unmatched_files: true
