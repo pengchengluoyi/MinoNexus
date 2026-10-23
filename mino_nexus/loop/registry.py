@@ -330,7 +330,7 @@ def _guard_block_mutate_when_thought_done(ctx: dict[str, Any]) -> Optional[str]:
     cap = str(ctx.get("cap_id") or "")
     if not cap or cap.startswith("signal_") or cap in ("wait_ms",):
         return None
-    if cap.startswith("recover_"):
+    if cap.startswith("recover_") or cap == "run_flow_block":
         return None
     return (
         "模型思考已结论本步/前置应收工（signal_done），与实际 capability 不一致。"
@@ -359,7 +359,7 @@ def _guard_block_prep_guest_mine_tab(ctx: dict[str, Any]) -> Optional[str]:
         return None
     return (
         "session_block 仍为 logged_in，本用例要求 guest。"
-        "勿点「我的」进登录页收工；请走路线图 logout 边或 recover_restart_target_app 后再 signal_done。"
+        "勿点「我的」进登录页收工；请走路线图 logout 边或 run_flow_block(block_id=fb.global.app.restart) 后再 signal_done。"
     )
 
 
@@ -394,7 +394,7 @@ def _guard_block_do_after_step_goal(ctx: dict[str, Any]) -> Optional[str]:
     cap = str(ctx.get("cap_id") or "")
     if cap in ("", "signal_done", "signal_give_up", "wait_ms"):
         return None
-    if cap.startswith("recover_") or cap in ("dismiss_ime", "accept_legal_consent"):
+    if cap.startswith("recover_") or cap in ("dismiss_ime", "accept_legal_consent", "run_flow_block"):
         return None
     return (
         "本步目标已在屏上达成，请立刻 signal_done 进入校验，"
@@ -875,30 +875,6 @@ def _guard_skip_repeat_fsm_open_loop(ctx: dict[str, Any]) -> Optional[str]:
     return fsm_params_blocked_in_open_loop(ctx)
 
 
-def _guard_skip_recover_screen_when_display_guard(ctx: dict[str, Any]) -> Optional[str]:
-    cap = str(ctx.get("cap_id") or "")
-    if cap not in ("recover_screen_asleep_or_locked",):
-        return None
-    if not bool(ctx.get("display_guard_active")):
-        return None
-    return (
-        "亮屏/解锁由任务子线程自动处理，勿再 recover_screen_asleep_or_locked；"
-        "请 wait_ms 后重试本步或 signal_done。"
-    )
-
-
-def _guard_skip_recover_bring_when_foreground(ctx: dict[str, Any]) -> Optional[str]:
-    cap = str(ctx.get("cap_id") or "")
-    if cap not in ("recover_bring_target_app_foreground",):
-        return None
-    if str(ctx.get("app_foreground") or "") != "yes":
-        return None
-    return (
-        "probe/hierarchy 显示被测 App 已在前台，勿再 recover_bring_target_app_foreground；"
-        "请继续本步 tap/fsm 或 signal_done。"
-    )
-
-
 def _guard_skip_repeat_launch_app(ctx: dict[str, Any]) -> Optional[str]:
     cap = str(ctx.get("cap_id") or "")
     if cap not in ("launch_app", "open_app", "open_url"):
@@ -928,7 +904,7 @@ def _guard_skip_repeat_launch_app(ctx: dict[str, Any]) -> Optional[str]:
             )
         return (
             "已拒绝重复 launch_app：本任务已成功启动过被测 App。"
-            "若仍不在前台请 recover_bring_target_app_foreground，不要重复 launch_app。"
+            "若仍不在前台请 run_flow_block(block_id=fb.global.app.foreground)，不要重复 launch_app。"
         )
     return None
 
@@ -936,7 +912,7 @@ def _guard_skip_repeat_launch_app(ctx: dict[str, Any]) -> Optional[str]:
 def _guard_skip_repeat_clear_app_cache(ctx: dict[str, Any]) -> Optional[str]:
     if str(ctx.get("phase") or "") != "prep":
         return None
-    if str(ctx.get("cap_id") or "") not in ("clear_app_cache", "system_pkg_clear"):
+    if str(ctx.get("cap_id") or "") != "clear_app_cache":
         return None
     if bool(ctx.get("prep_clear_done")):
         return (
@@ -1069,7 +1045,7 @@ def _guard_skip_repeat_satisfied_step_action(ctx: dict[str, Any]) -> Optional[st
     if str(ctx.get("phase") or "") != "do":
         return None
     cap = str(ctx.get("cap_id") or "")
-    if not cap or cap.startswith("signal_") or cap.startswith("recover_"):
+    if not cap or cap.startswith("signal_") or cap.startswith("recover_") or cap == "run_flow_block":
         return None
     from mino_nexus.loop.step_intent import instruction_required_intents, is_structural_cap
 
@@ -1181,8 +1157,6 @@ GUARDS: dict[str, GuardFn] = {
     "skip_repeat_check_run_env": _guard_skip_repeat_check_run_env,
     "skip_repeat_get_app_version": _guard_skip_repeat_get_app_version,
     "skip_repeat_launch_app": _guard_skip_repeat_launch_app,
-    "skip_recover_bring_when_foreground": _guard_skip_recover_bring_when_foreground,
-    "skip_recover_screen_when_display_guard": _guard_skip_recover_screen_when_display_guard,
     "skip_repeat_fsm_open_loop": _guard_skip_repeat_fsm_open_loop,
     "skip_repeat_fsm_declined": _guard_skip_repeat_fsm_declined,
     "block_fsm_off_step_target": _guard_block_fsm_off_step_target,

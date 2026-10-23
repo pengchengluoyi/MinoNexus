@@ -19,6 +19,6 @@ def should_coerce_mutate_to_signal_done(
     cap = str(cap_id or "").strip()
     if not cap or cap.startswith("signal_") or cap in ("wait_ms",):
         return False
-    if cap.startswith("recover_"):
+    if cap.startswith("recover_") or cap == "run_flow_block":
         return False
     return thought_implies_signal_done(thought)

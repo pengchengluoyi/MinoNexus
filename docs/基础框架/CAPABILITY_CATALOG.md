@@ -56,11 +56,11 @@ params:                          # 进 agent-decide 的工具参数；空数组�
 ```
 id: adb
 available_when: connectivity.adb        # 由 Scout 上报的连通性决定
-provides: [system_shell, system_pkg_clear, ui_native_input, ...]
+provides: [system_shell, ui_native_input, ...]
 platforms: [android]
 conditional_provides:                   # 视设备运行时权限而定
-  - cap: system_pkg_clear
-    requires_remote_caps: [device_owner]
+  - cap: exec_script
+    requires_remote_caps: [script_runner]
 ```
 
 **`available_when` 的数据来自 Scout 的 `REGISTER` / `HEARTBEAT`，不是 Nexus 自己探的。**

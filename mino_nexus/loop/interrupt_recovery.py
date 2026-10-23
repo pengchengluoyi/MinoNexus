@@ -22,14 +22,53 @@ _DISMISS_STEP: dict[str, Any] = {
 from mino_nexus.contract.interrupt_caps import BUILTIN_INTERRUPT_CAPS  # noqa: F401,E402
 
 
-def builtin_obstacle_steps(kind: str) -> list[dict[str, Any]]:
+def builtin_obstacle_steps(kind: str, *, app_id: str = "", consent_block: str = "") -> list[dict[str, Any]]:
     if kind == "consent":
+        # 协议/隐私弹窗交给逻辑块处理：意图在编译期就定好（同意 / 拒绝），运行时不再猜。
+        # consent_block 来自用例场景（case_scene.consent_block_id）；缺省按同意处理。
+        block = str(consent_block or "").strip() or "fb.global.privacy.accept"
+        steps = _block_obstacle_steps(app_id, block)
+        if steps:
+            return steps
         return [{"id": "interrupt_accept_consent", "title": "确认当前应用协议弹窗，使弹窗关闭并恢复被遮挡页面",
+                 "kind": "visual_tap", "hook_cap": "tap_element", "optional": False}]
+    if kind == "permission":
+        # 系统权限弹窗交给逻辑块（fb.global.system_dialog）处理，不再有专用恢复事件。
+        steps = _block_obstacle_steps(app_id, "fb.global.system_dialog")
+        if steps:
+            return steps
+        return [{"id": "interrupt_allow_permission", "title": "允许系统权限弹窗，使页面恢复可操作",
                  "kind": "visual_tap", "hook_cap": "tap_element", "optional": False}]
     if kind == "loading":
         return [{"id": "interrupt_screen_ready", "title": "等待当前页面加载完成",
                  "kind": "hook", "hook_cap": "wait_screen_ready", "optional": False}]
     return []
+
+
+def _block_obstacle_steps(app_id: str, block_id: str) -> list[dict[str, Any]]:
+    """把逻辑块的视觉步骤映射成恢复步骤（中断栈只认 hook_cap + kind）。"""
+    try:
+        from mino_nexus.navigation.atlas.nav_flow_block_catalog import resolve_effective_steps
+
+        steps = resolve_effective_steps(app_id=str(app_id or ""), block_id=block_id)
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[dict[str, Any]] = []
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        cap = str(step.get("hook_cap") or step.get("cap") or "").strip()
+        if not cap:
+            continue
+        row = {"id": str(step.get("id") or cap), "title": str(step.get("title") or cap),
+               "kind": str(step.get("kind") or "visual_tap"), "hook_cap": cap,
+               "optional": bool(step.get("optional"))}
+        if isinstance(step.get("params"), dict):
+            row["hook_params"] = dict(step["params"])
+        if step.get("key_ref"):
+            row["key_ref"] = str(step["key_ref"])
+        out.append(row)
+    return out
 
 
 def recovery_step_diagnostics(steps: list[dict[str, Any]], bound_ids: set[str]) -> list[dict[str, Any]]:

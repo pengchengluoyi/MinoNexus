@@ -15,6 +15,20 @@ COORD = {
 }
 
 PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
+    "run_flow_block": {
+        "type": "object",
+        "properties": {
+            "block_id": {
+                "type": "string",
+                "description": (
+                    "要执行的逻辑块 id。恢复类：fb.global.app.foreground（把被测 App 拉回前台）、"
+                    "fb.global.app.restart（关进程再启动）、fb.global.device.wake（唤醒并解锁）、"
+                    "fb.global.system_dialog（系统权限弹窗）、fb.global.privacy.accept / .decline（协议弹窗）"
+                ),
+            },
+        },
+        "required": ["block_id"],
+    },
     "tap_element": {
         "type": "object",
         "properties": {
@@ -138,7 +152,6 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
     "kill_app": {"type": "object", "properties": {}},
     "get_app_version": {"type": "object", "properties": {}},
     "clear_app_cache": {"type": "object", "properties": {}},
-    "system_pkg_clear": {"type": "object", "properties": {}},
     "get_foreground_app": {"type": "object", "properties": {}},
     "human_input_text": {
         "type": "object",
@@ -429,7 +442,6 @@ _CONTEXT_ADDRESS_CAPS = frozenset({
     "kill_app",
     "get_app_version",
     "clear_app_cache",
-    "system_pkg_clear",
     "open_url",
     "open_app",
 })
@@ -441,7 +453,6 @@ PACKAGE_PARAM_CAPS = frozenset({
     "kill_app",
     "get_app_version",
     "clear_app_cache",
-    "system_pkg_clear",
 })
 
 

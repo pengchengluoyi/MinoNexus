@@ -8,7 +8,6 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from mino_nexus.catalog.exec_classes import PROGRESS_CAPS
-from mino_nexus.loop.execution.actions import RECOVER_PREFIX
 from mino_nexus.loop.execution.turn_log import _log_turn_end
 from mino_nexus.loop.step_pointer import StepCursor
 
@@ -30,7 +29,7 @@ def note_progress_and_auto_finish(
     emit: Callable[..., None],
     rec: Callable[..., Any],
 ) -> bool:
-    if status_val == "pass" and cap_id in PROGRESS_CAPS and not recovery_action and not str(cap_id).startswith(RECOVER_PREFIX):
+    if status_val == "pass" and cap_id in PROGRESS_CAPS and not recovery_action and cap_id != "run_flow_block":
         count_nav = True
         if cap_id in ("fsm_navigate", "recover_fsm_navigate"):
             raw_nav = getattr(result, "raw_response", None) or {}

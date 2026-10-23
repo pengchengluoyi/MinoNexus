@@ -13,7 +13,6 @@ from mino_nexus.loop.launch_grace import stamp_launch_grace
 from mino_nexus.loop.execution.state import RunState
 from mino_nexus.loop.login_session_hint import compile_login_session_hint
 from mino_nexus.core.schemas import PlanEvent
-from mino_nexus.loop.android.app_env import reset_native_app_before_case
 from mino_nexus.loop.execution.page_ready import (
     _ensure_desktop_window,
     _ensure_web_page,
@@ -21,10 +20,10 @@ from mino_nexus.loop.execution.page_ready import (
 )
 from mino_nexus.loop.milestone_orchestrator import ensure_single_in_progress
 from mino_nexus.loop.recovery import ensure_target_app_foreground
+from mino_nexus.resources.resource_preflight import claim_requires_clear_cache
 from mino_nexus.loop.step_pointer import StepCursor
 from mino_nexus.loop.web.web_env import frame_step
 from mino_nexus.navigation.atlas.nav_route import load_fsm_doc
-from mino_nexus.resources.resource_preflight import claim_requires_clear_cache
 from mino_nexus.runtime.run_context import (
     execute_result_ok,
     is_web_slot,
@@ -57,39 +56,23 @@ def run_preflight(st: RunState) -> Preflight:
     t0 = st.t0
     case_seq = st.case_seq
     resolved_case = st.resolved_case
+    # 前置要先清数据时，preflight 不许把应用先拉起来（拉起后立刻会被 pm clear 杀掉）。
+    _scene = getattr(ctx, "case_scene", None) or {}
+    clear_before_launch = claim_requires_clear_cache(
+        case.get("resource_key") if isinstance(case, dict) else None,
+        _scene,
+        str((case or {}).get("precondition") or ""),
+    ) or (str(getattr(ctx, "platform", "") or "").strip().lower() == "android"
+          and str((_scene or {}).get("required_session") or "") in ("guest", "logged_out"))
     login_module_case = st.login_module_case
     cancel_check = st.cancel_check
     _leave = st.leave
     rec = st.rec
     _screen_unregistered = st.screen_unregistered
-    _rk = case.get("resource_key") if isinstance(case.get("resource_key"), dict) else None
-    _clear_before_launch = claim_requires_clear_cache(
-        _rk,
-        getattr(ctx, "case_scene", None),
-        str(case.get("precondition") or ""),
-    )
-    cold_started = False if _program_executor(ctx) == "desktop" else reset_native_app_before_case(
-        proxy,
-        ctx,
-        run_id=scout_run_id,
-        case_seq=case_seq,
-        case=case,
-        login_module=login_module_case,
-        defer_launch=_clear_before_launch,
-    )
-    if cold_started and writer:
-        writer.append(
-            "app/cold_start",
-            {
-                "login_module": True,
-                "package": str(getattr(ctx, "target_package", "") or ""),
-                "defer_launch": _clear_before_launch,
-            },
-        )
-    if cold_started:
-        from mino_nexus.loop.launch_grace import stamp_launch_grace
-
-        stamp_launch_grace(ctx)
+    # 2026-10-22：取消「每次任务执行前先关一次、再启动一次」的开环。
+    # 它和 prep 自己的 prep_launch_app 重复，而且会先启动再被 prep_clear_cache 杀掉：
+    # api-1-218 实测出现 close→launch→clear→launch→launch 三次启动。
+    # 现在应用由 prep_launch_app（程序里程碑）启动一次，开机态交给 prep 决定。
     opened = _ensure_desktop_window(proxy, ctx, run_id=scout_run_id, case_seq=case_seq, writer=writer)
     if opened is None:
         opened = _ensure_web_page(proxy, ctx, run_id=scout_run_id, case_seq=case_seq, writer=writer)
@@ -236,14 +219,13 @@ def run_preflight(st: RunState) -> Preflight:
         if recovery_out.stop_run:
             return Preflight(aborted=_leave(status="blocked", summary=recovery_out.summary(), reason_code="environment_precondition_unmet"))
 
-    fg_out = ensure_target_app_foreground(
+    # 前置要先清数据时跳过前台确认：它会在 pm clear 之前把应用拉起来，纯属白启动。
+    fg_out = None if clear_before_launch else ensure_target_app_foreground(
         ctx,
         proxy,
         target_package=target_pkg,
         shot=preflight_shot,
     )
-    if _clear_before_launch and not bool(getattr(ctx, "prep_clear_done", False)):
-        fg_out = None
     if fg_out:
         _log_preflight_recovery(fg_out, source="preflight_fg")
         if fg_out.stop_run:
@@ -330,4 +312,4 @@ def run_preflight(st: RunState) -> Preflight:
     if fixed_deadline:
         ctx.case_deadline_ts = min(ctx.case_deadline_ts or fixed_deadline, fixed_deadline)
 
-    return Preflight(fixed_deadline=float(fixed_deadline or 0), clear_before_launch=bool(_clear_before_launch))
+    return Preflight(fixed_deadline=float(fixed_deadline or 0), clear_before_launch=bool(clear_before_launch))

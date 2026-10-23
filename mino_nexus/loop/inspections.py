@@ -48,7 +48,7 @@ def program_session_block_from_hierarchy(
             "session=guest identity=unknown seen=in_app_legal_consent "
             "next=tap_element "
             "reason=应用内隐私/用户协议弹窗（hierarchy），按当前协议里程碑用 tap_element 操作已识别控件并核验结果；"
-            "非系统权限页，勿 recover_bring_target_app_foreground"
+            "非系统权限页，勿 run_flow_block(fb.global.app.foreground)"
         )
     pkg = str(getattr(ctx, "target_package", "") or "").strip()
     from mino_nexus.navigation.atlas.nav_capture_store import run_guard_foreground

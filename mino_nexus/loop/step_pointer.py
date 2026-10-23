@@ -202,7 +202,7 @@ def cap_clears_repeat_tap(cap_id: str) -> bool:
     cid = str(cap_id or "").strip()
     if not cid:
         return False
-    if cid in _NAV_CLEAR_CAPS or cid.startswith("recover_"):
+    if cid in _NAV_CLEAR_CAPS or cid.startswith("recover_") or cid == "run_flow_block":
         return True
     return False
 
@@ -231,7 +231,7 @@ def format_skip_repeat_read_device_message(last_summary: str = "") -> str:
     hint = f"（上次结果：{last_summary[:80]}）" if last_summary else ""
     return (
         f"已拒绝重复 read_device_data{hint}：前置数据已读过且满足要求，"
-        f"请直接 signal_done 结束前置；锁屏/黑屏请用 recover_screen_asleep_or_locked，不要用 read_device_data。"
+        f"请直接 signal_done 结束前置；锁屏/黑屏请用 run_flow_block(block_id=fb.global.device.wake)，不要用 read_device_data。"
     )
 
 

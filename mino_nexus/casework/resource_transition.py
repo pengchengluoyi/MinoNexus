@@ -133,16 +133,17 @@ def emit_clear_app_cache(ctx: Any, *, package_id: str = "") -> None:
     from mino_nexus.navigation.login.state import mark_session_dirty
     from mino_nexus.casework.resource_transition_engine import record_transition
 
-    mark_session_dirty(ctx, reason="cache_cleared_requires_observation")
+    mark_session_dirty(ctx, reason="app_data_cleared")
     sn, pkg = _ctx_sn(ctx), _ctx_package(ctx, package_id)
     if sn and pkg:
-        upsert_session(sn, pkg, session="unknown", stale=True,
-            stale_reason="cache_cleared_requires_observation", source="clear_app_cache",
+        # 2026-10-22：clear_app_cache 就是 pm clear，应用数据目录被删，本地凭据不可能残留，
+        # 因此机态按构造即为未登录；仍保留一次新观察，但不再把结论置为 unknown。
+        upsert_session(sn, pkg, session="logged_out", stale=False,
+            stale_reason="", source="clear_app_cache",
             lease_run_id=str(getattr(ctx, "run_id", "") or "")[:80])
-    # No account-facet update: cache removal proves neither logout nor reset
-    # of server-side business data. Persist a fresh-observation requirement.
+    # 服务端业务事实（作品、订单）不受影响；只有客户端凭据与本地状态被清掉。
     record_transition(ctx, "clear_app_cache", source="clear_app_cache",
-        meta={"package_id": pkg, "cleanup_scope": "cache_only", "session_verified": False})
+        meta={"package_id": pkg})
 
 
 def emit_inspect_session(ctx: Any, row: dict[str, Any] | None, *, package_id: str = "") -> None:

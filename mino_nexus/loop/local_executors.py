@@ -48,7 +48,7 @@ def _result(
 _FSM_DEGRADE_HINT = (
     "【导航降级】路线图未能从当前屏执行跳转（常见：深层页不在架构图、或当前无底栏 Tab）。"
     "若处于 onboarding 无底栏墙，请开环 tap_element 沿主流程出墙，勿重复 fsm_navigate；"
-    "否则请 press_back 退出栈顶，或 recover_restart_target_app 冷启动后再点 Tab。"
+    "否则请 press_back 退出栈顶，或 run_flow_block(block_id=fb.global.app.restart) 冷启动后再点 Tab。"
 )
 _FSM_SAME_PAGE_HINT = (
     "【导航】路线图判定当前已在目标节点，本次未执行点击。"
@@ -161,6 +161,33 @@ def dispatch_local(
                 summary="本地工具依赖未满足：" + unavailable["reason_code"],
                 error=unavailable["reason_code"], raw_response={"dependencies": dependencies},
                 elapsed_ms=int((time.time() - t0) * 1000))
+    if cap == "run_flow_block":
+        from mino_nexus.loop.block_dispatch import recovery_block_ids, run_block
+
+        params = dict(event.params or {})
+        block_id = str(params.get("block_id") or "").strip()
+        allowed = recovery_block_ids()
+        if not block_id:
+            return _result(event, status=EventStatus.FAIL, summary="缺少 block_id",
+                           error="missing_block_id", elapsed_ms=int((time.time() - t0) * 1000))
+        if block_id not in allowed:
+            return _result(event, status=EventStatus.FAIL,
+                           summary=f"块 {block_id} 不能由模型直接执行；可执行：{', '.join(allowed)}",
+                           error="block_not_allowed", elapsed_ms=int((time.time() - t0) * 1000),
+                           raw_response={"allowed_blocks": allowed})
+        out = run_block(block_id, ctx=ctx, router=router,
+                        run_id=str(params.get("run_id") or ""),
+                        purpose="plan_action",
+                        target_package=str(params.get("package") or ""))
+        return _result(
+            event,
+            status=EventStatus.PASS if out.get("ok") else EventStatus.FAIL,
+            summary=f"逻辑块 {block_id}：" + str(out.get("summary") or out.get("error") or ""),
+            error="" if out.get("ok") else str(out.get("error") or "block_step_failed"),
+            elapsed_ms=int((time.time() - t0) * 1000),
+            executor="internal",
+            raw_response=out,
+        )
     if cap == "signal_nav_calib_step":
         key = str((event.params or {}).get("step_key") or "").strip()
         summary = f"校准里程碑 {key}" if key else "校准里程碑（未给 step_key）"
@@ -249,7 +276,12 @@ def dispatch_local(
 
         scene = getattr(ctx, "case_scene", None) if ctx is not None else None
         req = required_session_enum(scene=scene)
+        cleared = bool(getattr(ctx, "prep_clear_done", False))
         session, reason = observe_login_state(ctx, router, shot)
+        if cleared and req in {"guest", "logged_out"} and session not in {"logged_out", "guest"}:
+            # 前置已用 clear_app_cache（pm clear）重置过应用数据：本地凭据已被删除，
+            # 未登录是重置事实，不要求页面必须长成登录页。
+            session, reason = "logged_out", "应用数据已重置（pm clear），未登录由重置事实保证"
         summary = reason or f"session={session}"
         from mino_nexus.loop.step_flow_scope import prep_initial_session_block_reason
 
@@ -271,33 +303,18 @@ def dispatch_local(
         known = session in {"logged_in", "logged_out", "guest"}
         mismatch = req == "guest" and session == "logged_in"
         if not known and not preserve_initial:
-            # 这个能力只回答"当前是不是登录页"：登录有 loading 态，模型分析完界面可能已经切走，
-            # 所以它用来卡住"在登录页上继续跑后续步骤"，不承担账号身份举证。
-            # 证不出登录态不等于失败（2026-10-22：商品页上无法举证 guest，用例被整体 blocked）。
+            # 这个能力只回答「当前是不是登录页」，不承担账号身份举证。
+            # 2026-10-23：之前对 guest/logged_out 用例在这里判 FAIL，要求「先按配置导航取证」，
+            # 结果是 clear_app_cache 已经 pm clear 过、应用就是未登录初态，却因为页面不是登录页
+            # 被整体 blocked（cr-d9c1b4ce4799 api-1-227 / api-1-218）。未登录已由上方的重置事实
+            # 保证，这里只报告页面性质，不再制造额外的取证要求。
             from mino_nexus.loop.login_account_lease import login_surface_detected
 
             on_login_page = login_surface_detected(ctx)
-            if req in {"guest", "logged_out"}:
-                # 例外：用例明确要求未登录。这时"证不出"不能算通过 —— 放行会在已登录设备上
-                # 找一个根本不存在的登录入口（2026-10-22 api-1-218：页面上是「续命研究员」的
-                # 账号中心，模型被要求点登录入口，连点两次「我的」后按回看策略停止）。
-                # 交回 prep 调度：按应用配置导航取证 / 受限退出后重新观察，仍证不出再明确阻断。
-                return _result(
-                    event,
-                    status=EventStatus.FAIL,
-                    summary=(
-                        "当前在登录页，尚不能确认未登录；先按配置导航取证或退出后重新观察"
-                        if on_login_page
-                        else "当前不在登录页，但用例要求未登录且尚未取证；先按配置导航取证或退出后重新观察"
-                    )[:500],
-                    error="login_observation_unavailable",
-                    executor=executor,
-                    elapsed_ms=int((time.time() - t0) * 1000),
-                )
             summary = (
                 "当前在登录页（登录中或未提交），只报告页面性质，不判定账号状态"
                 if on_login_page
-                else "当前不在登录页，不把登录态作为后续步骤的前置"
+                else "当前不在登录页，只报告页面性质，不判定账号状态"
             )
         error = "initial_session_required" if preserve_initial else "session_requirement_mismatch" if mismatch else ""
         return _result(

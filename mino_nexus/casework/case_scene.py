@@ -12,6 +12,28 @@ from mino_nexus.resources.case_resource_claim import (
 )
 
 
+# 协议 / 隐私弹窗的处置意图在**编译期**定死，运行期只按 block id 执行，不再猜。
+# 只认「主题词 + 选择词」同时出现，避免普通用例里出现「同意」就误插一步点击。
+_CONSENT_TOPIC = ("协议", "隐私", "条款", "授权弹窗", "privacy", "terms", "consent")
+_CONSENT_DECLINE = ("拒绝", "不同意", "decline", "reject", "deny", "not now")
+_CONSENT_ACCEPT = ("同意", "接受", "允许", "accept", "agree", "allow")
+
+
+def _consent_block_id(row: dict[str, Any], *, platform: str) -> str:
+    """从用例原文推导首启协议弹窗的处置块；判不出就返回空（不插步骤）。"""
+    if platform != "android":
+        return ""
+    text = " ".join(str(row.get(k) or "") for k in
+                    ("title", "name", "precondition", "precondition_raw", "steps_text", "expected")).lower()
+    if not text.strip() or not any(w in text for w in _CONSENT_TOPIC):
+        return ""
+    if any(w in text for w in _CONSENT_DECLINE):
+        return "fb.global.privacy.decline"
+    if any(w in text for w in _CONSENT_ACCEPT):
+        return "fb.global.privacy.accept"
+    return ""
+
+
 def compile_execution_scene(row: dict[str, Any], *, project_id: str) -> dict[str, Any]:
     """Compile scene from current source, never from a previous artifact.
 
@@ -37,5 +59,10 @@ def compile_execution_scene(row: dict[str, Any], *, project_id: str) -> dict[str
     _set_case_resource_key(out, key)
     scene = copy.deepcopy(key["case_scene"])
     scene["device_need"] = "web" if platform == "web" else "app"
+    consent = _consent_block_id(row, platform=platform)
+    if consent:
+        scene["consent_block_id"] = consent
+    else:
+        scene.pop("consent_block_id", None)
     out["case_scene"] = clamp_case_scene(scene)
     return out

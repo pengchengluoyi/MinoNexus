@@ -20,7 +20,6 @@ BASE_ENTRY_IDS = frozenset({
     "ui_screenshot",
     "ui_stream",
     "system_shell",
-    "system_pkg_clear",
     "system_pkg_install",
     "app_force_stop",
     "app_launch_native",
@@ -168,7 +167,7 @@ def capability_dispatch_ok(cap_id: str) -> bool:
     """派发前：不可用或当前不可覆盖都不派。"""
     if canonical_cap(cap_id).startswith("guard.") or canonical_cap(cap_id) in V5_EXCLUDED_IDS or canonical_cap(cap_id) in RETIRED_BUSINESS_EVENTS:
         return False
-    if str(cap_id or "").startswith(("human_", "signal_", "recover_")):
+    if str(cap_id or "").startswith(("human_", "signal_", "recover_")) or str(cap_id or "") == "run_flow_block":
         return True
     return capability_enabled(cap_id) and capability_ui_coverable(cap_id)
 
@@ -176,7 +175,7 @@ def capability_dispatch_ok(cap_id: str) -> bool:
 def phase_allows(cap_id: str, phase: str) -> bool:
     """阶段只卡一次：目录 phases 不含本阶段就拒绝。没有 phases 的行不在这里拦。"""
     cap = canonical_cap(cap_id)
-    if not cap or cap.startswith(("human_", "signal_", "recover_")):
+    if not cap or cap.startswith(("human_", "signal_", "recover_")) or cap == "run_flow_block":
         return True
     from mino_nexus.catalog.registry import get_capability
 
@@ -491,7 +490,7 @@ def _ensure_program_rows(db: Any) -> int:
         ("operation.check_box", "设置复选框状态", "指定准确目标和 checked 状态；最多点击一次并复核，不含登录业务。", ["mac", "win", "android", "web"]),
     )
     specs += (
-        ("clear_app_cache", "仅清除应用缓存", "只清理目标应用缓存，保留应用数据；不证明退出登录或账号业务状态复位。", ["android"]),
+        ("clear_app_cache", "重置应用数据（清数据+缓存）", "pm clear 清数据与缓存，等价于退出登录/回到首启初态；执行后登录态、形象、权限授权都必须重新观察。", ["android"]),
         ("reload_page", "刷新当前页面", "程序刷新本次运行的 Web 页面。不进模型菜单。", ["web"]),
         ("plugin.gmail.fetch_otp", "节点 Gmail 取码", "在同一绑定节点读取验证码，不携带邮箱密码。", ["mac", "win", "android", "web"]),
     )
@@ -510,13 +509,10 @@ def _ensure_program_rows(db: Any) -> int:
                 "device_hint_template": {"execution_mode": "agent"}}
             if eid == "clear_app_cache":
                 fields["channel_contract_version"] = 4
-                implementation["requires_caps"] = ["system_pkg_clear"]
-                # Safe on older Scout versions as well: unsupported flags fail,
-                # and this declaration contains no data-clearing fallback.
+                # 2026-10-22：能力就是 pm clear，清数据与缓存；旧的清缓存别名已删除。
                 implementation["low_level"] = {"kind": "shell",
-                    "shell": "pm clear --cache-only --user current {package}",
-                    "summary": "仅清除目标应用缓存，保留应用数据"}
-                implementation["result_contract"]["cleanup_scope"] = "cache_only"
+                    "shell": "pm clear --user current {package}",
+                    "summary": "清除目标应用数据与缓存，应用回到未登录初态"}
             if eid == "reload_page":
                 implementation["requires_caps"] = ["ui_native_input"]
             fields["implementations"] = [implementation]

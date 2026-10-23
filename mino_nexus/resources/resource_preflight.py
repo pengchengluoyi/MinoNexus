@@ -109,8 +109,9 @@ def run_start_resource_blockers(
     if not needs_guest:
         return blockers
     from mino_nexus.resources.session.scene_gate import session_prep_intent
-    # 差异可由前置退出修复，prep 完成时仍须当前观察证明未登录。
-    if plat == "web" or session_prep_intent(scene=scene_row) == "logout":
+    # 差异可由前置修复，prep 完成时仍须当前观察证明未登录。
+    # 2026-10-22：安卓前置会用 clear_app_cache（pm clear）重置到未登录初态，与 web 同理不再拒跑。
+    if plat in ("web", "android") or session_prep_intent(scene=scene_row) == "logout":
         return blockers
     from mino_nexus.resources.device_app_session_store import get_session
 
@@ -122,7 +123,7 @@ def run_start_resource_blockers(
         return blockers
     blockers.append(
         "【拒跑】登记簿机态为 logged_in，用例要求未登录/已登出/游客，且未声明退出登录前置。"
-        "请先通过应用退出并重新观察确认；清缓存不等于退出登录。"
+        "请先用 clear_app_cache（pm clear，清数据+缓存）重置到未登录初态，再重新观察确认。"
     )
     return blockers
 

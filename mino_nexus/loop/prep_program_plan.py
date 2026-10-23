@@ -55,6 +55,18 @@ def milestones_from_prep_program(plan: dict[str, Any]) -> list[dict[str, Any]]:
             row["skip_reason"] = str(step.get("skip_reason") or "channel_absent")
         if step.get("evaluate"):
             row["evaluate"] = str(step.get("evaluate") or "")
+        block_id = str(step.get("block_id") or "").strip()
+        if block_id:
+            from mino_nexus.navigation.atlas.nav_flow_block_catalog import resolve_effective_steps
+            from mino_nexus.loop.milestones import milestones_from_flow_steps
+
+            app_id = str(step.get("app_id") or "").strip()
+            block_steps = resolve_effective_steps(app_id=app_id, block_id=block_id)
+            expanded = milestones_from_flow_steps(block_steps, block_id=block_id)
+            for item in expanded:
+                item = {**item, "source": "prep_block", "source_block": block_id}
+                rows.append(item)
+            continue
         rows.append(row)
     return rows
 

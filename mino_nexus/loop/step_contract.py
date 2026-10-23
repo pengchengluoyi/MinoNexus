@@ -20,7 +20,6 @@ _CAP_FAMILY: dict[str, str] = {
     "close_app": "open",
     "kill_app": "open",
     "clear_app_cache": "clear",
-    "system_pkg_clear": "clear",
     "tap_element": "tap",
     "multi_tap": "tap",
     "long_press_element": "tap",

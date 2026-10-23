@@ -13,8 +13,6 @@ GUARD_CODES: dict[str, str] = {
     "skip_repeat_check_run_env": "skip_repeat_check_run_env",
     "skip_repeat_get_app_version": "skip_repeat_get_app_version",
     "skip_repeat_launch_app": "skip_repeat_launch_app",
-    "skip_recover_bring_when_foreground": "skip_recover_bring_when_foreground",
-    "skip_recover_screen_when_display_guard": "skip_recover_screen_when_display_guard",
     "skip_repeat_fsm_open_loop": "skip_repeat_fsm_open_loop",
     "skip_repeat_fsm_declined": "skip_repeat_fsm_declined",
     "block_fsm_off_step_target": "block_fsm_off_step_target",

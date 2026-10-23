@@ -182,7 +182,7 @@ def _menu_flags(menu: dict[str, Any] | None) -> dict[str, Any]:
     payload = dict(menu or {})
     cap_ids = [str(c) for c in (payload.get("cap_ids") or []) if c]
     tool_kinds = [str(k) for k in (payload.get("tool_kinds") or []) if k]
-    recovery_caps = [c for c in cap_ids if c.startswith("recover_")]
+    recovery_caps = [c for c in cap_ids if c.startswith("recover_") or c == "run_flow_block"]
     return {
         "cap_ids": cap_ids,
         "tool_kinds": tool_kinds,

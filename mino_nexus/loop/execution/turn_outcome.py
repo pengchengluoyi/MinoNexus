@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from mino_nexus.loop.execution.actions import RECOVER_PREFIX
 from mino_nexus.loop.step_pointer import StepCursor
 
 
@@ -32,8 +31,6 @@ def resolve_turn_outcome(
     if hasattr(result, "recovered"):
         mode = str(getattr(result, "mode", "") or "")
         rid = str(getattr(result, "rule_id", "") or "").strip()
-        if not rid and cap_id.startswith(RECOVER_PREFIX):
-            rid = cap_id[len(RECOVER_PREFIX):]
         advice = str(getattr(result, "advice", "") or "").strip()
         if mode == "advise":
             status_val = "declined" if result.error else "pass"

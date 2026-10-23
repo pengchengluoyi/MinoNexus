@@ -229,8 +229,28 @@ def _prior_incomplete_required(state: dict[str, Any], before_id: str) -> list[st
 
 
 def first_pending_hook_milestone(state: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """仅在前序必填里程碑均已 pass/skipped 后，才返回下一个 hook。"""
-    for row in state.get("milestones") or []:
+    """返回当前该执行的那个 hook；没有焦点时才按列表顺序取第一个待执行。"""
+    rows = state.get("milestones") or []
+    # 优先当前焦点：中断栈插入、回看推进、程序跳步都会让「列表第一个」不等于
+    # 「当前正在做的那一步」。只按顺序取会在旧里程碑上重复派发——api-1-227 里
+    # 焦点已经在 privacy_confirm，调度却回头又发了一次 prep_launch_app。
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "").strip().lower() != "in_progress":
+            continue
+        if _milestone_passed(row):
+            continue
+        kind = str(row.get("kind") or "").strip().lower()
+        if kind != "hook":
+            if row.get("optional"):
+                continue
+            return None
+        rid = str(row.get("id") or "")
+        if _prior_incomplete_required(state, rid):
+            return None
+        return row
+    for row in rows:
         if not isinstance(row, dict):
             continue
         if _milestone_passed(row):
@@ -838,10 +858,18 @@ def note_tool_pass_milestone(
     state["milestones"] = ms
     state["status"] = "in_progress"
     write_state(cursor, state)
-    if ctx is not None and cap in ("clear_app_cache", "system_pkg_clear"):
+    if ctx is not None and cap == "clear_app_cache":
         from mino_nexus.casework.resource_transition import emit_clear_app_cache
 
         emit_clear_app_cache(ctx)
+        # pm clear 是确定性重置事实，凡是程序派发的清理都要落标记，
+        # 否则 confirm_login_state 会以为「还没重置过」，在非登录页上要求继续取证
+        # （cr-d9c1b4ce4799 api-1-227 实测：clear 已 pass，prep_clear_done 仍为 False）。
+        ctx.prep_clear_done = True
+    if ctx is not None and cap in ("launch_app", "open_app"):
+        # 程序派发的启动（prep 里程碑）也要算「已确认启动」，
+        # 否则 prep_launch_app 仍 pending，逻辑块会再启动一次（api-1-218 实测两次）。
+        ctx.app_launch_confirmed = True
     if ctx is not None and cap == "close_app":
         plat = str(getattr(ctx, "platform", "") or "").strip().lower()
         if plat in ("web", "browser", "playwright"):

@@ -1,6 +1,7 @@
 """当前逻辑块执行器：按里程碑推进并消费实际结果证据。"""
 from __future__ import annotations
 
+import time
 from typing import Any, Optional
 
 from mino_nexus.loop.milestones import (
@@ -51,6 +52,100 @@ def skip_login_entry_if_form_visible(cursor: Any, ctx: Any, *, writer: Any = Non
         except Exception:  # noqa: BLE001
             pass
     return True
+
+
+_LAUNCH_VERIFY_ATTEMPTS = 3
+_LAUNCH_VERIFY_POLLS = 5
+_LAUNCH_VERIFY_INTERVAL = 1.0
+
+
+def _verify_launch_foreground(
+    proxy: Any, ctx: Any, cursor: Any, *, run_id: str, turn_seq: int, mid: str, writer: Any = None
+) -> Optional[dict[str, Any]]:
+    """启动后核验前台是否真的是被测应用。
+
+    安卓 pm clear 之后首启可能落到系统页（权限/纯净模式/桌面），此时截图与结构
+    都属于异应用。必须在 prep 阶段就把「没起来」说清楚，而不是留到观察阶段被
+    扣图后报一个 foreground_image_withheld（那个 reason 把真实原因藏掉了）。
+    """
+    if str(getattr(ctx, "platform", "") or "").strip().lower() != "android":
+        return None
+    target = str(getattr(ctx, "target_package", "") or "").strip()
+    if not target:
+        return None
+    from mino_nexus.core.schemas import PlanEvent
+
+    last = ""
+    for attempt in range(1, _LAUNCH_VERIFY_ATTEMPTS + 1):
+        # 先等应用真的画出来：冷启 + pm clear 后首屏常在 2~4 秒，立刻探测只会拿到空串，
+        # 于是把「还没起来」误判成「起不来」。每轮最多等 _LAUNCH_VERIFY_POLLS 秒。
+        settled = False
+        for poll in range(1, _LAUNCH_VERIFY_POLLS + 1):
+            event = PlanEvent(
+                seq=int(turn_seq),
+                capability_id="get_foreground_app",
+                event_kind="get_foreground_app",
+                params={"package": target},
+                ai_reasoning=f"启动后前台核验 attempt={attempt} poll={poll}",
+                label="核验启动前台",
+            )
+            try:
+                probe = proxy.dispatch(event, run_id=run_id, step_idx=int(turn_seq), ctx=ctx)
+            except Exception as exc:  # noqa: BLE001
+                last = f"probe_failed:{exc}"
+                probe = None
+            data = dict(getattr(probe, "data", None) or {}) if probe is not None else {}
+            # Scout 的 get_foreground_app 把包名放在 raw_response 里（data 一般空），
+            # 只读 data 会永远拿到空串，于是把「起的明明是目标应用」误判成读不到前台。
+            raw = dict(getattr(probe, "raw_response", None) or {}) if probe is not None else {}
+            seen = str(data.get("package") or data.get("foreground_package")
+                       or raw.get("package") or raw.get("foreground_package") or "").strip()
+            if seen:
+                last = seen
+            if seen == target:
+                ctx.app_launch_confirmed = True
+                if writer:
+                    writer.append("prep/launch_verified", {"milestone_id": mid, "attempt": attempt,
+                                                           "poll": poll, "package": seen, "status": "pass"})
+                return None
+            if seen:
+                settled = True
+                break
+            if poll < _LAUNCH_VERIFY_POLLS:
+                time.sleep(_LAUNCH_VERIFY_INTERVAL)
+        if attempt >= _LAUNCH_VERIFY_ATTEMPTS:
+            break
+        if not settled and last.startswith("probe_failed"):
+            break
+        retry = PlanEvent(
+            seq=int(turn_seq),
+            capability_id="launch_app",
+            event_kind="launch_app",
+            params={"package": target},
+            ai_reasoning=f"前台不是目标应用（{last or '未知'}），第 {attempt} 次重启",
+            label="重启被测应用",
+        )
+        try:
+            proxy.dispatch(retry, run_id=run_id, step_idx=int(turn_seq), ctx=ctx)
+        except Exception:  # noqa: BLE001
+            pass
+    ctx.app_launch_confirmed = False
+    reason = "foreground_unreadable" if (not last or last.startswith("probe_failed")) else "foreground_mismatch"
+    if writer:
+        writer.append("prep/launch_verified", {"milestone_id": mid, "attempts": _LAUNCH_VERIFY_ATTEMPTS,
+                                               "package": last, "target": target,
+                                               "status": "fail", "reason_code": reason})
+    return {
+        "ok": False,
+        "case_fail": True,
+        "status": "env_blocked",
+        "error_kind": reason,
+        "capability_id": "launch_app",
+        "milestone_id": mid,
+        "summary": (f"启动 {_LAUNCH_VERIFY_ATTEMPTS} 次后前台仍是 {last or '未知'}，不是 {target}；应用没有真正起来"
+                    if reason == "foreground_mismatch" else
+                    f"启动后连续 {_LAUNCH_VERIFY_ATTEMPTS} 轮都读不到前台包名（{last or '空'}），无法确认 {target} 是否起来"),
+    }
 
 
 def try_dispatch_block_hook(
@@ -112,6 +207,19 @@ def try_dispatch_block_hook(
         return None
     if str(pending.get("kind") or "").strip().lower() != "hook":
         return None
+    # 恢复动作刚刚把应用拉起来（recovery_action launch_app），block 里同义的启动步骤
+    # 不该再执行一次：标 pass 抬起下一条，而不是重复 launch（cr-a0a9e3aff26e seq71/seq74）。
+    if cap in ("launch_app", "open_app") and bool(getattr(ctx, "app_launch_confirmed", False)):
+        pending["status"] = "pass"
+        pending["evidence"] = "app_already_launched"
+        write_state(cursor, state)
+        if writer:
+            writer.append("milestone/already_satisfied",
+                          {"milestone_id": mid, "capability_id": cap, "reason": "app_launch_confirmed"})
+        return {"ok": True, "case_fail": False, "status": "pass", "error_kind": "",
+                "capability_id": cap, "milestone_id": mid,
+                "summary": "应用已由恢复动作启动，跳过重复启动"}
+
     from mino_nexus.catalog.skill_channel import capability_dispatch_ok, is_program_caller
     from mino_nexus.loop.router_proxy import is_local_cap
 
@@ -326,6 +434,12 @@ def try_dispatch_block_hook(
                 int(getattr(cursor, "get_otp_hook_fail_streak", 0) or 0) + 1
             )
     hook_summary = str(res.summary or res.error or cap)
+    if ok and cap in ("launch_app", "open_app") and phase == "prep":
+        mismatch = _verify_launch_foreground(
+            proxy, ctx, cursor, run_id=run_id, turn_seq=turn_seq, mid=mid, writer=writer
+        )
+        if mismatch:
+            return mismatch
     from mino_nexus.loop.observe.program_tool_log import log_program_tool
 
     log_program_tool(

@@ -33,7 +33,6 @@ _CAP_INTENT: dict[str, str] = {
     "request_sms_code": "sms_send",
     "lease_account": "account_lease",
     "clear_app_cache": "clear_cache",
-    "system_pkg_clear": "clear_cache",
     "launch_app": "open_app",
     "open_app": "open_app",
     "swipe_direction": "swipe_gesture",
@@ -48,7 +47,6 @@ _STRUCTURAL_CAPS = frozenset(
         "request_sms_code",
         "dismiss_ime",
         "clear_app_cache",
-        "system_pkg_clear",
     }
 )
 

@@ -15,8 +15,6 @@ SATISFY_GUARD_IDS = (
     "skip_repeat_tap",
     "skip_repeat_fsm_open_loop",
     "skip_repeat_fsm_declined",
-    "skip_recover_bring_when_foreground",
-    "skip_recover_screen_when_display_guard",
     "skip_repeat_satisfied_step_action",
 )
 

@@ -34,7 +34,7 @@ from mino_nexus.loop.observe.agent_stream import emit_agent_event, make_thumb
 from mino_nexus.records.eventlog.writer import SessionWriter, bind_writer, open_session
 from mino_nexus.loop.observe.execution_diagnostics import execution_result_metadata
 from mino_nexus.loop.recovery import recover_if_needed
-from mino_nexus.loop.execution.actions import RECOVER_PREFIX, _run_action
+from mino_nexus.loop.execution.actions import _run_action
 from mino_nexus.loop.execution.auto_finish import note_progress_and_auto_finish
 from mino_nexus.loop.execution.preflight import run_preflight
 from mino_nexus.loop.execution.setup import prepare_run
@@ -1260,7 +1260,7 @@ def _run_loop(
                     "launch_app",
                     "open_app",
                     "open_url",
-                    "recover_bring_target_app_foreground",
+                    "run_flow_block",
                 )
             ]
         from mino_nexus.loop.step_contract import instruction_allows_login_flow
@@ -2231,7 +2231,7 @@ def _run_loop(
             binding_focus = in_progress_milestone_id(cursor)
             if ((binding_focus == "account_fill" and cap_id == "input_text")
                     or (binding_focus == "submit_login" and status_val != "pass")
-                    or cap_id in {"clear_app_cache", "system_pkg_clear"}):
+                    or cap_id == "clear_app_cache"):
                 clear_submission(ctx)
         if status_val == "pass" and cap_id == "clear_app_cache":
             ctx.prep_clear_done = True
@@ -2275,7 +2275,7 @@ def _run_loop(
             status_val == "pass"
             and cap_id in PROGRESS_CAPS
             and not recovery_action
-            and not str(cap_id).startswith(RECOVER_PREFIX)
+            and not str(cap_id).startswith("recover_") and cap_id != "run_flow_block"
         ):
             if note_progress_and_auto_finish(
                 ctx=ctx,

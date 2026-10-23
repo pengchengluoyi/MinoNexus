@@ -20,7 +20,7 @@ LOCAL_EXECUTOR_IDS = frozenset({
     "lease_account", "get_otp", "get_phone", "release_account",
     "operation.check_box", "dismiss_ime", "confirm_login_state",
     "assert_visual", "persona_subtask", "wait_ms", "wait_screen_ready",
-    "signal_nav_calib_step",
+    "signal_nav_calib_step", "run_flow_block",
 })
 LOCAL_ORCH_IDS = LOCAL_EXECUTOR_IDS
 

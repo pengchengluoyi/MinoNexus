@@ -507,7 +507,55 @@ def _dispatch(
 
     scout_run_id = str(getattr(ctx, "scout_run_id", "") or getattr(ctx, "run_id", "") or "")
     step_idx = recovery_operation_step_idx()
-    return router.dispatch(event, run_id=scout_run_id, step_idx=step_idx, ctx=ctx, diagnostic_purpose=diagnostic_purpose)
+    res = router.dispatch(event, run_id=scout_run_id, step_idx=step_idx, ctx=ctx, diagnostic_purpose=diagnostic_purpose)
+    # 恢复动作里也会有 launch_app（例如 clear 后回桌面）。成功即算「应用已启动」，
+    # 否则紧接着模型自己再派一次 launch_app 时，skip_repeat_launch_app 看不到事实，
+    # 会把同一个动作做两遍（cr-7cdcfaa93757 seq74 + seq77）。
+    try:
+        cap = str(getattr(event, "capability_id", "") or "")
+        st = str(getattr(getattr(res, "status", None), "value", getattr(res, "status", "")) or "")
+        if cap in ("launch_app", "open_app", "open_url") and st == "pass":
+            ctx.app_launch_confirmed = True
+    except Exception:  # noqa: BLE001
+        pass
+    return res
+
+
+def _rule_actions(rule, ctx) -> list[Any]:
+    """恢复规则的动作步骤来自逻辑块（nav_flow_block_catalog）。
+
+    L0 规则只保留「什么时候触发」和「怎么验证」；「具体做什么」统一由逻辑块声明，
+    避免规则里再写一份动作、和块里的步骤各说各话。块缺失时退回规则自带动作并留警告，
+    不让调度因为少一条块而彻底走不通。
+    """
+    from mino_nexus.catalog.flow_block_seed import RECOVERY_RULE_BLOCKS
+
+    block_id = RECOVERY_RULE_BLOCKS.get(str(getattr(rule, "id", "") or ""))
+    if not block_id:
+        return list(rule.actions)
+    app_id = str(getattr(ctx, "app_id", "") or "")
+    try:
+        from mino_nexus.navigation.atlas.nav_flow_block_catalog import resolve_effective_steps
+
+        steps = resolve_effective_steps(app_id=app_id, block_id=block_id) or []
+    except Exception as exc:  # noqa: BLE001
+        SLog.w(TAG, f"恢复块 {block_id} 解析失败：{exc!r}；退回规则动作")
+        return list(rule.actions)
+    from mino_nexus.catalog.models import RecoveryAction
+
+    actions: list[Any] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        cap = str(step.get("hook_cap") or step.get("cap") or "").strip()
+        if not cap:
+            continue
+        params = dict(step.get("params") or {})
+        actions.append(RecoveryAction(capability=cap, params=params))
+    if not actions:
+        SLog.w(TAG, f"恢复块 {block_id} 没有可执行步骤；退回规则动作")
+        return list(rule.actions)
+    return actions
 
 
 def apply_rule(
@@ -585,7 +633,7 @@ def apply_rule(
             out=out,
         ):
             return out
-        for idx, action in enumerate(rule.actions, 1):
+        for idx, action in enumerate(_rule_actions(rule, ctx), 1):
             banned = _forbidden(rule, action)
             if banned:
                 out.actions.append({"capability": action.capability, "skipped": f"forbid:{banned}"})

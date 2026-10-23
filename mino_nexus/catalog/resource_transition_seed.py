@@ -8,14 +8,7 @@ _BUILTIN: list[dict] = [
         "rule_id": "clear_app_cache:any",
         "trigger_id": "clear_app_cache",
         "platform": "any",
-        "label": "清缓存 → 机态待重新观察（不证明登出）",
-        "effects_json": [],
-    },
-    {
-        "rule_id": "system_pkg_clear:any",
-        "trigger_id": "system_pkg_clear",
-        "platform": "any",
-        "label": "旧清缓存别名 → 机态待重新观察（不证明登出）",
+        "label": "清数据与缓存 → 应用回到未登录初态（登录态须重新观察）",
         "effects_json": [],
     },
     {

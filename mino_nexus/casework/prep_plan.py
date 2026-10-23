@@ -106,6 +106,10 @@ def build_prep_program_plan(
         device_want = scene["required_session"]
         device_label = "确认编译前置要求的应用登录态"
     need_clear = claim_requires_clear_cache(claim, scene, precondition)
+    # 2026-10-22：安卓非 root 没有跨应用的登录态 API，`pm clear` 是唯一确定性的未登录重置。
+    # 前置要求未登录时，清数据本身就是准备动作，不再等用例显式写「清缓存」。
+    if device_want == "guest" and str(getattr(ctx, "platform", "") or "").strip().lower() == "android":
+        need_clear = True
     env_label = _env_clear_clause(precondition) if need_clear else ""
     launch_cap = _launch_hook_cap(ctx, claim)
 
@@ -134,7 +138,7 @@ def build_prep_program_plan(
             clear_step = {
                 "id": "prep_clear_cache",
                 "prep_flow_id": fid,
-                "title": env_label or label or "清除应用缓存",
+                "title": env_label or label or "清除应用数据与缓存",
                 "kind": "hook",
                 "hook_cap": "clear_app_cache",
                 "optional": False,
@@ -148,7 +152,7 @@ def build_prep_program_plan(
         clear_step = {
             "id": "prep_clear_cache",
             "prep_flow_id": "env_cleanup",
-            "title": env_label or "清除应用缓存",
+            "title": env_label or "清除应用数据与缓存",
             "kind": "hook",
             "hook_cap": "clear_app_cache",
             "optional": False,
@@ -168,6 +172,35 @@ def build_prep_program_plan(
             "optional": False,
         }
     )
+    # 首启协议弹窗：block id 由用例编译期给出（fb.global.privacy.accept / .decline），
+    # 运行期不做意图判断；未声明就不插，避免在正常首页上乱点“同意”。
+    _scene = getattr(ctx, "case_scene", None) or {}
+    consent_block = str((_scene or {}).get("consent_block_id") or "").strip()
+    if consent_block and str(getattr(ctx, "platform", "") or "").strip().lower() == "android":
+        steps_out.append(
+            {
+                "id": "prep_consent",
+                "prep_flow_id": "consent",
+                "title": "处理首启用户协议弹窗",
+                "kind": "block",
+                "block_id": consent_block,
+                "app_id": str(getattr(ctx, "app_id", "") or ""),
+                "optional": False,
+            }
+        )
+    if device_want == "guest" and str(getattr(ctx, "platform", "") or "").strip().lower() != "android":
+        # web / mac / win 没有 pm clear 这条确定性重置，走应用自己的退出登录链（fb.global.logout）。
+        steps_out.append(
+            {
+                "id": "prep_logout",
+                "prep_flow_id": "logout",
+                "title": "退出登录到未登录态",
+                "kind": "block",
+                "block_id": "fb.global.logout",
+                "app_id": str(getattr(ctx, "app_id", "") or ""),
+                "optional": False,
+            }
+        )
     if device_want:
         steps_out.append(
             {

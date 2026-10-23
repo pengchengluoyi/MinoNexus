@@ -172,9 +172,9 @@ def fire_transition(
     tid = str(trigger_id or "").strip()
     if not tid:
         return False
-    if tid in {"clear_app_cache", "system_pkg_clear"}:
-        # Old databases may still contain a built-in cache -> logout rule.
-        # Such a rule cannot turn cache cleanup into authentication evidence.
+    if tid == "clear_app_cache":
+        # 2026-10-22：clear_app_cache 就是 pm clear（清数据+缓存），等价未登录重置；
+        # 旧库里的清数据别名不再产生新的转移规则。
         from mino_nexus.casework.resource_transition import emit_clear_app_cache
         emit_clear_app_cache(ctx, package_id=package_id)
         return True
@@ -210,7 +210,6 @@ def cap_id_to_trigger(cap_id: str) -> str | None:
         return None
     direct = {
         "clear_app_cache": "clear_app_cache",
-        "system_pkg_clear": "system_pkg_clear",
     }
     if cid in direct:
         return direct[cid]

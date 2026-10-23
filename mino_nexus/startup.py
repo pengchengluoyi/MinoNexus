@@ -27,6 +27,12 @@ def bootstrap() -> None:
     seed_recovery_rules()
     seed_resource_transition_rules()
     seed_global_flow_blocks()
+    from mino_nexus.catalog.flow_block_seed import verify_required_blocks
+    from mino_nexus.core.log import SLog
+
+    missing = verify_required_blocks()
+    if missing:
+        SLog.e("startup", f"缺少全局逻辑块：{missing}；对应阶段的调度会找不到钩子")
     register_current_local_capabilities()
     ensure_read_web_auth_capability()
     register_program_capabilities()

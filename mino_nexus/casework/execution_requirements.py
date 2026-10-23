@@ -13,7 +13,8 @@ PHASES = ('prep', 'do', 'check', 'cleanup')
 # Navigation policy names and compile-time markers, not catalog_entries ids.
 NON_CATALOG_EVENT_IDS = frozenset({'nav_target'})
 POLICY_NAV_CAPS = ('tap_element', 'press_key')
-# Existing primitives' abstract manifest contracts; not a platform alias table.
+# 旧 Scout 兼容：老版本上报的是抽象通道名（ui_native_input/system_shell…）。
+# 新 Scout 直接上报具体事件 id，绑定走 cid in provides 这条主路径，不依赖本表。
 ABSTRACT = {
     'tap_element': 'ui_native_input', 'multi_tap': 'ui_native_input',
     'long_press_element': 'ui_native_input', 'swipe_direction': 'ui_native_input',
@@ -22,7 +23,8 @@ ABSTRACT = {
     'probe_device_state': 'read_system_data', 'read_device_data': 'read_system_data',
     'get_app_version': 'read_system_data', 'get_foreground_app': 'read_system_data',
     'launch_app': 'app_launch_native', 'open_app': 'app_launch_native',
-    'clear_app_cache': 'system_pkg_clear', 'kill_app': 'app_force_stop',
+    # pm clear 通过 shell 执行；Scout 的 adb 执行器提供 system_shell。
+    'clear_app_cache': 'system_shell', 'kill_app': 'app_force_stop',
     'close_app': 'app_force_stop', 'press_key': 'key_event', 'set_clipboard': 'clipboard_set',
     'wake_screen': 'key_event', 'dismiss_keyguard': 'system_shell',
     'open_url': 'ui_native_input', 'read_web_auth': 'ui_native_input',
@@ -219,7 +221,7 @@ def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferre
         children = [canonical_cap(action.capability) for action in rule.actions]
         recovery_refs[rule.id] = {'revision': digest(rule.model_dump()), 'children': children}
         for phase in ('prep', 'do'):
-            add('recover_' + rule.id, phase, optional=True, declared_caller='case')
+            add('run_flow_block', phase, optional=True, declared_caller='case')
             for cid in children:
                 add(cid, phase, optional=True)
     # Known local children are flattened here, independent of target connectivity.

@@ -53,7 +53,7 @@ def check_phase_allows_recovery_cap(cap_id: str) -> bool:
     cid = str(cap_id or "").strip()
     if not cid:
         return False
-    if cid.startswith("recover_"):
+    if cid.startswith("recover_") or cid == "run_flow_block":
         return True
     if cid in ("wait_ms", "noop"):
         return True

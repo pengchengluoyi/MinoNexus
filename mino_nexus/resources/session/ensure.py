@@ -121,7 +121,7 @@ def session_mismatch_reason(
     if req == "guest" and current == "logged_in":
         return (
             "当前仍是已登录会话，本条要求未登录。"
-            "请走路线图 logout 边或 recover_restart_target_app 后观察，禁止 signal_done。"
+            "请走路线图 logout 边或 run_flow_block(block_id=fb.global.app.restart) 后观察，禁止 signal_done。"
         )
     if req == "logged_in" and current in ("logged_out", "guest"):
         return (

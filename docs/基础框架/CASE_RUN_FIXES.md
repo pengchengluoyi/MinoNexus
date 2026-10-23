@@ -234,3 +234,176 @@ MinoScout/mino_scout/executors/adb_executor.py  SIM/eSIM read_device_data（0.1.
 | `services/nav_localize.py` | 底栏纯文案 0.2；wireframe Jaccard；噪声 landmark 跳过 |
 | `loop/hierarchy_slots.py` | `hierarchy_is_weak` 看可见文案节点 |
 | `loop/local_executors.py` | 无底栏 BACK；有底栏直点 Tab |
+
+---
+
+## 8. 重启被自己拒绝 / 前置三连动作 / 节点永久 busy（2026-10-23）
+
+三条都出自 `cr-8a22b16487ed`、`cr-dc5a828b343e`、`cr-b7abfa648a63`、`cr-7cdcfaa93757` 的同一个复跑序列。
+
+### 8.1 Scout 重启「目标配置运行着当前执行节点」
+
+`IDEError('目标配置运行着当前执行节点…', reason_code='ide_controller_restart')`。
+
+- **停配置是按 `sessionId` 定位的**（`stop_run_configuration` 传 `sessionId` + `configurationName`），与 pid 无关；
+- 那个 `pid` 只是 `inspect_running()` 的观测值，Scout 作为独立进程（实测 `ppid=1`）与目标配置同目录时会被误认成同一实例，把正常重启也拒掉。
+
+| 仓库 | 文件 | 改动 |
+|------|------|------|
+| MinoScout | `mino_scout/ide_run_control.py` | 删除 `ide_controller_restart` 自我拒绝 |
+| MinoScout | `mino_scout/ide_control.py` | 同上（debugger_mcp 分支） |
+
+验证：`development_prepare action=restart` 三次连续成功，`state=ready`。
+
+### 8.2 启动后核验读不到前台包名
+
+`_verify_launch_foreground` 只读 `EventResult.data`，而 Scout 把包名放在 `raw_response` 里 →
+永远拿到空串 → 把「起的明明是目标应用」判成「起不来」，连发 3 次 `launch_app` 后报
+`env_blocked`。另外冷启首屏要 2~4 秒，立刻探测必空。
+
+| 仓库 | 文件 | 改动 |
+|------|------|------|
+| MinoNexus | `loop/flow_block_executor.py` | 同时读 `data` / `raw_response`；每轮最多 5 次 ×1s 等首屏；`foreground_unreadable` 与 `foreground_mismatch` 分开报 |
+
+### 8.3 已结束的 run 把节点钉在 busy
+
+`cancel_run` 在「仍有底层请求在途」时直接 `return 0`，`_active_runs` 从不摘除；
+UI 截图轮询又带同一个 `run_id`，把 `_run_seen` 一直刷新 → `_IDEMPOTENT_TTL_SEC(600s)` 也救不回来。
+结果：节点 `busy=True`，后续所有 `restart`/`execute` 都被「等待当前节点的测试和设备操作结束」挡住（实测 20 分钟以上）。
+
+| 仓库 | 文件 | 改动 |
+|------|------|------|
+| MinoScout | `core.py` | `cancel_run` 保留资源告警但同时摘除在途标记；新增 `_IDLE_RUN_SEC=90`：无在途请求且静默 90s 的 run 不再算活动 |
+
+### 8.4 复跑结论（`cr-7cdcfaa93757`，ZN32233HKS）
+
+| 检查 | 结果 |
+|------|------|
+| `close_app` | **0**（此前 1 次，无前置依据） |
+| 首个设备写动作 | `clear_app_cache`（seq50），**在任何 launch 之前** |
+| `clear_app_cache` | 1 次 |
+| `launch_app` | 1 次（见 §8.5；此前是 `recovery_action` + `plan_action` 各一次） |
+| 前置 | 通过，不再 `foreground_image_withheld` / `env_blocked` |
+| 终止点 | `tool_blocked`：`当前不在登录页，但用例要求未登录且尚未取证` —— 领域门，非基础设施缺陷 |
+
+### 8.5 恢复动作拉起后 block 又启动一次
+
+`cr-a0a9e3aff26e`：seq71 `recovery_action launch_app` 成功，seq74 `plan_action launch_app` 又来一次。
+`prep_launch_app` 是 block 的 hook 步骤，程序按里程碑照发，不再看「应用其实已经起来了」。
+而且 `recovery.py` 的 `_dispatch` 成功启动后没落 `app_launch_confirmed`，守卫也看不到事实。
+
+| 文件 | 改动 |
+|------|------|
+| `loop/recovery.py` | `_dispatch` 里 `launch_app/open_app/open_url` 成功即 `ctx.app_launch_confirmed = True` |
+| `loop/flow_block_executor.py` | block hook 是启动类且应用已启动时，标 `pass` + `app_already_launched`，写 `milestone/already_satisfied`，不再派发 |
+
+复跑 `cr-2e906a0c1368`：`clear_app_cache` 1 次（seq47）→ `launch_app` **1 次**（seq71，恢复动作），block 的启动步骤记 satisfied。
+
+---
+
+## 9. 协议弹窗交给逻辑块（2026-10-23）
+
+以前 `screen_obstacle.kind == "consent"` 走一条通用 `interrupt_accept_consent` 点击，和系统权限弹窗的处理不对齐；
+`fb.global.privacy.accept/.decline` 两个块虽然已经 seed，但没有任何派发入口。
+
+| 环节 | 改动 |
+|------|------|
+| 编译期 | `casework/case_scene.py::_consent_block_id`：用例原文同时出现「协议/隐私/条款」主题词与「同意/接受」或「拒绝/不同意」时，把 `consent_block_id` 写进 `case_scene`；判不出留空，不在运行期猜意图 |
+| 执行期 | `loop/interrupt_recovery.py::builtin_obstacle_steps("consent", app_id, consent_block)`：优先按用例给的块 id 展开，缺省 `fb.global.privacy.accept`，解析不到才退回通用点击 |
+
+验证（dev 库）：
+
+```
+consent   -> privacy_choice(tap_element) → privacy_confirm(tap_element) → privacy_verified(confirm_login_state)
+permission-> system_dialog_allow → system_dialog_confirm → system_dialog_verified
+```
+
+注意：块里的 `match` 词表目前只是数据，执行期点击目标仍由 hierarchy 现场解析（与系统弹窗同一套机制）；
+真正带隐私弹窗的用例还没跑过，属于待验证项。
+
+---
+
+## 10. 未登录取证过度严格 / 恢复动作进块（2026-10-23）
+
+### 10.1 `confirm_login_state` 只回答「当前是不是登录页」
+
+`cr-d9c1b4ce4799` 的两条用例都停在同一句：`当前不在登录页，但用例要求未登录且尚未取证`。
+查下来是两层问题叠在一起：
+
+1. `prep_clear_done` 只在 `agent_loop` 里写，程序派发的 clear 走 `milestones.note_tool_pass`，漏了标记；
+2. 标记为假时，`local_executors.confirm_login_state` 对 guest/logged_out 用例判 FAIL，
+   要求「先按配置导航取证」——但 clear 已经把应用数据清了，未登录本来就是既定事实。
+
+| 文件 | 改动 |
+|------|------|
+| `loop/milestones.py` | 程序派发的 `clear_app_cache` pass 也写 `ctx.prep_clear_done = True` |
+| `loop/local_executors.py` | 去掉 guest/logged_out 的 FAIL 分支：只报告「在登录页 / 不在登录页」，不承担账号举证 |
+
+复跑 `cr-efedd6d878ba`（api-1-227）：`confirm_login_state` 于 seq126 **pass**，
+摘要为「应用数据已重置（pm clear），未登录由重置事实保证」，随后进入 do 阶段；
+新的阻断是 `do_s1_1_hook` 在 dev 目录里没有对应能力，与本条无关。
+
+### 10.2 L0 恢复规则的动作改由逻辑块提供
+
+规则里原来自己写一份 actions，块里又写一份 steps，两边各说各话。现在：
+
+| 文件 | 改动 |
+|------|------|
+| `catalog/flow_block_seed.py` | 新增 `fb.global.device.wake` / `fb.global.app.foreground` / `fb.global.app.restart`，并给出 `RECOVERY_RULE_BLOCKS` 映射 |
+| `loop/recovery.py` | `_rule_actions()` 按映射从块取步骤，块缺失才退回规则自带动作并告警 |
+| `startup.py` + `flow_block_seed.verify_required_blocks()` | 启动自检 9 个全局块，缺任何一个直接报错，不再静默降级 |
+
+映射：`screen_asleep_or_locked → device.wake`、`bring_target_app_foreground → app.foreground`、
+`restart_target_app → app.restart`（`screen_secure_or_no_capture` 是诊断规则，无动作，不进映射）。
+
+---
+
+## 11. 恢复能力收口成 run_flow_block / 调度改为焦点优先（2026-10-23）
+
+### 11.1 `recover_*` 虚拟能力删除
+
+以前模型侧有一条 `recover_<rule_id>` 的虚拟能力，`_run_action` 按前缀截出规则再 `apply_rule`，
+动作在规则 payload 里又写一遍。现在统一成：
+
+| 文件 | 改动 |
+|------|------|
+| `loop/block_dispatch.py`（新） | `run_block(block_id)`：按块步骤顺序派发，遇失败即停，返回聚合结果 |
+| `loop/local_executors.py` | 新增 `run_flow_block` 本地执行；只允许恢复类块（`RECOVERY_RULE_BLOCKS` 的值），其余拒绝并回列可执行块 |
+| `catalog/recovery_seed.py` | 注册 `run_flow_block`（kind=recovery，caller=case，prep/do，四平台）；提示语改成块 id |
+| `runtime/menu.py` | 恢复菜单不再按规则发虚拟能力，只发一条 `run_flow_block` |
+| `loop/execution/actions.py` | 删掉 `recover_` 前缀分支 |
+| `casework/execution_requirements.py` | 契约里 `recover_<rule>` 换成 `run_flow_block` |
+| `loop/registry.py` 等 | 删掉两个 `recover_*` 守卫及其注册；`run_flow_block` 按恢复类处理（不算进展、不清步骤指针） |
+
+自动恢复链路不变：`run_recovery → apply_rule → _rule_actions(块)` 仍然自己执行，不依赖模型。
+
+验证（stub router，不碰设备）：
+
+```
+fb.global.app.foreground -> launch_app(package=com.mathmagic.magicam)
+fb.global.app.restart    -> close_app → launch_app
+fb.global.device.wake    -> wake_screen → dismiss_keyguard
+run_flow_block(fb.global.login) -> fail（不在可执行白名单）
+run_flow_block(无 block_id)     -> fail
+```
+
+### 11.2 调度从「列表第一个」改为「当前焦点」
+
+`first_pending_hook_milestone` 原来只按里程碑列表顺序取第一个未完成的 hook。
+中断栈插入、回看推进、程序跳步之后，列表第一个不代表正在做的那一步：
+`cr-efedd6d878ba` 的焦点已经在 `privacy_confirm`，调度却回头又派了一次 `prep_launch_app`。
+
+现在先找 `status=in_progress` 的里程碑：是 hook 就派它，不是 hook（且必填）就交回模型，
+只有没有焦点时才退回按顺序取第一个。可选行不因 in_progress 卡住后面的 hook。
+
+### 11.3 删 `RECOVER_PREFIX` 引发的 ImportError
+
+`recover_*` 收口时把 `execution/actions.py` 里的 `RECOVER_PREFIX` 一起删了，
+但 `agent_loop.py` / `auto_finish.py` / `turn_outcome.py` 还在 `from ... import RECOVER_PREFIX`。
+静态门看不出来（它只检查名字有没有定义，不检查 import 的东西还在不在），
+要等某个用例真的 ImportError 才暴露：`cr-997250726855`。
+
+| 改动 | 说明 |
+|------|------|
+| 三个调用方 | 去掉对 `RECOVER_PREFIX` 的依赖，改成 `cap_id == "run_flow_block"` 的显式判断 |
+| `tools/check_imports.py`（新） | 逐个模块真实 import，抓「定义删了、调用方还在 import」这类错误；`[OK] 所有模块可导入` 才算过 |

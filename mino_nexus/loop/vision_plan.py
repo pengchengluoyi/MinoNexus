@@ -520,6 +520,26 @@ def handle_execution_obstacle(cursor: Any, ctx: Any, decision: Any, *, writer: A
     return plan
 
 
+def _consent_controls_proof(nodes: Any) -> dict[str, Any]:
+    """当前结构里的协议弹窗证据：协议类文案 + 同意/不同意两个可点控件。"""
+    labels: set[str] = set()
+    choices: set[str] = set()
+    for node in nodes or []:
+        if not isinstance(node, dict) or node.get("visible", True) is False or node.get("cross_origin"):
+            continue
+        text = str(node.get("text") or node.get("content_desc") or "").strip()
+        if text:
+            labels.add(text)
+            if node.get("clickable") and node.get("enabled", True):
+                choices.add(text)
+    terms = [t for t in labels if any(k in t for k in ("隐私", "用户协议", "服务协议", "Privacy", "Terms"))]
+    if not terms or not ({"同意", "不同意"} <= choices or {"同意", "拒绝"} <= choices
+                         or {"Agree", "Disagree"} <= choices or {"Accept", "Decline"} <= choices):
+        return {}
+    return {"source": "hierarchy", "kind": "consent", "term_labels": terms[:4],
+            "choice_labels": sorted(choices & {"同意", "不同意", "拒绝", "Agree", "Disagree", "Accept", "Decline"})}
+
+
 def handle_screen_obstacle(cursor: Any, ctx: Any, plan: VisionPlanDecision, *, writer: Any = None, shot: Any = None) -> bool:
     """挡屏先进入独立恢复，不能把恢复点击算成业务操作，也不能按已完成前置准出。"""
     from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
@@ -555,6 +575,11 @@ def handle_screen_obstacle(cursor: Any, ctx: Any, plan: VisionPlanDecision, *, w
         nodes = getattr(ctx, 'nav_hierarchy_nodes', None) or []
         image = str(getattr(shot, 'image_base64', '') or '')
         proof = dialog_evidence(nodes, obstacle, frame_ref=hashlib.sha256(image.encode()).hexdigest() if image else '')
+        if not proof and kind in ('consent', 'overlay'):
+            # 无截图回合（纯文本决策）拿不到 frame_ref，但当前结构里若同时能看到
+            # 「同意 / 不同意」两个可点控件和协议类文案，协议弹窗就是结构事实，
+            # 不能因为没有图片证据就退回普通导航 —— 那会让模型报完挡屏后无动作可发。
+            proof = _consent_controls_proof(nodes) or {}
         if not proof:
             state.pop('screen_obstacle', None)
             write_state(cursor, state)
@@ -594,7 +619,7 @@ def handle_screen_obstacle(cursor: Any, ctx: Any, plan: VisionPlanDecision, *, w
     )
     # A visible consent/loading obstacle selects its own policy. A stale generic
     # foreground probe must not replace consent with launch_app.
-    steps = builtin_obstacle_steps(kind)
+    steps = builtin_obstacle_steps(kind, app_id=str(getattr(ctx, "app_id", "") or ""))
     if not steps and kind == "overlay":
         steps = resolve_interrupt_steps(cursor, ctx, router=getattr(ctx, "router", None),
                                         reason=reason, allow_fallback=False)

@@ -54,7 +54,7 @@ _TAP_BUCKET_MILLI = 50
 
 def fuseable_cap(cap_id: str) -> bool:
     cid = str(cap_id or "").strip()
-    if not cid or cid.startswith("recover_"):
+    if not cid or cid.startswith("recover_") or cid == "run_flow_block":
         return False
     return cid in _FUSE_CAPS or cid in _WAIT_CAPS
 

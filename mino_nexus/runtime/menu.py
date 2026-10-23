@@ -171,15 +171,17 @@ def recovery_menu_brief(ctx: RunContext, *, platform: str = "") -> list[dict[str
     if not allowed:
         return []
     plat = str(platform or getattr(ctx, "platform", "") or "").strip()
+    # 恢复不再按规则暴露虚拟能力：模型只有一个入口 run_flow_block(block_id)，
+    # 具体做哪些步骤由块目录声明。
     rows: list[dict[str, Any]] = []
-    for rule in plugin_registry.list_recovery_rules(enabled_only=True):
-        if not plugin_registry.platform_ok(list(rule.platforms or []), plat):
-            continue
-        summary = _first_line(rule.when, rule.prompt_snippet, rule.title, rule.id)[:120]
+    if any(plugin_registry.platform_ok(list(rule.platforms or []), plat)
+           for rule in plugin_registry.list_recovery_rules(enabled_only=True)):
+        from mino_nexus.loop.block_dispatch import recovery_block_ids
+
         rows.append({
-            "id": f"{RECOVER_PREFIX}{rule.id}",
+            "id": "run_flow_block",
             "kind": "recovery",
-            "summary": summary,
+            "summary": "执行恢复逻辑块（" + " / ".join(recovery_block_ids()) + "）",
         })
     return [row for row in rows if row['id'] in allowed]
 

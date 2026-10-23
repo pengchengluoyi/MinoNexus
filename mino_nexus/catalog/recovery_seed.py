@@ -27,7 +27,7 @@ _RECOVERY_PAYLOAD_V3: dict[str, Any] = {
     ],
     "prompt_snippet": (
         "设备锁屏、休眠，或截图不可读且 probe 报告 blocked 时，先唤醒再解除锁屏。"
-        "单独截图全黑但设备未锁屏 → 用 recover_screen_secure_or_no_capture，不要反复 wake。"
+        "单独截图全黑但设备未锁屏 → 属于 FLAG_SECURE 诊断，不要反复 wake，直接报给验收。"
     ),
     "evidence_notes": [
         "screen_blocked=yes：probe 报告 asleep 或 keyguard",
@@ -56,7 +56,7 @@ _BRING_TARGET_APP_FOREGROUND: dict[str, Any] = {
     },
     "prompt_snippet": (
         "当前前台不是被测 App（如 OAuth 后仍停在微信）。"
-        "若本步要在被测 App 内操作，先 recover_bring_target_app_foreground 或 launch_app(目标包)。"
+        "若本步要在被测 App 内操作，先 run_flow_block(block_id=fb.global.app.foreground)。"
     ),
     "evidence_notes": [
         "app_foreground=no：probe 前台包 ≠ 目标包",
@@ -77,7 +77,7 @@ _SCREEN_SECURE_OR_NO_CAPTURE: dict[str, Any] = {
     "actions": [],
     "prompt_snippet": (
         "截图全黑但设备未锁屏：可能是 FLAG_SECURE、安全键盘或密码界面，唤醒无效。"
-        "先 press_key BACK 收起键盘或 wait_ms 后再 observe；不要重复 recover_screen_asleep_or_locked。"
+        "先 press_key BACK 收起键盘或 wait_ms 后再 observe；不要重复 run_flow_block(block_id=fb.global.device.wake)。"
         "仍黑则 hierarchy / signal_ask_human。实验机可在 Scout 侧切 ADB Keyboard 减挡截图。"
     ),
     "evidence_notes": [
@@ -108,7 +108,7 @@ _RESTART_TARGET_APP: dict[str, Any] = {
         },
     },
     "prompt_snippet": (
-        "迷路、页面栈太深、找不到登录入口或起点时：recover_restart_target_app。"
+        "迷路、页面栈太深、找不到登录入口或起点时：run_flow_block(block_id=fb.global.app.restart)。"
         "等价于关进程再冷启动目标包。登录模块 case 开环也可能已做过一次；仍迷路可再调。"
         "重启后先 observe 再操作，勿 launch_app/BACK 死循环。"
     ),
@@ -120,7 +120,7 @@ _RESTART_TARGET_APP: dict[str, Any] = {
 
 READ_DEVICE_DATA_DESCRIPTION = (
     "只读 SIM/设备属性（getprop/dumpsys），不唤醒、不解锁。"
-    "锁屏/黑屏请用 recover_screen_asleep_or_locked。"
+    "锁屏/黑屏请用 run_flow_block(block_id=fb.global.device.wake)。"
     "Remote 不可用时该 plugin 自动消失。"
 )
 
@@ -378,7 +378,6 @@ _TARGET_APP_CAPS = (
     "kill_app",
     "get_app_version",
     "clear_app_cache",
-    "system_pkg_clear",
     "open_url",
     "open_app",
 )
@@ -414,6 +413,16 @@ def register_current_local_capabilities() -> None:
                         "observe": "program", "implementations": [],
                         "channel_contract_version": 1,
                         "params": schema_to_param_rows(PARAM_DEFAULTS[cid])})
+        # 模型侧的恢复入口：只有这一个能力，具体动作由块目录声明。
+        sync_system_capability(
+            db, cid="run_flow_block", kind="recovery", title="执行逻辑块",
+            description="按块 id 执行一组已声明步骤（恢复类：拉回前台 / 重启应用 / 唤醒解锁 / system_dialog / privacy）。",
+            platforms=["mac", "win", "android", "web"],
+            fields={"event_kind": "run_flow_block", "caller": "case", "phases": ["prep", "do"],
+                    "observe": "program", "implementations": [], "channel_contract_version": 1,
+                    "visible_to": ["case", "system"],
+                    "params": schema_to_param_rows(PARAM_DEFAULTS["run_flow_block"])},
+        )
         for cid, title, payload in [
             ("system_permission_dialog_while_using_deterministic", "系统权限弹窗", _SYSTEM_PERMISSION_WHILE_USING_DETERMINISTIC),
             ("system_media_picker_dismiss", "关闭系统相册/选择器", _SYSTEM_MEDIA_PICKER_DISMISS)]:
