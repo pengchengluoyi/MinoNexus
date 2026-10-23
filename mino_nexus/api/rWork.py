@@ -40,6 +40,13 @@ class ApprovalBody(BaseModel):
     comment: str = ""
 
 
+class BudgetBody(BaseModel):
+    extra_tokens: int = Field(default=60000, ge=1000, le=2000000)
+    extra_steps: int = Field(default=8, ge=0, le=200)
+    extra_turns: int = Field(default=4, ge=0, le=100)
+    extra_tool_calls: int = Field(default=4, ge=0, le=100)
+
+
 class InstructionBody(BaseModel):
     text: str
 
@@ -136,6 +143,19 @@ def resume_work(project_id: str, work_id: str,
     _owned(work_id, project_id, sess)
     try:
         return ok(work_store.resume_work(work_id, actor=_uid(sess)))
+    except ValueError as exc:
+        raise _fail(exc) from exc
+
+
+@router.post("/{work_id}/budget")
+def extend_budget(project_id: str, work_id: str, body: BudgetBody,
+                  sess: dict = Depends(project_maintainer)) -> dict[str, Any]:
+    _owned(work_id, project_id, sess)
+    try:
+        return ok(work_store.extend_budget(work_id, extra={
+            "tokens": body.extra_tokens, "steps": body.extra_steps,
+            "turns": body.extra_turns, "tool_calls": body.extra_tool_calls,
+        }, actor=_uid(sess)))
     except ValueError as exc:
         raise _fail(exc) from exc
 

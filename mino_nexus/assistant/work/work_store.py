@@ -39,11 +39,16 @@ TERMINAL_WORK = {"done", "failed", "cancelled"}
 TERMINAL_STEP = {"done", "failed", "skipped", "cancelled", "unknown"}
 RECOVERABLE = {"agent.plan", "agent.turn", "job.call", "run.wait", "work.review"}
 DEFAULT_BUDGET = {
-    "max_steps": 24,
-    "max_turns": 12,
-    "max_tool_calls": 12,
-    "max_tokens": 60000,
-    "max_wall_clock_sec": 1800,
+    "max_steps": 32,
+    "max_turns": 20,
+    "max_tool_calls": 20,
+    "max_tokens": 120000,
+    "max_wall_clock_sec": 3600,
+}
+BUDGET_KEYS = ("steps", "turns", "tool_calls", "tokens")
+BUDGET_LABELS = {
+    "steps": "步骤预算", "turns": "角色回合预算", "tool_calls": "工具调用预算",
+    "tokens": "模型 token 预算", "wall_clock_sec": "执行时长预算",
 }
 LEASE_SECONDS = 90.0
 
@@ -346,6 +351,27 @@ def list_memories(db: Session, work_id: str, *, agent_id: str = "", limit: int =
     return [memory_public(r) for r in reversed(rows)]
 
 
+def blocked_reason_text(work: WorkItem) -> str:
+    """Turn internal blocker codes into a sentence the chat card can show."""
+    reason = str(work.blocked_reason or "")
+    if reason.startswith("budget_exhausted:"):
+        key = reason.split(":", 1)[1]
+        label = BUDGET_LABELS.get(key, key)
+        budget = dict(work.budget_json or DEFAULT_BUDGET)
+        spent = dict(work.spent_json or {})
+        limit_key = "max_wall_clock_sec" if key == "wall_clock_sec" else "max_" + key
+        used = int(spent.get(key) or 0)
+        limit = int(budget.get(limit_key) or 0)
+        return f"{label}已用完（已用 {used:,} / 上限 {limit:,}）"
+    return {
+        "approval_rejected": "计划或操作被驳回，需要重新确认",
+        "write_result_unknown": "写操作结果未确认，需要先核对",
+        "no_runnable_step": "没有可继续的步骤，请调整计划",
+        "run_wait_timeout": "等待执行结果超时",
+        "work_terminal": "工作已结束",
+    }.get(reason, reason)
+
+
 def public_work(db: Session, work: WorkItem, *, include_counts: bool = True) -> dict[str, Any]:
     counts: dict[str, int] = {}
     if include_counts:
@@ -376,6 +402,7 @@ def public_work(db: Session, work: WorkItem, *, include_counts: bool = True) -> 
         "budget": work.budget_json or {},
         "spent": work.spent_json or {},
         "blocked_reason": work.blocked_reason or "",
+        "blocked_reason_text": blocked_reason_text(work),
         "stop_requested": int(work.stop_requested or 0),
         "created_at": work.created_at or "",
         "updated_at": work.updated_at or "",
@@ -1145,11 +1172,78 @@ def reserve_budget(step: dict[str, Any], work: dict[str, Any]) -> bool:
                 step_row.lease_owner = ""
                 step_row.lease_until = None
                 step_row.finished_at = _now()
-            append_event(db, row, "work.blocked",
+            append_event(db, row, "work.blocked", step_id=str(step.get("step_id") or ""),
                          payload={"reason": row.blocked_reason, "spent": spent})
             return False
         row.spent_json = spent
         return True
+
+
+def extend_budget(work_id: str, *, extra: dict[str, int] | None = None,
+                  actor: str = "") -> dict[str, Any]:
+    """Add budget to a budget-blocked work and wake the step it cancelled.
+
+    This is deliberately explicit: a work never gets more budget silently.
+    The user sees the spent/limit numbers in chat and chooses to continue.
+    """
+    extra = extra or {}
+    with work_session() as db:
+        work = db.get(WorkItem, work_id)
+        if not work:
+            raise KeyError("work_not_found")
+        if work.status in TERMINAL_WORK:
+            raise ValueError("work_terminal")
+        if not str(work.blocked_reason or "").startswith("budget_exhausted:"):
+            raise ValueError("work_not_budget_blocked")
+        budget = dict(work.budget_json or DEFAULT_BUDGET)
+        for key in BUDGET_KEYS:
+            amount = max(0, int(extra.get(key) or 0))
+            if not amount:
+                continue
+            limit_key = "max_" + key
+            budget[limit_key] = int(budget.get(limit_key) or DEFAULT_BUDGET[limit_key]) + amount
+        # Prefer the step recorded on the blocking event; old rows fall back to
+        # the latest cancelled executable step.
+        blocked = (
+            db.query(WorkEvent)
+            .filter_by(work_id=work_id, type="work.blocked")
+            .order_by(WorkEvent.seq.desc())
+            .first()
+        )
+        step_id = str((blocked.step_id if blocked else "") or "")
+        step = db.get(WorkStep, step_id) if step_id else None
+        if step is not None and step.kind == "human.approval":
+            step = None
+        if not step:
+            step = (
+                db.query(WorkStep)
+                .filter(WorkStep.work_id == work_id,
+                        WorkStep.status == "cancelled",
+                        WorkStep.kind.in_(("agent.plan", "agent.turn", "tool.call",
+                                           "run.wait", "job.call", "work.review")))
+                .order_by(WorkStep.updated_at.desc())
+                .first()
+            )
+        if step is not None:
+            step.status = "ready"
+            step.error = ""
+            step.lease_owner = ""
+            step.lease_until = None
+            step.next_run_at = None
+            step.finished_at = None
+            step.updated_at = _now()
+        work.budget_json = budget
+        work.status = "running"
+        work.blocked_reason = ""
+        work.stop_requested = 0
+        work.updated_at = _now()
+        append_event(db, work, "work.budget_extended", step_id=step.step_id if step else "",
+                     actor=actor or "user",
+                     payload={"budget": budget, "extra": extra,
+                              "resumed_step": step.step_id if step else ""})
+        append_event(db, work, "work.resumed", actor=actor or "user",
+                     payload={"reason": "budget_extended"})
+        return public_work(db, work)
 
 
 def add_tokens(work_id: str, tokens: int) -> None:

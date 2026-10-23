@@ -574,6 +574,7 @@ Meego 空间发现返回空列表时，助手不重复相同查询，而是询�
 - `GET /?topic_id=&status=&limit=&offset=`：工作项摘要列表，含 `progress`。
 - `GET /{work_id}`：详情，含 `steps`、`approvals`、`artifacts`、`links`、`events`；只读 `run_store`，不复制 run 状态。
 - `POST /{work_id}/pause|resume|cancel`：暂停/恢复/取消；取消会把待审批置 rejected，运行中的步骤由 finish guard 收口。
+- `POST /{work_id}/budget`：仅用于 `blocked_reason` 为 `budget_exhausted:*` 的工作；body `{extra_tokens?, extra_steps?, extra_turns?, extra_tool_calls?}`，默认追加 60000 token、8 步、4 回合、4 次工具调用。显式追加后恢复被取消的步骤；不在后台静默加预算。
 - `POST /{work_id}/instruct`：`{text}` 追加用户约束，进入后续计划和角色回合。
 - `PATCH /{work_id}/plan`：`{plan, acceptance, expected_revision}`；有版本冲突返回 409，重新审批后旧计划不继续。
 - `POST /{work_id}/approvals/{approval_id}`：`{decision:"approve"|"reject", comment?, option?}`；计划批准会把 work 拉回 running；工具审批执行审批时冻结的 tool_id/args，不让模型换参数重来。
