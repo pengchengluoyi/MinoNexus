@@ -82,8 +82,15 @@ def dependency_digest(db, project_id, owner, *, compile_inserts=()):
         values.append(["provider_configuration", {column.name: getattr(setting, column.name) for column in Settings.__table__.columns}])
     root = Path(__file__).resolve().parents[1]
     paths = list((root / "prompts").rglob("*.md")) + list((root / "prompts").rglob("*.yaml"))
-    paths += [root / "services" / name for name in ("case_compilation.py", "case_step_key_compiler.py",
-        "case_step_span_llm.py", "case_resource_claim.py", "account_requirement_compile.py")]
+    # V8 拆分后这些文件分布在 casework/ 与 resources/；旧 services/ 路径已删除，
+    # 继续引用会让每次编译在 dependency_digest 处抛 FileNotFoundError（API 500）。
+    paths += [
+        root / "casework" / "case_compilation.py",
+        root / "casework" / "case_step_key_compiler.py",
+        root / "casework" / "case_step_span_llm.py",
+        root / "resources" / "case_resource_claim.py",
+        root / "resources" / "accounts" / "requirement_compile.py",
+    ]
     values.append(["compiler_files", [(str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest())
         for path in sorted(paths)]])
     return digest(values)
