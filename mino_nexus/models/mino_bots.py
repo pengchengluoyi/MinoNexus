@@ -39,7 +39,7 @@ class CollabTopic(Base):
     im_route = Column(JSON, default=dict)
     knowledge_graph = Column(JSON, default=dict)
     digest = Column(JSON, default=dict)
-    paused = Column(Integer, default=0)
+    paused = Column(Integer, default=0)  # retired: kept for schema compatibility; no workspace pause path
     workspace_kind = Column(String, default='')
     scope_revision = Column(Integer, default=1)
     scope_key = Column(String, unique=True, nullable=True)

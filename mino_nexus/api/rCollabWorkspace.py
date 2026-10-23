@@ -6,13 +6,11 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 from mino_nexus.api.deps import project_maintainer, current_session
 from mino_nexus.core.http_util import ok
 from mino_nexus.core.database import session_scope
 from mino_nexus.assistant.workspace import collab_workspace as ws
-from mino_nexus.models.mino_bots import CollabMessage, CollabActivity, CollabTopicMember
-from mino_nexus.models.collab_read import CollabWorkspaceRead
+from mino_nexus.models.mino_bots import CollabMessage
 
 def require_workspace_owner(request: Request, sess: dict = Depends(current_session)):
     topic_id = request.path_params.get('topic_id')
@@ -46,13 +44,18 @@ class WorkspacePatch(BaseModel):
     env_profile: str | None = None
     env_surface: str | None = None
     platform: str | None = None
-    paused: bool | None = None
     archived: bool | None = None
 
 
 class ChatBody(BaseModel):
     thread_id: str = ''
     body: str = Field(min_length=1, max_length=8000)
+
+
+class HandoffBody(BaseModel):
+    work_id: str = Field(min_length=1, max_length=80)
+    member_id: str = Field(min_length=1, max_length=80)
+    note: str = Field(default='', max_length=1000)
 
 
 class PinBody(BaseModel):
@@ -104,17 +107,9 @@ def chat(project_id: str, topic_id: str, body: ChatBody, sess: dict = Depends(pr
     return call(send, project_id, topic_id, sess, body.body, body.thread_id)
 
 
-@router.delete('/{topic_id}')
-def delete(project_id: str, topic_id: str, sess: dict = Depends(project_maintainer)):
-    ws.authorize(project_id, sess)
-    with session_scope() as db:
-        db.execute(text('BEGIN IMMEDIATE'))
-        topic = ws.owned(db, project_id, topic_id)
-        from mino_nexus.models.collab_message_job import CollabMessageJob
-        for model in (CollabWorkspaceRead, CollabMessageJob, CollabActivity, CollabMessage, CollabTopicMember):
-            db.query(model).filter_by(topic_id=topic_id).delete(synchronize_session=False)
-        db.delete(topic)
-    return ok({'deleted': True, 'topic_id': topic_id})
+@router.post('/{topic_id}/handoff')
+def handoff(project_id: str, topic_id: str, body: HandoffBody, sess: dict = Depends(project_maintainer)):
+    return call(ws.handoff_work, project_id, topic_id, sess, body.work_id, body.member_id, body.note)
 
 
 @router.post('/{topic_id}/attachments')

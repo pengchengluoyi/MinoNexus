@@ -63,7 +63,7 @@ def facts(project_id, topic_id, sess, content):
     return {
         'members': list_members(project_id, topic_id, sess),
         'project_id': project_id, 'project': opts['project'], 'topic_id': topic_id,
-        'scope': {k: view[k] for k in ('title', 'requirement_id', 'modules', 'app_id', 'env_profile', 'env_surface', 'platform', 'paused')},
+        'scope': {k: view[k] for k in ('title', 'requirement_id', 'modules', 'app_id', 'env_profile', 'env_surface', 'platform')},
         'cases': {'total': snap['total'], 'executable': len(snap['executable']), 'blocked': len(snap['blocked']),
                   'case_ids': snap['case_ids'][:200], 'items': snap['cases'][:50], 'truncated': len(snap['case_ids']) > 200},
         'resources': snap['resources'], 'runs_from_this_workspace': runs,
@@ -86,8 +86,6 @@ def execution_args(project_id, topic_id, sess, spec, args, requested_target=None
         topic = ws.owned(db, project_id, topic_id, write=True)
         scope = ws.scope_ids(db, topic)
         view = ws.public(topic)
-    if view['paused'] and spec.get('risk') == 'write':
-        raise ValueError('工作区已暂停，请在菜单中恢复后再提交操作。')
     if args.get('project_id', project_id) != project_id:
         raise ValueError('所选项目与当前对话所属项目不一致，请先切换项目；本轮未提交操作。')
     requested_target = requested_target or {}

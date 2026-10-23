@@ -4,7 +4,7 @@ from mino_nexus.models.collab_message_job import CollabMessageJob
 from mino_nexus.assistant.workspace import collab_workspace as ws
 
 
-def enqueue(project_id, topic_id, sess, content, thread_id=''):
+def enqueue(project_id, topic_id, sess, content, thread_id='', *, card='', ref=''):
     owner = ws.authorize(project_id, sess)
     content = str(content or '').strip()
     if not content or len(content) > 8000:
@@ -13,7 +13,7 @@ def enqueue(project_id, topic_id, sess, content, thread_id=''):
         t = ws.owned(db, project_id, topic_id, write=True)
         if t.title == '新对话':
             t.title = ' '.join(content.split())[:60]
-        m = ws.message(db, t, content, kind='text', author='user', owner=owner)
+        m = ws.message(db, t, content, kind='text', card=card, ref=ref, author='user', owner=owner)
         db.flush()
         db.add(CollabMessageJob(message_id=m.message_id, project_id=project_id, topic_id=topic_id,
             owner_user_id=owner, status='queued', created_at=ws.now(), updated_at=ws.now()))

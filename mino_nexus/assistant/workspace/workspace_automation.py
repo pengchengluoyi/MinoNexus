@@ -82,7 +82,7 @@ def save(project_id, topic_id, sess, policy, revision):
 
 def enqueue(db, topic, action, key, *, run_id='', attempt=0, root=''):
     policy, saved = config(topic)
-    if not policy['enabled'] or topic.paused or topic.archived:
+    if not policy['enabled'] or topic.archived:
         return False
     revision = int(saved.get('revision', 0))
     mid = 'auto-' + hashlib.sha256(f'{topic.topic_id}:{revision}:{action}:{key}'.encode()).hexdigest()
@@ -113,7 +113,7 @@ def on_finished(doc):
         db.execute(text('BEGIN IMMEDIATE'))
         # Adoption is explicitly configured and never expands a workspace's scope.
         if doc.get('run_type', 'manual') == 'manual' and any(c.get('status') in ('fail', 'failed', 'blocked', 'declined') for c in doc.get('cases') or []):
-            for topic in db.query(CollabTopic).filter_by(lead_user_id=doc.get('owner_user_id'), app_id=doc.get('app_id'), paused=0, archived=0):
+            for topic in db.query(CollabTopic).filter_by(lead_user_id=doc.get('owner_user_id'), app_id=doc.get('app_id'), archived=0):
                 policy, saved = config(topic)
                 if not policy['enabled'] or not policy['watch_manual_failures'] or not doc.get('started_at') or doc['started_at'] < saved.get('activated_at', ''):
                     continue
@@ -170,8 +170,8 @@ def process(project_id, topic_id, sess, message_id, payload):
     with session_scope() as db:
         topic = ws.owned(db, project_id, topic_id, write=True)
         policy, saved = config(topic)
-        if not policy['enabled'] or topic.paused or payload['revision'] != saved.get('revision'):
-            raise ValueError('自动化已关闭、暂停或配置已变化，本次触发已停止。')
+        if not policy['enabled'] or payload['revision'] != saved.get('revision'):
+            raise ValueError('自动化已关闭或配置已变化，本次触发已停止。')
         if payload['action'] in ('run', 'retry') and payload['selection'] != selection(db, topic):
             raise ValueError('测试范围或目标已变化，本次自动执行已停止。')
     action, rid = payload['action'], payload.get('run_id', '')
@@ -215,7 +215,7 @@ def tick(_worker_id=''):
     from mino_nexus.resources.project_store import require_app
     from mino_nexus.models.case import ProjectCase
     with session_scope() as db:
-        targets = [(t.topic_id, t.project_id, t.lead_user_id) for t in db.query(CollabTopic).filter_by(paused=0, archived=0)
+        targets = [(t.topic_id, t.project_id, t.lead_user_id) for t in db.query(CollabTopic).filter_by(archived=0)
                    if (t.workspace_policy or {}).get('config', {}).get('enabled')]
     worked = False
     for tid, pid, owner in targets:

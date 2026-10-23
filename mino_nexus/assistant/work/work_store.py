@@ -90,7 +90,7 @@ def work_session(*, write: bool = True) -> Iterator[Session]:
                     "work.blocked", "work.cancelled", "work.completed", "work.instruction",
                     "approval.requested", "approval.approved", "approval.rejected",
                     "step.unknown_on_recovery", "step.resolved", "step.retry",
-                    "step.skipped", "step.takeover",
+                    "step.skipped", "step.takeover", "work.handoff",
                 }
             }
             if changed:
@@ -1240,6 +1240,31 @@ def set_plan(work_id: str, plan: dict[str, Any], acceptance: Any, *,
         append_event(db, work, "plan.ready", actor=actor,
                      payload={"plan_revision": work.plan_revision,
                               "steps": len(plan.get("steps") or [])})
+        return public_work(db, work)
+
+
+def handoff(work_id: str, to_member: str, note: str = "", *, actor: str = "") -> dict[str, Any]:
+    """Record a handoff without changing the plan or pretending execution changed hands.
+
+    The chat mention created by the workspace endpoint is what asks the target member
+    to pick the work up; this event keeps the decision visible on the work itself.
+    """
+    to_member = str(to_member or '').strip()[:120]
+    if not to_member:
+        raise ValueError('handoff_target_empty')
+    note = str(note or '').strip()[:1000]
+    with work_session() as db:
+        work = db.get(WorkItem, work_id)
+        if not work:
+            raise KeyError("work_not_found")
+        if work.status in TERMINAL_WORK:
+            raise ValueError("work_terminal")
+        rows = list(work.instructions_json or [])
+        rows.append((f"交接给 {to_member}" + (f"：{note}" if note else ""))[:1000])
+        work.instructions_json = rows[-30:]
+        work.updated_at = _now()
+        append_event(db, work, "work.handoff", actor=actor or "user",
+                     payload={"to": to_member, "note": note})
         return public_work(db, work)
 
 

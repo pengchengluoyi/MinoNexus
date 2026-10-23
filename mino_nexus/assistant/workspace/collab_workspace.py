@@ -34,7 +34,7 @@ def identity(value):
 
 def public(row):
     return {c.name: getattr(row, c.name) for c in row.__table__.columns
-            if not (isinstance(row, CollabTopic) and c.name == 'expected_build')}
+            if not (isinstance(row, CollabTopic) and c.name in {'expected_build', 'paused'})}
 
 
 def authorize(project_id, sess):
@@ -297,7 +297,7 @@ def update_workspace(project_id, topic_id, sess, body):
         for key in ('title',):
             if key in body:
                 setattr(t, key, str(body[key] or '')[:200])
-        for key in ('paused', 'archived'):
+        for key in ('archived',):
             if key in body:
                 setattr(t, key, int(bool(body[key])))
         if 'scope_case_ids' in body:
@@ -308,6 +308,40 @@ def update_workspace(project_id, topic_id, sess, body):
             t.scope_case_ids = ids
         activity(db, t, 'updated', '工作区配置已更新')
         return public(t)
+
+
+def handoff_work(project_id, topic_id, sess, work_id, member_id, note=''):
+    """Ask a group member to take over a work item, visibly in the chat.
+
+    The work instruction/event is the durable record; the chat mention is what
+    routes the request to that member through the existing mention handler.
+    """
+    authorize(project_id, sess)
+    from mino_nexus.assistant.workspace.workspace_members import list_members
+    members = list_members(project_id, topic_id, sess)
+    target = next((m for m in members if str(m.get('id') or '') == str(member_id or '')), None)
+    if target is None:
+        raise ValueError('接手的成员不在当前群聊，请先拉入成员')
+    note = str(note or '').strip()[:1000]
+    from mino_nexus.assistant.work import work_store
+    from mino_nexus.models.work_item import WorkItem
+    with session_scope() as db:
+        topic = owned(db, project_id, topic_id, write=True)
+        work = db.get(WorkItem, work_id)
+        if work is None or work.project_id != project_id or work.topic_id != topic_id:
+            raise KeyError('工作项不属于当前工作区')
+        if work.status in work_store.TERMINAL_WORK:
+            raise ValueError('工作已结束，不能交接')
+        title = str(work.title or work.goal or work_id)
+    updated = work_store.handoff(work_id, str(target['id']), note, actor='user')
+    mention = str(target.get('sender_name') or target.get('label') or target['id'])
+    body = f'@{mention} 接手工作「{title}」'
+    if note:
+        body += f'\n备注：{note}'
+    body += f'\n工作：{work_id}'
+    from mino_nexus.assistant.workspace.collab_conductor import enqueue
+    message = enqueue(project_id, topic_id, sess, body, card='handoff', ref=work_id)
+    return {'message': message, 'work': updated}
 
 
 def pin_case(project_id, topic_id, sess, case_id):
@@ -451,8 +485,6 @@ def pin_cases(project_id, topic_id, sess, case_ids):
     with session_scope() as db:
         db.execute(text('BEGIN IMMEDIATE'))
         topic = owned(db, project_id, topic_id, write=True)
-        if topic.paused:
-            raise ValueError('工作区已暂停，请先恢复')
         available = {r[0] for r in db.query(ProjectCase.case_id).filter(ProjectCase.project_id == project_id, ProjectCase.case_id.in_(ids))}
         if set(ids) != available:
             raise ValueError('所选用例已删除或不属于当前项目；本次未加入任何用例')
