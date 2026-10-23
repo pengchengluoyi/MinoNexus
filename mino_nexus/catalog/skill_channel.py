@@ -558,6 +558,51 @@ def _ensure_program_rows(db: Any) -> int:
 
 
 
+def _ensure_web_playwright_rows(db: Any) -> int:
+    """为 Web 补齐 tap_element / launch_app 的 Playwright 实现。
+
+    Scout 的 playwright_executor 已经原生支持 tap_element 和 launch_app；但目录长期只
+    声明 android/adb，导致 Web 编译产物在准入阶段报 event_platform_unsupported。
+    这里只补 Web 平台和 playwright 实现，不改 Android 现有实现，也不降低 Scout 准入。
+    """
+    from mino_nexus.models.catalog import CatalogEntry
+
+    specs = (
+        ("tap_element", "点击元素（Web）", "case", ["prep", "do"]),
+        ("launch_app", "打开被测 Web 地址", "program", ["prep"]),
+    )
+    changed = 0
+    for eid, title, caller, phases in specs:
+        row = db.query(CatalogEntry).filter(CatalogEntry.id == eid).first()
+        if row is None:
+            continue
+        platforms = list(row.platforms_json or [])
+        payload = dict(row.payload_json or {})
+        implementations = list(payload.get("implementations") or [])
+        impl_id = "web.playwright.v1"
+        if not any(isinstance(item, dict) and item.get("id") == impl_id for item in implementations):
+            implementations.append({
+                "id": impl_id,
+                "executor": "playwright",
+                "runs_on": "scout",
+                "platforms": ["web"],
+                "needs_vlm": False,
+                "low_level": {},
+                "requires_caps": [],
+                "params_contract": {"version": 1},
+                "result_contract": {"version": 1},
+                "device_hint_template": {"execution_mode": "agent"},
+            })
+            payload["implementations"] = implementations
+        if "web" not in platforms:
+            platforms.append("web")
+        if list(row.platforms_json or []) != platforms or dict(row.payload_json or {}) != payload:
+            row.platforms_json = platforms
+            row.payload_json = payload
+            changed += 1
+    return changed
+
+
 def register_program_capabilities() -> dict[str, Any]:
     """启动同一注册器；仅处理已声明的程序能力，不修改业务目录。"""
     from mino_nexus.catalog import registry as catalog
@@ -565,6 +610,7 @@ def register_program_capabilities() -> dict[str, Any]:
     from mino_nexus.models.catalog import CatalogEntry
     with session_scope() as db:
         changed = _ensure_program_rows(db)
+        changed += _ensure_web_playwright_rows(db)
         registered = [{"id": row.id, "platforms": list(row.platforms_json or []),
                        "channel_contract_version": (row.payload_json or {}).get("channel_contract_version")}
                       for row in db.query(CatalogEntry).filter(CatalogEntry.id.in_(
