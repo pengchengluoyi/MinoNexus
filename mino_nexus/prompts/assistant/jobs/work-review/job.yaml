@@ -1,0 +1,71 @@
+id: work-review
+label: 工作层验收
+summary: 逐条检查验收标准与真实证据，不采信模型自述
+engine: json_chat
+role: conductor
+output_schema: ""
+enabled: true
+sort_order: 33
+flags: []
+slots:
+- name: goal
+  kind: text
+  required: true
+- name: acceptance
+  kind: text
+  required: true
+- name: plan
+  kind: text
+  required: true
+- name: artifacts
+  kind: text
+  required: true
+- name: results
+  kind: text
+  required: true
+- name: runs
+  kind: text
+  required: false
+- name: agent_session
+  kind: text
+  required: false
+- name: memories
+  kind: text
+  required: false
+call:
+  temperature: 0.1
+  max_tokens: 1800
+  timeout_sec: 120
+  total_timeout_sec: 300
+  json_mode: true
+image: {}
+system:
+- id: rules
+  file: system/30-rules.md
+- id: goal
+  slot: goal
+  heading: 【工作目标】
+- id: acceptance
+  slot: acceptance
+  heading: 【验收标准】
+- id: plan
+  slot: plan
+  heading: 【计划】
+- id: results
+  slot: results
+  heading: 【工具与回合结果（摘要）】
+- id: artifacts
+  slot: artifacts
+  heading: 【证据与产物】
+- id: runs
+  slot: runs
+  heading: 【关联的 run】
+  skip_if_empty: true
+- id: memory
+  slot: agent_session
+  heading: 【管家会话摘要】
+  skip_if_empty: true
+- id: memories
+  slot: memories
+  heading: 【工作记忆】
+  skip_if_empty: true

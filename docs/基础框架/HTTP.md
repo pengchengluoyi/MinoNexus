@@ -565,3 +565,18 @@ Meego 明确返回 `Check Token Perm Failed` 时，保留错误码、鉴权/业�
 Meego 空间发现返回空列表时，助手不重复相同查询，而是询问目标空间链接或别名，将待补充查询保存为 `project get`；补充后继续解析真实空间 key。空的空间详情提示核对目标和访问范围，空的工作项类型或创建模板明确阻断创建，不猜测业务 ID。空结果本身不能证明权限被拒绝。CLI 无进展提示不再要求选择 Mino 应用或测试模块。
 
 追问无候选项时使用直接输入提示，不生成空 choices，也不要求回复序号；确认或继续消息沿用同一输入提示。CLI HTTP 响应排除 Scout 附带的顶层 `plugins` 状态快照，避免无关状态造成长度截断并丢失业务权限错误码及具体处理指引；业务结果和权限拒绝状态仍按原合同返回。
+
+## 多 Agent 工作层（2026-10-22，v1）
+
+工作层 HTTP 只做鉴权、参数校验和状态读写；执行由进程内 `work_runner` 领取步骤，模型/工具调用不在请求线程里跑。所有接口在 `/project/{project_id}/work` 下，要求当前账号有项目访问权限，并且只返回 `owner_user_id` 为当前账号的工作项。
+
+- `POST /`：body `{goal, title?, topic_id?, source_message_id?, create_key?, acceptance?, budget?, instructions?, policy?}`；`policy.write_approval=plan|always` 控制写工具审批级别；`(owner_user_id, create_key)` 幂等，返回 `{code:200, data:work, created}`。
+- `GET /?topic_id=&status=&limit=&offset=`：工作项摘要列表，含 `progress`。
+- `GET /{work_id}`：详情，含 `steps`、`approvals`、`artifacts`、`links`、`events`；只读 `run_store`，不复制 run 状态。
+- `POST /{work_id}/pause|resume|cancel`：暂停/恢复/取消；取消会把待审批置 rejected，运行中的步骤由 finish guard 收口。
+- `POST /{work_id}/instruct`：`{text}` 追加用户约束，进入后续计划和角色回合。
+- `PATCH /{work_id}/plan`：`{plan, acceptance, expected_revision}`；有版本冲突返回 409，重新审批后旧计划不继续。
+- `POST /{work_id}/approvals/{approval_id}`：`{decision:"approve"|"reject", comment?, option?}`；计划批准会把 work 拉回 running；工具审批执行审批时冻结的 tool_id/args，不让模型换参数重来。
+- `POST /{work_id}/steps/{step_id}/retry|skip|takeover|resolve`：重试失败步骤、跳过、暂停并接管、裁决 `unknown` 写结果。`unknown` 不自动重放；必须先确认已执行/未执行。
+
+写操作成功仍返回 `{code:200, data}`；业务错误使用 `{detail:{reason_code,message}}`，前端 `errText` 可直接显示。工作事件只在 SQLite commit 后通过 `/ws` 以 `work_event` 推送，归属按 `work_items.owner_user_id` 解析。

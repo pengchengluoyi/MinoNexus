@@ -36,7 +36,7 @@ params_schema:
       description: 用户指定的用例模块，按项目共享用例范围精确筛选
     search:
       type: string
-      description: 用户指定的用例名称关键字
+      description: 用户指定的用例名称关键字；不要填用例 id（id 请放 case_ids）
     ordinal:
       type: integer
       minimum: 1

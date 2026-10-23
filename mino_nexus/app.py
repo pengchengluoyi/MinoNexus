@@ -164,7 +164,22 @@ async def lifespan(app: FastAPI):
                 SLog.w(TAG, f"execution policy tick: {type(exc).__name__}")
             await asyncio.sleep(2)
     policy_task = asyncio.create_task(execution_policy_worker())
+    from mino_nexus.assistant.work.work_runner import (
+        recover_stale_work as recover_stale_work_items,
+        start as start_work_runner,
+        stop as stop_work_runner,
+        maintenance_worker as work_maintenance_worker,
+        worker as work_worker,
+    )
+    await asyncio.to_thread(recover_stale_work_items)
+    start_work_runner()
+    work_task = asyncio.create_task(work_worker())
+    work_maintenance_task = asyncio.create_task(work_maintenance_worker())
     yield
+    stop_work_runner()
+    work_task.cancel()
+    work_maintenance_task.cancel()
+    await asyncio.gather(work_task, work_maintenance_task, return_exceptions=True)
     message_task.cancel()
     await asyncio.gather(message_task, return_exceptions=True)
     collab_task.cancel()
@@ -259,6 +274,8 @@ def create_app() -> FastAPI:
     app.include_router(rMinoBots.router)
     app.include_router(rAssistant.router)
     app.include_router(rMcp.router)
+    from mino_nexus.api import rWork
+    app.include_router(rWork.router)
     from mino_nexus.assistant.assistant_tools import bind_app
 
     bind_app(app)

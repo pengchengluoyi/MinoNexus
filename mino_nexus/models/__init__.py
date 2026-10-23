@@ -62,6 +62,14 @@ from mino_nexus.models.mino_bots import (
 from mino_nexus.models.task import Task
 from mino_nexus.models.token import InstallToken, NodeCredential
 from mino_nexus.models.ui_control import UiControl
+from mino_nexus.models.work_item import WorkItem
+from mino_nexus.models.work_step import WorkStep
+from mino_nexus.models.work_event import WorkEvent
+from mino_nexus.models.work_approval import WorkApproval
+from mino_nexus.models.work_artifact import WorkArtifact
+from mino_nexus.models.work_link import WorkLink
+from mino_nexus.models.work_agent_session import WorkAgentSession
+from mino_nexus.models.work_agent_memory import WorkAgentMemory
 
 __all__ = [
     "AssistantMcpToken",
@@ -121,6 +129,14 @@ __all__ = [
     "Task",
     "User",
     "UserPluginSecret",
+    "WorkItem",
+    "WorkStep",
+    "WorkEvent",
+    "WorkApproval",
+    "WorkArtifact",
+    "WorkLink",
+    "WorkAgentSession",
+    "WorkAgentMemory",
 ]
 
 from mino_nexus.models.case_revision import CaseRevision

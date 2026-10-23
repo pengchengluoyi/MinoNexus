@@ -3,11 +3,18 @@ from sqlalchemy import inspect
 
 
 def initialize_current_schema(engine, metadata):
+    from mino_nexus.core.schema_migrations import apply_additive_migrations
+
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
     if not tables:
         metadata.create_all(bind=engine)
+        apply_additive_migrations(engine, metadata)
         return
+    # 先补新表，再做严格校验：旧库不应因为新增 work_* 被误判为不支持。
+    apply_additive_migrations(engine, metadata)
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
     expected = set(metadata.tables)
     additive = {"node_tool_tasks"} & expected
     issues = ["missing_table:" + name for name in sorted(expected - tables - additive)]

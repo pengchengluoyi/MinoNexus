@@ -1,0 +1,98 @@
+id: work-turn
+label: 工作层角色回合
+summary: 某个角色在当前计划步骤里决定下一步动作
+engine: json_chat
+role: conductor
+output_schema: ""
+enabled: true
+sort_order: 32
+flags: []
+slots:
+- name: role_brief
+  kind: text
+  required: true
+- name: work_goal
+  kind: text
+  required: true
+- name: workspace_context
+  kind: text
+  required: true
+- name: acceptance
+  kind: text
+  required: false
+- name: plan
+  kind: text
+  required: true
+- name: current_step
+  kind: text
+  required: true
+- name: prior_results
+  kind: text
+  required: false
+- name: approvals
+  kind: text
+  required: false
+- name: tools
+  kind: text
+  required: true
+- name: instructions
+  kind: text
+  required: false
+- name: agent_session
+  kind: text
+  required: false
+- name: memories
+  kind: text
+  required: false
+call:
+  temperature: 0.1
+  max_tokens: 1800
+  timeout_sec: 120
+  total_timeout_sec: 300
+  json_mode: true
+image: {}
+system:
+- id: role
+  slot: role_brief
+  heading: 【你的角色】
+- id: rules
+  file: system/20-rules.md
+- id: goal
+  slot: work_goal
+  heading: 【工作目标】
+- id: workspace
+  slot: workspace_context
+  heading: 【项目与应用（ID 必须原样使用）】
+- id: acceptance
+  slot: acceptance
+  heading: 【验收标准】
+  skip_if_empty: true
+- id: plan
+  slot: plan
+  heading: 【完整计划】
+- id: step
+  slot: current_step
+  heading: 【当前步骤】
+- id: prior
+  slot: prior_results
+  heading: 【已经发生的结果】
+  skip_if_empty: true
+- id: approvals
+  slot: approvals
+  heading: 【用户已经驳回/确认的事】
+  skip_if_empty: true
+- id: tools
+  slot: tools
+  heading: 【本轮可用工具】
+- id: instructions
+  slot: instructions
+  heading: 【用户补充指令】
+  skip_if_empty: true
+- id: session
+  slot: agent_session
+  heading: 【你这个角色在此工作项中的既有摘要】
+  skip_if_empty: true
+- id: memories
+  slot: memories
+  heading: 【已确认的记忆/决策】
+  skip_if_empty: true

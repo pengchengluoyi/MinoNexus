@@ -65,7 +65,7 @@ def activity(db, topic, kind, body, **refs):
 
 def message(db, topic, body='', *, kind='system', card='', ref='', author='bot', owner='', origin='', role='', thread_id=''):
     # Reference cards update in place; a heartbeat is not a new chat message.
-    if card in ('resources', 'run', 'workspace', 'run_finished'):
+    if card in ('resources', 'run', 'workspace', 'run_finished', 'work'):
         query = db.query(CollabMessage).filter_by(topic_id=topic.topic_id, card_kind=card)
         if card != 'resources':
             query = query.filter_by(ref_id=ref)

@@ -1,0 +1,80 @@
+id: work-plan
+label: 工作层制定计划
+summary: 把用户目标拆成可审批、可恢复的执行步骤
+engine: json_chat
+role: conductor
+output_schema: ""
+enabled: true
+sort_order: 31
+flags: []
+slots:
+- name: goal
+  kind: text
+  required: true
+- name: acceptance
+  kind: text
+  required: false
+- name: workspace_facts
+  kind: text
+  required: true
+- name: team
+  kind: text
+  required: true
+- name: constraints
+  kind: text
+  required: false
+- name: budget
+  kind: text
+  required: true
+- name: agent_session
+  kind: text
+  required: false
+- name: memories
+  kind: text
+  required: false
+- name: previous_review
+  kind: text
+  required: false
+call:
+  temperature: 0.1
+  max_tokens: 2200
+  timeout_sec: 120
+  total_timeout_sec: 300
+  json_mode: true
+image: {}
+system:
+- id: rules
+  file: system/10-rules.md
+- id: facts
+  slot: workspace_facts
+  heading: 【工作区事实】
+user:
+- id: goal
+  slot: goal
+  heading: 【目标】
+- id: acceptance
+  slot: acceptance
+  heading: 【必须满足的验收标准】
+  skip_if_empty: true
+- id: team
+  slot: team
+  heading: 【可分配的角色】
+- id: constraints
+  slot: constraints
+  heading: 【用户约束】
+  skip_if_empty: true
+- id: budget
+  slot: budget
+  heading: 【预算】
+- id: memory
+  slot: agent_session
+  heading: 【管家会话摘要】
+  skip_if_empty: true
+- id: memories
+  slot: memories
+  heading: 【工作记忆】
+  skip_if_empty: true
+- id: previous_review
+  slot: previous_review
+  heading: 【上一次验收】
+  skip_if_empty: true

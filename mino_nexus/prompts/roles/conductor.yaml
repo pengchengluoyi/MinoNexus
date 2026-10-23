@@ -27,3 +27,8 @@ jobs:
 - route
 chat_jobs:
 - conductor
+tools:
+- work.create
+- case.list
+- task.list
+- session.list

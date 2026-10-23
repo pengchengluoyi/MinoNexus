@@ -164,3 +164,17 @@ V6 D1：`scout_updates` 保存节点更新操作、唯一活动 slot、参数、
 ## 协作消息回复回执（2026-10-19）
 
 collab_message_jobs 以 message_id 为主键，保存 project_id/topic_id、owner_user_id、queued/running/succeeded/failed/interrupted 状态、错误及时间。原文仍只在 collab_messages。随消息同事务创建，不存认证 token；启动 create_all 新建表。处理中断不自动重试命令，queued 可继续；议题删除时清理对应回执，运行中拒绝删除。
+
+## 多 Agent 工作层（2026-10-22，v1）
+
+新增 8 张表，由 `core/schema_migrations.py` 在严格校验前 additive 创建；旧表不改。`PRAGMA user_version=1` 只表示这组新表已补齐。
+
+- `work_items`：`work_id` 主键，`(owner_user_id, create_key)` 唯一；保存 project/topic、goal、status、plan/revision/index、acceptance、review、instructions、budget/spent、policy、blocked_reason、last_event_seq、stop_requested。工作状态是业务真源，不复制 run 状态。`policy.write_approval=always` 时写工具在 `run_tool` 前单独审批；默认 `plan`。
+- `work_steps`：`(work_id, seq)` 与 `(work_id, step_key)` 唯一；保存 kind、agent/job/role、intent、status、input/output、ref、parent、attempt/max_attempts、lease、next_run_at。`claim_step` 只领 ready，或 `run.wait` 的 waiting；`run.wait` 轮询不增加 attempt。
+- `work_events`：`(work_id, seq)` 唯一，追加写；commit 后才向 UI 发布。
+- `work_approvals`：计划、工具、回合审批；`prompt` 保存计划 JSON 或工具确认文本；批准工具时实际执行的是审批时冻结的 tool_id/args。
+- `work_artifacts`：run、session、tool_result、note、review 等证据；`(work_id, step_id, kind, ref_id)` 唯一。
+- `work_links`：`(work_id, kind, ref_id)` 唯一；工作项到 run/session 的引用，不复制 run 行。
+- `work_agent_sessions`、`work_agent_memory`：按工作项/角色 upsert 摘要、决策和教训；`work-turn` 读取当前角色摘要与最近记忆，仅作辅助上下文，验收仍以 run/session/artifact 为准。
+
+所有 `work_*` 写事务使用 `BEGIN IMMEDIATE`。工具写结果未知时步骤置 `unknown` 并阻塞工作项，不自动重放；`tool.call` 恢复只有“已有子步骤”或“未知”两种，不重发写请求。

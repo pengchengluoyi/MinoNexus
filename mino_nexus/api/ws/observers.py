@@ -49,6 +49,10 @@ def _event_owner(payload: dict[str, Any]) -> str:
     from mino_nexus.casework import run_store
     from mino_nexus.resources.access_scope import node_owner_id, device_owner_id
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    wid = str(data.get("work_id") or "")
+    if wid and str(payload.get("type") or "") == "work_event":
+        from mino_nexus.assistant.work.work_store import owner_of
+        return owner_of(wid)
     rid = str(data.get("task_id") or data.get("run_id") or "").split("::", 1)[0]
     if rid:
         doc = run_store.get(rid)
