@@ -75,12 +75,22 @@ def _owned(work_id: str, project_id: str, sess: dict[str, Any]) -> dict[str, Any
     return data
 
 
+WORK_ERROR_MESSAGES = {
+    "work_terminal": "工作已结束，不能再操作",
+    "work_not_budget_blocked": "当前工作不是预算用完导致的阻塞",
+    "write_result_unknown": "写操作结果未确认，请先核对",
+    "resolve_unknown_before_resume": "请先确认未知步骤的结果",
+    "patch_plan_before_resume": "请先调整计划再恢复",
+}
+
+
 def _fail(exc: Exception) -> HTTPException:
     if isinstance(exc, KeyError):
         return HTTPException(status_code=404, detail={"reason_code": "work_not_found",
                                                       "message": "工作项不存在"})
-    return HTTPException(status_code=409, detail={"reason_code": str(exc),
-                                                  "message": str(exc)})
+    code = str(exc)
+    return HTTPException(status_code=409, detail={"reason_code": code,
+                                                  "message": WORK_ERROR_MESSAGES.get(code, code)})
 
 
 @router.post("")
