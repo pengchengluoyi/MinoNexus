@@ -300,7 +300,7 @@ def upsert_agent_session(db: Session, work: WorkItem, *, agent_id: str,
 
 def remember(db: Session, work: WorkItem, *, agent_id: str, kind: str,
              content: str, source_ref: str = "", confidence: int = 50,
-             ttl_days: int = 0, scope: str = "work") -> WorkAgentMemory | None:
+             ttl_days: int = 90, scope: str = "work") -> WorkAgentMemory | None:
     text = str(content or "").strip()
     if not text:
         return None
