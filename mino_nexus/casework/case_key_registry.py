@@ -592,13 +592,10 @@ def _automatability(ua: dict[str, Any]) -> dict[str, str]:
         return {"class": "A", "label": "可直接执行", "reason": ""}
     if status == "needs_setup":
         return {"class": "B", "label": "需准备前置/数据", "reason": reason}
-    if status == "partial":
+    if status in {"partial", "blocked"} or blockers:
+        # C/D/E 合并：凡不能整案直接跑满的，统一为 C，细节留在 reason / blocked_by。
         return {"class": "C", "label": "仅部分可 UI 自动化", "reason": reason}
-    classes = {str(item.get("class") or "") for item in blockers}
-    reasons = {str(item.get("reason") or "") for item in blockers}
-    if "source" in classes or any(code.startswith("compile_") for code in reasons):
-        return {"class": "E", "label": "定义/编译无效", "reason": reason}
-    return {"class": "D", "label": "非 UI 或需拆段", "reason": reason}
+    return {"class": "C", "label": "仅部分可 UI 自动化", "reason": reason}
 
 
 def import_row_key_summary(row: dict[str, Any], *, project_id: str, app_id: str = "", env_doc: dict[str, Any] | None = None) -> dict[str, Any]:

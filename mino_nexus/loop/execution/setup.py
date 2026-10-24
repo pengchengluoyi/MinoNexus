@@ -89,6 +89,11 @@ def prepare_run(
         cursor.execution_context = ctx
         cursor.verified_check_points = {}
         cursor.phase = "prep"
+        meta = case.get("meta") if isinstance(case.get("meta"), dict) else {}
+        summary = meta.get("intent_summary") if isinstance(meta.get("intent_summary"), dict) else {}
+        first_intent = next((str(x) for x in (summary.get("intents") or []) if str(x)), "")
+        if first_intent:
+            setattr(cursor, "current_intent_id", first_intent)
     ctx._step_cursor = cursor
     from mino_nexus.loop.step_contract import bind_run_cursor
 

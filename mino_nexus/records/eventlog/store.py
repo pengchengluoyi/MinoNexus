@@ -337,6 +337,9 @@ def finalize_bound(*, session_id, body, turn=0, phase="done"):
              "verdict": {"verification_status": verification, "outcome": str(body.get("status") or "unknown"),
                          "reason_code": body.get("reason_code") or "ordinary_execution_result",
                          "failure_stage": body.get("failure_stage") or "", "case_step": int(body.get("case_step") or 0),
+                         "attribution_class": str(body.get("attribution_class") or ""),
+                         "attribution_label": str(body.get("attribution_label") or ""),
+                         "layer": str(body.get("layer") or ""),
                          "evidence_scope": (meta.get("verdict") or {}).get("evidence_scope") or {"session_id": session_id, "through_seq": meta["event_count"]},
                          "binding_id": meta["runtime_context"]["execution_binding"]["binding_id"]}}
     # Stable content identity; identical retries succeed, changed outcomes conflict.

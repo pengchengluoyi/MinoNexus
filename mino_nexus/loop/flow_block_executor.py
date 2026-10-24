@@ -160,6 +160,7 @@ def try_dispatch_block_hook(
     writer: Any = None,
 ) -> Optional[dict[str, Any]]:
     """若当前里程碑有待执行 hook，dispatch 对应 cap（与 catalog 步骤对齐）。"""
+    phase = str(getattr(cursor, "phase", "") or "")
     from mino_nexus.loop.milestones import write_state
     from mino_nexus.navigation.geometry.ui_consent import find_consent_control, tap_params_for_control
     from mino_nexus.loop.milestones import write_state
@@ -232,33 +233,15 @@ def try_dispatch_block_hook(
             "case_fail": True,
             "status": "blocked",
             "error_kind": "capability_unavailable",
-            "summary": f"{cap} 未启用或当前不可覆盖，不能派发",
+            "reason_code": "unavailable_cap",
+            "attribution_class": "B",
+            "attribution_label": "程序缺口",
+            "layer": "dispatch",
+            "summary": f"{cap} 未启用或生命周期不可派发",
             "capability_id": cap,
             "milestone_id": mid,
         }
-    from mino_nexus.catalog.skill_channel import phase_allows, system_device_dispatch
-
-    phase = str(getattr(cursor, "phase", "") or "")
-    if (
-        phase in ("prep", "do", "check")
-        and not is_program_caller(cap)
-        and not system_device_dispatch(cap)
-        and not phase_allows(cap, phase)
-    ):
-        if writer is not None:
-            writer.append(
-                "guard/block",
-                {"capability_id": cap, "reason": "phase", "phase": phase, "milestone_id": mid},
-            )
-        return {
-            "ok": False,
-            "case_fail": True,
-            "status": "blocked",
-            "error_kind": "capability_phase_mismatch",
-            "summary": f"{cap} 不能在{phase}阶段派发",
-            "capability_id": cap,
-            "milestone_id": mid,
-        }
+    # 阶段门已拆除：prep / do / check 只用于裁剪 prompt，不再阻断程序派发（规划 §3）。
 
     hist = list(history_lines or [])
     intents = set(getattr(cursor, "step_intents_done", None) or set())

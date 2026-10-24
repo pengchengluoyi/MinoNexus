@@ -164,26 +164,28 @@ def capability_observe(cap_id: str) -> str:
 
 
 def capability_dispatch_ok(cap_id: str) -> bool:
-    """派发前：不可用或当前不可覆盖都不派。"""
-    if canonical_cap(cap_id).startswith("guard.") or canonical_cap(cap_id) in V5_EXCLUDED_IDS or canonical_cap(cap_id) in RETIRED_BUSINESS_EVENTS:
+    """派发前只问：能力是否启用、生命周期是否 active。
+
+    ``ui_coverable`` 是覆盖统计字段，不是权限：把它拿来拦派发会让「手能点、目录也声明了
+    实现」的合法事件永远发不出去（规划 §4 / §6）。平台是否支持由 binding / EXECUTE 的
+    platform 合同判断，不在这一层重复收窄。
+    """
+    cap = canonical_cap(cap_id)
+    if cap.startswith("guard.") or cap in V5_EXCLUDED_IDS or cap in RETIRED_BUSINESS_EVENTS:
         return False
     if str(cap_id or "").startswith(("human_", "signal_", "recover_")) or str(cap_id or "") == "run_flow_block":
         return True
-    return capability_enabled(cap_id) and capability_ui_coverable(cap_id)
+    return capability_enabled(cap_id)
 
 
 def phase_allows(cap_id: str, phase: str) -> bool:
-    """阶段只卡一次：目录 phases 不含本阶段就拒绝。没有 phases 的行不在这里拦。"""
-    cap = canonical_cap(cap_id)
-    if not cap or cap.startswith(("human_", "signal_", "recover_")) or cap == "run_flow_block":
-        return True
-    from mino_nexus.catalog.registry import get_capability
+    """阶段只缩 prompt，不进派发权限（规划 §3）。
 
-    row = get_capability(cap)
-    phases = [str(x) for x in (getattr(row, "phases", None) or [])] if row is not None else []
-    if not phases:
-        return False
-    return str(phase or "").strip().lower() in phases
+    保留函数是为了兼容旧调用点；``prep`` / ``do`` / ``check`` 不再作为准入门。
+    模型菜单仍用 ``menu_caller_ok`` 按阶段裁剪，程序派发只看平台能力与应用声明。
+    """
+    del cap_id, phase
+    return True
 
 
 def menu_caller_ok(cap: Any, phase: str) -> bool:
@@ -247,6 +249,10 @@ def apply_channel_skip(row: dict[str, Any], platform: str) -> bool:
         return restored
     row["status"] = "skipped" if row.get("optional") else "failed"
     row["skip_reason" if row.get("optional") else "failure_reason"] = "channel_absent"
+    row["reason_code"] = "channel_absent"
+    row["layer"] = "dispatch"
+    row["attribution_class"] = "A"
+    row["attribution_label"] = "平台缺口"
     row["evidence"] = "当前渠道缺少必需能力，请在 Workbench 核对目录版本与平台" if not row.get("optional") else "channel_absent"
     row["skipped_by" if row.get("optional") else "failed_by"] = "channel"
     return True
@@ -286,14 +292,17 @@ def milestone_caps_registered(
         local = cap in LOCAL_EXECUTORS or cap in LOCAL_EXECUTOR_IDS or cap.startswith(("recover_", "signal_"))
         if local:
             return capability_dispatch_ok(cap) and channel_supports(cap, platform)
-        if not (allow_program and (is_program_caller(cap) or system_device_dispatch(cap))):
-            return False
         from mino_nexus.catalog.registry import get_capability
 
         row = get_capability(cap)
         impls = list(getattr(row, "implementations", None) or []) if row is not None else []
         if not impls or not capability_dispatch_ok(cap):
             return False
+        if is_program_caller(cap) or system_device_dispatch(cap):
+            if not allow_program:
+                return False
+        # 菜单只缩 prompt。能力目录有实现、平台也声明支持，就不该因为「没进当前阶段
+        # 菜单」被判成整案不可执行（规划 §3/§4）。
         return channel_supports(cap, platform)
 
     primary: list[str] = []

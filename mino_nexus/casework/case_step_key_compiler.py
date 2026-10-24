@@ -156,12 +156,11 @@ def _cap_block_reason(cap_id: str) -> str:
     cid = str(cap_id or "").strip()
     if not cid:
         return ""
-    from mino_nexus.catalog.skill_channel import capability_enabled, capability_ui_coverable
+    from mino_nexus.catalog.skill_channel import capability_enabled
 
     if not capability_enabled(cid):
         return "unavailable_cap"
-    if not capability_ui_coverable(cid):
-        return "uncoverable_event"
+    # ui_coverable=false 只进覆盖统计，不再把事件判成不可编译、不可下发（规划 §4/§6）。
     return ""
 
 
@@ -197,7 +196,7 @@ def _blocked_item(
 
 
 _CAPABILITY_BLOCK_REASONS = frozenset(
-    {"unavailable_cap", "uncoverable_event", "platform_unsupported", "capability_disabled"}
+    {"unavailable_cap", "uncoverable_event", "platform_unsupported", "capability_disabled", "missing_ref"}
 )
 
 
@@ -221,8 +220,18 @@ def _enrich_blocker(item: dict[str, Any]) -> dict[str, Any]:
         row["severity"] = "degraded"
     elif reason in ("human_only", "advisory"):
         row["severity"] = reason
+    elif reason in _CAPABILITY_BLOCK_REASONS:
+        # 能力缺口是运行时归因 A/B 的输入，不是编译期死刑（规划 §4/§6）。
+        row["severity"] = "risk"
     else:
         row["severity"] = str(row.get("severity") or "blocking")
+    from mino_nexus.contract.attribution import classify_reason
+
+    attribution = classify_reason(reason, layer="compile")
+    row.setdefault("reason_code", reason)
+    row.setdefault("layer", "compile")
+    row.setdefault("attribution_class", attribution["attribution_class"])
+    row.setdefault("attribution_label", attribution["attribution_label"])
     return row
 
 
@@ -270,6 +279,7 @@ def _build_ui_automation(case: dict[str, Any], step_keys: dict[str, Any],
         do_steps += len((bundle.get("do_program_plan") or {}).get("steps") or [])
         check_steps += len((bundle.get("check_program_plan") or {}).get("checkpoints") or [])
     blocking = [item for item in blocked if str(item.get("severity") or "blocking") == "blocking"]
+    risks = [item for item in blocked if str(item.get("severity") or "") == "risk"]
     ui_blocking = [item for item in blocking if str(item.get("class") or "") in {"operation", "source"}]
     oracle_blocking = [item for item in blocking if str(item.get("class") or "") == "oracle"]
     setup_items = [item for item in blocked if str(item.get("class") or "") == "setup"]
@@ -277,7 +287,7 @@ def _build_ui_automation(case: dict[str, Any], step_keys: dict[str, Any],
     manual_oracle = _has_manual_check(step_keys)
     if not do_steps and not check_steps:
         ui_plan = "none"
-    elif ui_blocking:
+    elif ui_blocking or risks:
         ui_plan = "partial"
     else:
         ui_plan = "complete"
@@ -291,16 +301,20 @@ def _build_ui_automation(case: dict[str, Any], step_keys: dict[str, Any],
         str(item.get("class") or "") == "source" and str(item.get("phase") or "") == "prep"
         for item in blocking
     )
-    if ui_plan == "none" or source_in_prep or setup_state == "blocked":
+    if source_in_prep or setup_state == "blocked":
         status = "blocked"
-    elif ui_plan == "partial" or oracle_state == "missing":
-        status = "partial"
+    elif ui_plan == "none":
+        # 完全没有步骤，且没有任何可归因的能力缺口：这是定义/编译问题。
+        status = "blocked" if not risks else "runnable"
     elif setup_state != "ready":
         status = "needs_setup"
     else:
+        # 部分步骤或断言无法自动化只记在 ui_plan / blocked_by，不把整条用例标成不可执行。
         status = "runnable"
     coverable = status in {"runnable", "needs_setup"}
     total = do_steps + check_steps
+    from mino_nexus.contract.attribution import merge_classes
+
     return {
         "schema": "mino.ui_automation.v2",
         "status": status,
@@ -319,8 +333,11 @@ def _build_ui_automation(case: dict[str, Any], step_keys: dict[str, Any],
         },
         "coverage": {
             "total_steps": total,
-            "covered_steps": max(0, total - len(ui_blocking) - len(oracle_blocking)),
+            "covered_steps": max(0, total - len(ui_blocking) - len(oracle_blocking) - len(risks)),
             "manual": 1 if manual_oracle else 0,
+            "risk_steps": len(risks),
+            "risk_items": risks,
+            "attribution_classes": merge_classes(blocked),
         },
         "blocked_by": blocked,
     }
@@ -1228,7 +1245,18 @@ def _stored_plan_fresh(plan: Any, source: str, *, platform: str = "", instructio
     if str(plan.get("source") or "") != str(source or ""):
         return False
     warnings = plan.get("compile_warnings") if isinstance(plan.get("compile_warnings"), list) else []
-    if any(isinstance(row, dict) and row.get("blocked") for row in warnings):
+    # 能力缺口（risk）/ 前置提示（degraded）不再让计划永久失效；只有真正的编译阻断
+    # 才要求重编，避免「每次读都重编一次」的空转（规划 §4）。
+    def _hard(row: Any) -> bool:
+        if not isinstance(row, dict) or not row.get("blocked"):
+            return False
+        blocked = row.get("blocked") if isinstance(row.get("blocked"), dict) else {}
+        reason = str(blocked.get("reason") or blocked.get("reason_code") or "")
+        if reason in _CAPABILITY_BLOCK_REASONS:
+            return False
+        return str(blocked.get("severity") or "blocking") == "blocking"
+
+    if any(_hard(row) for row in warnings):
         return False
     return True
 
@@ -1301,12 +1329,26 @@ def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
         for step in do_plan.get("steps") or []:
             if isinstance(step, dict):
                 collect(str(step.get("block_id") or ""))
+        # 意图图标注：步骤 → 意图节点（auth.login / order.place / app 私有块）。
+        # 只补字段，不改事件序列（规划 §3）。
+        from mino_nexus.knowledge.intent_graph import annotate_step, build_case_graph, validate
+
+        do_plan["steps"] = [annotate_step(step, app_id=app_id) for step in (do_plan.get("steps") or [])]
+        ck_plan["checkpoints"] = [annotate_step(item, app_id=app_id) for item in (ck_plan.get("checkpoints") or [])]
+        graph = build_case_graph(
+            list(do_plan.get("steps") or []) + list(ck_plan.get("checkpoints") or []),
+            app_id=app_id, case_id=str(case.get("case_id") or ""), case_step=n,
+        )
+        for issue in validate(graph, app_id=app_id):
+            all_warnings.append({"case_step": n, "layer": "intent", "blocked": issue})
         step_keys[str(n)] = {
             "operations": list(do_plan.get("key_refs") or []),
             "expected": list(ck_plan.get("key_refs") or []),
             "do_program_plan": do_plan,
             "check_program_plan": ck_plan,
             "required_capabilities": sorted(required_caps - {""}),
+            "intent_graph": graph,
+            "intent_ids": list(graph.get("intent_ids") or []),
         }
         all_warnings.extend(do_plan.get("compile_warnings") or [])
         all_warnings.extend(ck_plan.get("compile_warnings") or [])
@@ -1339,10 +1381,25 @@ def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
             item = _enrich_blocker(item)
             w["blocked"] = item
             blocked.append(item)
+    intent_ids: list[str] = []
+    domain_counts: dict[str, int] = {}
+    for bundle in step_keys.values():
+        for iid in bundle.get("intent_ids") or []:
+            if iid not in intent_ids:
+                intent_ids.append(str(iid))
+        for node in (bundle.get("intent_graph") or {}).get("nodes") or []:
+            dom = str(node.get("domain") or "")
+            domain_counts[dom] = domain_counts.get(dom, 0) + 1
     return {
         "step_program_keys": step_keys,
         "key_compile_warnings": all_warnings,
         "ui_automation": _build_ui_automation(case, step_keys, blocked),
+        "intent_summary": {
+            "schema": "mino.intent_graph.v1",
+            "case_id": str(case.get("case_id") or ""),
+            "intents": intent_ids,
+            "domains": domain_counts,
+        },
     }
 
 
@@ -1357,6 +1414,7 @@ def sync_case_step_program_keys(row: dict[str, Any]) -> dict[str, Any]:
     meta["step_program_keys"] = compiled["step_program_keys"]
     meta["key_compile_warnings"] = compiled["key_compile_warnings"]
     meta["ui_automation"] = compiled["ui_automation"]
+    meta["intent_summary"] = compiled.get("intent_summary") or {}
     meta["compile_provenance"] = compiled.get("compile_provenance", [])
     out["meta"] = meta
     return out

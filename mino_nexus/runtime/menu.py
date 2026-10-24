@@ -98,10 +98,12 @@ def available_menu_brief(
     tool_kinds: Optional[list[str]] = None,
     extra_ids: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
-    """id + summary。不把 platforms / implementations / low_level 塞进 prompt。"""
+    """id + summary。不把 platforms / implementations / low_level 塞进 prompt。
+
+    ``allowed`` 是绑定投影出的建议集合；没有绑定或投影失败时不再返回空菜单，
+    否则规划会直接 give_up，里程碑也会被误判成能力未注册（规划 §4）。
+    """
     allowed = _bound_menu_ids(ctx, phase)
-    if not allowed:
-        return []
     kind = (kind or "agent").strip().lower()
     plat = str(platform or getattr(ctx, "platform", "") or "").strip()
     from mino_nexus.catalog.skill_channel import menu_caller_ok
@@ -154,13 +156,30 @@ def available_menu_brief(
             row["parameters"] = parameters
         out.append(row)
         seen.add(cap.id)
+    # 逻辑块是意图宏，不再只藏在恢复菜单里：prep/do/check 都能按块 id 调度。
+    # 这样「意图识别 → 边展开 → 同一解释器」才有真正的执行入口（规划 §3）。
+    if (kind == "agent" and str(phase or "do") in ("prep", "do", "check")
+            and "run_flow_block" not in seen):
+        try:
+            from mino_nexus.loop.block_dispatch import dispatchable_block_ids
+
+            block_ids = dispatchable_block_ids(app_id=str(getattr(ctx, "app_id", "") or ""))
+        except Exception:  # noqa: BLE001 - 菜单降级不能拖垮整个决策
+            block_ids = []
+        if block_ids:
+            out.append({
+                "id": "run_flow_block", "kind": "recovery",
+                "summary": "执行意图/逻辑块（登录、协议、私有分支、恢复）；可用块：" + " / ".join(block_ids[:30]),
+            })
+            seen.add("run_flow_block")
     from mino_nexus.resources.local_tool_dependencies import evaluate
     # Keep unmet tools visible with a safe reason; never label them not_applicable.
     for row in out:
         facts = evaluate(row["id"], ctx=ctx)
         if facts:
             row["dependencies"] = facts
-    return [row for row in out if row['id'] in allowed]
+    return [row for row in out
+            if not allowed or row['id'] in allowed or row['id'] == "run_flow_block"]
 
 
 def recovery_menu_brief(ctx: RunContext, *, platform: str = "") -> list[dict[str, Any]]:
@@ -168,22 +187,22 @@ def recovery_menu_brief(ctx: RunContext, *, platform: str = "") -> list[dict[str
 
     writer = active_writer()
     allowed = _bound_menu_ids(ctx, writer.phase if writer else "prep")
-    if not allowed:
-        return []
     plat = str(platform or getattr(ctx, "platform", "") or "").strip()
     # 恢复不再按规则暴露虚拟能力：模型只有一个入口 run_flow_block(block_id)，
     # 具体做哪些步骤由块目录声明。
     rows: list[dict[str, Any]] = []
     if any(plugin_registry.platform_ok(list(rule.platforms or []), plat)
            for rule in plugin_registry.list_recovery_rules(enabled_only=True)):
-        from mino_nexus.loop.block_dispatch import recovery_block_ids
+        from mino_nexus.loop.block_dispatch import dispatchable_block_ids
 
-        rows.append({
-            "id": "run_flow_block",
-            "kind": "recovery",
-            "summary": "执行恢复逻辑块（" + " / ".join(recovery_block_ids()) + "）",
-        })
-    return [row for row in rows if row['id'] in allowed]
+        ids = dispatchable_block_ids(app_id=str(getattr(ctx, "app_id", "") or ""))
+        if ids:
+            rows.append({
+                "id": "run_flow_block",
+                "kind": "recovery",
+                "summary": "执行逻辑块（" + " / ".join(ids[:20]) + "）",
+            })
+    return [row for row in rows if not allowed or row['id'] in allowed]
 
 
 def capability_menu_diagnostics(ctx: RunContext) -> dict[str, Any]:

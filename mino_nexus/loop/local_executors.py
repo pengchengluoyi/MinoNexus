@@ -162,23 +162,43 @@ def dispatch_local(
                 error=unavailable["reason_code"], raw_response={"dependencies": dependencies},
                 elapsed_ms=int((time.time() - t0) * 1000))
     if cap == "run_flow_block":
-        from mino_nexus.loop.block_dispatch import recovery_block_ids, run_block
+        from mino_nexus.loop.block_dispatch import is_block_dispatchable, run_block
 
         params = dict(event.params or {})
         block_id = str(params.get("block_id") or "").strip()
-        allowed = recovery_block_ids()
+        intent_id = str(params.get("intent_id") or "").strip()
+        app_id = str(getattr(ctx, "app_id", "") or "")
+        if intent_id:
+            # 意图入口：与 prep/recover 共用同一个解释器（规划 §3）。
+            from mino_nexus.loop.event_interpreter import run_intent
+
+            out = run_intent(intent_id, ctx=ctx, router=router, params=params,
+                             run_id=str(params.get("run_id") or ""),
+                             purpose="plan_action",
+                             target_package=str(params.get("package") or ""))
+            return _result(
+                event,
+                status=EventStatus.PASS if out.get("ok") else EventStatus.FAIL,
+                summary=f"意图 {intent_id}：" + str(out.get("summary") or out.get("error") or ""),
+                error="" if out.get("ok") else str(out.get("error") or "intent_not_executable"),
+                elapsed_ms=int((time.time() - t0) * 1000),
+                executor="internal",
+                raw_response=out,
+            )
         if not block_id:
-            return _result(event, status=EventStatus.FAIL, summary="缺少 block_id",
+            return _result(event, status=EventStatus.FAIL, summary="缺少 block_id 或 intent_id",
                            error="missing_block_id", elapsed_ms=int((time.time() - t0) * 1000))
-        if block_id not in allowed:
+        # 不再限定 recovery 白名单：登录/协议/私有块都可由意图图调度（规划 §4/§6）。
+        if not is_block_dispatchable(block_id, app_id=app_id):
             return _result(event, status=EventStatus.FAIL,
-                           summary=f"块 {block_id} 不能由模型直接执行；可执行：{', '.join(allowed)}",
-                           error="block_not_allowed", elapsed_ms=int((time.time() - t0) * 1000),
-                           raw_response={"allowed_blocks": allowed})
+                           summary=f"块 {block_id} 未登记、未启用或没有可执行步骤",
+                           error="block_unknown", elapsed_ms=int((time.time() - t0) * 1000),
+                           raw_response={"block_id": block_id, "app_id": app_id})
         out = run_block(block_id, ctx=ctx, router=router,
                         run_id=str(params.get("run_id") or ""),
                         purpose="plan_action",
-                        target_package=str(params.get("package") or ""))
+                        target_package=str(params.get("package") or ""),
+                        params=params)
         return _result(
             event,
             status=EventStatus.PASS if out.get("ok") else EventStatus.FAIL,

@@ -133,21 +133,9 @@ def _run_case_list(
             "sn": sn,
             "app_id": str(doc.get("app_id") or ""),
         })
-        from mino_nexus.runtime.session_gate import clamp_case_scene
-        try:
-            scene = clamp_case_scene(case.get("case_scene"))
-        except ValueError as exc:
-            reason_code = str(exc)
-            reason = f"用例场景无效（{reason_code}），请重新编译当前用例；未执行设备动作"
-            _record_case_preflight_fail(run_id=run_id, case=case, reason=reason,
-                app_id=str(doc.get("app_id") or ""), sn=sn,
-                provider_id=provider_id, reason_code=reason_code, status="blocked")
-            run_store.patch_case(run_id, cid, target_sn=sn, status="blocked", summary=reason,
-                error=reason, reason_code=reason_code, execution_started="no",
-                **_case_trace_fields(run_id, case))
-            emit_testing_task({"event": "case_finished", "run_id": run_id, "task_id": run_id,
-                "case_id": cid, "sn": sn, "status": "blocked", "app_id": str(doc.get("app_id") or "")})
-            continue
+        from mino_nexus.runtime.session_gate import ensure_case_scene
+
+        scene = ensure_case_scene(case)
         from mino_nexus.resources import project_store as ps
         from mino_nexus.resources.case_resource_claim import (
             ensure_resource_key_on_case,
@@ -163,14 +151,24 @@ def _run_case_list(
             except KeyError:
                 project_id = ""
         env_doc = ps.project_env(project_id) if project_id else None
-        ensure_resource_key_on_case(
-            case,
-            env_doc=env_doc,
-            env=str(doc.get("env_profile") or "test"),
-            package=str(package or ""),
-        )
+        try:
+            ensure_resource_key_on_case(
+                case,
+                env_doc=env_doc,
+                env=str(doc.get("env_profile") or "test"),
+                package=str(package or ""),
+            )
+        except ValueError as exc:
+            reason = str(exc)[:240]
+            _record_case_preflight_fail(
+                run_id=run_id, case=case, reason=reason, app_id=app_id, sn=sn,
+                provider_id=str(doc.get("provider_id") or ""), reason_code=reason.split(":", 1)[0],
+            )
+            run_store.patch_case(run_id, cid, target_sn=sn, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
+            emit_testing_task({"event": "case_finished", "run_id": run_id, "task_id": run_id, "case_id": cid, "status": "fail", "app_id": app_id})
+            continue
         rk = case.get("resource_key") if isinstance(case.get("resource_key"), dict) else None
-        merged_scene = case.get("case_scene") if isinstance(case.get("case_scene"), dict) else scene
+        merged_scene = scene
         sn_state = get_sn_state(continuity_by_sn, sn)
         cont_block = continuity_blockers(
             sn_state,
@@ -196,13 +194,16 @@ def _run_case_list(
                 "app_id": app_id,
             })
             continue
-        blockers = run_start_resource_blockers(
-            rk,
-            scene=merged_scene,
-            precondition=str(case.get("precondition") or ""),
-            sn=sn,
-            package_id=str(package or ""),
-        )
+        try:
+            blockers = run_start_resource_blockers(
+                rk,
+                scene=merged_scene,
+                precondition=str(case.get("precondition") or ""),
+                sn=sn,
+                package_id=str(package or ""),
+            )
+        except ValueError as exc:
+            blockers = [str(exc)]
         if blockers:
             reason = blockers[0]
             _record_case_preflight_fail(
@@ -254,8 +255,10 @@ def _run_case_list(
                     app_id=app_id,
                     sn=sn,
                     provider_id=str(doc.get("provider_id") or ""),
+                    reason_code=str(lease_err or "resource_wait_deadline_exceeded"),
                 )
-                run_store.patch_case(run_id, cid, target_sn=sn, status="fail", summary=reason, error=reason, **_case_trace_fields(run_id, case))
+                run_store.patch_case(run_id, cid, target_sn=sn, status="fail", summary=reason, error=reason,
+                    reason_code=str(lease_err or "resource_wait_deadline_exceeded"), **_case_trace_fields(run_id, case))
                 emit_testing_task({
                     "event": "case_finished",
                     "run_id": run_id,

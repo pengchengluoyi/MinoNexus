@@ -64,8 +64,7 @@ def filter_capabilities(
     for cap in list_capabilities(kinds=kinds):
         if cap.enabled is False or cap.lifecycle != "active":
             continue
-        if getattr(cap, "ui_coverable", True) is False:
-            continue
+        # ui_coverable 只进覆盖统计，不再决定模型能否看见/程序能否派发（规划 §4）。
         if not platform_ok(list(cap.platforms or []), platform):
             continue
         kept: list[Implementation] = []

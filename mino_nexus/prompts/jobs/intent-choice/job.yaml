@@ -1,0 +1,34 @@
+id: intent-choice
+label: 意图选择
+summary: Jev 风格类型化选择（choice / noul / score），替代 Jev/Laya 托管接口
+engine: text_chat
+role: ''
+output_schema: json
+enabled: true
+sort_order: 0
+flags: []
+slots:
+- name: domain
+  kind: text
+- name: question
+  kind: text
+- name: options
+  kind: text
+- name: context
+  kind: text
+- name: image_base64
+  kind: image
+- name: image_mime
+  kind: text
+call:
+  temperature: 0.0
+  max_tokens: 400
+  timeout_sec: 45
+  json_mode: true
+image: {}
+system:
+- id: main
+  file: system/10-main.md
+user:
+- id: ask
+  file: user/10-ask.md

@@ -21,8 +21,7 @@ def otp_facts(otp, *, node, uid, events, executors):
     cap = events.get(GMAIL_CAP) or {}
     implementations = cap.get('implementations') or []
     supported = (cap.get('enabled') is True and cap.get('lifecycle') == 'active'
-        and cap.get('ui_coverable') is not False and cap.get('caller') == 'program'
-        and {'prep', 'do'} <= set(cap.get('phases') or [])
+        and cap.get('caller') == 'program'
         and any(row.get('id') == 'host_plugin' and row.get('available') is True
                 and GMAIL_CAP in (row.get('provides') or []) for row in executors)
         and any(impl.get('executor') == 'host_plugin' and impl.get('runs_on') == 'scout'

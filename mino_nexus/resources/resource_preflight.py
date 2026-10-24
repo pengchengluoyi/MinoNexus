@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from mino_nexus.core.step_text import precondition_requires_clear_cache
-from mino_nexus.resources.session.scene_gate import clamp_case_scene
+from mino_nexus.resources.session.scene_gate import case_scene_reference
 from mino_nexus.resources.case_resource_claim import (
     _case_resource_key,
     ensure_resource_key_on_case,
@@ -31,7 +31,7 @@ def claim_requires_clear_cache(
 ) -> bool:
     if precondition_requires_clear_cache(precondition):
         return True
-    scene_row = clamp_case_scene(scene if isinstance(scene, dict) else None)
+    scene_row = case_scene_reference(scene if isinstance(scene, dict) else None)
     for it in scene_row.get("prep_items") or []:
         if isinstance(it, dict) and str(it.get("kind") or "") == "clear_cache":
             return True
@@ -99,32 +99,7 @@ def run_start_resource_blockers(
         blockers.append("Web 用例需指定 URL / 包名（playwright 目标）")
     if plat == "ios" and not str(sn or "").strip():
         blockers.append("iOS 用例需指定设备 sn（WDA 节点）")
-    scene_row = clamp_case_scene(scene if isinstance(scene, dict) else None)
-    pre = str(precondition or "").strip()
-    da = claim.get("device_app") if isinstance(claim.get("device_app"), dict) else {}
-    req_sess = str(
-        da.get("required_session") or scene_row.get("required_session") or ""
-    ).strip().lower()
-    needs_guest = req_sess in ("guest", "logged_out") or scene_row.get("required_session") == "guest"
-    if not needs_guest:
-        return blockers
-    from mino_nexus.resources.session.scene_gate import session_prep_intent
-    # 差异可由前置修复，prep 完成时仍须当前观察证明未登录。
-    # 2026-10-22：安卓前置会用 clear_app_cache（pm clear）重置到未登录初态，与 web 同理不再拒跑。
-    if plat in ("web", "android") or session_prep_intent(scene=scene_row) == "logout":
-        return blockers
-    from mino_nexus.resources.device_app_session_store import get_session
-
-    row = get_session(str(sn).strip(), str(package_id).strip()) or {}
-    from mino_nexus.resources.accounts.session_match import normalize_device_session
-
-    cur = "unknown" if row.get("stale") else normalize_device_session(row.get("session") or "")
-    if cur != "logged_in":
-        return blockers
-    blockers.append(
-        "【拒跑】登记簿机态为 logged_in，用例要求未登录/已登出/游客，且未声明退出登录前置。"
-        "请先用 clear_app_cache（pm clear，清数据+缓存）重置到未登录初态，再重新观察确认。"
-    )
+    del scene, precondition
     return blockers
 
 
@@ -170,7 +145,7 @@ def prep_resource_gate_issues(
         return []
 
     claim = _claim_from_case(case)
-    scene = clamp_case_scene(
+    scene = case_scene_reference(
         getattr(ctx, "case_scene", None) if isinstance(getattr(ctx, "case_scene", None), dict) else None
     )
     pre = str(case.get("precondition") or scene.get("precondition") or "").strip()
@@ -195,37 +170,9 @@ def prep_resource_gate_issues(
 
     da = claim.get("device_app") if isinstance(claim, dict) and isinstance(claim.get("device_app"), dict) else {}
     req_sess = str(da.get("required_session") or scene.get("required_session") or "").strip().lower()
-    allow = [str(x).strip().lower() for x in (da.get("allow") or []) if str(x).strip()]
-    from mino_nexus.resources.session.scene_gate import session_prep_intent
-
-    prep_intent = session_prep_intent(scene=scene)
-    defer_device_session_gate = (
-        req_sess == "logged_in"
-        and prep_intent == "relogin"
-        and not bool(getattr(ctx, "_login_flow_transition_emitted", False))
-        and bool(getattr(ctx, "login_flow_macro_active", False))
-    )
-    if (
-        req_sess
-        and req_sess not in ("any", "")
-        and not defer_device_session_gate
-    ):
-        cur = effective_device_session(ctx, sn=sn, package_id=pkg)
-        if not _session_allows_required(req_sess, cur, allow):
-            hint = ""
-            if req_sess == "logged_in" and cur == "unknown":
-                hint = "请先完成登录流块或刷新登记簿机态。"
-            issues.append(
-                f"【资源门槛】device_app.session 需要 {req_sess}"
-                f"（允许 {allow or [req_sess]}），当前 {cur}。{hint}"
-            )
 
     binding = str(da.get("binding") or "").strip()
-    if (
-        binding == "must_match_lease"
-        and req_sess == "logged_in"
-        and not defer_device_session_gate
-    ):
+    if binding == "must_match_lease" and req_sess == "logged_in":
         pid, lease_aid = "", ""
         lease = getattr(ctx, "resource_lease", None) or {}
         if isinstance(lease, dict):
@@ -260,7 +207,7 @@ def preflight_device_app_gap(
     gaps = list(_base_gap(claim, sn=sn, package_id=package_id))
     if not ctx or not claim:
         return gaps
-    scene = clamp_case_scene(
+    scene = case_scene_reference(
         getattr(ctx, "case_scene", None) if isinstance(getattr(ctx, "case_scene", None), dict) else None
     )
     pre = ""

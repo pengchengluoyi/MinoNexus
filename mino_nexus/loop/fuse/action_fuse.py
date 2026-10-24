@@ -275,7 +275,10 @@ class ProgressGate:
         self, *, case_step: int, capability_id: str, guard_id: str,
         passed_milestones: tuple[str, ...], reason: str,
     ) -> Optional[str]:
-        """同一步、同一动作和守卫在没有新里程碑证据时只能被拒绝有限次数。"""
+        """只记录，不因「被拒次数」停整案（规划 §6：取消 skip_repeat×3 整案停）。
+
+        是否需要停，由界面指纹驱动的 no_progress 熔断判断；守卫本身不掌握这个证据。
+        """
         key = f"{case_step}:{capability_id}:{guard_id}"
         previous, count, first_reason = self._guard_rejections.get(key, ((), 0, reason))
         if previous == passed_milestones:
@@ -283,13 +286,12 @@ class ProgressGate:
         else:
             count, first_reason = 1, reason
         self._guard_rejections[key] = (passed_milestones, count, first_reason)
-        if count < 4:
-            return None
-        self.last_intervention = "stop"
-        return (
-            f"步骤 {case_step} 的 {capability_id} 连续 {count} 次被守卫 {guard_id} 拒绝，"
-            f"且必要里程碑没有新进展；已停止。首次阻塞：{first_reason[:180]}"
-        )
+        if count >= 3:
+            self.warning_hint = (
+                f"步骤 {case_step} 的 {capability_id} 已被 {guard_id} 拒绝 {count} 次；"
+                "请换一条意图边或换目标，程序不会仅因此结束整案。"
+            )
+        return None
 
     def note_submilestone_pass(self) -> None:
         """已确认的子里程碑进展开启新的停滞窗口，保留阶段总预算。"""
@@ -338,10 +340,13 @@ class ProgressGate:
                 f"【熔断·强制转向】已连续 {n} 次同类操作被拒绝；"
                 f"禁止再 swipe/tap/input，必须 signal_give_up（勿再盲点）。"
             )
-        if n >= FUSE_BLOCK_STOP_THRESHOLD or self.total_fuse_blocks >= 6:
+        # 只有「界面指纹确实没变」才算有证据的无进展熔断；单纯被拦截次数不构成停止依据。
+        if self.no_progress_streak >= NO_PROGRESS_THRESHOLD and (
+            n >= FUSE_BLOCK_STOP_THRESHOLD or self.total_fuse_blocks >= 6
+        ):
             self.last_intervention = "stop"
             return (
-                f"连续 {n} 次熔断拦截后仍重复尝试，判定陷入死循环。"
+                f"连续 {n} 次熔断拦截且界面指纹持续未变，判定陷入死循环。"
                 f"请 signal_give_up 结束本步。最近：{text[:160]}"
             )
         return None
@@ -400,15 +405,17 @@ class ProgressGate:
         ):
             return None
 
+        # 熔断拦截次数本身不再构成强制停止：只有指纹无进展（record_fuse_block）才停。
+        # 这里保留提示，让模型换目标/换意图边。
         if self.fuse_block_streak >= FUSE_BLOCK_STOP_THRESHOLD:
-            return (
-                f"【熔断·强制停止】已连续 {self.fuse_block_streak} 次被拦截，"
-                f"禁止再尝试 {cap_id}；必须 signal_give_up。"
+            self.warning_hint = (
+                f"【熔断·强制转向】已连续 {self.fuse_block_streak} 次被拦截；"
+                "请换目标或换意图边，不要在原动作上重试。"
             )
         if self.total_fuse_blocks >= 6:
-            return (
-                f"【熔断·强制停止】本阶段已累计 {self.total_fuse_blocks} 次熔断，"
-                f"必须 signal_give_up。"
+            self.warning_hint = (
+                f"【熔断·累计】本阶段已累计 {self.total_fuse_blocks} 次熔断；"
+                "请优先换一条策略边。"
             )
 
         explore = self.profile == "explore"

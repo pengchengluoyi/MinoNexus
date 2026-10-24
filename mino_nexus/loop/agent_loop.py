@@ -330,10 +330,6 @@ def run_case(
                     "reason": platform_error, "execution_started": "no", "retryable": False})
                 outcome = _finish(emit, status="env_blocked" if ordinary_contract_enabled else "blocked", summary="设备平台缺失或无效，请检查节点上报", steps=steps, t0=t0)
                 outcome.update(reason_code="device_platform_invalid", execution_started="no")
-            elif scene_error:
-                writer.append("contract/blocked", {"reason_code":"case_scene_invalid","reason":scene_error,"retryable":False})
-                outcome = _finish(emit,status="tool_blocked" if ordinary_contract_enabled else "blocked",summary=f"场景合同无效，需重新编译：{scene_error}",steps=steps,t0=t0)
-                outcome["reason_code"] = "case_scene_invalid"
             elif plat_skip:
                 def _skip_emit(phase: str, **extra: Any) -> None:
                     payload = {
@@ -357,6 +353,9 @@ def run_case(
                 outcome = _finish(_skip_emit, status="env_blocked" if ordinary_contract_enabled else "skip", summary=plat_skip, steps=steps, t0=t0)
                 outcome["reason_code"] = "platform_not_applicable"
             else:
+                if scene_error:
+                    writer.append("contract/blocked", {"reason_code": "obsolete_case_scene_field",
+                        "reason": scene_error, "retryable": False})
                 writer.append("scope/bind", {
                     "app_id": ctx.app_id, "project_id": ctx.project_id,
                     "case_project_id": str(case.get("project_id") or ""),
@@ -380,15 +379,14 @@ def run_case(
                             started_at=t0, max_steps=_TURN_SAFETY_CAP)
                         persist_contract(ctx.resolved_case, writer)
                         writer.append("execution/runtime", {"revision": EXECUTION_REVISION})
-                    writer.set_phase("prep")
                     execution_admitted = True
                 except BindingAdmissionError as exc:
                     writer.append("execution/blocked", {"reason_code": exc.reason_code,
-                        "diagnostics": exc.diagnostics, "execution_started": "no"})
+                        "diagnostics": exc.diagnostics, "execution_started": "yes",
+                        "handoff": "intent"})
                     writer.require_persisted()
-                    outcome = _finish(emit, status="tool_blocked" if ordinary_contract_enabled else "blocked", summary=exc.reason_code, steps=steps, t0=t0)
-                    outcome.update(reason_code=exc.reason_code, failure_stage="execution_binding", execution_started="no")
-                    return outcome
+                    execution_admitted = True
+                writer.set_phase("prep")
                 outcome = _run_loop(
                     emit=emit,
                     ctx=ctx,
@@ -651,8 +649,11 @@ def _run_loop(
     try:
         ctx.case_scene = ensure_case_scene(case, getattr(ctx, "case_scene", None))
     except ValueError as exc:
-        writer.append("contract/blocked", {"reason_code":"case_scene_invalid", "reason":str(exc), "retryable":False})
-        return _leave(status="blocked", summary=f"场景合同无效，需重新编译用例：{exc}", reason_code="case_scene_invalid")
+        writer.append("contract/blocked", {"reason_code": "obsolete_case_scene_field", "reason": str(exc), "retryable": False})
+        return _leave(status="blocked", summary=f"用例仍使用已废弃 scene 字段：{exc}", reason_code="obsolete_case_scene_field")
+    _notes = list((ctx.case_scene or {}).get("reference_notes") or [])
+    if _notes and writer:
+        writer.append("session/reference", {"notes": _notes, "case_scene": ctx.case_scene})
     ctx.case = case
     if isinstance(cursor, StepCursor):
         setattr(cursor, "case", case)
@@ -1070,11 +1071,11 @@ def _run_loop(
             from mino_nexus.resources.session.scene_gate import required_session
             from mino_nexus.navigation.login.evidence import can_commit
             if required_session(scene=ctx.case_scene) == "logged_in" and not can_commit(ctx):
-                writer.append("login/completion_blocked", {
-                    "reason_code": "login_identity_unverified", "status": "env_blocked",
+                writer.append("login/completion_advisory", {
+                    "reason_code": "login_identity_unverified",
+                    "status": "reference",
+                    "summary": "场景参考要求已登录，租约身份尚未核实；不阻断执行",
                 })
-                return _leave(status="env_blocked", reason_code="login_identity_unverified",
-                              summary="业务前置要求已登录，但当前租约账号身份尚未核实")
 
         cursor.login_session_hint = compile_login_session_hint(
             getattr(ctx, "case_scene", None),
@@ -1828,10 +1829,7 @@ def _run_loop(
                 continue
 
         from mino_nexus.loop.fuse.dispatch_gate import GuardVerdict
-        from mino_nexus.loop.flow_block_guards import (
-            evaluate_flow_block_guards,
-            filter_registry_guards_for_milestones,
-        )
+        from mino_nexus.loop.flow_block_guards import evaluate_flow_block_guards
         from mino_nexus.loop.registry import run_guards_verdict
 
         from mino_nexus.loop.focus_turn import try_satisfy_focus_instead_of_repeat
@@ -1841,10 +1839,7 @@ def _run_loop(
         ):
             _log_turn_end(writer, cap=cap_id, status="pass")
             continue
-        _guard_names = filter_registry_guards_for_milestones(
-            list(phase_cfg.get("guards") or []),
-            cursor,
-        )
+        _guard_names = list(phase_cfg.get("guards") or [])
         guard_vision_remediate: AgentDecision | None = None
         _fb_guard = evaluate_flow_block_guards(guard_ctx, cursor)
         if _fb_guard is not None and not _fb_guard.allowed:
@@ -1865,6 +1860,7 @@ def _run_loop(
                 case=case,
                 guard_ctx=guard_ctx,
                 guard_verdict=guard_verdict,
+                skip_reason=skip_reason,
                 phase_tool_kinds=phase_tool_kinds,
                 history=history,
                 inspect_slots=inspect_slots,

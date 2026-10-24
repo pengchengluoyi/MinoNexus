@@ -402,210 +402,6 @@ def _guard_block_do_after_step_goal(ctx: dict[str, Any]) -> Optional[str]:
     )
 
 
-def _guard_block_repeat_get_otp_when_ready(ctx: dict[str, Any]) -> Optional[str]:
-    if str(ctx.get("cap_id") or "") != "get_otp":
-        return None
-    if str(ctx.get("phase") or "") != "do":
-        return None
-    step_cursor = ctx.get("step_cursor")
-    from mino_nexus.loop.milestones import (
-        _milestone_passed,
-        login_flow_under_milestones,
-        milestone_by_id,
-        read_state,
-    )
-
-    if not login_flow_under_milestones(step_cursor):
-        return None
-    row = milestone_by_id(read_state(step_cursor), "otp_fill")
-    if not row or not row.get("otp_ready") or _milestone_passed(row):
-        return None
-    return (
-        "验证码已在服务端就绪（otp_ready）；请 input_text(field=sms_code) 填入验证码框，"
-        "勿重复 get_otp。"
-    )
-
-
-def _guard_require_sms_send_before_otp(ctx: dict[str, Any]) -> Optional[str]:
-    from mino_nexus.loop.login_verification import verification_send_required_message
-    from mino_nexus.loop.flow_block_guards import registry_login_guards_suppressed
-
-    if registry_login_guards_suppressed(ctx):
-        return None
-    cap = str(ctx.get("cap_id") or "")
-    if cap not in ("get_otp", "input_text"):
-        return None
-    if str(ctx.get("phase") or "") != "do":
-        return None
-    cur = ctx.get("cursor")
-    instr = str(getattr(cur, "instruction", "") or "").strip() if cur else ""
-    from mino_nexus.loop.step_contract import instruction_allows_login_flow
-
-    if not instruction_allows_login_flow(
-        instr,
-        login_module_case=bool(ctx.get("login_module_case")),
-    ):
-        return None
-    if cap == "input_text":
-        field = str((ctx.get("params") or {}).get("field") or "").lower()
-        if field not in ("sms_code", "验证码"):
-            return None
-    hist = list(ctx.get("history_lines") or [])
-    step_cursor = ctx.get("step_cursor")
-    done = set(getattr(step_cursor, "step_intents_done", None) or set()) if step_cursor else set()
-    from mino_nexus.loop.login_submit import _email_login_kind, _email_ready_for_otp, _sms_send_done
-
-    if cap == "input_text" and _email_login_kind(ctx.get("run_ctx")):
-        field = str((ctx.get("params") or {}).get("field") or "").lower()
-        if field in ("phone", "username", "login_phone"):
-            return (
-                "当前为邮箱登录（login.kind=email）：须完成账号填写（account_fill），"
-                "禁止 field=phone（勿填 display_name/用户名）。"
-            )
-        text = str((ctx.get("params") or {}).get("text") or "").strip()
-        if field in ("email", "login_email", "account") and text and "@" not in text:
-            return (
-                "邮箱登录的账号须含 @，勿填 display_name/用户名；"
-                "请完成 account_fill，由系统从号池写入。"
-            )
-    run_ctx = ctx.get("run_ctx") or ctx.get("ctx")
-    if cap == "get_otp" and _email_login_kind(run_ctx):
-        if not _email_ready_for_otp(hist, done):
-            from mino_nexus.loop.login_verification import verification_send_required_message
-
-            return verification_send_required_message(run_ctx)
-    if _sms_send_done(hist, done):
-        from mino_nexus.loop.login_verification import record_verification_send
-
-        if float(getattr(run_ctx, "otp_sent_at", 0) or 0) <= 0:
-            record_verification_send(run_ctx)
-        return None
-    blob = f"{ctx.get('session_block') or ''}\n{instr}"
-    if not re.search(r"验证码|短信|sms|otp|Send|邮箱", blob, re.I):
-        return None
-    from mino_nexus.loop.login_verification import verification_send_required_message
-
-    return verification_send_required_message(run_ctx)
-
-
-def _guard_block_repeat_email_tab(ctx: dict[str, Any]) -> Optional[str]:
-    """Web/邮箱登录：Email 标签已选过则禁止再 tap，逼模型 input_text(field=email)。"""
-    from mino_nexus.loop.flow_block_guards import registry_login_guards_suppressed
-
-    if registry_login_guards_suppressed(ctx):
-        return None
-    if str(ctx.get("cap_id") or "") != "tap_element":
-        return None
-    if str(ctx.get("phase") or "") != "do":
-        return None
-    from mino_nexus.contract.execution.ui import ui_channel_from_ctx, UiChannel
-
-    run_ctx = ctx.get("run_ctx") or ctx.get("ctx")
-    if ui_channel_from_ctx(run_ctx) != UiChannel.WEB:
-        return None
-    params = dict(ctx.get("params") or {})
-    sel = str(
-        params.get("selector_text")
-        or params.get("text")
-        or params.get("content_desc")
-        or ""
-    )
-    # 仅放行小写 field 提示（input 框）；勿用 re.I，否则会误放行「Email」标签。
-    if sel.strip() == "email":
-        return None
-    if not re.search(r"\bEmail\b|邮箱", sel, re.I):
-        return None
-    if str(params.get("field") or params.get("login_field") or "").lower() in (
-        "email",
-        "login_email",
-    ):
-        return None
-    target = params.get("target")
-    if isinstance(target, dict):
-        role = str(target.get("role") or target.get("tag") or "").lower()
-        if role in ("textbox", "input", "combobox", "searchbox"):
-            return None
-        blob = " ".join(
-            str(target.get(k) or "") for k in ("text", "content_desc", "aria_label", "name")
-        )
-        if "@" in blob or re.search(r"gmail|mail\.|邮箱", blob, re.I):
-            return None
-    cur = ctx.get("cursor")
-    instr = str(getattr(cur, "instruction", "") or "").strip() if cur else ""
-    from mino_nexus.loop.step_contract import instruction_allows_login_flow
-
-    if not instruction_allows_login_flow(
-        instr,
-        login_module_case=bool(ctx.get("login_module_case")),
-    ):
-        return None
-    from mino_nexus.loop.email_login_auto import _email_input_done, _email_tab_selected
-
-    hist = list(ctx.get("history_lines") or [])
-    step_cursor = ctx.get("step_cursor")
-    done = (
-        set(getattr(step_cursor, "step_intents_done", None) or set())
-        if step_cursor
-        else set()
-    )
-    if _email_input_done(hist, done):
-        return None
-    if not _email_tab_selected(hist):
-        return None
-    return (
-        "Email 标签已选过；请 input_text(field=email) 填租号邮箱（含 @），"
-        "或用 tap_element 点击 Send 发邮箱验证码。禁止重复点 Email 标签。"
-    )
-
-
-def _guard_block_repeat_continue_submit(ctx: dict[str, Any]) -> Optional[str]:
-    """已废弃：重复点击由逻辑块 steps_json fuse（same_target_repeat）统一处理。"""
-    return None
-
-
-def _guard_require_otp_before_login_tap(ctx: dict[str, Any]) -> Optional[str]:
-    """已发码但未填验证码时禁止点「登录」，避免空转（须先 get_otp + input_text）。"""
-    from mino_nexus.loop.flow_block_guards import registry_login_guards_suppressed
-
-    if registry_login_guards_suppressed(ctx):
-        return None
-    if str(ctx.get("cap_id") or "") != "tap_element":
-        return None
-    if str(ctx.get("phase") or "") != "do":
-        return None
-    cur = ctx.get("cursor")
-    instr = str(getattr(cur, "instruction", "") or "").strip() if cur else ""
-    from mino_nexus.loop.step_contract import instruction_allows_login_flow
-
-    if not instruction_allows_login_flow(
-        instr,
-        login_module_case=bool(ctx.get("login_module_case")),
-    ):
-        return None
-    params = dict(ctx.get("params") or {})
-    sel = str(params.get("selector_text") or params.get("text") or params.get("content_desc") or "")
-    if not re.search(r"登录|立即登录", sel):
-        return None
-    step_cursor = ctx.get("step_cursor")
-    done = set(getattr(step_cursor, "step_intents_done", None) or set()) if step_cursor else set()
-    hist = list(ctx.get("history_lines") or [])
-    if "sms_send" not in done and not _history_cap_passed(hist, "request_sms_code"):
-        from mino_nexus.loop.login_submit import _sms_send_done
-
-        if not _sms_send_done(hist, done):
-            return None
-    if "otp_fill" in done:
-        return None
-    from mino_nexus.loop.login_submit import _otp_code_already_entered
-
-    if _otp_code_already_entered(hist, done):
-        return None
-    return (
-        "已发送验证码但尚未填入验证码框。"
-        "须先 get_otp（或程序链自动填码）再点登录；禁止空点登录按钮。"
-    )
-
-
 def _guard_require_session(ctx: dict[str, Any]) -> Optional[str]:
     """仅 prep 结束收工时核对 session；do 阶段勿拦 signal_done（否则 guest 用例在步骤 1 会 signal_done↔require_session 死循环）。"""
     if str(ctx.get("phase") or "") != "prep":
@@ -723,17 +519,6 @@ def _guard_action_fuse(ctx: dict[str, Any]) -> Optional[str]:
         login_flow_step=login_flow_step,
         web_channel=web_channel,
         milestone_id=focus_mid,
-    )
-
-
-def _guard_skip_repeat_check_run_env(ctx: dict[str, Any]) -> Optional[str]:
-    if str(ctx.get("phase") or "") != "prep":
-        return None
-    if str(ctx.get("cap_id") or "") != "check_run_env":
-        return None
-    return (
-        "前置不再切换测试环境；环境由批次 env_profile 确定。"
-        "请只做筛选账号、筛选设备、环境清理，或直接 signal_done。"
     )
 
 
@@ -1040,46 +825,6 @@ def _guard_skip_repeat_swipe_stuck(ctx: dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _guard_skip_repeat_satisfied_step_action(ctx: dict[str, Any]) -> Optional[str]:
-    """动作族次数上限（legacy）。do 阶段已从 skill_defs 移除，避免与 LLM 空转对打。"""
-    if str(ctx.get("phase") or "") != "do":
-        return None
-    cap = str(ctx.get("cap_id") or "")
-    if not cap or cap.startswith("signal_") or cap.startswith("recover_") or cap == "run_flow_block":
-        return None
-    from mino_nexus.loop.step_intent import instruction_required_intents, is_structural_cap
-
-    cur = ctx.get("cursor")
-    instr = str(getattr(cur, "instruction", "") or "").strip() if cur else ""
-    if instruction_required_intents(instr) or is_structural_cap(cap):
-        return None
-    step_cursor = ctx.get("step_cursor")
-    from mino_nexus.loop.step_contract import cap_action_family, instruction_action_counts
-
-    fam = cap_action_family(cap)
-    if not fam or fam == "key":
-        return None
-    need_n = int(instruction_action_counts(instr).get(fam) or 0)
-    if need_n <= 0:
-        return None
-    got = int((getattr(step_cursor, "step_family_counts", None) or {}).get(fam) or 0)
-    if got < need_n:
-        return None
-    if bool(getattr(step_cursor, "step_goal_met", False)):
-        return f"本步动作次数已达标且目标已达成，请 signal_done，勿再 {cap}。"
-    from mino_nexus.loop.step_intent import format_intent_progress
-
-    prog = format_intent_progress(
-        instruction=instr,
-        intents_done=getattr(step_cursor, "step_intents_done", None),
-    )
-    extra = f" {prog}" if prog else ""
-    return (
-        f"本步 {fam} 次数已达标（{got}/{need_n}），但达成信号未确认，勿重复 {cap}。"
-        f"请换目标元素/导航，或核对是否进错页后再 signal_done。{extra}"
-    )
-
-
 def _guard_prep_clear_before_launch(ctx: dict[str, Any]) -> Optional[str]:
     if str(ctx.get("phase") or "") != "prep":
         return None
@@ -1154,7 +899,6 @@ def apply_force_case_expectation(params: dict[str, Any], ctx: dict[str, Any]) ->
 GUARDS: dict[str, GuardFn] = {
     "deny_mutate": _guard_deny_mutate,
     "skip_repeat_read_device": _guard_skip_repeat_read_device,
-    "skip_repeat_check_run_env": _guard_skip_repeat_check_run_env,
     "skip_repeat_get_app_version": _guard_skip_repeat_get_app_version,
     "skip_repeat_launch_app": _guard_skip_repeat_launch_app,
     "skip_repeat_fsm_open_loop": _guard_skip_repeat_fsm_open_loop,
@@ -1162,7 +906,6 @@ GUARDS: dict[str, GuardFn] = {
     "block_fsm_off_step_target": _guard_block_fsm_off_step_target,
     "block_fsm_logged_in_session_drift": _guard_block_fsm_logged_in_session_drift,
     "skip_repeat_clear_app_cache": _guard_skip_repeat_clear_app_cache,
-    "skip_repeat_satisfied_step_action": _guard_skip_repeat_satisfied_step_action,
     "block_idle_wait_in_do": _guard_block_idle_wait_in_do,
     "swipe_direction_vs_instruction": _guard_swipe_direction_vs_instruction,
     "skip_repeat_swipe_stuck": _guard_skip_repeat_swipe_stuck,
@@ -1178,11 +921,6 @@ GUARDS: dict[str, GuardFn] = {
     "block_prep_guest_mine_tab": _guard_block_prep_guest_mine_tab,
     "block_back_without_nav_back_semantics": _guard_block_back_without_nav_back_semantics,
     "block_do_after_step_goal": _guard_block_do_after_step_goal,
-    "block_repeat_get_otp_when_ready": _guard_block_repeat_get_otp_when_ready,
-    "require_sms_send_before_otp": _guard_require_sms_send_before_otp,
-    "block_repeat_email_tab": _guard_block_repeat_email_tab,
-    "block_repeat_continue_submit": _guard_block_repeat_continue_submit,
-    "require_otp_before_login_tap": _guard_require_otp_before_login_tap,
     "exec_script_params": _guard_exec_script_params,
     "require_do_work": _guard_require_do_work,
     "block_assert_in_do": _guard_block_assert_in_do,

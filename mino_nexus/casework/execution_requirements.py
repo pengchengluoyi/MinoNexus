@@ -141,6 +141,7 @@ def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferre
         raise BindingAdmissionError('requirements_need_compile', diagnostics)
     operations = {}
     block_revisions = {}
+    capability_gaps = []
     def add(cid, phase, *, optional=False, source=None, requirement=None, declared_caller=None):
         cid = canonical_cap(cid)
         from mino_nexus.contract.business_event_contract import RETIRED
@@ -153,9 +154,14 @@ def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferre
         if cid in {'screenshot', 'hierarchy', 'probe_device_state'} or (cid == 'close_app' and platform == 'web'):
             caller = 'system'
         if not caller:
-            if optional:
-                return
-            raise BindingAdmissionError('catalog_capability_missing:' + cid)
+            # 能力目录缺行是 B 类缺口，不是整案死刑（规划 §4）。跳过该 operation，
+            # 运行时真正派发它时由 binding 给出 event_not_registered 并归因。
+            if not optional:
+                capability_gaps.append({'event_id': cid, 'phase': phase,
+                                        'reason_code': 'catalog_capability_missing',
+                                        'attribution_class': 'B', 'layer': 'dispatch',
+                                        'source': deepcopy(source or {})})
+            return
         key = phase + ':' + cid
         row = operations.setdefault(key, {'operation_ref': key, 'event_id': cid, 'phase': phase,
             'applicable': True, 'optional': optional, 'caller': caller, 'case_ref': str(case.get('case_id') or ''),
@@ -281,7 +287,7 @@ def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferre
         'execution_mode': 'agent', 'action_scheme': action_scheme, 'operations': rows,
         'required_operation_groups': required_groups, 'recovery_refs': recovery_refs,
         'provider_id': provider_id, 'block_revisions': block_revisions, 'resource_claim': deepcopy(claim), 'resource_scene': deepcopy(scene),
-        'resource_precondition': precondition,
+        'resource_precondition': precondition, 'capability_gaps': capability_gaps,
         'lease_requirements': [{'resource_ref': 'case-resource:' + revision}] if prep['flags']['need_lease'] else []}
 
 

@@ -1,25 +1,51 @@
 """按块 id 执行逻辑块步骤（模型与程序共用一条通路）。
 
 L0 恢复以前是「recover_<rule_id> 虚拟能力 + 规则自带 actions」，
-动作写两遍、名字也只有规则知道。现在统一成：块目录声明步骤，这里按顺序派发，
+动作写两遍、名字也只有规则知道。现在统一成：块目录声明步骤，
+由 ``loop/event_interpreter.py`` 这一个解释器按顺序派发；
 模型侧只暴露一个 run_flow_block(block_id)。
 """
 from __future__ import annotations
 
 from typing import Any
 
-from mino_nexus.core.log import SLog
-from mino_nexus.core.protocol import EventStatus
-from mino_nexus.core.schemas import PlanEvent
-
 TAG = "block_dispatch"
 
 
 def recovery_block_ids() -> list[str]:
-    """允许模型直接执行的块（目前只有 L0 恢复对应的那几块）。"""
+    """L0 恢复规则当前引用的块。仅用于菜单摘要，不再是派发白名单。"""
     from mino_nexus.catalog.flow_block_seed import RECOVERY_RULE_BLOCKS
 
     return sorted(set(RECOVERY_RULE_BLOCKS.values()))
+
+
+def dispatchable_block_ids(*, app_id: str = "") -> list[str]:
+    """所有已启用、可在当前应用下解析到步骤的块。
+
+    规划 §4/§6：登录、协议、私有分支由意图图调度，不再靠 recovery 白名单藏能力。
+    这里只按目录（块是否存在、是否 enabled）判断，不按块名猜用途。
+    """
+    from mino_nexus.navigation.atlas.nav_flow_block_catalog import list_catalog, resolve_effective_steps
+
+    out: list[str] = []
+    for row in list_catalog(app_id=str(app_id or "")):
+        bid = str(row.get("block_id") or "").strip()
+        if not bid or bid in out:
+            continue
+        try:
+            steps = resolve_effective_steps(app_id=str(app_id or ""), block_id=bid)
+        except Exception:  # noqa: BLE001 - 单个坏块不能清空整个菜单
+            continue
+        if steps:
+            out.append(bid)
+    return sorted(out)
+
+
+def is_block_dispatchable(block_id: str, *, app_id: str = "") -> bool:
+    from mino_nexus.navigation.atlas.nav_flow_block_catalog import load_block_row
+
+    row = load_block_row(app_id=str(app_id or ""), block_id=str(block_id or ""))
+    return bool(row and row.get("enabled") and row.get("steps_json"))
 
 
 def resolve_block_steps(block_id: str, *, app_id: str = "") -> list[dict[str, Any]]:
@@ -36,60 +62,12 @@ def run_block(
     run_id: str = "",
     purpose: str = "plan_action",
     target_package: str = "",
+    params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """按块步骤顺序派发，遇失败即停；返回聚合结果（不抛异常）。"""
-    block = str(block_id or "").strip()
-    if not block:
-        return {"ok": False, "status": "fail", "error": "missing_block_id",
-                "summary": "没有给出逻辑块 id", "actions": []}
-    steps = resolve_block_steps(block, app_id=str(getattr(ctx, "app_id", "") or ""))
-    if not steps:
-        SLog.w(TAG, f"逻辑块 {block} 没有可执行步骤")
-        return {"ok": False, "status": "fail", "error": "block_empty",
-                "summary": f"逻辑块 {block} 没有可执行步骤", "actions": []}
-    pkg = str(target_package or getattr(ctx, "target_package", "") or "")
-    rid = str(run_id or getattr(ctx, "run_id", "") or "")
-    actions: list[dict[str, Any]] = []
-    last_error = ""
-    for idx, step in enumerate(steps, 1):
-        if not isinstance(step, dict):
-            continue
-        cap = str(step.get("hook_cap") or step.get("cap") or "").strip()
-        if not cap:
-            continue
-        params = dict(step.get("params") or {})
-        if cap in ("launch_app", "close_app") and pkg:
-            params.setdefault("package", pkg)
-        if cap in ("launch_app", "open_app"):
-            params.setdefault("package", pkg)
-        event = PlanEvent(
-            seq=idx,
-            capability_id=cap,
-            event_kind=cap,
-            params=params,
-            ai_reasoning=f"逻辑块 {block}：{step.get('title') or cap}",
-            label=str(step.get("title") or cap),
-        )
-        try:
-            res = router.dispatch(event, run_id=rid, step_idx=idx, ctx=ctx, diagnostic_purpose=purpose)
-        except Exception as exc:  # noqa: BLE001
-            SLog.w(TAG, f"逻辑块 {block} 步骤 {cap} 派发异常：{exc!r}")
-            last_error = str(exc)
-            actions.append({"capability": cap, "status": "fail", "summary": last_error[:200]})
-            break
-        status = str(getattr(getattr(res, "status", None), "value", getattr(res, "status", "")) or "")
-        ok = status == EventStatus.PASS.value
-        actions.append({"capability": cap, "status": status or "unknown",
-                        "summary": str(getattr(res, "summary", "") or "")[:200]})
-        if not ok:
-            last_error = str(getattr(res, "error", "") or getattr(res, "summary", "") or status)
-            break
-    ok_all = bool(actions) and all(a["status"] == EventStatus.PASS.value for a in actions)
-    return {
-        "ok": ok_all,
-        "status": "pass" if ok_all else "fail",
-        "error": "" if ok_all else (last_error or "block_step_failed"),
-        "summary": "；".join(f"{a['capability']}:{a['status']}" for a in actions)[:300],
-        "actions": actions,
-        "block_id": block,
-    }
+    """委托给单一事件解释器；保留此入口给恢复/本地 executor 使用。"""
+    from mino_nexus.loop.event_interpreter import run_block as _run_block
+
+    out = _run_block(block_id, ctx=ctx, router=router, run_id=run_id, purpose=purpose,
+                     target_package=target_package, params=params)
+    out.setdefault("block_id", str(block_id or ""))
+    return out

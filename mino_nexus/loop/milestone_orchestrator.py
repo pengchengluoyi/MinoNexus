@@ -71,6 +71,8 @@ def ensure_single_in_progress(cursor: Any, *, writer: Any = None) -> bool:
     for row in ms:
         if not isinstance(row, dict):
             continue
+        if row.get("intent_id") and str(row.get("hook_cap") or "") == "run_flow_block":
+            continue
         if platform and apply_channel_skip(row, platform):
             continue
         st = str(row.get("status") or "pending").strip().lower()
@@ -78,18 +80,21 @@ def ensure_single_in_progress(cursor: Any, *, writer: Any = None) -> bool:
             continue
         if _required_failed_before(ms, row):
             continue
+        if row.get("intent_handoff"):
+            continue
         if row.get('requirement') != 'conditional' and ctx is not None and not milestone_caps_registered(
             row, menu_ids, allow_program=True, platform=platform, phase=phase,
         ):
-            if row.get("optional"):
-                row["status"] = "skipped"
-                row["skip_reason"] = "unregistered"
-                row["skipped_by"] = "menu"
-            else:
-                row["status"] = "blocked"
-                row["error_kind"] = "capability_unavailable"
-                row["evidence"] = "必要步骤的能力未注册或不在当前可执行菜单中，不能跳过"
-                state["exit_allowed"] = False
+            from mino_nexus.loop.intent_handoff import mark_gap
+
+            mark_gap(row, reason="capability_unregistered")
+    for row in ms:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "") == "failed" and str(row.get("failure_reason") or "") == "channel_absent":
+            from mino_nexus.loop.intent_handoff import mark_gap
+
+            mark_gap(row, reason="channel_absent")
     state["milestones"] = ms
     write_state(cursor, state)
     if required_milestone_blocker(state) is not None:
@@ -751,6 +756,25 @@ def run_vision_orchestrated_turn(
 
     maybe_pop_interrupt(cursor, writer=writer)
     ensure_single_in_progress(cursor, writer=writer)
+    focus = in_progress_milestone(read_state(cursor))
+    if isinstance(focus, dict) and focus.get("intent_handoff"):
+        from mino_nexus.loop.intent_handoff import decision_for_gap
+
+        decision = decision_for_gap(focus, ctx=ctx, phase=str(getattr(cursor, "phase", "") or ""))
+        state = read_state(cursor)
+        for row in state.get("milestones") or []:
+            if isinstance(row, dict) and str(row.get("id") or "") == str(focus.get("id") or ""):
+                row.update(focus)
+                break
+        write_state(cursor, state)
+        if writer:
+            writer.append("intent/handoff", {
+                "intent_id": str(focus.get("intent_id") or ""),
+                "reason": str(focus.get("handoff_reason") or ""),
+                "question": str(focus.get("handoff_question") or "")[:240],
+                **dict(zip(("case_step", "phase"), step_scope_key(cursor))),
+            })
+        return OrchestratedTurn(decision=decision)
     blocked = required_milestone_failure(read_state(cursor))
     if blocked is not None:
         pf = blocked.get("program_fail") if isinstance(blocked.get("program_fail"), dict) else {}
@@ -1060,11 +1084,10 @@ def run_vision_orchestrated_turn(
                 "capability_id": cap,
                 **dict(zip(("case_step", "phase"), step_scope_key(cursor))),
             })
-        return OrchestratedTurn(
-            decision=AgentDecision(
-                status="give_up",
-                thought=f"所需能力 {cap or '未知'} 无法派发（{reason_code}）；里程碑未跳过。"[:500],
-            ),
-            plan_only=True,
-        )
+        from mino_nexus.loop.intent_handoff import decision_for_gap, mark_gap
+
+        gap = dict(focus or {})
+        gap["handoff_question"] = str(gap.get("title") or gap.get("source_clause") or cap or "继续当前步骤")
+        mark_gap(gap, reason=reason_code)
+        return OrchestratedTurn(decision=decision_for_gap(gap, ctx=ctx, phase=str(getattr(cursor, "phase", "") or "")))
     return OrchestratedTurn(decision=decision)

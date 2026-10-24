@@ -21,13 +21,23 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
             "block_id": {
                 "type": "string",
                 "description": (
-                    "要执行的逻辑块 id。恢复类：fb.global.app.foreground（把被测 App 拉回前台）、"
-                    "fb.global.app.restart（关进程再启动）、fb.global.device.wake（唤醒并解锁）、"
-                    "fb.global.system_dialog（系统权限弹窗）、fb.global.privacy.accept / .decline（协议弹窗）"
+                    "要执行的逻辑块 id。公共骨架：fb.global.login（登录意图边，含发码/取码/提交）、"
+                    "fb.global.logout、fb.global.consent（协议/系统弹窗，配 params.decision）、"
+                    "fb.global.app.foreground、fb.global.app.restart、fb.global.device.wake。"
+                    "App 私有块以 fb.app.* 开头；恢复块也可走这里。"
                 ),
             },
+            "decision": {
+                "type": "string",
+                "enum": ["accept", "decline", "allow", "deny"],
+                "description": "参数化弹窗分支；仅 fb.global.consent 使用",
+            },
+            "intent_id": {
+                "type": "string",
+                "description": "也可直接给意图 id（如 auth.login / auth.consent），由程序展开成块或事件",
+            },
         },
-        "required": ["block_id"],
+        "required": [],
     },
     "tap_element": {
         "type": "object",

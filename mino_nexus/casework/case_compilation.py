@@ -434,7 +434,6 @@ from mino_nexus.contract.case_view import readiness, source_view  # noqa: F401,E
 
 
 def ensure_execution_compilation(project_id, case_ids):
-    from mino_nexus.casework.case_preflight import partition_cases
     from mino_nexus.casework.case_store import _public
 
     repairable = {"compile_required", "compile_source_changed", "compile_contract_changed",
@@ -458,8 +457,12 @@ def ensure_execution_compilation(project_id, case_ids):
             else:
                 latest = None
             case = _public(row)
-            _, report = partition_cases([case])
-            reasons = {item.get("reason") for blocked in report["blocked"] for item in blocked.get("blocked_by", [])}
+            from mino_nexus.contract.case_view import readiness as case_readiness
+            from mino_nexus.casework.execution_requirements import ordinary_compilation_diagnostics
+            issue = case_readiness(case)
+            reasons = {issue} if issue else set()
+            reasons.update(str(item.get("reason") or "") for item in ordinary_compilation_diagnostics(case))
+            reasons.discard("")
             revision = db.get(CaseRevision, case["source_revision_id"]) if case.get("source_revision_id") else None
             same_input = bool(revision and revision.project_id == project_id and revision.case_id == case_id
                 and revision.input_digest == digest(input_view(case)))

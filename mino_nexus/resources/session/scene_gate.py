@@ -72,6 +72,8 @@ def prep_kind_phase(kind: str) -> str:
 
 
 def clamp_prep_items(raw: Any, warnings: Optional[list[str]] = None) -> list[dict[str, Any]]:
+    if raw is None:
+        raw = []
     if not isinstance(raw,list) or len(raw)>20: raise ValueError("scene_prep_items_invalid")
     out=[]
     for item in raw:
@@ -80,6 +82,72 @@ def clamp_prep_items(raw: Any, warnings: Optional[list[str]] = None) -> list[dic
         if item.get("kind") not in PREP_KINDS or item.get("kind")=="unknown": raise ValueError("scene_prep_kind_invalid")
         if item.get("phase") not in {"before_launch","after_launch"}: raise ValueError("scene_prep_phase_invalid")
         out.append(dict(item))
+    return out
+
+
+def case_scene_reference(raw: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """执行期参考场景：缺失/非法字段降级为默认值，写入 reference_notes，不拒跑。"""
+    notes: list[str] = []
+    if not isinstance(raw, dict):
+        return {
+            "required_session": "any",
+            "session_prep": "skip",
+            "device_need": "app",
+            "platform": "",
+            "prep_items": [],
+            "foreign_foreground_llm_image": "deny",
+            "auth_under_test": True,
+            "how": "reference",
+            "reference_only": True,
+            "reference_notes": ["case_scene 缺失，以下 session 要求仅作执行参考"],
+            "parse_warnings": [],
+        }
+    row = dict(raw)
+    sp = row.get("session_prep")
+    if sp not in _SESSION_PREP:
+        notes.append(f"session_prep={sp!r} 不在允许枚举，参考值 skip")
+        sp = "skip"
+    rs = row.get("required_session")
+    if rs not in _REQUIRED:
+        notes.append(f"required_session={rs!r} 不在允许枚举，参考值 any")
+        rs = "any"
+    dn = row.get("device_need")
+    if dn not in _DEVICE_NEED:
+        notes.append(f"device_need={dn!r} 不在允许枚举，参考值 app")
+        dn = "app"
+    if sp == "relogin" and rs == "guest":
+        notes.append("session_prep=relogin 与 required_session=guest 冲突，参考改为 skip + guest")
+        sp = "skip"
+    plat = target_platform(row.get("platform")) if row.get("platform") is not None else ""
+    prep_items: list[dict[str, Any]] = []
+    try:
+        prep_items = clamp_prep_items(row.get("prep_items"))
+    except ValueError as exc:
+        notes.append(str(exc))
+    policy = row.get("foreign_foreground_llm_image", "deny")
+    if policy not in {"deny", "allow_always"}:
+        notes.append(f"foreign_foreground_llm_image={policy!r} 无效，参考值 deny")
+        policy = "deny"
+    lr = row.get("lease_requirements")
+    if lr is not None and not isinstance(lr, dict):
+        notes.append("lease_requirements 类型无效，已忽略")
+        lr = None
+    out = {
+        **{k: v for k, v in row.items() if k not in ("session_prep", "required_session", "device_need", "platform", "prep_items", "how", "auth_under_test")},
+        "session_prep": sp,
+        "required_session": rs,
+        "device_need": dn,
+        "platform": plat,
+        "prep_items": prep_items,
+        "foreign_foreground_llm_image": policy,
+        "auth_under_test": sp != "relogin",
+        "how": "reference",
+        "reference_only": True,
+        "reference_notes": notes,
+        "parse_warnings": list(notes),
+    }
+    if lr is not None:
+        out["lease_requirements"] = lr
     return out
 
 
@@ -114,12 +182,23 @@ def session_prep_intent(
 ) -> str:
     """前置要对登录态做什么：relogin | logout | skip。只认 CaseScene，不再扫关键字。"""
     del _legacy
-    return str(clamp_case_scene(scene).get("session_prep") or "skip")
+    if isinstance(scene, dict) and (scene.get("reference_only") or scene.get("how") == "reference"):
+        return str(scene.get("session_prep") or "skip")
+    try:
+        return str(clamp_case_scene(scene).get("session_prep") or "skip")
+    except ValueError:
+        return str(case_scene_reference(scene).get("session_prep") or "skip")
 
 
 def scene_allows_account_reset(scene: Optional[dict[str, Any]] = None) -> bool:
     """退出/切号用例或前置要清缓存时，允许执行层动账号环境。"""
-    row = clamp_case_scene(scene)
+    if isinstance(scene, dict) and (scene.get("reference_only") or scene.get("how") == "reference"):
+        row = scene
+    else:
+        try:
+            row = clamp_case_scene(scene)
+        except ValueError:
+            row = case_scene_reference(scene)
     if str(row.get("session_prep") or "") == "skip":
         return True
     return any(str(it.get("kind") or "") == "clear_cache" for it in (row.get("prep_items") or []))
@@ -141,7 +220,12 @@ def required_session(precondition: str = "", scene: Optional[dict[str, Any]] = N
     del precondition
     if not scene:
         return "any"
-    return str(clamp_case_scene(scene).get("required_session") or "any")
+    if isinstance(scene, dict) and (scene.get("reference_only") or scene.get("how") == "reference"):
+        return str(scene.get("required_session") or "any")
+    try:
+        return str(clamp_case_scene(scene).get("required_session") or "any")
+    except ValueError:
+        return str(case_scene_reference(scene).get("required_session") or "any")
 
 
 def _case_text_blob(case: dict[str, Any]) -> str:
@@ -167,7 +251,7 @@ def is_login_module_case(
     scene: Optional[dict[str, Any]] = None,
 ) -> bool:
     """登录模块 / 登录流程测试：需要 guest 起点，批跑可能继承上一条已登录。"""
-    row = clamp_case_scene(scene) if scene else {}
+    row = case_scene_reference(scene) if scene else {}
     req = str(row.get("required_session") or "")
     prep = str(row.get("session_prep") or "")
     if req == "guest" or prep == "logout":
@@ -183,14 +267,24 @@ def is_login_module_case(
 def ensure_case_scene(case: dict[str, Any], ctx_scene: Optional[dict[str, Any]] = None, *,
                       env_doc: Optional[dict[str, Any]] = None, target_package: str = "",
                       env_profile: str = "test") -> dict[str, Any]:
-    """Only explicit current scene fields can control execution."""
-    if "scene" in case: raise ValueError("obsolete_case_scene_field")
-    raw=case.get("case_scene")
-    if raw is not None and not isinstance(raw,dict): raise ValueError("case_scene_invalid")
-    merged={**(ctx_scene or {}),**(raw or {})}
+    """执行期合并 case_scene；校验失败时降级为参考数据，不拒跑。"""
+    del env_doc, target_package, env_profile
+    if "scene" in case:
+        raise ValueError("obsolete_case_scene_field")
+    raw = case.get("case_scene")
+    merged: dict[str, Any] = {**(ctx_scene or {})}
+    if isinstance(raw, dict):
+        merged = {**merged, **raw}
+    bad_raw = raw is not None and not isinstance(raw, dict)
     if merged.get("platform") is None and case.get("platform") is not None:
-        merged["platform"]=target_platform(case["platform"])
-    return clamp_case_scene(merged)
+        merged["platform"] = target_platform(case["platform"])
+    ref = case_scene_reference(merged if merged else None)
+    if bad_raw:
+        notes = list(ref.get("reference_notes") or [])
+        notes.insert(0, "case_scene 非对象，已忽略原值")
+        ref["reference_notes"] = notes
+        ref["parse_warnings"] = list(notes)
+    return ref
 
 
 

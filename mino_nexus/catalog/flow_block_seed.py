@@ -20,6 +20,7 @@ RECOVERY_RULE_BLOCKS: dict[str, str] = {
     "restart_target_app": RESTART_APP_BLOCK_ID,
 }
 PRIVACY_DECLINE_BLOCK_ID = "fb.global.privacy.decline"
+CONSENT_BLOCK_ID = "fb.global.consent"
 # Explicit release lineage; unknown versions are never ordered by guessing.
 _LOGIN_VERSION_ORDER = (
     "v1", "v2", "v3", "v4", "v5", "v6", "v7",
@@ -279,6 +280,17 @@ _SYSTEM_DIALOG_DENY_STEPS = [
     _SYSTEM_DIALOG_ALLOW_STEPS[2],
 ]
 
+# 参数化协议/系统弹窗：一个块 + decision 分支，替代隐私/系统弹窗四套平行块。
+# 旧 id（privacy.accept / privacy.decline / system_dialog / .deny）继续保留兼容。
+_CONSENT_STEPS = [
+    {**_PRIVACY_ACCEPT_STEPS[0], "id": "consent_accept", "when": {"decision": ["accept"]}},
+    {**_PRIVACY_DECLINE_STEPS[0], "id": "consent_decline", "when": {"decision": ["decline"]}},
+    {**_SYSTEM_DIALOG_ALLOW_STEPS[0], "id": "consent_allow", "when": {"decision": ["allow"]}},
+    {**_SYSTEM_DIALOG_DENY_STEPS[0], "id": "consent_deny", "when": {"decision": ["deny"]}},
+    {**_PRIVACY_ACCEPT_STEPS[1], "id": "consent_confirm", "when": {"decision": ["accept", "decline", "allow", "deny"]}},
+    {**_PRIVACY_ACCEPT_STEPS[2], "id": "consent_verified"},
+]
+
 
 def seed_global_flow_blocks() -> int:
     from mino_nexus.core.database import SessionLocal
@@ -348,6 +360,13 @@ def seed_global_flow_blocks() -> int:
                 "steps_json": list(_SYSTEM_DIALOG_DENY_STEPS),
                 "version": "v1",
             },
+            {
+                "block_id": CONSENT_BLOCK_ID,
+                "display_name": "协议/系统弹窗（参数化）",
+                "description": "按 params.decision=accept|decline|allow|deny 执行对应分支；旧四套块 id 保持兼容。",
+                "steps_json": list(_CONSENT_STEPS),
+                "version": "v1",
+            },
         ]
         for step_id in ('send_code', 'legal_consent'):
             rows.append({'block_id': LOGIN_BLOCK_ID + '.' + step_id,
@@ -394,13 +413,15 @@ def seed_global_flow_blocks() -> int:
     return n
 
 
-# 调度依赖的全局块：缺任何一个都会让对应阶段「找不到钩子而走不通」。
-# 启动时自检并大声报错，不做静默降级。
+# 登录攻坚期留下的「全局九块必填」。保留常量只为兼容旧引用；
+# 启动与覆盖都不再要求这九个同时存在（规划 §1/§4）。真正要校验的是
+# 「本 run 引用的块是否可达」，见 verify_referenced_blocks。
 REQUIRED_GLOBAL_BLOCKS: tuple[str, ...] = (
     LOGIN_BLOCK_ID,
     LOGOUT_BLOCK_ID,
     PRIVACY_ACCEPT_BLOCK_ID,
     PRIVACY_DECLINE_BLOCK_ID,
+    CONSENT_BLOCK_ID,
     SYSTEM_DIALOG_BLOCK_ID,
     SYSTEM_DIALOG_BLOCK_ID + ".deny",
     WAKE_BLOCK_ID,
@@ -409,8 +430,35 @@ REQUIRED_GLOBAL_BLOCKS: tuple[str, ...] = (
 )
 
 
+def seed_block_ids() -> list[str]:
+    """本模块会 seed 的块 id（不含旧版本别名）。用于诊断，不再作为启动必填。"""
+    return sorted({*REQUIRED_GLOBAL_BLOCKS, LOGIN_BLOCK_ID + ".send_code", LOGIN_BLOCK_ID + ".legal_consent"})
+
+
+def verify_referenced_blocks(
+    referenced: list[str] | tuple[str, ...] | set[str],
+    *,
+    app_id: str = "",
+) -> list[str]:
+    """只校验本 run / 本用例真正引用的块：返回解析不到步骤的块 id。
+
+    全局骨架缺一块不再阻止启动；但用例引用了不存在的块，必须在预检里报 B 类缺口，
+    而不是等到执行时才发现（规划 §4）。
+    """
+    from mino_nexus.navigation.atlas.nav_flow_block_catalog import resolve_effective_steps
+
+    missing: list[str] = []
+    for raw in referenced or []:
+        bid = str(raw or "").strip()
+        if not bid or bid in missing:
+            continue
+        if not resolve_effective_steps(app_id=str(app_id or ""), block_id=bid):
+            missing.append(bid)
+    return missing
+
+
 def verify_required_blocks() -> list[str]:
-    """返回缺失的全局块 id；调用方负责报错。"""
+    """已废弃：保留给旧调用方，改为返回 seed 后仍缺的块（不用于启动拒绝）。"""
     from mino_nexus.core.database import SessionLocal
     from mino_nexus.models.nav_flow_block_catalog import NavFlowBlockCatalog
 

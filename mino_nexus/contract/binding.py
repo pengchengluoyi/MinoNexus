@@ -42,8 +42,14 @@ def _canonical(value: Any) -> str:
 
 
 def _diagnostic(code: str, *, category="configuration", operation=None, missing=(), recheck=True):
+    from mino_nexus.contract.attribution import classify_reason
+
     op = operation or {}
+    attribution = classify_reason(code, layer="dispatch", responsibility=category)
     return {"reason_code": code, "responsibility": category,
+            "attribution_class": attribution["attribution_class"],
+            "attribution_label": attribution["attribution_label"],
+            "layer": "dispatch",
             "case_ref": op.get("case_ref", ""), "step_ref": op.get("step_ref", ""),
             "clause_ref": op.get("clause_ref", ""), "operation_ref": op.get("operation_ref", ""),
             "missing_fields": list(missing), "recovery_entry": "workbench.execution_review",
@@ -180,11 +186,11 @@ def _resolve_execution_binding(requirements, target, capability_snapshot, policy
         cap = events.get(cid)
         if not isinstance(cap, dict):
             diagnostics.append(_diagnostic("event_not_registered", operation=operation)); continue
-        if cap.get("enabled") is not True or cap.get("lifecycle") != "active" or cap.get("ui_coverable") is False:
+        if cap.get("enabled") is not True or cap.get("lifecycle") != "active":
             diagnostics.append(_diagnostic("event_disabled", operation=operation)); continue
         caller = (policy_snapshot.get("operation_callers") or {}).get(ref, policy_snapshot["caller"])
-        if (cap.get("caller") != caller or operation.get("phase") not in policy_snapshot["allowed_phases"]
-                or operation.get("phase") not in (cap.get("phases") or [])):
+        # 阶段只缩 prompt，不作为派发准入门（规划 §3）。caller 仍是契约字段。
+        if cap.get("caller") != caller:
             diagnostics.append(_diagnostic("event_call_not_allowed", category="authorization", operation=operation)); continue
         if target["platform"] not in (cap.get("platforms") or []):
             diagnostics.append(_diagnostic("event_platform_unsupported", operation=operation)); continue

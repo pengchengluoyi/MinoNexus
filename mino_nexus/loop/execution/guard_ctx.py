@@ -60,6 +60,7 @@ def build_guard_ctx(
         "app_launch_confirmed": bool(getattr(ctx, "app_launch_confirmed", False)),
         "precondition": str(getattr(cursor, "precondition", "") or case.get("precondition") or ""),
         "decision_thought": thought,
+        "intent_id": str(getattr(cursor, "current_intent_id", "") or ""),
         "login_module_case": bool(login_module_case),
         "login_flow_interrupt": bool(getattr(ctx, "login_flow_interrupt", False)),
         "login_flow_macro_active": bool(getattr(ctx, "login_flow_macro_active", False)),

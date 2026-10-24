@@ -101,6 +101,57 @@ def compile_metrics(project_id: str, app_id: str, platform: str = Query(default=
     return call(summary, project_id, app_id, platform=platform, days=days)
 
 
+@router.get("/coverage")
+def coverage(project_id: str, app_id: str, include_events: bool = Query(default=True)):
+    """新覆盖口径：业务意图闭合率（主）+ 事件×渠道可达性。"""
+    from mino_nexus.casework import coverage as svc_coverage
+    if include_events:
+        return call(svc_coverage.summary, project_id, app_id)
+    return call(svc_coverage.intent_coverage, project_id, app_id)
+
+
+@router.get("/intent-coverage")
+def intent_coverage(project_id: str, app_id: str):
+    from mino_nexus.casework import coverage as svc_coverage
+    return call(svc_coverage.intent_coverage, project_id, app_id)
+
+
+@router.get("/event-channel-matrix")
+def event_channel_matrix(project_id: str, app_id: str):
+    from mino_nexus.casework import coverage as svc_coverage
+    return call(svc_coverage.event_channel_matrix, project_id, app_id)
+
+
+@router.get("/intent-graph")
+def intent_graph(project_id: str, app_id: str):
+    from mino_nexus.knowledge import intent_graph as svc_graph
+    return call(svc_graph.describe, app_id=app_id, project_id=project_id)
+
+
+@router.get("/failure-attribution")
+def failure_attribution(project_id: str, app_id: str):
+    from mino_nexus.contract import attribution
+    return call(attribution.describe)
+
+
+@router.get("/private-blocks")
+def private_blocks(project_id: str, app_id: str):
+    from mino_nexus.casework import private_blocks as svc_blocks
+    return call(svc_blocks.reverse_metrics, project_id, app_id)
+
+
+@router.delete("/private-blocks", dependencies=[Depends(project_maintainer)])
+def private_blocks_clear(project_id: str, app_id: str):
+    from mino_nexus.casework import private_blocks as svc_blocks
+    return call(svc_blocks.clear_private_blocks, project_id, app_id)
+
+
+@router.post("/private-blocks/mine", dependencies=[Depends(project_maintainer)])
+def private_blocks_mine(project_id: str, app_id: str, min_cases: int = Query(default=2, ge=1, le=50)):
+    from mino_nexus.casework import private_blocks as svc_blocks
+    return call(svc_blocks.seed_private_blocks, project_id, app_id, min_cases=min_cases)
+
+
 class FactRuleBody(StrictBody):
     expected_revision: int = Field(ge=0)
     name: Text
@@ -135,11 +186,39 @@ def fact_verify(project_id: str, candidate_id: str):
     return call(verify_candidate, project_id, candidate_id)
 
 
+class IntentChoiceBody(StrictBody):
+    question: Text
+    context: str = Field(default='', max_length=4000)
+    domain: str = Field(default='', max_length=80)
+    image_base64: str = Field(default='', max_length=12_000_000)
+    image_mime: str = Field(default='image/png', max_length=80)
+
+
 class RecognitionLabel(StrictBody):
     request_id: Text
     expected_revision: int = Field(ge=0)
     expected_state_id: str = Field(default='', max_length=300)
     reason: Text
+
+
+@router.get('/intent-options')
+def intent_options(project_id: str, app_id: str, domain: str = Query(default='', max_length=80)):
+    from mino_nexus.knowledge import intent_graph
+    return call(intent_graph.intent_options, domain=domain, app_id=app_id, project_id=project_id)
+
+
+@router.post('/intent-choice')
+def intent_choice(project_id: str, app_id: str, body: IntentChoiceBody):
+    """用现有 LLM/VLM 做意图判断，替代 Jev/Laya 的本地决策模型。"""
+    from mino_nexus.ai import intent_router
+    choice = intent_router.choose_intent(
+        question=body.question, app_id=app_id,
+        domain=body.domain, context=body.context,
+        image_base64=body.image_base64, image_mime=body.image_mime,
+    )
+    if choice.get("error"):
+        raise HTTPException(status_code=409, detail=choice["error"])
+    return ok(choice)
 
 
 @router.get('/comparisons')

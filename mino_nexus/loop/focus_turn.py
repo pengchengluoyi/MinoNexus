@@ -7,7 +7,6 @@ from typing import Any
 SATISFY_GUARD_IDS = (
     "skip_repeat_launch_app",
     "skip_repeat_clear_app_cache",
-    "skip_repeat_check_run_env",
     "skip_repeat_get_app_version",
     "skip_repeat_read_device",
     "skip_repeat_structural_cap",
@@ -15,7 +14,6 @@ SATISFY_GUARD_IDS = (
     "skip_repeat_tap",
     "skip_repeat_fsm_open_loop",
     "skip_repeat_fsm_declined",
-    "skip_repeat_satisfied_step_action",
 )
 
 

@@ -145,6 +145,7 @@ def _log_context_slots(
             "slots": {
                 "phase": cursor.phase,
                 "case_step": case_step,
+                "intent_id": str(getattr(cursor, "current_intent_id", "") or ""),
                 **llm_injection,
                 "tool_kinds": list(phase_tool_kinds or []),
                 "menu_count": len(menu),

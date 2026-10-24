@@ -34,6 +34,7 @@ def run_guard_skip(
     case: Any,
     guard_ctx: dict[str, Any],
     guard_verdict: Any,
+    skip_reason: str = "",
     phase_tool_kinds: Any,
     history: list[Any],
     inspect_slots: Any,
@@ -56,6 +57,10 @@ def run_guard_skip(
     from mino_nexus.loop.milestones import login_block_id_for_ctx, read_state
     guard_vision_remediate: Any = None
     skip_cap = guard_verdict.code or cap_id
+    # 调用方在 agent_loop 里已经算过 skip_reason；旧实现漏传，导致守卫一旦真的拒收就
+    # UnboundLocalError（writer 为真时）。这里既补齐入参，也保证空值时仍有稳定文案。
+    skip_reason = str(skip_reason or getattr(guard_verdict, "reason", "") or skip_cap)
+    guard_id = str(getattr(guard_verdict, "guard_id", "") or "")
     if writer:
         from mino_nexus.loop.observe.ops_guard_diag import enrich_guard_block_payload, note_guard_block
 
@@ -63,6 +68,10 @@ def run_guard_skip(
             {
                 "capability_id": cap_id,
                 "reason": skip_reason,
+                "reason_code": skip_cap,
+                "layer": "guard",
+                "attribution_class": "C",
+                "attribution_label": "守卫误拦",
                 "rewritten_cap": skip_cap,
                 "dispatch_gate_code": skip_cap,
                 "guard_id": guard_verdict.guard_id,
@@ -81,7 +90,9 @@ def run_guard_skip(
         if hint:
             cursor.correction_hint = hint
             skip_reason = hint
-    rec(seq, capability_id=skip_cap, status="skipped", summary=skip_reason, thought=thought, thumb=thumb)
+    rec(seq, capability_id=skip_cap, status="skipped", summary=skip_reason, thought=thought, thumb=thumb,
+        extra={"reason_code": skip_cap, "layer": "guard", "attribution_class": "C",
+               "attribution_label": "守卫误拦"})
     emit(
         "result",
         thought=thought,
@@ -90,20 +101,29 @@ def run_guard_skip(
         status="skipped",
         result_status="skipped",
         summary=skip_reason,
+        reason_code=skip_cap,
+        layer="guard",
+        attribution_class="C",
+        attribution_label="守卫误拦",
         thumb=thumb,
         device_dispatched=False,
         execution_kind="guard_skip",
     )
     stop_msg = None
     if skip_cap == "action_fuse":
+        # 融合只在守卫已判定「同屏无进展」时累计；连着被拒不等于整案失败。
         stop_msg = cursor.progress_gate.record_fuse_block(skip_reason)
-    elif str(getattr(guard_verdict, "guard_id", "") or "").startswith("skip_repeat_"):
-        gid = str(guard_verdict.guard_id or "")
-        n_block = int((getattr(cursor, "guard_block_counts", None) or {}).get(gid) or 0)
-        if n_block >= 3:
-            stop_msg = (
-                f"连续 {n_block} 次被 {gid} 拒绝仍重复同一动作，已停止。"
-                f" {str(skip_reason or '')[:160]}"
+    elif guard_id.startswith("skip_repeat_"):
+        # 规划口径：取消 skip_repeat 连拒 3 次整案停。合法连点 / multi_tap 由意图边与
+        # 界面指纹判断，这里只给纠偏提示，继续走下一步。
+        gid = guard_id
+        counts = getattr(cursor, "guard_block_counts", None)
+        if isinstance(counts, dict):
+            counts[gid] = int(counts.get(gid) or 0) + 1
+        if isinstance(cursor, StepCursor):
+            cursor.correction_hint = (
+                f"{skip_reason} 若这是合法的连续操作（如 multi_tap / 连续步进），"
+                "请继续；程序不会因重复被拒直接结束整案。"
             )
     elif skip_cap in ("limit_recovery_retry", "block_back_without_nav_back_semantics"):
         ctx.recovery_allow_back = True
@@ -208,11 +228,6 @@ def run_guard_skip(
             )
             _log_turn_end(writer, cap=_fcap, status=_fst)
             return SkipFlow(cont=True)
-        if cursor.otp_ready_guard_streak >= 4:
-            stop_msg = (
-                f"otp_ready 后已连续 {cursor.otp_ready_guard_streak} 次误选 get_otp"
-                "且程序填码仍失败；请人工聚焦验证码框或 signal_give_up。"
-            )
     elif skip_cap.removeprefix("flow_block:") == "require_sms_send_before_otp":
         from mino_nexus.loop.login_verification import is_web_email_login
 
@@ -225,16 +240,6 @@ def run_guard_skip(
         cursor.sms_otp_guard_streak = (
             int(getattr(cursor, "sms_otp_guard_streak", 0) or 0) + 1
         )
-        if cursor.sms_otp_guard_streak >= 5:
-            stop_msg = (
-                f"连续 {cursor.sms_otp_guard_streak} 次在发码前尝试 get_otp。"
-                "请点 Send/发送验证码或 signal_give_up。"
-                f" 最近：{skip_reason[:120]}"
-            )
-        elif cursor.sms_otp_guard_streak >= 3:
-            stop_msg = cursor.progress_gate.record_fuse_block(
-                f"【熔断·守卫】{skip_reason}"
-            )
     elif (
         cursor.phase == "prep"
         and isinstance(cursor, StepCursor)
@@ -245,12 +250,6 @@ def run_guard_skip(
     ):
         cursor.prep_guard_streak = int(getattr(cursor, "prep_guard_streak", 0) or 0) + 1
         cursor.correction_hint = skip_reason
-        if cursor.prep_guard_streak >= 6:
-            stop_msg = (
-                f"前置空转 {cursor.prep_guard_streak} 轮（仍为 logged_in 或无法 logout）。"
-                "请确认应用退出登录路径可用，或将设备登出并重新观察后再跑；清缓存不等于退出登录。"
-                f" 最近拦截：{skip_reason[:160]}"
-            )
     elif (
         skip_cap in ("block_repeat_email_tab", "flow_block:block_repeat_email_tab")
         and isinstance(cursor, StepCursor)

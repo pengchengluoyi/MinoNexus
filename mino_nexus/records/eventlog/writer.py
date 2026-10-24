@@ -8,6 +8,8 @@ import time
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
+from mino_nexus.contract.attribution import classify_reason as _classify_reason
+from mino_nexus.contract.attribution import enrich as _enrich_attribution
 from mino_nexus.core.log import SLog
 from mino_nexus.records.eventlog import store as session_store
 
@@ -166,6 +168,16 @@ class SessionWriter:
         body = _sanitize_payload(payload or {})
         event_turn = self._turn if turn is None else max(0, int(turn))
         event_phase = self._phase if phase is None else str(phase)
+        # 失败路径强制带 A/B/C：任何 blocked/skipped/fail 事件只补字段，不改业务状态。
+        failure_like = evt_type in ("guard/block", "contract/blocked", "check/blocked",
+                                   "orchestrator/blocked", "progress/stop") or str(
+            body.get("status") or ""
+        ).lower() in ("blocked", "skipped", "fail", "failed")
+        if failure_like or any(body.get(k) for k in ("reason_code", "code", "dispatch_gate_code")):
+            default_layer = ("guard" if evt_type == "guard/block" else
+                             "dispatch" if evt_type in ("contract/blocked", "orchestrator/blocked") else
+                             "execution")
+            body = _enrich_attribution(body, layer=str(body.get("layer") or default_layer))
         if evt_type == "turn/start":
             self._turn_t0 = time.perf_counter()
         elif evt_type == "turn/end" and "elapsed_ms" not in body:
@@ -182,6 +194,9 @@ class SessionWriter:
                 "turn": self._turn,
                 "reason_code": str(body.get("reason_code") or body.get("code") or body.get("dispatch_gate_code") or "blocked")[:100],
                 "capability_id": str(body.get("capability_id") or "")[:80],
+                "attribution_class": str(body.get("attribution_class") or "")[:1],
+                "attribution_label": str(body.get("attribution_label") or "")[:40],
+                "layer": str(body.get("layer") or "")[:40],
             }
         if evt_type == "tool/result" and str(body.get("status") or "").lower() in ("fail", "failed", "error", "timeout"):
             self._latest_error = {
@@ -190,6 +205,9 @@ class SessionWriter:
                 "capability_id": str(body.get("capability_id") or "")[:80],
                 "executor_used": str(body.get("executor_used") or "")[:80],
                 "error_kind": "timeout" if "timeout" in str(body.get("error") or body.get("summary") or "").lower() else "executor_failure",
+                "reason_code": str(body.get("reason_code") or body.get("error") or "")[:100],
+                "attribution_class": str(body.get("attribution_class") or "")[:1],
+                "layer": str(body.get("layer") or "")[:40],
             }
         elif evt_type in ("assert/vision", "assert/dom", "check/blocked") and (body.get("passed") is False or evt_type == "check/blocked"):
             self._latest_error = {
@@ -246,11 +264,22 @@ class SessionWriter:
                     else "dependency_blocked" if status == "blocked"
                     else (self._latest_error or {}).get("error_kind") or "unclassified"
                 )
+                resolved = reason_code or str((self._first_blocker or {}).get("reason_code") or "")
+                attribution = _classify_reason(
+                    resolved or stop_kind,
+                    layer=failure_stage or str((self._first_blocker or {}).get("layer") or ""),
+                )
+                stop_reason = {
+                    "status": status, "kind": resolved or stop_kind,
+                    "reason_code": resolved or stop_kind,
+                    "failure_stage": failure_stage, "case_step": case_step,
+                    **{k: attribution[k] for k in ("attribution_class", "attribution_label", "layer")},
+                }
                 self.append("session/attribution", {
                     "first_blocker": self._first_blocker,
                     "latest_error": self._latest_error,
-                    "stop_reason": {"status": status, "kind": reason_code or stop_kind,
-                                    "reason_code": reason_code, "failure_stage": failure_stage, "case_step": case_step},
+                    "stop_reason": stop_reason,
+                    "attribution": attribution,
                 })
             self.append(
                 "perf/summary",
@@ -266,16 +295,27 @@ class SessionWriter:
             self.require_persisted()
             if meta and (meta.get("runtime_context") or {}).get("execution_binding") is not None:
                 try:
+                    failed_status = str(status or "").lower() in (
+                        "failed", "fail", "blocked", "gave_up", "error", "timeout", "cancelled")
+                    final_attr = (_classify_reason(reason_code or "ordinary_execution_result", layer=failure_stage)
+                                  if failed_status else {"attribution_class": "", "attribution_label": "", "layer": ""})
                     session_store.finalize_bound(session_id=self.session_id, body={
                         "status": status, "summary": summary, "step_count": step_count, "wall_ms": wall_ms, "reason_code": reason_code,
                         "failure_stage": failure_stage, "case_step": case_step,
+                        "attribution_class": final_attr["attribution_class"],
+                        "attribution_label": final_attr["attribution_label"],
+                        "layer": final_attr["layer"],
                     }, turn=self._turn, phase="done")
                     if (meta.get("runtime_context") or {}).get("resolved_case"):
                         finalized = get_meta(self.session_id)
+                        verdict = finalized.get("verdict") or {}
                         self.final_outcome = {"status": finalized["status"], "summary": finalized["summary"],
-                            "reason_code": (finalized.get("verdict") or {}).get("reason_code", reason_code),
-                            "failure_stage": (finalized.get("verdict") or {}).get("failure_stage", failure_stage),
-                            "case_step": (finalized.get("verdict") or {}).get("case_step", case_step)}
+                            "reason_code": verdict.get("reason_code", reason_code),
+                            "failure_stage": verdict.get("failure_stage", failure_stage),
+                            "case_step": verdict.get("case_step", case_step),
+                            "attribution_class": verdict.get("attribution_class", final_attr["attribution_class"]),
+                            "attribution_label": verdict.get("attribution_label", final_attr["attribution_label"]),
+                            "layer": verdict.get("layer", final_attr["layer"])}
                 except Exception as exc:
                     self._store_failure = "atomic_finalization"
                     raise SessionPersistenceError(self._store_failure) from exc

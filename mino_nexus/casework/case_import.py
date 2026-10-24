@@ -1,4 +1,8 @@
-"""用例导入：preview / commit，冲突由用户决定覆盖或跳过。"""
+"""用例导入：preview / commit，冲突由用户决定覆盖或跳过。
+
+默认可跑性缺口（C/E 类、ui_partial）不拦写入；仅 ``import_policy=strict``（或集成里
+开启「密钥/步骤键问题默认阻止提交」）会在提交前整批拒绝。
+"""
 from __future__ import annotations
 from mino_nexus.platform.identity import user_thread, require_user_id
 from mino_nexus.casework.job_owner import owned_job
@@ -337,8 +341,8 @@ def preview_import(
                  "oracle": {"state": "automated", "manual": False, "missing_items": []},
                  "blocked_by": []}
             ),
-            "automatability": {"class": "E" if incomplete or row.get("platform_error") else "A",
-                               "label": "定义/编译无效" if incomplete or row.get("platform_error") else "可直接执行",
+            "automatability": {"class": "C" if incomplete or row.get("platform_error") else "A",
+                               "label": "仅部分可 UI 自动化" if incomplete or row.get("platform_error") else "可直接执行",
                                "reason": row.get("platform_error") or ""},
             "parse_status": "invalid_platform" if row.get("platform_error") else ("incomplete" if incomplete else "pending"),
             "flags": flags,
@@ -375,7 +379,7 @@ def preview_import(
         "done": all(row.get("parse_status") != "pending" for row in preview_rows),
         "conflicts": conflicts,
         "rows": preview_rows,
-        "import_defaults": {**get_case_import_settings(), "import_policy": "ui_ready"},
+        "import_defaults": {**get_case_import_settings(), "import_policy": "all"},
         **meta,
     }
 
@@ -445,7 +449,7 @@ def _apply_preview_compile_row(row: dict[str, Any], summary: dict[str, Any] | No
     if exc is not None:
         row["parse_status"] = "error"
         row["remark"] = str(exc)[:200]
-        row["automatability"] = {"class": "E", "label": "定义/编译无效", "reason": str(exc)[:200]}
+        row["automatability"] = {"class": "C", "label": "仅部分可 UI 自动化", "reason": str(exc)[:200]}
         row["selected_by_default"] = False
         return
     assert summary is not None
@@ -466,20 +470,18 @@ def _apply_preview_compile_row(row: dict[str, Any], summary: dict[str, Any] | No
         "oracle": {"state": "unknown", "manual": False, "missing_items": []},
         "blocked_by": [],
     }
-    row["automatability"] = summary.get("automatability") or {"class": "E", "label": "定义/编译无效", "reason": ""}
+    row["automatability"] = summary.get("automatability") or {"class": "C", "label": "仅部分可 UI 自动化", "reason": ""}
     row["status"] = row["ui_automation"].get("status")
     row["runnable_now"] = bool(row["ui_automation"].get("runnable_now"))
     flags = [flag for flag in row.get("flags") or []
              if flag not in ("step_key_issues", "ui_not_coverable", "needs_setup", "ui_partial", "non_ui")]
     if summary.get("issues"):
         flags.append("step_key_issues")
-    klass = str((row.get("automatability") or {}).get("class") or "E")
+    klass = str((row.get("automatability") or {}).get("class") or "C").upper()
     if klass == "B":
         flags.append("needs_setup")
-    elif klass == "C":
+    elif klass not in ("A", "B"):
         flags.append("ui_partial")
-    elif klass in ("D", "E"):
-        flags.append("non_ui" if klass == "D" else "ui_not_coverable")
     row["flags"] = flags
     if klass not in ("A", "B"):
         row["selected_by_default"] = False
@@ -643,7 +645,7 @@ def _resolve_import_policy(import_policy: str, block_on_step_key_issues: bool) -
         return policy
     if policy:
         raise ValueError("import_policy 必须是 ui_ready / strict / all")
-    return "strict" if block_on_step_key_issues else "ui_ready"
+    return "strict" if block_on_step_key_issues else "all"
 
 
 def _preview_row_blocks_import(item: dict[str, Any], snapshot: dict[str, Any]) -> str:
@@ -651,7 +653,8 @@ def _preview_row_blocks_import(item: dict[str, Any], snapshot: dict[str, Any]) -
         return ""
     policy = _resolve_import_policy(snapshot.get("import_policy") or "",
                                     bool(snapshot.get("block_on_step_key_issues")))
-    if policy == "all":
+    # 默认可跑性缺口只标注在预览里，仍写入 project_cases；执行阶段由预检/意图交接处理。
+    if policy != "strict":
         return ""
     flags = [str(flag) for flag in (item.get("flags") or [])]
     if "step_key_issues" in flags:
@@ -663,9 +666,9 @@ def _preview_row_blocks_import(item: dict[str, Any], snapshot: dict[str, Any]) -
             return ""
         if klass == "B":
             return "" if policy == "ui_ready" else "needs_setup"
-        if klass == "C":
+        if klass not in ("A", "B"):
             return "ui_partial"
-        return "ui_not_coverable"
+        return ""
     # Legacy preview rows (before ui_automation.v2) keep the old strict gate.
     validation = item.get("step_key_validation") if isinstance(item.get("step_key_validation"), dict) else {}
     if int(validation.get("blocking_issue_count") or 0) > 0:

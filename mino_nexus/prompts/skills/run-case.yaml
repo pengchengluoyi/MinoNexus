@@ -30,12 +30,9 @@ sop:
     - action_fuse
     - limit_recovery_retry
     - block_assert_in_do
-    - require_sms_send_before_otp
     - block_back_without_nav_back_semantics
     - require_session
     - block_fsm_off_step_target
-    - require_otp_before_login_tap
-    - block_repeat_get_otp_when_ready
     advance_on: milestones
     require: ''
     exec_job: agent-vision-exec

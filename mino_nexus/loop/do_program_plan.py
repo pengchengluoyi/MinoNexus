@@ -39,6 +39,11 @@ def resolve_do_program_plan(
     bundle = step_bundle(c, case_step)
     plan = bundle.get("do_program_plan") if isinstance(bundle.get("do_program_plan"), dict) else {}
     setattr(cursor, "do_program_plan", plan)
+    # 执行侧也带当前意图，守卫/事件日志/策略边不用再各自猜步骤语义。
+    intent_id = next((str(step.get("intent_id") or "") for step in (plan.get("steps") or [])
+                      if isinstance(step, dict) and step.get("intent_id")), "")
+    if intent_id:
+        setattr(cursor, "current_intent_id", intent_id)
     return plan
 
 
@@ -50,23 +55,10 @@ def milestones_from_do_program(plan: dict[str, Any], *, app_id: str = "", ctx: A
         kind = str(step.get("kind") or "visual_action").strip().lower()
         sid = str(step.get("id") or "").strip() or f"do_{len(rows)}"
         if kind == "remark" or str(step.get("run_policy") or "") == "skip":
-            from mino_nexus.casework.case_semantic_integrity import explicit_remark
-            if not explicit_remark(step.get("source_clause") or step.get("title")):
-                from mino_nexus.loop.resolved_case import ContractError
-                raise ContractError("required_operation_skipped")
-            rows.append(
-                {
-                    "id": sid,
-                    "title": str(step.get("title") or sid)[:240],
-                    "kind": "remark",
-                    "status": "skipped",
-                    "optional": True,
-                    "source": "do_program",
-                    "key_ref": str(step.get("key_ref") or "operation.author_remark"),
-                    "skip_reason": "author_remark",
-                    "observe": str(step.get("observe") or "author_only"),
-                }
-            )
+            from mino_nexus.loop.intent_handoff import handoff_milestone
+
+            clause = str(step.get("source_clause") or step.get("title") or sid)
+            rows.append(handoff_milestone(clause, milestone_id=sid, reason="required_operation_skipped"))
             continue
         if kind == "flow_block":
             bid = str(step.get("block_id") or "").strip()
@@ -146,6 +138,16 @@ def seed_do_milestones_from_plan(
     if not steps:
         if writer and plan.get("fallback_lines"):
             _log_key_fallback(writer, case, cursor, plan.get("fallback_lines") or [])
+        from mino_nexus.loop.intent_handoff import handoff_milestone
+
+        current = cursor.current() if callable(getattr(cursor, "current", None)) else None
+        clause = str(getattr(current, "instruction", "") or "") if current is not None else ""
+        if not clause and isinstance(case, dict):
+            clause = str(case.get("steps_raw") or case.get("name") or "")
+        rows = [handoff_milestone(clause, milestone_id="intent_handoff_do", reason="no_executable_steps")]
+        state["milestones"] = rows
+        state["status"] = "in_progress"
+        write_state(cursor, state)
         return plan
     rows = milestones_from_do_program(plan, app_id=app_id, ctx=ctx)
     if not rows:

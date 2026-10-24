@@ -1,17 +1,15 @@
-"""逻辑块内 guards / fuse（P4 §2.6），在 milestones 登录流下替代 registry 登录 guard。"""
+"""逻辑块内 guards / fuse（P4 §2.6），在 milestones 登录流下按意图边求值。
+
+守卫声明只在 ``knowledge.intent_graph`` 的意图边上；这里只负责把声明解析成
+函数并顺序执行。新增/删除登录守卫不需要再改本模块的分支。
+"""
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
-LOGIN_REGISTRY_GUARD_IDS = frozenset(
-    {
-        "require_sms_send_before_otp",
-        "block_repeat_email_tab",
-        "require_otp_before_login_tap",
-    }
-)
+GuardFn = Callable[[dict[str, Any], Any], Optional["FlowBlockGuardVerdict"]]
 
 
 @dataclass(frozen=True)
@@ -24,20 +22,13 @@ class FlowBlockGuardVerdict:
     remediate: str = ""
 
 
-def filter_registry_guards_for_milestones(
-    guard_names: list[str],
-    cursor: Any,
-) -> list[str]:
-    from mino_nexus.loop.milestones import login_flow_under_milestones
-
-    if not login_flow_under_milestones(cursor):
-        return list(guard_names or [])
-    return [g for g in (guard_names or []) if str(g) not in LOGIN_REGISTRY_GUARD_IDS]
-
-
 def evaluate_flow_block_guards(ctx: dict[str, Any], cursor: Any) -> Optional[FlowBlockGuardVerdict]:
-    """登录块 milestones 激活时，按 steps_json guards/fuse 求值。"""
-    from mino_nexus.loop.milestones import login_flow_under_milestones, read_state
+    """登录块（含非里程碑登录用例）按意图边 guards + 块 fuse 求值。"""
+    from mino_nexus.loop.milestones import (
+        login_block_id_for_ctx,
+        login_flow_under_milestones,
+        read_state,
+    )
 
     from mino_nexus.loop.login_evidence_navigation import rejected_navigation_action
     if rejected_navigation_action(cursor, ctx.get("run_ctx") or ctx.get("ctx"),
@@ -46,59 +37,50 @@ def evaluate_flow_block_guards(ctx: dict[str, Any], cursor: Any) -> Optional[Flo
             code="navigation_no_change_repeat", dispatch_gate_code="navigation_no_change_repeat",
             reason="上一只读导航已独立核验为无可见变化，禁止重复；选择其他可见入口或相反滚动方向，不能重复无效返回。")
 
-    if not login_flow_under_milestones(cursor):
-        return None
+    milestone_login = login_flow_under_milestones(cursor)
+    login_context = milestone_login or bool(ctx.get("login_module_case"))
+    if not login_context:
+        current = cursor.current() if hasattr(cursor, "current") else None
+        instruction = str(getattr(current, "instruction", "") or "")
+        from mino_nexus.loop.step_contract import instruction_allows_login_flow
 
-    cap = str(ctx.get("cap_id") or "")
-    phase = str(ctx.get("phase") or "")
-    if phase != "do" or cap != "tap_element":
-        if cap in ("get_otp", "input_text"):
-            v = _guard_otp_ready_no_repeat_get_otp(ctx, cursor)
-            if v:
-                return v
-            v = _guard_require_sms_before_otp(ctx, cursor)
-            if v:
-                return v
+        login_context = instruction_allows_login_flow(instruction, login_module_case=False)
+    if not login_context:
         return None
 
     state = read_state(cursor)
     block_id = str((state.get("block_ref") or {}).get("block_id") or "")
+    if not block_id:
+        # 非里程碑登录用例没有 block_ref，但 guard_ctx 已明确标记 login_module_case。
+        block_id = login_block_id_for_ctx(ctx.get("run_ctx") or ctx.get("ctx"))
     run_ctx = ctx.get("run_ctx") or ctx.get("ctx")
     app_id = str(getattr(run_ctx, "app_id", "") or ctx.get("app_id") or "")
+
+    from mino_nexus.knowledge.intent_graph import guards_for_block
+
+    for name in guards_for_block(block_id, app_id=app_id):
+        impl = _LOGIN_GUARD_IMPL.get(name)
+        if impl is None:
+            continue
+        verdict = impl(ctx, cursor)
+        if verdict is not None and not verdict.allowed:
+            return verdict
+
+    if str(ctx.get("cap_id") or "") != "tap_element":
+        return None
     from mino_nexus.navigation.atlas.nav_flow_block_catalog import resolve_effective_steps
 
     steps = resolve_effective_steps(app_id=app_id, block_id=block_id) if block_id else []
-
-    v = _guard_block_repeat_email(ctx, cursor, steps=steps)
-    if v:
-        return v
-    v = _guard_require_otp_before_login_tap(ctx, cursor)
-    if v:
-        return v
-    v = _evaluate_fuse_repeat_tap(ctx, cursor, steps=steps)
-    if v:
-        return v
-    return None
+    return _evaluate_fuse_repeat_tap(ctx, cursor, steps=steps)
 
 
 def _guard_block_repeat_email(
     ctx: dict[str, Any],
     cursor: Any,
-    *,
-    steps: list[dict[str, Any]],
 ) -> Optional[FlowBlockGuardVerdict]:
-    has_guard = any(
-        isinstance(s, dict)
-        and any(
-            str(g.get("type") or "") == "block_repeat" and str(g.get("key") or "") == "email_tab"
-            for g in (s.get("guards") or [])
-            if isinstance(g, dict)
-        )
-        for s in steps
-    )
-    if not has_guard:
+    """Web 邮箱登录：Email 标签已选过就不再点，由意图边声明触发。"""
+    if str(ctx.get("cap_id") or "") != "tap_element":
         return None
-
     from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
 
     run_ctx = ctx.get("run_ctx") or ctx.get("ctx")
@@ -134,6 +116,8 @@ def _guard_block_repeat_email(
 
 
 def _guard_require_otp_before_login_tap(ctx: dict[str, Any], cursor: Any) -> Optional[FlowBlockGuardVerdict]:
+    if str(ctx.get("cap_id") or "") != "tap_element":
+        return None
     params = dict(ctx.get("params") or {})
     sel = str(params.get("selector_text") or params.get("text") or params.get("content_desc") or "")
     if not re.search(r"登录|立即登录|Log\s*in|Continue", sel, re.I):
@@ -274,6 +258,18 @@ def _evaluate_fuse_repeat_tap(
 
         case_step, phase = step_scope_key(cursor)
         key = f"navigation:{case_step}:{phase}:{focus_mid}:{key}"
+    # 只保留「界面指纹没变」的重复点击熔断：合法连点（multi_tap、连续步进）在指纹
+    # 变化时清零；拿不到指纹就不拦（规划 §6）。
+    fp = str(ctx.get("screen_fp") or "").strip()
+    fp_store = getattr(cursor, "flow_block_tap_fp", None)
+    if not isinstance(fp_store, dict):
+        fp_store = {}
+    if fp and fp_store.get(key) and fp_store[key] != fp:
+        store[key] = 0
+    fp_store[key] = fp
+    setattr(cursor, "flow_block_tap_fp", fp_store)
+    if not fp:
+        return None
     store[key] = int(store.get(key) or 0) + 1
     setattr(cursor, "flow_block_tap_streak", store)
     limit = 2
@@ -293,21 +289,15 @@ def _evaluate_fuse_repeat_tap(
     )
 
 
-def registry_login_guards_suppressed(ctx: dict[str, Any]) -> bool:
-    step_cursor = ctx.get("step_cursor") or ctx.get("cursor")
-    from mino_nexus.loop.milestones import login_flow_under_milestones
-
-    return bool(
-        step_cursor is not None
-        and True
-        and login_flow_under_milestones(step_cursor)
-    )
+_LOGIN_GUARD_IMPL: dict[str, GuardFn] = {
+    "block_repeat_get_otp_when_ready": _guard_otp_ready_no_repeat_get_otp,
+    "require_sms_send_before_otp": _guard_require_sms_before_otp,
+    "block_repeat_email_tab": _guard_block_repeat_email,
+    "require_otp_before_login_tap": _guard_require_otp_before_login_tap,
+}
 
 
 __all__ = [
     "FlowBlockGuardVerdict",
-    "LOGIN_REGISTRY_GUARD_IDS",
     "evaluate_flow_block_guards",
-    "filter_registry_guards_for_milestones",
-    "registry_login_guards_suppressed",
 ]

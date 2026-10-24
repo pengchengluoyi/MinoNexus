@@ -906,11 +906,18 @@ def finish(run_id: str, *, status: str = "done", error: str = "") -> dict[str, A
     if not task_is_live(doc):
         clear_cancel(run_id)
         return doc
-    if status in ("failed", "cancelled"):
+    if status == "cancelled":
         for case in doc.get("cases") or []:
             if str(case.get("status") or "") in ("pending", "running"):
                 case["status"] = "cancelled"
-                case["summary"] = case.get("summary") or error or "任务已结束"
+                case["summary"] = case.get("summary") or error or "任务已取消"
+    elif status == "failed":
+        # 单条失败不应把队列里未跑条目标成 cancelled；仅收口异常退出时仍挂起的行。
+        for case in doc.get("cases") or []:
+            if str(case.get("status") or "") in ("pending", "running"):
+                case["status"] = "fail"
+                case["summary"] = case.get("summary") or error or "任务异常结束，本条未执行"
+                case.setdefault("reason_code", "batch_aborted")
     doc["status"] = status
     doc["error"] = error or doc.get("error") or ""
     doc["finished_at"] = _now()

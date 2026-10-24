@@ -77,7 +77,10 @@ def _overrides_for_app(app_id: str) -> list[dict[str, Any]]:
     from mino_nexus.navigation.atlas import nav_calibration_store as calib
     from mino_nexus.navigation.atlas import nav_fsm_store as store
 
-    doc = calib.read_draft(app) or store.load(app, version="v1") or {}
+    try:
+        doc = calib.read_draft(app) or store.load(app, version="v1") or {}
+    except Exception:  # noqa: BLE001 - 覆盖校准不可读不能拖垮块目录
+        doc = {}
     meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
     raw = meta.get("flow_block_overrides")
     if not isinstance(raw, list):
@@ -239,8 +242,96 @@ def upsert_global_block(
         db.close()
 
 
+def upsert_app_block(
+    *,
+    app_id: str,
+    block_id: str,
+    display_name: str = "",
+    description: str = "",
+    steps_json: list[dict[str, Any]] | None = None,
+    version: str = "v1",
+    enabled: bool = True,
+    key_ref: str = "",
+    block_origin: str = "app",
+) -> dict[str, Any]:
+    """App 私有块：从用例拓扑沉淀，不进 global 骨架。"""
+    from mino_nexus.core.database import SessionLocal
+    from mino_nexus.navigation.atlas.nav_key_refs import default_block_key_ref
+
+    app = str(app_id or "").strip()
+    bid = normalize_block_id(block_id)
+    if not app or app == GLOBAL_APP_ID or not bid:
+        return {}
+    resolved_ref = str(key_ref or "").strip() or default_block_key_ref(bid)
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(NavFlowBlockCatalog)
+            .filter(NavFlowBlockCatalog.app_id == app, NavFlowBlockCatalog.block_id == bid)
+            .first()
+        )
+        if row is None:
+            row = NavFlowBlockCatalog(
+                app_id=app, block_id=bid, block_origin=block_origin,
+                display_name=display_name or bid, description=description or "",
+                steps_json=list(steps_json or []), version=version,
+                enabled=1 if enabled else 0, key_ref=resolved_ref,
+            )
+            db.add(row)
+        else:
+            if display_name:
+                row.display_name = display_name
+            if description:
+                row.description = description
+            if steps_json is not None:
+                row.steps_json = list(steps_json)
+            if version:
+                row.version = version
+            if block_origin:
+                row.block_origin = block_origin
+            row.enabled = 1 if enabled else 0
+            if key_ref or not str(getattr(row, "key_ref", "") or "").strip():
+                row.key_ref = resolved_ref
+        db.commit()
+        db.refresh(row)
+        return _row_dict(row)
+    finally:
+        db.close()
+
+
+def delete_app_blocks(app_id: str, *, prefix: str = "fb.app.") -> int:
+    """删除某个 App 的私有块（从用例拓扑重新沉淀时用）。"""
+    from mino_nexus.core.database import SessionLocal
+    from mino_nexus.models.nav_flow_block_catalog import NavFlowBlockCatalog
+
+    app = str(app_id or "").strip()
+    if not app:
+        return 0
+    db = SessionLocal()
+    try:
+        q = db.query(NavFlowBlockCatalog).filter(
+            NavFlowBlockCatalog.app_id == app,
+            NavFlowBlockCatalog.block_origin == "app",
+        )
+        if prefix:
+            q = q.filter(NavFlowBlockCatalog.block_id.like(prefix + "%"))
+        rows = q.all()
+        for row in rows:
+            db.delete(row)
+        db.commit()
+        return len(rows)
+    finally:
+        db.close()
+
+
 def resolve_effective_steps(*, app_id: str, block_id: str) -> list[dict[str, Any]]:
+    app = str(app_id or "").strip()
     base = load_block_row(app_id=GLOBAL_APP_ID, block_id=normalize_block_id(block_id))
+    if not base and app and app != GLOBAL_APP_ID:
+        # App 私有块没有 global 基座，直接读 App 自己的步骤（规划 §5）。
+        own = load_block_row(app_id=app, block_id=normalize_block_id(block_id))
+        if own and str(own.get("app_id") or "") == app:
+            return [dict(s) for s in (own.get("steps_json") or []) if isinstance(s, dict)]
     if not base:
         return []
     steps = [dict(s) for s in (base.get("steps_json") or []) if isinstance(s, dict)]

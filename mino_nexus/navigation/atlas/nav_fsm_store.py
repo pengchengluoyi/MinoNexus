@@ -185,8 +185,6 @@ def read_raw(app_id: str, *, version: str = DEFAULT_VERSION) -> Optional[dict[st
     ensure_db()
     db = SessionLocal()
     try:
-        from sqlalchemy import text
-        db.execute(text("BEGIN IMMEDIATE"))
         fsm = (
             db.query(NavFsm)
             .filter(NavFsm.app_id == aid, NavFsm.version == (version or DEFAULT_VERSION))
@@ -217,8 +215,6 @@ def load_with_reason(
     ensure_db()
     db = SessionLocal()
     try:
-        from sqlalchemy import text
-        db.execute(text("BEGIN IMMEDIATE"))
         fsm = (
             db.query(NavFsm)
             .filter(NavFsm.app_id == aid, NavFsm.version == (version or DEFAULT_VERSION))
@@ -356,8 +352,6 @@ def save(
     ensure_db()
     db = SessionLocal()
     try:
-        from sqlalchemy import text
-        db.execute(text("BEGIN IMMEDIATE"))
         fsm = (
             db.query(NavFsm)
             .filter(NavFsm.app_id == aid, NavFsm.version == version)
@@ -428,8 +422,6 @@ def delete(app_id: str, *, version: str = DEFAULT_VERSION) -> bool:
     ensure_db()
     db = SessionLocal()
     try:
-        from sqlalchemy import text
-        db.execute(text("BEGIN IMMEDIATE"))
         fsm = (
             db.query(NavFsm)
             .filter(NavFsm.app_id == str(app_id or "").strip(), NavFsm.version == version)

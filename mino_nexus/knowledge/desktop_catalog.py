@@ -51,7 +51,7 @@ def capabilities(reported: list[str], os_name: str, *, platform: str = "desktop"
             continue
         current = registry.get_capability(cap_id)
         if current is not None and (
-            not current.enabled or current.lifecycle != "active" or not current.ui_coverable
+            not current.enabled or current.lifecycle != "active"
         ):
             continue
         parameters = deepcopy(schema)

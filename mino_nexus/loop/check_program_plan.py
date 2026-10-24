@@ -43,14 +43,20 @@ def milestones_from_check_program(plan: dict[str, Any]) -> list[dict[str, Any]]:
         assert_payload = cp.get("assert") if isinstance(cp.get("assert"), dict) else {}
         mode = str(assert_payload.get("mode") or "vlm")
         skipped = mode == "human_only" or str(cp.get("run_policy") or "") == "skip"
+        if skipped:
+            from mino_nexus.loop.intent_handoff import handoff_milestone
+
+            clause = str(cp.get("source_clause") or cp.get("source_line") or cp.get("title") or cid)
+            rows.append(handoff_milestone(clause, milestone_id=cid, reason="check_not_automated"))
+            continue
         rows.append(
             {
                 "id": cid,
                 "title": str(cp.get("title") or cid)[:240],
                 "kind": "checkpoint",
-                "status": "skipped" if skipped else "pending",
-                "optional": bool(cp.get("optional")) or skipped,
-                "skip_reason": "human_review" if skipped else "",
+                "status": "pending",
+                "optional": bool(cp.get("optional")),
+                "skip_reason": "",
                 "source": str(cp.get("source") or "check_program"),
                 "key_ref": str(cp.get("key_ref") or ""),
                 "source_clause": str(cp.get("source_clause") or cp.get("source_line") or "")[:240],

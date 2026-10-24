@@ -72,10 +72,6 @@ class ResolvedCase:
 
 
 def resolve_case(case, ctx, *, expected_build, started_at, max_steps):
-    from mino_nexus.casework.case_semantic_integrity import operation_diagnostics, precondition_diagnostics
-    issues = operation_diagnostics(case) + precondition_diagnostics(case)
-    if issues:
-        raise ContractError(issues[0]['reason'])
     from mino_nexus.contract.binding import validate_binding
     from mino_nexus.loop.step_pointer import compute_case_wall_budget_sec
     from mino_nexus.catalog.registry import get_capability
@@ -152,9 +148,6 @@ def preparation_gate(ctx):
     from mino_nexus.navigation.login.evidence import can_commit
     case = resolved.case
     scene = getattr(ctx, 'case_scene', None) or {}
-    from mino_nexus.casework.case_semantic_integrity import precondition_diagnostics
-    if precondition_diagnostics({**case, 'case_scene': scene}):
-        raise ContractError('precondition_coverage_missing', 'env_blocked')
     need_clear = claim_requires_clear_cache(case.get('resource_key'), scene, case.get('precondition', ''))
     cursor = getattr(ctx, '_step_cursor', None)
     if cursor is not None and getattr(cursor, 'phase', '') == 'prep':
@@ -244,7 +237,10 @@ def dispatch_gate(ctx, event_id, *, requested_phase=''):
     rows = [row for row in resolved.capability_snapshot if row['event_id'] == event_id]
     if not rows:
         raise ContractError('event_not_registered')
-    if phase == 'check' and all(row.get('kind') != 'check' for row in rows):
+    # 唤醒屏幕/读前台/截图只是取证，不改 App 业务状态，check 阶段允许。
+    check_safe = {'wake_screen', 'get_foreground_app', 'probe_device_state',
+                  'screenshot', 'observe_screen'}
+    if phase == 'check' and all(row.get('kind') != 'check' for row in rows) and event_id not in check_safe:
         raise ContractError('check_mutation_forbidden')
     if phase == 'do':
         preparation_gate(ctx)
