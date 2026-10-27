@@ -133,6 +133,11 @@ def _screen_score(localized: dict[str, Any] | None, state_id: str) -> float:
     return 0.0
 
 
+def _rejected_state(state: dict[str, Any] | None) -> bool:
+    meta = (state or {}).get("meta") if isinstance((state or {}).get("meta"), dict) else {}
+    return str(meta.get("semantic_status") or "") == "rejected"
+
+
 @dataclass(frozen=True)
 class ResolveOutcome:
     state_id: str
@@ -156,7 +161,8 @@ def resolve_state_fuzzy(
     if not raw or not fsm:
         return ResolveOutcome("", method="empty")
 
-    if F.state_by_id(fsm, raw) and raw not in skip:
+    exact = F.state_by_id(fsm, raw)
+    if exact and raw not in skip and not _rejected_state(exact):
         return ResolveOutcome(
             raw,
             name_score=1.0,
@@ -165,7 +171,7 @@ def resolve_state_fuzzy(
         )
 
     legacy = resolve_state_ref(fsm, raw)
-    if legacy and F.state_by_id(fsm, legacy) and legacy != raw and legacy not in skip:
+    if legacy and F.state_by_id(fsm, legacy) and not _rejected_state(F.state_by_id(fsm, legacy)) and legacy != raw and legacy not in skip:
         return ResolveOutcome(
             legacy,
             name_score=0.95,
@@ -184,7 +190,7 @@ def resolve_state_fuzzy(
         if not isinstance(st, dict):
             continue
         sid = str(st.get("id") or "").strip()
-        if not sid or sid in skip:
+        if not sid or sid in skip or _rejected_state(st):
             continue
         labels = _state_labels(fsm, st)
         if not labels:

@@ -3612,7 +3612,6 @@ def build_atlas(
     if not filtered:
         built = _empty_atlas_built(app_id, project_id=project_id, cap_meta=cap_meta)
         doc = _merge_atlas_manual_patches(built["doc"], app_id)
-        explore_turns = 0
         vlm_turns = 0
         doc_meta = dict(doc.get("meta") or {})
         doc_meta["capture_layout_sources"] = {
@@ -3629,7 +3628,7 @@ def build_atlas(
             "screens": [],
             "screen_count": 0,
             "edge_count": len(doc.get("edges") or []),
-            "capture": {**cap_meta, "turns_app": 0, "explore_turns": 0},
+            "capture": {**cap_meta, "turns_app": 0},
             "updated_at": int(cap_meta.get("latest_at") or 0) or max((int(t.get("at") or 0) for t in ordered), default=0),
         }
 
@@ -3674,7 +3673,6 @@ def build_atlas(
             cluster_meta=dict(enrich_ctx.get("cluster_meta") or {}),
             app_id=app_id,
         )
-    explore_turns = sum(1 for t in filtered if str(t.get("run_type") or "").lower() == "explore")
     vlm_turns = sum(
         1
         for t in filtered
@@ -3704,49 +3702,6 @@ def build_atlas(
         "capture": {
             **cap_meta,
             "turns_app": len(filtered),
-            "explore_turns": explore_turns,
         },
         "updated_at": last_capture_at,
     }
-
-
-def explore_progress_block(
-    *,
-    known_screen_ids: list[str],
-    step: int,
-    max_steps: int,
-    idle_steps: int,
-    max_idle_steps: int,
-    known_screen_labels: list[str] | None = None,
-) -> str:
-    labels = [str(x).strip() for x in (known_screen_labels or []) if str(x).strip()]
-    shown = labels[-8:] if labels else [str(x) for x in (known_screen_ids or [])[-8:]]
-    lines = [
-        f"【探索进度】步数 {step}/{max_steps}；连续无新屏 {idle_steps}/{max_idle_steps}",
-        f"已发现 {len(known_screen_ids)} 个不同屏面：{', '.join(shown) or '（尚无）'}",
-        "尽量切换底栏、进入列表项、返回后再去未去过区域；无法发现新屏时可 signal_done 结束探索。",
-    ]
-    return "\n".join(lines)
-
-
-def explore_screen_identity(nodes: list[dict[str, Any]]) -> tuple[str, str]:
-    """与架构图同一套骨骼聚类键 + 可读名，供 ExploreCursor idle / 进度块使用。"""
-    from mino_nexus.navigation.geometry.nav_layout import (
-        detect_layout_framework,
-        semantic_page_role,
-        stable_chrome_texts,
-    )
-    from mino_nexus.navigation.atlas.nav_app_skeleton import chrome_header_title
-    from mino_nexus.navigation.geometry.nav_screen_layout import infer_content_bands
-
-    turn = {"nodes": nodes or []}
-    bands = infer_content_bands(nodes or [])
-    y_tab = int(bands.get("content_bottom_px") or 0) or 9999
-    fw = detect_layout_framework(turn, y_tab_max=y_tab, exclude=set())
-    chrome = stable_chrome_texts(turn, y_tab_max=y_tab, exclude=set())
-    role = semantic_page_role(fw)
-    row = {"turn": turn, "framework": fw, "chrome": chrome}
-    key = _atlas_layout_cluster_key(row, None, str(role or ""))
-    header = chrome_header_title(chrome)
-    title = _compact_page_title(header) if header else _logical_page_title("", str(role or ""), fw)
-    return key, title

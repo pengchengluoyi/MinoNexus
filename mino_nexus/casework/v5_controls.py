@@ -19,16 +19,24 @@ def audit(project_id):
 
 
 def list_controls(project_id):
+    from mino_nexus.casework.control_page_binding import bind_project_controls
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.ui_control import UiControl
+    bind_project_controls(project_id)
     with session_scope() as db:
         return [_public(row) for row in db.query(UiControl).filter_by(project_id=project_id).order_by(UiControl.pk)]
 
 
-def configure(project_id, control_id, *, expected_revision, locator_spec, sensitive, publish=False):
+def configure(project_id, control_id, *, expected_revision, locator_spec, sensitive, publish=False, page_state_id=None, platform="web"):
     _assert_runtime_writable()
     actor = require_user_id()
-    validate_locator(locator_spec)
+    from mino_nexus.contract.locator_spec import validate_locator_spec
+
+    plat = str(platform or "web").strip() or "web"
+    if plat == "web":
+        validate_locator(locator_spec)
+    else:
+        validate_locator_spec(locator_spec, plat)
     from mino_nexus.core.database import session_scope
     from mino_nexus.models.ui_control import UiControl
     from sqlalchemy import text
@@ -42,6 +50,16 @@ def configure(project_id, control_id, *, expected_revision, locator_spec, sensit
             raise ValueError("control_revision_conflict")
         if row.scope != "page":
             raise ValueError("unsupported_scope")
+        if page_state_id is not None:
+            locator = dict(row.locator_value or {})
+            page = str(page_state_id or "").strip()
+            if page:
+                locator["nav_state_id"] = page
+                locator["nav_state_source"] = "manual"
+            else:
+                locator.pop("nav_state_id", None)
+                locator.pop("nav_state_source", None)
+            row.locator_value = locator
         row.locator_spec = locator_spec
         row.sensitive = int(bool(sensitive))
         row.revision += 1

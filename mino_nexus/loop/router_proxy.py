@@ -35,6 +35,16 @@ from mino_nexus.resources.node_registry import NodeSession, get_registry
 from mino_nexus.core.schemas import CapturedScreen, EventResult, EventStatus, PlanEvent
 
 TAG = "RouterProxy"
+# 会改变前台/界面状态的能力：派发之后上一拍的「前台是谁」结论必须作废。
+_REVIEW_ONLY_CAPS = frozenset({"confirm_action_result"})
+
+
+_UI_WRITE_CAPS = frozenset({
+    "launch_app", "open_app", "open_url", "close_app", "kill_app", "restart_app",
+    "clear_app_cache", "tap_element", "tap_xy", "tap_target", "press_key",
+    "swipe", "scroll", "input_text", "input_target", "wake_screen",
+    "dismiss_keyguard", "run_flow_block",
+})
 _DIAGNOSTIC_PURPOSES = {
     "plan_action": "执行计划动作", "recovery_action": "恢复动作",
     "recovery_evidence": "恢复取证", "foreground_guard": "前台状态守护",
@@ -202,7 +212,8 @@ class RouterProxy:
             phase = 'cleanup' if getattr(self.run_context, 'execution_cleanup_active', False) else str(getattr(getattr(self.run_context, '_step_cursor', None), 'phase', '') or 'prep')
         if self.execution_binding is None or not self._binding_session_id:
             raise BindingAdmissionError('binding_not_committed')
-        if options.get('binding_run_id', self.run_id) != self.run_id:
+        bound_run = options.get("binding_run_id")
+        if bound_run is not None and str(bound_run) != str(self.run_id):
             raise BindingAdmissionError('binding_run_mismatch')
         combination = None
         if event.capability_id == 'input_text':
@@ -223,7 +234,7 @@ class RouterProxy:
         binding = self.execution_binding
         if not binding or self._task_aborted():
             return set()
-        rows = [row for row in binding['operations'] if row['phase'] == phase]
+        rows = list(binding['operations'] or [])
         if not rows:
             return set()
         row = rows[0]
@@ -247,8 +258,7 @@ class RouterProxy:
         menu = menu_projection(binding, phase)
         resolved = getattr(self.run_context, 'resolved_case', None)
         if resolved is not None:
-            menu &= {row['event_id'] for row in resolved.capability_snapshot
-                     if row['phase'] == phase and (phase != 'check' or row['kind'] == 'check')}
+            menu &= {row['event_id'] for row in resolved.capability_snapshot}
         return menu
 
     def _task_aborted(self) -> bool:
@@ -273,7 +283,29 @@ class RouterProxy:
         **kwargs: Any,
     ) -> EventResult:
         """同步接口 —— 上游循环是同步代码，这里内部跑事件循环。"""
-        return _run_sync(
+        import time as _t
+
+        ctx = kwargs.get("ctx") or self.run_context
+        cap = str(getattr(event, "capability_id", "") or "")
+        if cap in _REVIEW_ONLY_CAPS:
+            # 回看回答工具不是设备动作，永远不该走到派发口。
+            # 以前漏过来就是 event_not_registered（cr-8d33bcfe4537 的 api-1-211 停在 33 回合），
+            # 这里兜住：不派发、不判死，交回模型给一个真动作。
+            from mino_nexus.ai.schemas import EventResult, EventStatus
+
+            return EventResult(
+                seq=int(getattr(event, "seq", 0) or 0), capability_id=cap, event_kind="review_answer",
+                status=EventStatus.SKIPPED,
+                summary="回看回答不是设备动作，本回合未派发；请给出真实的重做动作。",
+                elapsed_ms=0, thought="review_answer_not_dispatchable",
+            )
+        # 前台探测是全链路最贵的读，一回合里有取证、guard、启动核验三个调用点各问一次。
+        # 在唯一出口上收口：没有界面写入动作之前，同一秒内的重复读直接复用上一次结果。
+        if cap == "get_foreground_app" and ctx is not None:
+            cache = getattr(ctx, "_fg_result_cache", None)
+            if isinstance(cache, tuple) and len(cache) == 2 and (_t.time() - float(cache[0] or 0)) <= 20.0:
+                return cache[1]
+        res = _run_sync(
             self.dispatch_async(
                 event,
                 run_id=run_id or self.run_id,
@@ -281,6 +313,21 @@ class RouterProxy:
                 **kwargs,
             )
         )
+        # 任何会改变界面的动作之后，上一拍的前台结论立刻作废。
+        # 前台探测是全链路最贵的读（cr-a390541e5dd2 里 1010 次设备动作中有 683 次），
+        # 缓存只在同一拍内复用，写入动作一律清空。
+        if ctx is not None and cap in _UI_WRITE_CAPS:
+            try:
+                setattr(ctx, "_fg_probe_cache", None)
+                setattr(ctx, "_fg_result_cache", None)
+            except Exception:  # noqa: BLE001
+                pass
+        elif ctx is not None and cap == "get_foreground_app":
+            try:
+                setattr(ctx, "_fg_result_cache", (_t.time(), res))
+            except Exception:  # noqa: BLE001
+                pass
+        return res
 
     def observe(
         self,
@@ -366,6 +413,11 @@ class RouterProxy:
         if session_writer is not None:
             session_writer.require_persisted()
 
+        from mino_nexus.catalog.skill_channel import INTERNAL_FLOW_IDS, canonical_cap
+
+        if canonical_cap(event.capability_id) in INTERNAL_FLOW_IDS:
+            return await self._dispatch_internal_flow(event, started, t0)
+
         from mino_nexus.loop.resolved_case import dispatch_gate, ContractError
         try:
             dispatch_gate(self.run_context, event.capability_id,
@@ -398,7 +450,7 @@ class RouterProxy:
                 local_reason="task_cancelled",
             )
 
-        from mino_nexus.catalog.skill_channel import canonical_cap, capability_dispatch_ok
+        from mino_nexus.catalog.skill_channel import capability_dispatch_ok
 
         from mino_nexus.catalog.tool_schema import CONFIRM_ACTION_RESULT
 
@@ -534,10 +586,10 @@ class RouterProxy:
         scheme = action_scheme(ctx if ctx is not None else self)
         focus_ref = str(params.get("focus_ref") or "")
         params = stamp_scheme_params(event.capability_id, params, scheme)
-        if scheme != "dom" and visual_point_missing(event.capability_id, params):
+        if scheme == "visual" and visual_point_missing(event.capability_id, params):
             return _fail(
                 event, started, t0,
-                "当前视觉操作缺少完整坐标，未派发到节点；普通步骤、逻辑块和恢复步骤均需提供有效操作参数",
+                "DOM 执行不了，看图这一步还没有坐标",
                 executor_used="router_proxy", local_reason="visual_coordinates_missing",
             )
         if event.capability_id == "input_text" and params.get("target_mode") == "current_focus":
@@ -814,6 +866,31 @@ class RouterProxy:
                 raw_response={"scout": _request_metadata(node, req)},
             )
         return _event_result_from(event, res, started, node=node, request=req)
+
+    async def _dispatch_internal_flow(self, event: PlanEvent, started: str, t0: float) -> EventResult:
+        """hierarchy / screenshot 是程序取证，不走能力目录，失败也不把意图判死。"""
+        from mino_nexus.catalog.skill_channel import canonical_cap
+
+        kind = {
+            "get_app_version": "get_app_version",
+            "get_foreground_app": "get_foreground_app",
+            "screenshot": "screenshot",
+            "observe_screen": "screenshot",
+        }.get(canonical_cap(event.capability_id), "hierarchy")
+        shot = await self.observe_async(kind, force_fresh=True, diagnostic_purpose="plan_action")
+        summary = "程序内部观察已采集" if getattr(shot, "ok", False) else "程序内部观察未取到新帧，不阻断后续动作"
+        return EventResult(
+            seq=event.seq,
+            capability_id=event.capability_id,
+            event_kind=event.event_kind or event.capability_id,
+            status=EventStatus.PASS,
+            executor_used="router_proxy",
+            elapsed_ms=int((time.time() - t0) * 1000),
+            summary=summary,
+            started_at=started,
+            finished_at=_now_iso(),
+            raw_response={"internal_flow": kind, "observed": bool(getattr(shot, "ok", False))},
+        )
 
     async def observe_async(
         self,

@@ -154,6 +154,47 @@ def compile_from_captures(app_id: str, *, min_evidence: int = _MIN_EVIDENCE) -> 
     return batch
 
 
+def publish_pages_from_captures(
+    app_id: str,
+    *,
+    project_id: str = "",
+    updated_by: str = "",
+) -> dict[str, Any]:
+    """把被动采集合成导航页并写入 nav_fsm。应用逻辑页与候选编译共用这一份页面。"""
+    from mino_nexus.navigation.atlas import nav_fsm_store as fsm_store
+    from mino_nexus.navigation.atlas import nav_screen_registry as atlas_reg
+
+    aid = str(app_id or "").strip()
+    pid = str(project_id or "").strip() or fsm_store._project_of(aid)
+    doc = atlas_reg.atlas_doc_for_navigation(aid, project_id=pid)
+    if not doc or not (doc.get("states") or []):
+        return {"app_id": aid, "project_id": pid, "published": False, "state_count": 0, "states": []}
+    doc = dict(doc)
+    doc["app_id"] = aid
+    doc["project_id"] = pid
+    doc["version"] = "v1"
+    doc = finalize_for_publish(aid, doc)
+    doc["app_id"] = aid
+    doc["project_id"] = pid
+    doc["version"] = "v1"
+    saved = fsm_store.save(aid, doc, updated_by=updated_by or "capture_pages")
+    states = [
+        {
+            "state_id": str(st.get("id") or ""),
+            "label": str((st.get("meta") or {}).get("display_name") or st.get("id") or ""),
+        }
+        for st in (saved.get("states") or [])
+        if isinstance(st, dict)
+    ]
+    return {
+        "app_id": aid,
+        "project_id": pid,
+        "published": True,
+        "state_count": len(states),
+        "states": states,
+    }
+
+
 def _dedupe_for_human_review(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """去掉占位符填充类候选（发布时自动处理），同类同值只留一条。"""
     seen: set[tuple[str, str]] = set()

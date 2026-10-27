@@ -72,16 +72,25 @@ def _block_obstacle_steps(app_id: str, block_id: str) -> list[dict[str, Any]]:
 
 
 def recovery_step_diagnostics(steps: list[dict[str, Any]], bound_ids: set[str]) -> list[dict[str, Any]]:
-    """An ordered recovery is atomic at admission: never silently drop a child."""
+    """有序恢复在准入时是原子的：不静默丢子步。
+
+    例外：显式标了 ``optional`` 的步骤（例如协议弹窗的「二次确认（如有）」）允许被跳过。
+    否则一个可选步骤没绑定，整条恢复会被判死 —— 连「点同意」都不执行
+    （cr-a390541e5dd2 五条 10 秒 blocked）。
+    """
     issues = []
     for step in steps:
         required = {str(step[k]) for k in ("hook_cap", "device_cap", "cap") if step.get(k)}
         alternatives = {str(cid) for cid in step.get("exec_caps", []) if cid}
         missing = required - bound_ids
-        if missing or (alternatives and not alternatives & bound_ids) or not (required or alternatives):
-            issues.append({"milestone_id": str(step.get("id") or ""),
-                "reason_code": "recovery_operation_not_bound" if required or alternatives else "recovery_step_invalid",
-                "missing_capabilities": sorted(missing | (alternatives if not alternatives & bound_ids else set()))})
+        missing_alt = bool(alternatives and not alternatives & bound_ids)
+        if not (missing or missing_alt or not (required or alternatives)):
+            continue
+        if step.get("optional"):
+            continue
+        issues.append({"milestone_id": str(step.get("id") or ""),
+            "reason_code": "recovery_operation_not_bound" if required or alternatives else "recovery_step_invalid",
+            "missing_capabilities": sorted(missing | (alternatives if missing_alt else set()))})
     return issues
 
 

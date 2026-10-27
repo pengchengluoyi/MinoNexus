@@ -268,9 +268,13 @@ def vision_assert_checkpoints(
         scope = raw.get("observation_scope")
         error = scope_error(scope)
         if error:
+            # 作用域没通过时必须把 scope 带出来：以前这里直接丢成 {}，
+            # 事后只能看到 check_scope_mismatch，看不到「模型到底看到了哪个页面」
+            # （cr-869c1b6bc98b 的 api-1-212：其实是相机取景界面，不是商品详情页）。
+            kept = bind_scope(scope, image_base64) if isinstance(scope, dict) and scope else {}
             return AssertResult(passed=False, ai_reasoning=str((scope or {}).get("evidence") or "当前页面或观察通道尚未验证")
                 if isinstance(scope, dict) else "当前页面或观察通道尚未验证", error_kind=error,
-                raw_llm={"observation_scope": scope})
+                raw_llm={"observation_scope": scope}, **({"observation_scope": kept} if kept else {}))
         result.observation_scope = bind_scope(scope, image_base64)
     if result.parse_warnings:
         result.passed = False

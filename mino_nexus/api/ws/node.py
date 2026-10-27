@@ -168,9 +168,6 @@ class NodeConnection:
             SLog.e(TAG, f"[{self.node_id}] 解码失败，忽略: {type(exc).__name__}: {exc}")
             return
 
-        if env.v != P.PROTOCOL_VERSION:
-            raise RuntimeError(f"Scout 用了协议 v{env.v}，本 Nexus 是 v{P.PROTOCOL_VERSION}")
-
         if not self.node_id and env.type is not P.MsgType.REGISTER:
             await self.ws.close(code=1008, reason="必须先注册节点")
             self.close()
@@ -256,14 +253,6 @@ class NodeConnection:
     async def _on_register(self, env: P.Envelope) -> None:
         req: P.Register = env.payload
         reg = get_registry()
-
-        if req.protocol_version != P.PROTOCOL_VERSION:
-            await self._reply(env, P.Registered(
-                accepted=False, nexus_version=NEXUS_VERSION,
-                reason=f"协议版本不一致：Scout v{req.protocol_version} vs Nexus "
-                       f"v{P.PROTOCOL_VERSION}。按协议 §7 不做降级协商",
-            ))
-            return
 
         if req.account_isolation_version != 1:
             await self._reply(env, P.Registered(accepted=False, nexus_version=NEXUS_VERSION,

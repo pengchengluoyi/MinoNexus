@@ -354,9 +354,6 @@ def seed_case(run_id: str, raw: dict[str, Any], index: int, *, sn: str = "", cov
         "v5_publication": copy.deepcopy(raw.get("v5_publication")),
         "v5_plan_state": raw.get("v5_plan_state", "draft"),
         "wall_budget_sec": raw.get("wall_budget_sec", 0),
-        **({key: copy.deepcopy(raw[key]) for key in
-            ("source", "case_scene", "success_criteria", "max_steps", "max_idle_steps") if key in raw}
-           if cid == "__explore__" and raw.get("source") == "explore" else {}),
     }
 
 

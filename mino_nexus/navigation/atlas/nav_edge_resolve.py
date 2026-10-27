@@ -69,7 +69,11 @@ def resolve_state_via_nav_edges(
         else:
             sid = str(edge.get("from") or edge.get("from_state") or "").strip()
             method = "nav_edge_from"
-        if not sid or not F.state_by_id(fsm, sid):
+        target = F.state_by_id(fsm, sid)
+        if not target:
+            continue
+        target_meta = target.get("meta") if isinstance(target.get("meta"), dict) else {}
+        if str(target_meta.get("semantic_status") or "") == "rejected":
             continue
         if name > best_name:
             best_name = name

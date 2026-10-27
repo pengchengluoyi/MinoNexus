@@ -76,9 +76,11 @@ def program_graph_version(cursor: Any, ctx: Any = None) -> str:
 def fingerprint_from_node(node: dict[str, Any] | None) -> dict[str, str]:
     if not isinstance(node, dict):
         return {}
-    rid = rid_short(node.get("resource_id") or "")
-    text = str(node.get("text") or "").strip()
+    rid = rid_short(node.get("resource_id") or node.get("identifier") or node.get("automation_id")
+                    or node.get("accessibility_id") or "")
+    text = str(node.get("text") or node.get("name") or node.get("title") or "").strip()
     desc = str(node.get("content_desc") or "").strip()
+    test_id = str(node.get("test_id") or node.get("data-testid") or "").strip()
     label = ""
     if 0 < len(text) <= _LABEL_MAX:
         label = text
@@ -88,11 +90,15 @@ def fingerprint_from_node(node: dict[str, Any] | None) -> dict[str, str]:
     fp: dict[str, str] = {}
     if rid:
         fp["resource_id"] = rid
+    if test_id:
+        fp["test_id"] = test_id
     if label:
         fp["text"] = label
+    if desc and desc != label:
+        fp["content_desc"] = desc[:_LABEL_MAX]
     if role:
         fp["role"] = role
-    if not fp.get("resource_id") and not fp.get("text"):
+    if not fp.get("resource_id") and not fp.get("text") and not fp.get("test_id"):
         return {}
     for key in _COORD_KEYS:
         fp.pop(key, None)

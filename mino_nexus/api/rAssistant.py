@@ -14,6 +14,8 @@ from mino_nexus.core.http_util import ok
 from mino_nexus.api.deps import current_session
 from mino_nexus.assistant import store as store
 from mino_nexus.assistant import store as assistant_store
+# 模块导入即注册 IM 入站处理器；助手路由是应用启动时必加载的入口。
+from mino_nexus.assistant.assistant_gateway import confirmed_history
 from mino_nexus.resources.node_registry import get_registry
 
 router = APIRouter(prefix="/assistant", tags=["Assistant"])
@@ -209,7 +211,6 @@ def turn_messages(turn_id: str, sess: dict = Depends(current_session)):
         store.require_im_binding(_uid(sess), channel, node_id, ctx)
     except PermissionError:
         return ok({"available": False, "reason": "该会话绑定已失效", "messages": []})
-    from mino_nexus.assistant.assistant_gateway import confirmed_history
     raw = data.get("messages") if isinstance(data.get("messages"), list) else []
     msgs = confirmed_history({**ctx, "recent_turns": raw}, binding, limit=40, text_limit=4000)
     return ok({"available": True, "reason": "", "messages": msgs})

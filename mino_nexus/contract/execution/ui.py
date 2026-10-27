@@ -37,7 +37,7 @@ def ui_channel_label(channel: UiChannel | str) -> str:
     if c == UiChannel.WEB.value:
         return "web_dom"
     if c == UiChannel.DESKTOP.value:
-        return "desktop_visual"
+        return "native_hierarchy"
     if c == UiChannel.IOS.value:
         return "ios"
     return "android_hierarchy"

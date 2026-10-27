@@ -170,7 +170,28 @@ def run_check_phase(
                             },
                         )
             if va is not None:
-                if resolved_case is not None:
+                scope_bad = str(va.error_kind) in ("check_scope_mismatch", "check_observation_channel_mismatch")
+                if scope_bad:
+                    # 必须在 record_check 之前处理：record_check 会把 scope 失败直接抛成
+                    # ContractError（resolved_case.py:276），那一步就再没机会退回操作阶段
+                    # （cr-1dd866f93044 的 api-1-217 就是 check/scope 之后立刻 contract/blocked）。
+                    from mino_nexus.loop.scope_bounce import bounce_to_do_after_scope_mismatch
+
+                    if resolved_case is not None:
+                        writer.append("check/scope", {
+                            "case_step": cur.n,
+                            "observation_scope": getattr(va, "observation_scope", {}),
+                            "reason_code": va.error_kind, "business_verdict": "unknown"})
+                    if bounce_to_do_after_scope_mismatch(
+                        ctx,
+                        cursor,
+                        case_step=int(getattr(cur, "n", 0) or 0),
+                        evidence=str(getattr(va, "evidence", "") or va.ai_reasoning or ""),
+                        writer=writer,
+                    ):
+                        _log_turn_end(writer, cap="assert_visual", status="blocked")
+                        return CheckFlow(cont=True)
+                if resolved_case is not None and not scope_bad:
                     from mino_nexus.loop.resolved_case import record_check
                     writer.append("check/scope", {"case_step": cur.n,
                         "observation_scope": getattr(va, "observation_scope", {}),
@@ -546,22 +567,12 @@ def run_check_phase(
             return CheckFlow(cont=True)
 
         if action_scheme(ctx) == "dom":
-            from mino_nexus.loop.intent_tap import dom_checkbox_tap_decision, dom_intent_tap_decision
+            from mino_nexus.loop.locator_dispatch import try_locator_chain_decision
 
-            applicable, dom_dec = dom_checkbox_tap_decision(cursor, ctx, writer)
-            if not applicable:
-                dom_dec = dom_intent_tap_decision(cursor, ctx, writer)
+            dom_dec = try_locator_chain_decision(cursor, ctx, writer)
             if dom_dec is not None:
                 cursor.dom_miss_streak = 0
                 decision = dom_dec
-            else:
-                from mino_nexus.loop.milestone_orchestrator import in_progress_milestone
-                from mino_nexus.loop.milestones import read_state
-                focus = in_progress_milestone(read_state(cursor)) or {}
-                cap = str(focus.get("device_cap") or focus.get("cap") or "")
-                if applicable or cap == "tap_element" or focus.get("kind") == "visual_tap":
-                    from mino_nexus.action_space.scheme import use_visual_fallback
-                    use_visual_fallback(ctx, reason="target_not_unique_in_structure", writer=writer)
         if decision is None and (_vision_plan_on() or execution_phase_active()):
             from mino_nexus.loop.milestone_orchestrator import run_vision_orchestrated_turn
             from mino_nexus.loop.program_device_fallback import merge_program_vision_fallback_slots
@@ -615,8 +626,9 @@ def run_check_phase(
                 cursor.plan_only_streak = 0
         if decision is None:
             decision = _decide_gated()
-        model_meta = (decision.raw_llm or {}).get("meta") or {}
-        if model_meta.get("error") and not (decision.raw_llm or {}).get("llm_output"):
+        raw_llm = getattr(decision, "raw_llm", None) or {}
+        model_meta = (raw_llm or {}).get("meta") or {}
+        if model_meta.get("error") and not raw_llm.get("llm_output"):
             return CheckFlow(leave=leave_blocked(seq, "model", str(model_meta["error"]),
                                             "model_" + str(model_meta.get("fail_kind") or "request")))
         # 点名了知识就展开正文重决策一次。只一次 —— 展开后再点名一律忽略。
@@ -632,7 +644,8 @@ def run_check_phase(
             inspect_slots["knowledge_body"] = ""
         if decision.action and action_scheme(ctx) == "dom":
             from mino_nexus.action_space.scheme import structure_target_available, use_visual_fallback
-            if not structure_target_available(decision.action.capability_id, decision.action.params, ctx):
+            chain_hit = bool((decision.action.params or {}).get("locator_chain"))
+            if not chain_hit and not structure_target_available(decision.action.capability_id, decision.action.params, ctx):
                 use_visual_fallback(ctx, reason="model_target_not_unique_in_structure", writer=writer)
                 # DOM 规划不能证明截图上没有挡屏。切换观察后先按同一截图重规划，尚未派发任何点击。
                 from mino_nexus.loop.vision_plan import run_vision_plan_turn_if_enabled

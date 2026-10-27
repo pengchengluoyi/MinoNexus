@@ -34,7 +34,11 @@ def _infer_blocked_from_capture(ev: Any) -> None:
     cap_ok = str(getattr(ev, "capture_ok", "") or "").strip().lower()
     awake = str(getattr(ev, "awake", "") or "").strip().lower()
     if cap_ok == "no" and blocked in ("", "unknown"):
-        setattr(ev, "screen_blocked", "yes")
+        # 截图缺失/解码失败不等于锁屏：设备已 awake 且未锁屏时，
+        # 唤醒+解锁两个动作对「拿不到图」毫无帮助（cr-9f7f478af02c 的 215/218/225
+        # 就是这样白跑 4 个动作后判 observation_missing）。
+        if awake != "yes" or str(getattr(ev, "locked", "") or "").strip().lower() == "yes":
+            setattr(ev, "screen_blocked", "yes")
         return
     if cap_black != "yes":
         return
@@ -55,7 +59,11 @@ def _display_needs_fix(ev: Any) -> bool:
     cap_ok = str(getattr(ev, "capture_ok", "") or "").strip().lower()
     cap_black = str(getattr(ev, "capture_black", "") or "").strip().lower()
     if cap_ok == "no" and blocked in ("yes", "unknown", ""):
-        return True
+        # 同上：没有图不是显示问题，除非屏幕本身是灭的/锁着的。
+        awake = str(getattr(ev, "awake", "") or "").strip().lower()
+        locked = str(getattr(ev, "locked", "") or "").strip().lower()
+        if awake == "no" or locked == "yes":
+            return True
     if cap_black == "yes" and blocked != "no":
         return True
     return False

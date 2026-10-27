@@ -28,7 +28,6 @@ def run_model_stop(
     cur: Any,
     decision: Any,
     trace: dict[str, Any],
-    is_explore: bool,
     seq: int,
     thought: str,
     thumb: Any,
@@ -39,7 +38,6 @@ def run_model_stop(
 ) -> StopFlow:
     if (
         decision.status == "give_up"
-        and not is_explore
         and isinstance(cursor, StepCursor)
         and cursor.phase == "do"
     ):
@@ -97,7 +95,10 @@ def run_model_stop(
             },
         )
         writer.append("turn/end", {"decision_cap": "", "decision_status": st})
-    reason = (str(getattr(decision, "error_kind", "") or "observation_missing")
+    # 观察缺失只是「这一回合没东西可看」，不是业务结论；如果本会话里已经有
+    # 程序的真实失败原因（锚点未命中、能力版本变更等），退出原因必须用它。
+    program_reason = str(getattr(cursor, "last_program_fail_reason", "") or "").strip()[:120]
+    reason = (str(getattr(decision, "error_kind", "") or program_reason or "observation_missing")
               if "visual_observation_unavailable" in decision.parse_warnings
               else "model_human_required" if decision.status == "ask_human" else "model_gave_up")
     return StopFlow(leave=leave(status=st, summary=summary, reason_code=reason))

@@ -14,7 +14,6 @@ ALIASES = {
     "agent-decide": "run-case",
     "agent-vision-exec": "run-case",
     "agent_do": "run-case",
-    "explore-decide": "explore-app",
 }
 
 

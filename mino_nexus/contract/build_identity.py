@@ -1,8 +1,8 @@
 """编译产物的身份指纹：版本 + 编译器合同 + 资源目录版本。"""
 from __future__ import annotations
 
-COMPILE_CONTRACT_REVISION = 15
-CATALOG_VERSION = 13
+COMPILE_CONTRACT_REVISION = 17
+CATALOG_VERSION = 14
 
 
 def build_identity() -> dict[str, str | int]:

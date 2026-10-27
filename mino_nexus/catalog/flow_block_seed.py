@@ -21,29 +21,10 @@ RECOVERY_RULE_BLOCKS: dict[str, str] = {
 }
 PRIVACY_DECLINE_BLOCK_ID = "fb.global.privacy.decline"
 CONSENT_BLOCK_ID = "fb.global.consent"
-# Explicit release lineage; unknown versions are never ordered by guessing.
-_LOGIN_VERSION_ORDER = (
-    "v1", "v2", "v3", "v4", "v5", "v6", "v7",
-    "v8", "v9", "v10", "v11", "v12", "v13",
-)
-_VERSION_ORDER = {
-    LOGIN_BLOCK_ID: _LOGIN_VERSION_ORDER,
-    LOGOUT_BLOCK_ID: ("v1", "v2"),
-    PRIVACY_ACCEPT_BLOCK_ID: ("v1",),
-    SYSTEM_DIALOG_BLOCK_ID: ("v1", "v2"),
-    WAKE_BLOCK_ID: ("v1",),
-    FOREGROUND_BLOCK_ID: ("v1",),
-    RESTART_APP_BLOCK_ID: ("v1",),
-    SYSTEM_DIALOG_BLOCK_ID + ".deny": ("v1",),
-    PRIVACY_DECLINE_BLOCK_ID: ("v1",),
-    LOGIN_BLOCK_ID + ".send_code": _LOGIN_VERSION_ORDER,
-    LOGIN_BLOCK_ID + ".legal_consent": _LOGIN_VERSION_ORDER,
-}
-
-
-def _is_seed_upgrade(block_id: str, current: str, target: str) -> bool:
-    order = _VERSION_ORDER.get(block_id, ())
-    return current in order and target in order and order.index(current) < order.index(target)
+# 块内容是代码声明的真源：启动时无条件和库里的行对齐，不再有 v1/v2 版本阶梯。
+# 版本阶梯曾经造成「代码把核验步从 confirm_login_state 改成 screenshot，库里还是旧行」，
+# 于是协议恢复被判 recovery_operation_not_bound（cr-a390541e5dd2 五条 10 秒 blocked）。
+SEED_VERSION = "code"
 
 
 # 一条登录链。账号和验证码由 lease_account / get_otp 按用例给出，不按邮箱/手机、Web/App 拆块。
@@ -54,6 +35,7 @@ _UNIFIED_LOGIN_STEPS = [
         "kind": "visual_tap",
         "title": "聚焦账号输入框",
         "cap": "tap_element",
+        "params": {"element": {"role": "textbox"}},
     },
     {
         "id": "account_fill",
@@ -292,88 +274,93 @@ _CONSENT_STEPS = [
 ]
 
 
+def _seed_rows() -> list[dict[str, object]]:
+    """代码即真源：块的内容全部在这里声明，启动时按它覆盖库里的行。"""
+    rows: list[dict[str, object]] = [
+        {
+            "block_id": LOGIN_BLOCK_ID,
+            "display_name": "登录流（通用）",
+            "description": "登录入口→填账号→发码→取码→核验协议→聚焦并填验证码→提交→确认登录态。lease_account / get_otp 按用例给凭证。",
+            "steps_json": list(_UNIFIED_LOGIN_STEPS),
+        },
+        {
+            "block_id": LOGOUT_BLOCK_ID,
+            "display_name": "退出登录（通用）",
+            "description": "进入退出登录入口→确认弹窗→核验已退出。入口文案由应用覆盖给出。",
+            "steps_json": list(_UNIFIED_LOGOUT_STEPS),
+        },
+        {
+            "block_id": WAKE_BLOCK_ID,
+            "display_name": "唤醒与解锁（通用）",
+            "description": "设备休眠/锁屏时唤醒并解除锁屏，供恢复规则复用。",
+            "steps_json": list(_WAKE_STEPS),
+        },
+        {
+            "block_id": FOREGROUND_BLOCK_ID,
+            "display_name": "拉回被测应用（通用）",
+            "description": "前台不是被测应用时把目标包拉回前台。",
+            "steps_json": list(_FOREGROUND_STEPS),
+        },
+        {
+            "block_id": RESTART_APP_BLOCK_ID,
+            "display_name": "重启被测应用（通用）",
+            "description": "关进程再启动，回到近似首次进入状态。",
+            "steps_json": list(_RESTART_APP_STEPS),
+        },
+        {
+            "block_id": PRIVACY_ACCEPT_BLOCK_ID,
+            "display_name": "首启协议弹窗：同意（通用）",
+            "description": "同意用户协议/隐私政策→确认二次弹窗→核验弹窗关闭。由用例编译期选择。",
+            "steps_json": list(_PRIVACY_ACCEPT_STEPS),
+        },
+        {
+            "block_id": PRIVACY_DECLINE_BLOCK_ID,
+            "display_name": "首启协议弹窗：拒绝（通用）",
+            "description": "拒绝用户协议/隐私政策→确认二次弹窗→核验弹窗关闭（不要求进入主界面）。",
+            "steps_json": list(_PRIVACY_DECLINE_STEPS),
+        },
+        {
+            "block_id": SYSTEM_DIALOG_BLOCK_ID,
+            "display_name": "系统弹窗：允许（通用）",
+            "description": "系统权限挡屏→允许→确认→核验关闭。由用例编译期选择。",
+            "steps_json": list(_SYSTEM_DIALOG_ALLOW_STEPS),
+        },
+        {
+            "block_id": SYSTEM_DIALOG_BLOCK_ID + ".deny",
+            "display_name": "系统弹窗：拒绝（通用）",
+            "description": "系统权限挡屏→拒绝→确认→核验关闭。",
+            "steps_json": list(_SYSTEM_DIALOG_DENY_STEPS),
+        },
+        {
+            "block_id": CONSENT_BLOCK_ID,
+            "display_name": "协议/系统弹窗（参数化）",
+            "description": "按 params.decision=accept|decline|allow|deny 执行对应分支；旧四套块 id 保持兼容。",
+            "steps_json": list(_CONSENT_STEPS),
+        },
+    ]
+    for step_id in ("send_code", "legal_consent"):
+        rows.append({
+            "block_id": LOGIN_BLOCK_ID + "." + step_id,
+            "display_name": "登录步骤：" + step_id,
+            "description": "登录块的独立业务步骤；不是事件别名。",
+            "steps_json": [{**{k: v for k, v in step.items() if k not in {"condition", "requirement"}}, "optional": False}
+                           for step in _UNIFIED_LOGIN_STEPS if step["id"] == step_id],
+        })
+    return rows
+
+
 def seed_global_flow_blocks() -> int:
+    """把代码声明的通用块写进库：缺的补、旧的和代码不一致的直接对齐。
+
+    以前靠 v1→v2 的版本阶梯决定要不要升级，代码改了但版本号没动时库里会永远留着旧步骤。
+    现在版本列只做展示（``SEED_VERSION``），内容一律以代码为准。
+    """
     from mino_nexus.core.database import SessionLocal
 
     db = SessionLocal()
     n = 0
     try:
-        rows = [
-            {
-                "block_id": LOGIN_BLOCK_ID,
-                "display_name": "登录流（通用）",
-                "description": "登录入口→填账号→发码→取码→核验协议→聚焦并填验证码→提交→确认登录态。lease_account / get_otp 按用例给凭证。",
-                "steps_json": list(_UNIFIED_LOGIN_STEPS),
-                "version": "v13",
-            },
-            {
-                "block_id": LOGOUT_BLOCK_ID,
-                "display_name": "退出登录（通用）",
-                "description": "进入退出登录入口→确认弹窗→核验已退出。入口文案由应用覆盖给出。",
-                "steps_json": list(_UNIFIED_LOGOUT_STEPS),
-                "version": "v2",
-            },
-            {
-                "block_id": WAKE_BLOCK_ID,
-                "display_name": "唤醒与解锁（通用）",
-                "description": "设备休眠/锁屏时唤醒并解除锁屏，供恢复规则复用。",
-                "steps_json": list(_WAKE_STEPS),
-                "version": "v1",
-            },
-            {
-                "block_id": FOREGROUND_BLOCK_ID,
-                "display_name": "拉回被测应用（通用）",
-                "description": "前台不是被测应用时把目标包拉回前台。",
-                "steps_json": list(_FOREGROUND_STEPS),
-                "version": "v1",
-            },
-            {
-                "block_id": RESTART_APP_BLOCK_ID,
-                "display_name": "重启被测应用（通用）",
-                "description": "关进程再启动，回到近似首次进入状态。",
-                "steps_json": list(_RESTART_APP_STEPS),
-                "version": "v1",
-            },
-            {
-                "block_id": PRIVACY_ACCEPT_BLOCK_ID,
-                "display_name": "首启协议弹窗：同意（通用）",
-                "description": "同意用户协议/隐私政策→确认二次弹窗→核验弹窗关闭。由用例编译期选择。",
-                "steps_json": list(_PRIVACY_ACCEPT_STEPS),
-            },
-            {
-                "block_id": PRIVACY_DECLINE_BLOCK_ID,
-                "display_name": "首启协议弹窗：拒绝（通用）",
-                "description": "拒绝用户协议/隐私政策→确认二次弹窗→核验弹窗关闭（不要求进入主界面）。",
-                "steps_json": list(_PRIVACY_DECLINE_STEPS),
-            },
-            {
-                "block_id": SYSTEM_DIALOG_BLOCK_ID,
-                "display_name": "系统弹窗：允许（通用）",
-                "description": "系统权限挡屏→允许→确认→核验关闭。由用例编译期选择。",
-                "steps_json": list(_SYSTEM_DIALOG_ALLOW_STEPS),
-                "version": "v2",
-            },
-            {
-                "block_id": SYSTEM_DIALOG_BLOCK_ID + ".deny",
-                "display_name": "系统弹窗：拒绝（通用）",
-                "description": "系统权限挡屏→拒绝→确认→核验关闭。",
-                "steps_json": list(_SYSTEM_DIALOG_DENY_STEPS),
-                "version": "v1",
-            },
-            {
-                "block_id": CONSENT_BLOCK_ID,
-                "display_name": "协议/系统弹窗（参数化）",
-                "description": "按 params.decision=accept|decline|allow|deny 执行对应分支；旧四套块 id 保持兼容。",
-                "steps_json": list(_CONSENT_STEPS),
-                "version": "v1",
-            },
-        ]
-        for step_id in ('send_code', 'legal_consent'):
-            rows.append({'block_id': LOGIN_BLOCK_ID + '.' + step_id,
-                'display_name': '登录步骤：' + step_id, 'description': '登录块的独立业务步骤；不是事件别名。',
-                'steps_json': [{**{k:v for k,v in step.items() if k not in {'condition', 'requirement'}}, 'optional': False} for step in _UNIFIED_LOGIN_STEPS if step['id'] == step_id],
-                'version': 'v13'})
-        for row in rows:
+        for row in _seed_rows():
             bid = str(row["block_id"])
             existing = (
                 db.query(NavFlowBlockCatalog)
@@ -392,19 +379,23 @@ def seed_global_flow_blocks() -> int:
                         display_name=str(row["display_name"]),
                         description=str(row["description"]),
                         steps_json=row["steps_json"],
-                        version=str(row.get("version") or "v1"),
+                        version=SEED_VERSION,
                         enabled=1,
                     )
                 )
                 n += 1
-            elif (existing.block_origin == "global_catalog"
-                  and _is_seed_upgrade(bid, str(existing.version or ""),
-                                       str(row.get("version") or "v1"))):
-                existing.steps_json = row["steps_json"]
-                existing.version = str(row.get("version") or "v1")
-                existing.display_name = str(row["display_name"])
-                existing.description = str(row.get("description") or "")
-                n += 1
+                continue
+            # 私有块（block_origin != global_catalog）是应用自己沉淀的，不动。
+            if existing.block_origin != "global_catalog":
+                continue
+            if (existing.steps_json or []) == row["steps_json"] and str(existing.version or "") == SEED_VERSION:
+                continue
+            existing.steps_json = row["steps_json"]
+            existing.version = SEED_VERSION
+            existing.display_name = str(row["display_name"])
+            existing.description = str(row.get("description") or "")
+            existing.enabled = 1
+            n += 1
         # Legacy IDs are no longer seeded, but startup must not delete them:
         # a newer release or an existing plan may still reference those rows.
         db.commit()

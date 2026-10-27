@@ -664,8 +664,12 @@ def list_candidates(app_id: str, _sess: dict = Depends(current_session)):
 
 
 @router.post("/{app_id}/candidates/compile")
-def compile_candidates(app_id: str, _sess: dict = Depends(current_session)):
-    return ok(compiler.compile_from_captures(app_id))
+def compile_candidates(app_id: str, sess: dict = Depends(current_session)):
+    """从采集合成导航页并写入 nav_fsm，和应用逻辑页读的是同一份页面。"""
+    return ok(compiler.publish_pages_from_captures(
+        app_id,
+        updated_by=str(sess.get("username") or sess.get("user_id") or ""),
+    ))
 
 
 @router.post("/{app_id}/expectations/compile")

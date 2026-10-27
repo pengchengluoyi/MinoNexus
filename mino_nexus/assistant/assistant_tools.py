@@ -409,6 +409,15 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
     method = method.upper()
     props = (spec.get("params_schema") or {}).get("properties") or {}
     args = dict(args or {})
+    if spec.get("id") == "cli.execute":
+        # 用户明确把截图/文件随 Bug 提交时，不能因为模型漏填 attachments 就静默创建空附件。
+        refs = [str(ref) for ref in (context.get("assistant_attachments") or []) if ref]
+        text = str(context.get("assistant_user_text") or "")
+        if (refs and not args.get("attachments") and args.get("plugin") == "meego"
+                and list(args.get("command") or []) == ["workitem", "create"]
+                and re.search(r"截图|图片|附件|文件", text)):
+            args["attachments"] = [{"ref": ref, "field_key": "__auto__", "resource_type": 15}
+                                   for ref in refs[:4]]
     if spec.get('id') in {'cli.query', 'cli.execute'} and not args.get('node_id'):
         origin = context.get('assistant_origin') or {}
         if origin.get('node_id'):

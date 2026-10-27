@@ -11,6 +11,8 @@
 ## 会话执行版本证据（2026-10-18）
 
 `GET /case-runner/sessions/{session_id}/execution-evidence` 只读取当前账号的历史会话。
+
+`GET /case-runner/sessions/{session_id}/locator-chain` 只读定位链轨迹。按会话汇总 `hit/miss/ambiguous/skip/config`，附带 `runtime_context.locator_chain`（`enabled/platform/structural`）。命中回写草稿不经过此接口。android / web / mac / win 都先走结构链；树空记 `miss`（`structure_empty`），再看图兜底。Workbench 尚未做展示页，本仓只提供只读 API。
 可选查询参数 `expected_instance_id`、`expected_nexus_build_id`、`expected_node_id`、`expected_build_id` 是测试计划中的预期值，不自动采用当前实际值。
 实例不符返回 409（`instance_mismatch`），会话不可读或跨账号返回 404，未认证返回 401。
 返回实际 Nexus 实例/build、Scout 节点/进程/build、设备、结果事件序号、源码提交与快照摘要以及可复制的引用。
@@ -312,7 +314,7 @@ pip install -e .    # 或 uv sync
 | `GET` | `/nav-fsm/{app_id}/captures/{session_id}/turn/{turn_id}` | 单 turn hierarchy 样本 |
 | `GET` | `/nav-fsm/{app_id}/calibration-report` | 采集报告 + 待审候选数 |
 | `GET` | `/nav-fsm/{app_id}/candidates` | 当前候选包 |
-| `POST` | `/nav-fsm/{app_id}/candidates/compile` | 从采集生成候选（不进正式库） |
+| `POST` | `/nav-fsm/{app_id}/candidates/compile` | 从采集合成导航页并写入 `nav_fsm`（与应用逻辑页同一份页面） |
 | `POST` | `/nav-fsm/{app_id}/candidates/{id}/review` | 接受/拒绝候选 |
 | `POST` | `/nav-fsm/{app_id}/candidates/apply-to-draft` | 已接受候选合并进 draft |
 | `POST` | `/nav-fsm/{app_id}/feedback` | 失败点反馈 → 定点候选 |
@@ -327,6 +329,7 @@ pip install -e .    # 或 uv sync
 | `POST` | `/nav-fsm/{app_id}/calibration/{id}/finish` | 【遗留】收工 |
 | `GET` | `/nav-fsm/{app_id}/metrics` | §9 指标（`guard_fp`/`guard_fn` 为 null 表示没样本） |
 | `GET` | `/nav-fsm/{app_id}/reviews` | 待人工标注的 guard 事件 |
+| `GET` | `/project/{project_id}/apps/{app_id}/understanding/pages/{state_id}/case-refs` | 页面详情用例引用：`enters` / `operates` / `asserts`，按同页面 `page_label` 聚合多个业务状态 |
 | `POST` | `/nav-fsm/{app_id}/annotate` | QA 标注 fp/fn（body：`session_id`, `target_seq`, `verdict`） |
 
 **Playbook 开关**（`apps` automation config）：
@@ -491,12 +494,12 @@ Workbench 的“预检所选用例”按当前完整选择逐条调用；选择�
 | `POST .../compile-jobs/{job_id}/recover` | `{expected_revision,client_request_id}`；仅最新 failed/interrupted/cancelled 任务可显式创建关联新 job；可能再次调用模型 |
 | `GET .../review-requirements` | 当前 source/revision/job，编译、发布、断言/资源及已检查目标的诊断；来源、六类建议根因或根因待确认、缺项、point/operation、动作、逐项历史 |
 | `PUT .../review-requirements` | 原有 `{expected_revision,source:{precondition,steps_raw,expected_raw},reason}`；原文与新 revision+queued job 原子落盘，不同步编译 |
-| `POST .../review-requirements/{item_id}/review` | `{expected_revision,expected_job_id,reason,category?}`；category 允许 case_definition/semantic_parsing/capability_gap/configuration/execution_toolchain/external_evidence，null 表示暂不定责；只登记人工意见，不解除运行阻塞 |
+| `POST .../review-requirements/{item_id}/review` | `{expected_revision,expected_job_id,reason,category?}`；category 允许 case_definition/semantic_parsing/capability_gap/configuration/execution_toolchain/external_evidence，null 表示暂不定责；只登记人工意见，不改变用例执行资格 |
 | `POST .../review-requirements/recheck` | `{expected_revision,expected_job_id,reason,context?,evidence_session_id?}`；context 为当前项目应用及 owned 设备 `{app_id,sn,env_profile,env_surface,execution_mode?,action_scheme?,provider_id?}`。实际重算静态资格、目标绑定和资源登记检查，不租设备、不调用执行器。目标诊断按上下文保存，省略目标不能清除原目标问题；观察超过 60 秒或版本改变标过时 |
 
 原有 `POST .../v5/compile`、`.../step-keys/compile`、`.../resource-key/compile` 统一进入队列，仍返回 `{case,job,preview}`。新客户端发送上述稳定请求身份；兼容无 body 的旧入口可复用在途工作，不能把 HTTP 返回当编译已完成。保存/导入不再被模型时延阻塞；预览的解析仍是可丢弃候选，确认导入保留原文并以持久任务报告编译缺口。
 
-执行入口（助手、Workbench 启动及 Case Runner）重新读取用例，再校验原文摘要、编译/资源目录合同及执行绑定合同。产物缺失或失效时复用 queued/running 或按原文版本与当前构建依赖生成幂等重编任务；不把旧预检结果作为执行许可。真实语义阻塞不触发重编，failed/interrupted/cancelled 不自动重放；仅模型调用前检测到 `compile_input_or_build_changed` 的失败可按新的构建身份排队，重复请求不重复调用。全部等待编译时不创建执行任务，Runner 返回 409，detail 含 `message/blocked/compilation_jobs`；部分就绪时仍只执行就绪子集，其余的重编回执进入 `skipped_cases`。编译完成后需再次发起执行，不在后台延迟操作设备。列表、详情及默认 preflight 不触发编译；无关 Nexus 发布版本变化不会单独使成功产物失效。
+执行入口（助手、Workbench 启动及 Case Runner）重新读取用例，再校验原文摘要、编译/资源目录合同及执行绑定合同。产物缺失或失效时复用 queued/running 或按原文版本与当前构建依赖生成幂等重编任务；不把旧预检结果作为执行许可。编译未就绪、能力缺口或页面入口缺口不再作为拒绝整案的理由：重编回执进入 `compilation_jobs`，未就绪的步骤/断言在执行时交给意图识别与入口调度，风险随任务记录。只有用例本身不可执行（空选择、已删除、不属于当前项目）才在创建任务前拒绝。真实语义阻塞不触发重编，failed/interrupted/cancelled 不自动重放；仅模型调用前检测到 `compile_input_or_build_changed` 的失败可按新的构建身份排队，重复请求不重复调用。列表、详情及默认 preflight 不触发编译；无关 Nexus 发布版本变化不会单独使成功产物失效。
 
 来源/任务变化或恢复父任务不一致返回 409；无项目维护权限返回 403，不存在或非本账号的完整 job/设备/session 资源返回 404 或证据不匹配；复核理由/分类/证据不合约返回 400。queued/running/failed/interrupted/cancelled 最新版本均不能悄悄使用旧 artifact 或旧 publication 执行。发布快照保存 source_revision_id/source_revision/compile_job_id/effective_artifact，并在提交时再次比较引用。
 

@@ -3,7 +3,7 @@
 这段是循环里最长的一条判定链，顺序是硬的：
 
 1. 里程碑阶段下的 `signal_done` 前置校验（未满足就转阶段或记 blocked）
-2. explore 模式 / prep / check 三段各自的收尾规则
+2. prep / check 两段各自的收尾规则
 3. `require_do_work` 守卫：确实没做过实质动作时不许进 check
 4. 资源闸门、视觉先验、探测命中判定
 5. 都通过才 `enter_check()` 并结束本轮
@@ -48,7 +48,6 @@ def run_model_done(
     writer: Any,
     in_prep: bool,
     in_check: bool,
-    is_explore: bool,
     run_guards: Callable[..., Any],
     rec: Callable[..., Any],
     emit: Callable[..., None],
@@ -64,7 +63,6 @@ def run_model_done(
 
     if (
         milestone_phase_active()
-        and not is_explore
         and isinstance(cursor, StepCursor)
     ):
         fsm_act, fsm_tr = handle_model_signal_done_blocked(
@@ -140,27 +138,6 @@ def run_model_done(
             )
             _log_turn_end(writer, cap="signal_done", status="skipped")
             return DoneFlow(cont=True)
-    if is_explore:
-        cursor.mark_explore_done()
-        rec(
-            seq,
-            capability_id="signal_done",
-            status="pass",
-            summary=thought or cursor.summary(),
-            thought=thought,
-            thumb=thumb,
-        )
-        emit(
-            "result",
-            thought=thought,
-            step=seq,
-            capability_id="signal_done",
-            status="pass",
-            summary=cursor.summary(),
-            thumb=thumb,
-        )
-        _log_turn_end(writer, cap="signal_done", status="pass")
-        return DoneFlow(leave=leave(status="pass", summary=cursor.summary(), pack=pack(), reason_code="required_assertions_consumed"))
     if in_prep:
         from mino_nexus.resources.resource_preflight import prep_resource_gate_issues
 

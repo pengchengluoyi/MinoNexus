@@ -67,6 +67,24 @@ def run_tap_params(
             return TapParamsFlow(cont=True)
         if recovery == "stop":
             return TapParamsFlow(leave=leave(status="blocked", summary=str(cursor.semantic_stop)[:500], reason_code="execution_contract_blocked"))
+        # 焦点引用过期（中间又点了别处）不是用例失败：让人先聚焦再输入就行。
+        # 以前这里直接终止，cr-9bbe7ff87da2 的 api-1-211 已经填完手机号和验证码，
+        # 就因为聚焦引用失效被判 tool_blocked。
+        tries = int(getattr(cursor, "focus_ref_reask", 0) or 0) + 1
+        setattr(cursor, "focus_ref_reask", tries)
+        if tries <= 2:
+            setattr(cursor, "correction_hint",
+                    "输入前先 tap 目标输入框完成聚焦，再 input_text(field=...)；"
+                    "本回合未派发输入，不要用旧坐标硬写。")
+            if writer:
+                writer.append("contract/reask", {
+                    "capability_id": "input_text",
+                    "reason_code": "focus_reference_stale",
+                    "attempt": tries,
+                    "required": "先 tap 当前目标输入框再 input_text",
+                })
+            _log_turn_end(writer, cap="input_text", status="pending")
+            return TapParamsFlow(cont=True)
         summary = "当前焦点输入缺少有效的聚焦动作引用，不能静默写入"
         if writer:
             writer.append(
@@ -74,12 +92,9 @@ def run_tap_params(
                 {"code": "parameter_contract_mismatch", "reason": summary, "retryable": False},
             )
         return TapParamsFlow(leave=leave(status="blocked", summary=summary, reason_code="execution_contract_blocked"))
-    from mino_nexus.action_space.assemble import visual_point_missing
-    from mino_nexus.action_space.scheme import execution_scheme as _run_scheme
-
     gate = getattr(cursor, "progress_gate", None)
-    if _run_scheme(ctx) != "dom" and visual_point_missing(cap_id, params):
-        hint = "上一次没有给出坐标，这次必须给出 0–1000 的 x 和 y。"
+    if run_scheme(ctx) == "visual" and visual_point_missing(cap_id, params):
+        hint = "DOM 定位不了这一步。看当前截图，给出 0–1000 的 x 和 y。"
         cursor.correction_hint = hint
         stop_msg = gate.note_missing_coordinate(cap_id) if gate is not None else None
         if writer:

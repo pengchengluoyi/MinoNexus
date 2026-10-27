@@ -1,8 +1,8 @@
 """Read-only eligibility checks, split by *why* a case cannot run.
 
-预编译保留。某几步或断言无法自动化时，用例仍然进入执行，这些步骤记在 risks 里。
-``needs_setup`` 只表示前置或数据还没准备好。编译产物缺失、场景无效、绑定合同
-过期仍然不创建执行。
+预编译只负责排队/记录风险，不再把编译未就绪、能力缺口或页面入口缺口当作整案
+hard block。某几步或断言无法自动化时，用例仍然进入执行，这些步骤记在 risks 里；
+执行时由意图识别和入口调度接管。``needs_setup`` 只表示前置或数据还没准备好。
 """
 from __future__ import annotations
 

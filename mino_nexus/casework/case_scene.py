@@ -34,6 +34,24 @@ def _consent_block_id(row: dict[str, Any], *, platform: str) -> str:
     return ""
 
 
+# 系统权限弹窗（相机/相册/通知…）：用例说了「拒绝/不允许/取消」就走 deny 变体，否则默认允许。
+# 同样在编译期定死，运行期只按 block id 执行。
+_PERMISSION_TOPIC = ("权限", "permission", "授权", "弹窗", "对话框")
+_PERMISSION_DENY = ("拒绝", "不允许", "禁止", "取消授权", "deny", "don't allow", "do not allow")
+
+
+def _system_dialog_block_id(row: dict[str, Any], *, platform: str) -> str:
+    if platform != "android":
+        return ""
+    text = " ".join(str(row.get(k) or "") for k in
+                    ("title", "name", "precondition", "precondition_raw", "steps_text", "expected")).lower()
+    if not text.strip() or not any(w in text for w in _PERMISSION_TOPIC):
+        return ""
+    if any(w in text for w in _PERMISSION_DENY):
+        return "fb.global.system_dialog.deny"
+    return "fb.global.system_dialog"
+
+
 def compile_execution_scene(row: dict[str, Any], *, project_id: str) -> dict[str, Any]:
     """Compile scene from current source, never from a previous artifact.
 
@@ -64,5 +82,10 @@ def compile_execution_scene(row: dict[str, Any], *, project_id: str) -> dict[str
         scene["consent_block_id"] = consent
     else:
         scene.pop("consent_block_id", None)
+    dialog = _system_dialog_block_id(row, platform=platform)
+    if dialog:
+        scene["system_dialog_block_id"] = dialog
+    else:
+        scene.pop("system_dialog_block_id", None)
     out["case_scene"] = clamp_case_scene(scene)
     return out

@@ -27,6 +27,7 @@ def capture_compile_controls():
 
 
 from mino_nexus.contract.errors import RuntimeReadOnlyError
+from mino_nexus.knowledge.page_semantics import analyze_clause, control_semantic_role
 from mino_nexus.platform.runtime_mode import runtime_readonly  # noqa: F401
 
 
@@ -79,8 +80,10 @@ def _empty_locator() -> dict[str, Any]:
     return {
         "playwright": "",
         "uiautomator": "",
+        "ax": "",
+        "uia": "",
         "vlm_text": "",
-        "source": {"playwright": "", "uiautomator": "", "vlm_text": ""},
+        "source": {"playwright": "", "uiautomator": "", "ax": "", "uia": "", "vlm_text": ""},
     }
 
 
@@ -96,6 +99,8 @@ def _public(row: Any) -> dict[str, Any]:
     merged["source"] = {
         "playwright": str(source.get("playwright") or ""),
         "uiautomator": str(source.get("uiautomator") or ""),
+        "ax": str(source.get("ax") or ""),
+        "uia": str(source.get("uia") or ""),
         "vlm_text": str(source.get("vlm_text") or ""),
     }
     return {
@@ -107,6 +112,7 @@ def _public(row: Any) -> dict[str, Any]:
         "locator_value": merged,
         "pending_merge": bool(row.pending_merge),
         "revision": int(row.revision or 1),
+        "page_state_id": str(merged.get("nav_state_id") or ""),
         "locator_spec": dict(row.locator_spec or {}),
         "sensitive": bool(row.sensitive),
         "publish_state": row.publish_state or "draft",
@@ -114,6 +120,9 @@ def _public(row: Any) -> dict[str, Any]:
         "published_at": row.published_at or "",
         "updated_by": row.updated_by or "",
         "updated_at": row.updated_at or "",
+        # 只读派生值：历史控件表里混入过动作/断言句，Workbench 用它把
+        # 真正的元素和用例句子分开，不改旧记录。
+        "semantic_role": control_semantic_role(str(merged.get("vlm_text") or row.desc_key or "")),
     }
 
 
@@ -221,13 +230,63 @@ def get_control(project_id: str, control_id: str) -> dict[str, Any] | None:
         return _public(row) if row else None
 
 
+def _control_label_token(row: Any) -> str:
+    locator = row.locator_value if isinstance(row.locator_value, dict) else {}
+    return _desc_key(str((locator or {}).get("vlm_text") or row.desc_key or ""))
+
+
+def find_control_by_label(project_id: str, label: str) -> dict[str, Any] | None:
+    """Unique control whose visible copy equals this label. resource_id is not required."""
+    token = _desc_key(label)
+    if len(token) < 2:
+        return None
+    pid = str(project_id or "").strip()
+    if not pid:
+        return None
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.ui_control import UiControl
+
+    with session_scope() as db:
+        hits = [row for row in db.query(UiControl).filter_by(project_id=pid).all() if _control_label_token(row) == token]
+        if len(hits) != 1:
+            return None
+        return _public(hits[0])
+
+
+def find_control_in_text(project_id: str, text: str) -> dict[str, Any] | None:
+    """Unique longest control copy that appears in this clause. Ties are not a match."""
+    blob = _desc_key(text)
+    if len(blob) < 2:
+        return None
+    pid = str(project_id or "").strip()
+    if not pid:
+        return None
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.ui_control import UiControl
+
+    skip = {"页面", "edittext", "button", "input", "checkbox", "switch", "dialog", "image", "text"}
+    with session_scope() as db:
+        ranked: list[tuple[int, Any]] = []
+        for row in db.query(UiControl).filter_by(project_id=pid).all():
+            token = _control_label_token(row)
+            if len(token) < 2 or token in skip or token not in blob:
+                continue
+            ranked.append((len(token), row))
+        if not ranked:
+            return None
+        best = max(length for length, _row in ranked)
+        top = [row for length, row in ranked if length == best]
+        if len(top) != 1:
+            return None
+        return _public(top[0])
+
+
 def locator_cell(scheme: str, platform: str) -> str:
     from mino_nexus.core.platform_contract import target_platform
     plat = target_platform(platform)
     if scheme == "visual": return "vlm_text"
     if scheme not in {"dom","dom_preferred"}: raise ValueError("locator_scheme_invalid")
-    if plat in {"mac","win"}: raise ValueError("native_dom_locator_unsupported; select visual explicitly")
-    return {"android":"uiautomator","web":"playwright"}[plat]
+    return {"android": "uiautomator", "web": "playwright", "mac": "ax", "win": "uia"}[plat]
 
 
 def read_locator(control: dict[str, Any] | None, *, scheme: str, platform: str) -> str:
@@ -288,6 +347,46 @@ def fill_locator(
     return cell
 
 
+def fill_locator_spec_draft(project_id: str, control_id: str, spec: dict[str, Any]) -> None:
+    """Write typed locator_spec cells that are still empty. Never publishes."""
+    _assert_runtime_writable()
+    if not isinstance(spec, dict) or not spec:
+        return
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.ui_control import UiControl
+
+    pid = str(project_id or "").strip() or "_project"
+    with session_scope() as db:
+        row = _find_control_row(db, pid, str(control_id or ""))
+        if row is None or _published_typed(row):
+            return
+        current = dict(row.locator_spec or {}) if isinstance(row.locator_spec, dict) else {}
+        changed = False
+        for cell, cfg in spec.items():
+            if not str(cell or "").strip() or not isinstance(cfg, dict):
+                continue
+            if isinstance(current.get(cell), dict) and current.get(cell):
+                continue
+            current[cell] = cfg
+            changed = True
+        if not changed:
+            return
+        updated = (
+            db.query(UiControl)
+            .filter(
+                UiControl.pk == row.pk,
+                UiControl.revision == row.revision,
+                UiControl.publish_state != "published",
+            )
+            .update(
+                {UiControl.locator_spec: current, UiControl.revision: UiControl.revision + 1},
+                synchronize_session=False,
+            )
+        )
+        if not updated:
+            raise ControlRegistryReadOnlyError("configuration_changed")
+
+
 _UNIMPLEMENTED = {"select", "upload", "hover"}
 
 
@@ -341,7 +440,11 @@ def assert_of(step: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
 
 def stamp_compiled_plans(case: dict[str, Any], do_plan: dict[str, Any], check_plan: dict[str, Any]) -> list[dict[str, Any]]:
-    """给操作和预期补上 control_id 与步骤字段。未实现的动作返回阻塞说明。"""
+    """给操作和预期补上 control_id 与步骤字段。未实现的动作返回阻塞说明。
+
+    控件身份只来自明确的元素目标。导航步骤、检查步骤和只有整句描述的
+    动作不会创建控件；它们分别属于入口/断言，不能污染控件表。
+    """
     project_id = str(case.get("project_id") or "")
     if not project_id or project_id == "_project":
         raise ValueError("control_project_missing: 编译控件必须携带真实 project_id")
@@ -357,33 +460,46 @@ def stamp_compiled_plans(case: dict[str, Any], do_plan: dict[str, Any], check_pl
         step["action_type"] = action
         params = step.get("params") if isinstance(step.get("params"), dict) else {}
         target = params.get("target") if isinstance(params.get("target"), dict) else {}
-        desc = str(target.get("name") or step.get("source_clause") or step.get("title") or "").strip()
+        kind = str(step.get("kind") or "")
+        explicit = str(target.get("name") or "").strip()
+        desc = explicit or str(step.get("source_clause") or step.get("title") or "").strip()
         step["target_desc"] = desc[:200]
-        step["control_id"] = ensure_control(
-            project_id,
-            target_desc=desc,
-            element_type=str(target.get("role") or "button"),
-            scope="dialog" if "弹窗" in desc else "page",
-            vlm_text=desc,
-            page_id=str(target.get("page_id") or step.get("page_id") or ""),
-            container_id=str(target.get("container_id") or step.get("container_id") or ""),
-            platform=str(case.get("platform") or ""),
-        )
+        step["target_role"] = control_semantic_role(desc, explicit=bool(explicit)) if desc else "unknown"
+        step["control_id"] = ""
+        if kind == "nav":
+            nav = str(step.get("nav_target") or desc)
+            step["target_desc"] = nav[:200]
+            step["target_page"] = analyze_clause(nav).page_label
+            step["target_role"] = "nav"
+        elif kind not in ("flow_block", "remark") and explicit:
+            if step["target_role"] == "element":
+                step["control_id"] = ensure_control(
+                    project_id,
+                    target_desc=explicit,
+                    element_type=str(target.get("role") or "button"),
+                    scope="dialog" if "弹窗" in explicit else "page",
+                    vlm_text=explicit,
+                    page_id=str(target.get("page_id") or step.get("page_id") or ""),
+                    container_id=str(target.get("container_id") or step.get("container_id") or ""),
+                    platform=str(case.get("platform") or ""),
+                )
         for slot in step.get("slots") or []:
             if not isinstance(slot, dict):
                 continue
             slot_desc = str(slot.get("text") or "").strip()
             slot_target = slot.get("target") if isinstance(slot.get("target"), dict) else {}
-            slot["control_id"] = ensure_control(
-                project_id,
-                target_desc=slot_desc or str(slot.get("id") or ""),
-                element_type=str(slot_target.get("role") or "button"),
-                scope="page",
-                vlm_text=slot_desc,
-                page_id=str(slot_target.get("page_id") or step.get("page_id") or ""),
-                container_id=str(slot_target.get("container_id") or step.get("container_id") or ""),
-                platform=str(case.get("platform") or ""),
-            )
+            slot["control_id"] = ""
+            if slot_desc and control_semantic_role(slot_desc, explicit=True) == "element":
+                slot["control_id"] = ensure_control(
+                    project_id,
+                    target_desc=slot_desc,
+                    element_type=str(slot_target.get("role") or "button"),
+                    scope="page",
+                    vlm_text=slot_desc,
+                    page_id=str(slot_target.get("page_id") or step.get("page_id") or ""),
+                    container_id=str(slot_target.get("container_id") or step.get("container_id") or ""),
+                    platform=str(case.get("platform") or ""),
+                )
         extra = dict(params.get("rules") or {}) if isinstance(params.get("rules"), dict) else {}
         if params.get("wait_ms"):
             extra["wait_ms"] = params.get("wait_ms")
@@ -413,19 +529,12 @@ def stamp_compiled_plans(case: dict[str, Any], do_plan: dict[str, Any], check_pl
         step["step_id"] = first_step
         step["assert_type"] = kind
         step["target_desc"] = desc[:200]
-        step["control_id"] = ensure_control(
-            project_id,
-            target_desc=desc or step["assert_id"],
-            element_type="dialog" if kind in ("exists", "visible") and "弹窗" in desc else "text",
-            scope="dialog" if "弹窗" in desc else "page",
-            vlm_text=desc,
-            page_id=str(rules.get("page_id") or step.get("page_id") or ""),
-            container_id=str(rules.get("container_id") or step.get("container_id") or ""),
-            platform=str(case.get("platform") or ""),
-        )
+        # 预期是断言，不是控件。只有以后明确指向已注册元素时才允许引用
+        # control_id；这里不创建、也没有整句兜底。
+        step["control_id"] = ""
+        step["target_role"] = "assertion" if desc else "unknown"
         step["assert_params"] = assert_params
     return blocked
-
 
 def locator_stop_reason(
     *,

@@ -90,6 +90,11 @@ def _verify_launch_foreground(
                 label="核验启动前台",
             )
             try:
+                # 启动核验靠逐次轮询看界面变化，必须每次真读，不能吃 router 的前台去重缓存。
+                try:
+                    setattr(ctx, "_fg_result_cache", None)
+                except Exception:  # noqa: BLE001
+                    pass
                 probe = proxy.dispatch(event, run_id=run_id, step_idx=int(turn_seq), ctx=ctx)
             except Exception as exc:  # noqa: BLE001
                 last = f"probe_failed:{exc}"
@@ -130,7 +135,21 @@ def _verify_launch_foreground(
         except Exception:  # noqa: BLE001
             pass
     ctx.app_launch_confirmed = False
-    reason = "foreground_unreadable" if (not last or last.startswith("probe_failed")) else "foreground_mismatch"
+    if not last or last.startswith("probe_failed"):
+        # 探针三次都返回空串 = 「不知道」，不是「前台是别的应用」。
+        # 以前把它判成 foreground_unreadable 并 env_blocked，一次探针失灵就能
+        # 让整批用例在 17 秒内全灭（cr-9c780f9be78f 四条全 env_blocked，
+        # 其中 case-f1cba7fc 上一轮还是 pass）。未知就继续跑，交给 do 阶段的观察确认；
+        # 真不是目标应用时，do 阶段本来就有「前台不是被测应用 → 重新启动」的恢复。
+        if writer:
+            writer.append("prep/launch_unverified", {
+                "milestone_id": mid, "attempts": _LAUNCH_VERIFY_ATTEMPTS,
+                "package": last, "target": target, "status": "unknown",
+                "reason_code": "foreground_probe_empty",
+                "note": "探针未返回包名，不能据此判定应用没起来；继续执行，由执行阶段观察确认",
+            })
+        return None
+    reason = "foreground_mismatch"
     if writer:
         writer.append("prep/launch_verified", {"milestone_id": mid, "attempts": _LAUNCH_VERIFY_ATTEMPTS,
                                                "package": last, "target": target,
@@ -146,6 +165,27 @@ def _verify_launch_foreground(
                     if reason == "foreground_mismatch" else
                     f"启动后连续 {_LAUNCH_VERIFY_ATTEMPTS} 轮都读不到前台包名（{last or '空'}），无法确认 {target} 是否起来"),
     }
+
+
+def _target_unresolved(res: Any, summary: str) -> bool:
+    """这一步是不是「结构性定位失败、一个设备动作都没发出去」。
+
+    只认执行链自己的证据：``execution_started=no`` 且 reason 指向 unresolved。
+    真失败（点了但没效果）不走这条，仍然按失败记账。
+    """
+    raw = getattr(res, "raw_response", None)
+    ex = raw.get("execution") if isinstance(raw, dict) else None
+    if isinstance(ex, dict):
+        started = str(ex.get("execution_started") or "").strip().lower()
+        rcode = str(ex.get("reason_code") or "").strip().lower()
+        if started == "no" and ("unresolved" in rcode or "not_found" in rcode or "no_target" in rcode):
+            return True
+    text = str(summary or "")
+    # 「缺少完整坐标 / 未派发到节点」同样是定位失败：连动作都没形成，
+    # 再让程序重试也只会重复同一条错误（cr-13cf1f327373 的 api-1-211 第 3 步）。
+    if "缺少完整坐标" in text or "未派发到节点" in text or "tap_target_unresolved" in text:
+        return True
+    return ("未命中" in text or "target_unresolved" in text or "锚点" in text) and "点击" in text
 
 
 def try_dispatch_block_hook(
@@ -514,6 +554,46 @@ def try_dispatch_block_hook(
             tool_summary=hook_summary,
             ctx=ctx,
         )
+    if not ok and _target_unresolved(res, hook_summary):
+        # 程序块按结构锚点点不到控件（Scout 明确拒绝坐标兜底）：
+        # 这不是用例失败，是「程序不该继续猜」。把这一步改成模型看图定位，
+        # 三回合后仍不成就正常记账，不再以 program_hook_failed 终止整条会话
+        # （cr-318e39386a3b 的 api-1-213：do_s1_1_hook 锚点未命中直接弃赛）。
+        streak = int(getattr(cursor, "program_hook_unresolved", {}).get(mid, 0) or 0) + 1 \
+            if isinstance(getattr(cursor, "program_hook_unresolved", None), dict) else 1
+        streaks = dict(getattr(cursor, "program_hook_unresolved", None) or {})
+        streaks[mid] = streak
+        cursor.program_hook_unresolved = streaks
+        if streak <= 2:
+            from mino_nexus.loop.milestones import write_state
+
+            state = read_state(cursor)
+            for row in state.get("milestones") or []:
+                if isinstance(row, dict) and str(row.get("id") or "") == mid:
+                    row["kind"] = "visual_tap"
+                    row["device_cap"] = cap if cap in ("tap_element", "input_text") else "tap_element"
+                    row.pop("hook_cap", None)
+                    row["converted_from_hook"] = cap
+                    row["title"] = str(row.get("title") or "") + "（程序未定位到控件，改为看图定位）"
+            write_state(cursor, state)
+            from mino_nexus.action_space.scheme import use_visual_fallback
+
+            use_visual_fallback(ctx, reason="program_block_target_unresolved", writer=writer)
+            if isinstance(cursor, object) and hasattr(cursor, "correction_hint"):
+                cursor.correction_hint = (
+                    f"「{mid}」程序块按结构锚点没点到控件。用当前截图自己定位该控件并完成这一步，不要重复上一个动作。"
+                )
+            if writer:
+                writer.append("program/handoff", {
+                    "milestone_id": mid, "capability_id": cap, "block_id": block_id,
+                    "reason": "target_unresolved", "streak": streak, "to": "model_visual",
+                })
+            return {
+                "ok": False, "defer": True, "case_fail": False, "status": "wait",
+                "capability_id": cap, "milestone_id": mid, "step_id": mid, "block_id": block_id,
+                "summary": f"{hook_summary}（程序块未定位到控件，已改由模型看图定位）",
+                "session_logged": "flow_block",
+            }
     blocked = not ok and not (cap == "get_otp" and mid == "otp_fill")
     return {
         "ok": ok,

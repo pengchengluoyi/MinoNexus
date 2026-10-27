@@ -136,6 +136,19 @@ def fresh_phone_facets(env_doc: dict[str, Any]) -> dict[str, str]:
                   if isinstance(option, dict)}
         if "no" in values:
             facets[str(field["key"])] = "no"
+    # 其余扩展字段也要有确定取值，否则「按头像筛号」这类要求永远 0 命中：
+    # 号池里 26 个账号都没有 avatar_ready 这一行，用例只能等到 deadline
+    # （cr-9f7f478af02c 的 case-5c5bf758/ed07139f/bc49fd61）。
+    for field in merged_pool_field_defs(env_doc):
+        key = str(field.get("key") or "")
+        if not key or key in facets:
+            continue
+        values = {str(option.get("value") or "") for option in field.get("options") or []
+                  if isinstance(option, dict)}
+        for fallback in ("unknown", "none", "no", "not_set"):
+            if fallback in values:
+                facets[key] = fallback
+                break
     return facets
 
 

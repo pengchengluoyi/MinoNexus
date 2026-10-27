@@ -28,7 +28,9 @@ def readiness(case):
     from mino_nexus.contract.build_identity import build_identity
 
     current = build_identity()
+    # 版本号也是编译产物的一部分：程序升级后旧 job 不能继续冒充当前产物。
+    # 只比 compiler_contract 会漏掉“版本已升、合同常量未变”的发布。
     if any((job.get("build") or {}).get(key) != current[key]
-            for key in ("compiler_contract", "resource_catalog_version")):
+            for key in ("nexus_version", "compiler_contract", "resource_catalog_version")):
         return "compile_contract_changed"
     return None

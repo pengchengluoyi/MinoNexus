@@ -442,6 +442,14 @@ def augment_requirements_from_precondition(
         return dict(req or {})
     out = dict(req or empty_requirements())
     defs = list(field_defs) if field_defs is not None else merged_pool_field_defs(env_doc)
+    from mino_nexus.resources.accounts.account_facts import registration_age_clauses
+
+    age_clauses = registration_age_clauses(pre)
+    for clause in age_clauses:
+        _append_clause(out, "all", clause)
+    if age_clauses:
+        out["all"] = [row for row in out.get("all") or []
+                      if str(row.get("facet") or "") not in _DYNAMIC_FLOW_FACETS]
 
     for line in re.split(r"[\n\r]+", pre):
         chunk = re.sub(r"^\s*[\d]+[.)、]\s*", "", line.strip())

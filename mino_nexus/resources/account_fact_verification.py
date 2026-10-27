@@ -54,7 +54,14 @@ def save_rule(project_id, rule_id, body):
     _assert_runtime_writable()
     choices = options(project_id)
     field = next((f for f in choices['fields'] if f['key'] == body.facet_key), None)
-    if field is None or body.facet_value not in {o['value'] for o in field.get('options') or []}:
+    if field is None:
+        raise ValueError('fact_rule_value_invalid')
+    from mino_nexus.resources.accounts.account_facts import fact_value_configured, is_numeric_fact
+    if is_numeric_fact(field):
+        valid = fact_value_configured(field, body.facet_value)
+    else:
+        valid = body.facet_value in {o['value'] for o in field.get('options') or []}
+    if not valid:
         raise ValueError('fact_rule_value_invalid')
     with session_scope() as db:
         db.execute(text('BEGIN IMMEDIATE'))

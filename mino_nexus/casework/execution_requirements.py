@@ -105,8 +105,52 @@ def compile_steps(plan, *, app_id):
     return rows
 
 
+def repair_binding_plans(case, app_id: str) -> bool:
+    """旧编译产物缺 binding 字段时，内存补全（不写库），避免 requirements_need_compile 拒跑。"""
+    meta = case.get("meta") or {}
+    bundles = meta.get("step_program_keys") if isinstance(meta, dict) else None
+    if not isinstance(bundles, dict) or not bundles:
+        return False
+    revision = case_source_revision(case)
+    changed = False
+    for bundle in bundles.values():
+        if not isinstance(bundle, dict):
+            continue
+        for phase in ("do", "check"):
+            plan = bundle.get(phase + "_program_plan")
+            if not isinstance(plan, dict) or not plan.get("steps"):
+                continue
+            stale = (
+                plan.get("binding_source_revision") != revision
+                or plan.get("binding_event_contract") != 3
+                or plan.get("binding_requirement_contract") != 1
+                or not plan.get("binding_steps")
+            )
+            if not stale:
+                continue
+            try:
+                plan["binding_steps"] = compile_steps(plan, app_id=app_id)
+                plan["binding_source_revision"] = revision
+                plan["binding_event_contract"] = 3
+                plan["binding_requirement_contract"] = 1
+                changed = True
+            except ValueError:
+                continue
+    return changed
+
+
 def ordinary_compilation_diagnostics(case):
     """Read-only admission check shared by submission and execution."""
+    from mino_nexus.contract.case_view import readiness
+
+    build_issue = readiness(case)
+    if build_issue:
+        return [{"reason": "requirements_need_compile", "reason_code": build_issue,
+                 "missing_fields": ["build_identity"], "step_ref": "", "phase": "prep",
+                 "source_revision_mismatch": build_issue == "compile_source_changed",
+                 "user_message": "编译产物与当前程序版本/编译合同不一致，请在 Workbench 重新编译后再运行。"}]
+    app_id = str(case.get("app_id") or case.get("project_id") or "")
+    repair_binding_plans(case, app_id)
     meta = case.get('meta') or {}
     bundles = meta.get('step_program_keys') if isinstance(meta, dict) else None
     base = {'reason': 'requirements_need_compile',
@@ -134,6 +178,7 @@ def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferre
     from mino_nexus.resources.case_resource_claim import _case_resource_key
     from mino_nexus.casework.prep_plan import build_prep_program_plan
     from mino_nexus.contract.errors import BindingAdmissionError
+    repair_binding_plans(case, app_id)
     meta = case.get('meta') or {}
     bundles = meta.get('step_program_keys')
     diagnostics = ordinary_compilation_diagnostics(case)
@@ -261,7 +306,7 @@ def ordinary_requirements(case, app_id, *, platform, action_scheme='dom_preferre
     rows = []
     for row in operations.values():
         if row['event_id'] == 'input_text':
-            targets = ['current_focus'] if action_scheme == 'visual' or platform in {'desktop', 'mac', 'win'} else ['node', 'current_focus']
+            targets = ['current_focus'] if action_scheme == 'visual' else ['node', 'current_focus']
             for target in targets:
                 for mode in ('replace', 'append'):
                     item = deepcopy(row)

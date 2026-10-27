@@ -198,7 +198,6 @@ def _entries() -> list[dict[str, Any]]:
             write_examples=[
                 "fixture=product.new_user_discount:true",
                 "该商品已配置新人折扣价格",
-                "账号注册≤30天",
             ],
             claim_path="resource_key.precondition_coverage[].setup",
             resource="fixture / API seed / manual",
@@ -258,14 +257,24 @@ def _entries() -> list[dict[str, Any]]:
         _entry(
             section="account",
             write_category="账号与数据",
-            write_examples=["形象-已配置形象", "形象-未配置形象", "个人信息配置-已配置"],
+            write_examples=[
+                "形象-已配置形象",
+                "形象-未配置形象",
+                "个人信息配置-已配置",
+                "账号注册≤30天",
+                "注册超过30天",
+            ],
             claim_path="account.requirements.all[]",
-            resource="pool_account_facets",
-            config_keys=["号池模板字段 key 或中文名", "选项 value 或标签"],
-            dsl="「字段名-状态」→ 该 facet eq；不扫其它字段的同名标签",
-            runtime="租号时 row_satisfies_requirements",
+            resource="pool_account_facets（含 registered_days）",
+            config_keys=["号池模板字段 key 或中文名", "选项 value 或标签", "数值事实 op/value"],
+            dsl="枚举字段默认 op=eq；registered_days 等数值事实用 lt/lte/gt/gte，如 registered_days lte 30",
+            runtime="租号时 match_requirements；注册天数不能映射为 register_flow",
             key_ref="precondition.account_field",
-            param_slots=[{"id": "facet", "required": True}, {"id": "value", "required": True}],
+            param_slots=[
+                {"id": "facet", "required": True},
+                {"id": "op", "required": False, "enum": ["eq", "ne", "in", "lt", "lte", "gt", "gte"]},
+                {"id": "value", "required": True},
+            ],
         ),
         _entry(
             section="account",

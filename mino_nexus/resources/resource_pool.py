@@ -287,6 +287,12 @@ def compile_requirements_from_text(
     if env:
         req["env"] = str(env).strip().lower()
 
+    from mino_nexus.resources.accounts.account_facts import registration_age_clauses
+
+    for clause in registration_age_clauses(pre):
+        if clause not in req["all"]:
+            req["all"].append(clause)
+
     session = str(session_hint or "").strip().lower()
     if session == "logged_in":
         # 设备侧要 logged_in；号池租号仍可选 logged_out/unknown，登录在 prep 完成
@@ -434,6 +440,19 @@ def _eval_clause(
     if op == "in":
         opts = {x.strip() for x in want.split(",") if x.strip()}
         return got in opts
+    if op in {"lt", "lte", "gt", "gte"}:
+        from mino_nexus.resources.accounts.account_facts import parse_number
+
+        left, right = parse_number(got), parse_number(want)
+        if left is None or right is None:
+            return False
+        if op == "lt":
+            return left < right
+        if op == "lte":
+            return left <= right
+        if op == "gt":
+            return left > right
+        return left >= right
     return False
 
 
@@ -695,14 +714,24 @@ def apply_facet_updates(
         if k not in DEFAULT_FACETS
         and str(defs_by_key.get(k, {}).get("data_kind") or "static") == "static"
     )
+    from mino_nexus.resources.accounts.account_facts import is_numeric_fact, normalize_fact_value
+
     for key, new_val in (updates or {}).items():
         key = str(key).strip()
         new_val = str(new_val).strip().lower()
         if key in static_ext:
             # 形象这类静态号池字段只接受人工编辑和用例预期已证明的写回。
             # 用例结束的模型推断不能把「已配置形象」写成「未配置形象」。
-            if source not in ("manual", "manual_console", "case_pass", "reset", "log_restore"):
+            numeric_fact = is_numeric_fact(defs_by_key.get(key))
+            if source not in ("manual", "manual_console", "case_pass", "reset", "log_restore") and not (
+                numeric_fact and source == "ai_case_end"
+            ):
                 continue
+            if numeric_fact:
+                new_val = normalize_fact_value(defs_by_key.get(key), new_val)
+                if new_val == "unknown":
+                    errors.append(f"无效数值事实 {key}: {new_val}")
+                    continue
             out[key] = new_val
             continue
         if key not in DEFAULT_FACETS and key not in ext:

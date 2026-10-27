@@ -10,8 +10,10 @@ from mino_nexus.core.stable_digest import digest
 
 def frozen_identity(case):
     from mino_nexus.casework.v5_publication import source_view
+    from mino_nexus.contract.build_identity import build_identity
     return {"case_revision_id": case.get("source_revision_id") or "", "source_digest": digest(source_view(case)),
-        "plan_digest": digest(case.get("v5_publication") or (case.get("meta") or {}).get("step_program_keys") or {})}
+        "plan_digest": digest(case.get("v5_publication") or (case.get("meta") or {}).get("step_program_keys") or {}),
+        "build": build_identity()}
 
 
 def _facts(db, doc, case):

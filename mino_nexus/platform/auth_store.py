@@ -346,7 +346,6 @@ def bootstrap(token: str = "", client: str = "") -> dict[str, Any]:
             "write_plugins": can_admin,
             "run_cases": True,
             "install_scout": True,
-            "write_studio_nav": can_admin,
         },
     }
 

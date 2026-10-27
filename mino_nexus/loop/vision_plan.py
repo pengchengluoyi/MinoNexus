@@ -493,6 +493,32 @@ def run_vision_plan_turn_if_enabled(
     return plan
 
 
+def _infer_obstacle_kind(ctx: Any, summary: str) -> str:
+    """模型报了挡屏但没给 kind 时，用当前结构 + 它自己的描述补类别。
+
+    以前直接判 ``screen_obstacle_invalid`` 终止整条会话（cr-318e39386a3b 的 api-1-233：
+    系统弹窗挡屏、hierarchy 拿下 0 个节点，模型只说「有权限弹窗」没说 kind → 直接弃赛）。
+    类别只是选哪条恢复块，能判出来就不该让人重跑。
+    """
+    from mino_nexus.loop.recovery_permission import system_dialog_present
+
+    nodes = getattr(ctx, "nav_hierarchy_nodes", None) or []
+    if system_dialog_present(nodes):
+        return "permission"
+    if _consent_controls_proof(nodes):
+        return "consent"
+    text = str(summary or "").lower()
+    for kind, words in (
+        ("consent", ("协议", "隐私", "条款", "privacy", "terms")),
+        ("permission", ("权限", "允许", "拒绝", "permission", "deny", "allow")),
+        ("loading", ("加载", "请稍候", "loading", "splash")),
+        ("overlay", ("弹窗", "弹层", "广告", "升级", "更新", "dialog", "popup", "update")),
+    ):
+        if any(w in text for w in words):
+            return kind
+    return "overlay" if text else ""
+
+
 def handle_execution_obstacle(cursor: Any, ctx: Any, decision: Any, *, writer: Any = None, shot: Any = None) -> VisionPlanDecision:
     """执行观察发现挡屏时复用规划恢复合同；报告不派发设备，也不裁定先前动作。"""
     action = getattr(decision, "action", None)
@@ -500,9 +526,31 @@ def handle_execution_obstacle(cursor: Any, ctx: Any, decision: Any, *, writer: A
     params = params if isinstance(params, dict) else {}
     kind = str(params.get("kind") or "").strip().lower()
     summary = str(params.get("summary") or "").strip()
+    if kind not in {"consent", "permission", "overlay", "loading"}:
+        inferred = _infer_obstacle_kind(ctx, summary)
+        if inferred:
+            if writer:
+                writer.append("exec/obstacle_inferred", {"kind": inferred, "reported_kind": kind,
+                              "summary": summary[:200]})
+            kind = inferred
     plan = VisionPlanDecision(screen_obstacle={"kind": kind, "summary": summary,
         "dialog_region": params.get("dialog_region"), "dialog_evidence": params.get("dialog_evidence")})
     if kind not in {"consent", "permission", "overlay", "loading"} or not summary:
+        # 报错不派设备，但也不终止：给一次带格式的补报机会。
+        attempts = int(getattr(cursor, "obstacle_report_reasks", 0) or 0) + 1
+        setattr(cursor, "obstacle_report_reasks", attempts)
+        if writer:
+            writer.append("contract/reask" if attempts <= 2 else "contract/blocked", {
+                "capability_id": "report_screen_obstacle",
+                "reason_code": "screen_obstacle_invalid",
+                "attempt": attempts,
+                "required": {"kind": ["consent", "permission", "overlay", "loading"], "summary": "一句话描述挡住了什么"},
+            })
+        if attempts <= 2:
+            setattr(cursor, "correction_hint",
+                    "挡屏报告要带 kind（consent | permission | overlay | loading）和 summary 一句话；"
+                    "按当前截图重新报告一次，不要重复上一个动作。")
+            return VisionPlanDecision()
         plan.blocked_error = {"source": "screen", "fail_kind": "screen_obstacle_invalid",
                               "error": "挡屏报告缺少有效类别或可见证据，未派发设备动作。"}
         return plan

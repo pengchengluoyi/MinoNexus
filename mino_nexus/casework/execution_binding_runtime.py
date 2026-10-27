@@ -348,10 +348,11 @@ def committed_projection(session_id, binding_id, requirements, target_context, *
 
 
 def menu_projection(binding, phase):
-    """Only bound events in the current phase can appear in a bound menu."""
+    """绑定过的事件在任意阶段都能进菜单。phase 只说明用例里它写在哪一列。"""
+    del phase
     from mino_nexus.contract.binding import validate_binding
     value = validate_binding(binding)
-    return {operation['event_id'] for operation in value['operations'] if operation['phase'] == phase}
+    return {operation['event_id'] for operation in value['operations']}
 
 
 def _dependency_facts(requirements, target_context, target, identifier, env_doc, *, node=None, events=None, executors=()):

@@ -81,7 +81,10 @@ def _record_case_preflight_fail(
             extra={"goal": str(case.get("name") or cid), "preflight": True},
         )
         writer.append("preflight/block", {"reason": summary, "reason_code": reason_code, "execution_started": "no"})
-        writer.close(status=status, summary=summary, step_count=0)
+        # close 必须带 reason_code：不带的话 session/end 里 reason_code 是空串，
+        # 事后只能看到 status=fail + "unclassified"，查不出是准入失败
+        # （cr-1dd866f93044 的 case-5c5bf758/ed07139f/bc49fd61）。
+        writer.close(status=status, summary=summary, step_count=0, reason_code=reason_code)
     except Exception as exc:
         SLog.w(TAG, f"preflight session log failed {stream_id}: {exc!r}")
 

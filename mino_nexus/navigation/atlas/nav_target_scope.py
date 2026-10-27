@@ -30,6 +30,31 @@ _SYSTEM_ONLY_PKGS = frozenset(
     }
 )
 
+# 系统弹窗（权限 / 安装器 / 选择器）—— 盖在被测应用上，不是「另一个应用」。
+# 以前这类包名被算成 foreign，前台判成 no，截图被送图策略扣掉、模型看不到画面直接弃赛
+# （cr-a390541e5dd2 的 api-1-214/226/233）。它们应该走 fb.global.system_dialog。
+SYSTEM_DIALOG_PKGS = frozenset(
+    {
+        "com.android.permissioncontroller",
+        "com.google.android.permissioncontroller",
+        "com.android.packageinstaller",
+        "com.google.android.packageinstaller",
+        "com.android.documentsui",
+        "com.android.providers.media.module",
+        "com.google.android.documentsui",
+        "com.android.settings",
+    }
+)
+
+
+def is_system_dialog_pkg(package: str) -> bool:
+    pkg = str(package or "").strip().lower()
+    if not pkg:
+        return False
+    if pkg in SYSTEM_DIALOG_PKGS:
+        return True
+    return any(pkg.startswith(owner + ".") or pkg == owner for owner in SYSTEM_DIALOG_PKGS)
+
 
 @dataclass(frozen=True)
 class TargetScope:
@@ -196,11 +221,25 @@ def infer_foreground(
             "screen_kind": "launcher",
         }
 
+    overlay_pkg = ""
     if pkgs:
         app_pkgs = {p for p in pkgs if p not in _SYSTEM_ONLY_PKGS}
+        dialogs = {p for p in app_pkgs if is_system_dialog_pkg(p)}
         if target and target in pkgs:
             fg = target
             kind = "app"
+        elif dialogs and target:
+            # 只有系统弹窗、看不到被测应用自己的节点：不能因此断定被测应用在前台
+            # （否则「应用根本没起来」会被误判成 app_foreground=yes，
+            # 前置启动核验直接跳过 → prepare_launch_unverified）。
+            # 只标记这是系统弹窗、前台未知，让截图照常送出并由 system_dialog 块处理。
+            fg = ""
+            kind = "system_dialog"
+            overlay_pkg = sorted(dialogs)[0]
+        elif dialogs and not target:
+            fg = sorted(dialogs)[0]
+            kind = "system_dialog"
+            overlay_pkg = fg
         elif not app_pkgs:
             fg = ""
             kind = "unknown"
@@ -217,7 +256,7 @@ def infer_foreground(
         fg = ""
         kind = "unknown"
 
-    return {
+    out = {
         "platform": plat,
         "target_id": target,
         "foreground_id": fg,
@@ -225,6 +264,9 @@ def infer_foreground(
         "foreground_package": fg,
         "screen_kind": kind,
     }
+    if overlay_pkg:
+        out["overlay_package"] = overlay_pkg
+    return out
 
 
 def turn_matches_scope(turn: dict[str, Any], scope: TargetScope | None) -> bool:
@@ -264,6 +306,9 @@ def resolve_app_target_scope(app_id: str, *, platform: str = "", target_package:
             if target_package and scope_from_values(scoped.platform, target_package).target_id != scoped.target_id:
                 raise ValueError("target_scope_identity_conflict")
             return scoped
+    # 没有已发布范围、调用方也没给平台时，不编造范围。采集样本自己带 target_scope。
+    if not str(platform or "").strip():
+        return None
     plat = _norm_platform(platform)
     tid = str(target_package or "").strip()
     if not tid:

@@ -105,33 +105,29 @@ class NavRuntime:
 
         app_id, project_id = resolve_knowledge_scope(ctx)
         account_id = str((getattr(ctx, "picked_account", None) or {}).get("id") or "")
-        run_kind = str(run_type or "manual").lower()
-        if run_kind == "explore":
-            fsm, reason = None, "explore_capture_only"
-        else:
-            from mino_nexus.navigation.atlas.nav_route import load_fsm_doc
+        from mino_nexus.navigation.atlas.nav_route import load_fsm_doc
 
-            app_ver = str(getattr(ctx, "app_version", "") or "").strip()
-            fsm, nav_src = load_fsm_doc(
-                app_id,
-                project_id=project_id,
-                use_live=False,
-                app_version=app_ver,
-            )
-            reason = ""
-            if not fsm:
-                fsm, reason = store.load_with_reason(app_id, expected_account_id=account_id)
-                nav_src = "published"
-            else:
-                scope_reason = store.account_scope_reason(fsm, expected_account_id=account_id)
-                if scope_reason:
-                    fsm, reason = None, scope_reason
-                    nav_src = ""
-            if reason:
-                level = SLog.w if "没有 nav_fsm 配置" not in reason else SLog.d
-                level(TAG, f"NavFSM 不可用 app_id={app_id}: {reason}")
-            elif fsm and nav_src:
-                SLog.d(TAG, f"NavFSM app_id={app_id} source={nav_src}")
+        app_ver = str(getattr(ctx, "app_version", "") or "").strip()
+        fsm, nav_src = load_fsm_doc(
+            app_id,
+            project_id=project_id,
+            use_live=False,
+            app_version=app_ver,
+        )
+        reason = ""
+        if not fsm:
+            fsm, reason = store.load_with_reason(app_id, expected_account_id=account_id)
+            nav_src = "published"
+        else:
+            scope_reason = store.account_scope_reason(fsm, expected_account_id=account_id)
+            if scope_reason:
+                fsm, reason = None, scope_reason
+                nav_src = ""
+        if reason:
+            level = SLog.w if "没有 nav_fsm 配置" not in reason else SLog.d
+            level(TAG, f"NavFSM 不可用 app_id={app_id}: {reason}")
+        elif fsm and nav_src:
+            SLog.d(TAG, f"NavFSM app_id={app_id} source={nav_src}")
         if fsm:
             from mino_nexus.casework.application_understanding import apply_reviewed
             fsm = apply_reviewed(fsm, platform=str(getattr(ctx, "platform", "") or ""),
@@ -249,7 +245,10 @@ class NavRuntime:
 
         if not self.active:
             self.localized = {"chosen": "", "confidence": 0.0, "navigation_match": "not_configured", **fg_obs}
-            slot_sink["nav_assist"] = "【导航】未配置导航图；按当前画面执行。导航图缺失不代表目标应用不在前台。"
+            slot_sink["nav_assist"] = (
+                "【导航】未配置导航图；本步只按页面入口档案执行。"
+                "没有入口就记录缺口并停，不要在页面上盲点。"
+            )
             nav_telemetry.localize(turn_id=turn_id, run_id=self._run_id,
                 case_id=str(self.case.get("case_id") or ""), result="not_configured", state_id="",
                 confidence=0.0, hierarchy_stale=snap.stale, observe_hierarchy=True, **fg_obs)
@@ -624,11 +623,7 @@ class NavRuntime:
             hits=self.plan.guards,
             hierarchy_ok=hierarchy_ok,
             allowed=self.plan.allow,
-            enforce_allowed=bool(
-                self.run_type not in ("explore",)
-                and self.plan.band == "high"
-                and self.plan.edge
-            ),
+            enforce_allowed=bool(self.plan.band == "high" and self.plan.edge),
         )
         self._log_verdict(verdict, cap_id=cap_id, params=params)
         return verdict

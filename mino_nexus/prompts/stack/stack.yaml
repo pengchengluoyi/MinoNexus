@@ -35,12 +35,6 @@ skills:
   summary: 看图按前置 / 操作 / 预期推进，调用能力目录里的 function。
   intent: act
   category: device
-- id: explore-app
-  label: 应用探索
-  owner: test-engineer
-  summary: 在 App 内自由探索，被动采集拓展 Screen Atlas。
-  intent: act
-  category: device
 - id: analyze_req
   label: 拆验收标准
   owner: req-analyst
@@ -257,10 +251,6 @@ trigger_skills:
     default: ''
   case_run:
     default: run-case
-  app_explore:
-    default: explore-app
-  explore_run:
-    default: explore-app
   settings_chat:
     default: ''
 intent_labels:

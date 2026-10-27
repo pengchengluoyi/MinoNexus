@@ -59,14 +59,18 @@ def _field_catalog(env_doc: dict) -> list[dict[str, Any]]:
             val = str(o.get("value") or "").strip().lower()
             if val:
                 opts.append({"value": val, "label": str(o.get("label") or val)[:24]})
-        catalog.append(
-            {
-                "key": key,
-                "label": str(defn.get("label") or key)[:24],
-                "core": False,
-                "options": opts[:12],
-            }
-        )
+        row = {
+            "key": key,
+            "label": str(defn.get("label") or key)[:24],
+            "core": False,
+            "options": opts[:12],
+        }
+        if str(defn.get("value_kind") or "") == "number":
+            row["value_kind"] = "number"
+            for field in ("unit", "min", "max"):
+                if defn.get(field) is not None:
+                    row[field] = defn[field]
+        catalog.append(row)
     return catalog
 
 
@@ -76,22 +80,32 @@ def _sanitize_updates(
     catalog: list[dict[str, Any]],
 ) -> dict[str, str]:
     allowed: dict[str, set[str]] = {}
+    numeric: dict[str, dict[str, Any]] = {}
     keys_ok = set(DEFAULT_FACETS.keys())
     for row in catalog:
         key = str(row.get("key") or "").strip()
         if not key:
             continue
         keys_ok.add(key)
+        if str(row.get("value_kind") or "") == "number":
+            numeric[key] = row
+            continue
         opts = {str(o.get("value") or "").strip().lower() for o in (row.get("options") or []) if isinstance(o, dict)}
         if opts:
             allowed[key] = opts
+    from mino_nexus.resources.accounts.account_facts import normalize_fact_value
+
     out: dict[str, str] = {}
     for key, val in (raw or {}).items():
         k = str(key or "").strip()
         v = str(val or "").strip().lower()
         if not k or k not in keys_ok or not v:
             continue
-        if k in allowed and v not in allowed[k]:
+        if k in numeric:
+            v = normalize_fact_value(numeric[k], v)
+            if v == "unknown":
+                continue
+        elif k in allowed and v not in allowed[k]:
             continue
         out[k] = v
     return out

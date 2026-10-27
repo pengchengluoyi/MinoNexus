@@ -132,8 +132,15 @@ def run_guard_foreground(
                 foreground = "no"
         elif fpkg != tgt:
             foreground = "no"
+    # 系统弹窗（权限/安装器/选择器）盖在被测应用上：前台仍算被测应用，
+    # 但必须标记成 overlay，让调用方去派 fb.global.system_dialog，而不是按异应用弃赛。
+    if kind == "system_dialog":
+        overlay = True
+        # 系统弹窗挡屏：既不算「异应用」（不该扣图），也不能算「被测应用在前台」（会跳过启动核验）。
+        if foreground == "no":
+            foreground = "unknown"
     return {"app_foreground": foreground,
-            "system_overlay": "yes" if overlay and foreground == "no" else "no",
+            "system_overlay": "yes" if overlay and (foreground == "no" or kind == "system_dialog") else "no",
             "screen_kind": kind or "unknown", "foreground_package": fpkg,
             "foreground_source": "hierarchy" if fpkg else "unknown",
             **({"overlay_evidence": proof} if overlay and foreground == "no" else {})}

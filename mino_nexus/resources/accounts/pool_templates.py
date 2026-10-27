@@ -7,6 +7,12 @@ import uuid
 from typing import Any
 
 from mino_nexus.resources.account_facet_schema import normalize_extensions
+from mino_nexus.resources.accounts.account_facts import (
+    ACCOUNT_FACT_FIELDS,
+    FACT_VALUE_KIND_ENUM,
+    FACT_VALUE_KIND_NUMBER,
+    FACT_VALUE_KINDS,
+)
 from mino_nexus.resources.resource_pool import normalize_facets
 
 
@@ -37,14 +43,25 @@ def normalize_template_extensions(raw: Any) -> list[dict[str, Any]]:
         kind = str(item.get("data_kind") or "").strip().lower()
         if kind not in (FACET_DATA_KIND_STATIC, FACET_DATA_KIND_DYNAMIC):
             kind = FACET_DATA_KIND_STATIC
-        out.append({
+        value_kind = str(item.get("value_kind") or "").strip().lower()
+        if value_kind not in FACT_VALUE_KINDS:
+            value_kind = FACT_VALUE_KIND_ENUM
+        if value_kind == FACT_VALUE_KIND_NUMBER and opts:
+            opts = [o for o in opts if o.get("value") == "unknown"] or [{"value": "unknown", "label": "未设置"}]
+        row = {
             "key": key,
             "label": label,
             "options": opts[:16],
             "help": str(item.get("help") or "").strip()[:200],
             "source": str(item.get("source") or "builtin").strip()[:16] or "builtin",
             "data_kind": kind,
-        })
+            "value_kind": value_kind,
+        }
+        if value_kind == FACT_VALUE_KIND_NUMBER:
+            for key_name in ("unit", "min", "max"):
+                if item.get(key_name) is not None:
+                    row[key_name] = item[key_name]
+        out.append(row)
     return out[:32]
 
 CATEGORIES = [
@@ -784,11 +801,16 @@ def merged_template_field_defs(env_doc: dict | None = None) -> list[dict[str, An
 
 
 def merged_pool_field_defs(env_doc: dict | None = None) -> list[dict[str, Any]]:
-    """模板字段 + 项目级 account_facet_extensions（Studio/Console 自定义扩展）。"""
+    """内置账号事实 + 模板字段 + 项目级 account_facet_extensions。"""
     from mino_nexus.resources.account_facet_schema import extensions_from_env
 
-    out = list(merged_template_field_defs(env_doc))
+    out = [dict(row) for row in ACCOUNT_FACT_FIELDS]
     seen = {str(x.get("key") or "") for x in out}
+    for row in merged_template_field_defs(env_doc):
+        key = str(row.get("key") or "")
+        if key and key not in seen:
+            seen.add(key)
+            out.append(row)
     for ext in extensions_from_env(env_doc):
         key = str(ext.get("key") or "")
         if not key or key in seen or key in ACCOUNT_BASIC_FACET_KEYS:

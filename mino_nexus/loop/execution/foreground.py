@@ -27,7 +27,6 @@ def ensure_foreground(
     proxy: Any,
     cursor: Any,
     nav: Any,
-    is_explore: bool,
     clear_before_launch: bool,
     target_pkg: str,
     scout_run_id: str,
@@ -40,7 +39,7 @@ def ensure_foreground(
     emit: Callable[..., None],
     leave: Callable[..., dict[str, Any]],
 ) -> FgFlow:
-    if not is_explore and cursor.phase in ("prep", "do"):
+    if cursor.phase in ("prep", "do"):
         hier_nodes: list[Any] = []
         if nav is not None:
             snap = getattr(nav, "snapshot", None)

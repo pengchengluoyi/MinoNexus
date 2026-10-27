@@ -407,3 +407,355 @@ run_flow_block(无 block_id)     -> fail
 |------|------|
 | 三个调用方 | 去掉对 `RECOVER_PREFIX` 的依赖，改成 `cap_id == "run_flow_block"` 的显式判断 |
 | `tools/check_imports.py`（新） | 逐个模块真实 import，抓「定义删了、调用方还在 import」这类错误；`[OK] 所有模块可导入` 才算过 |
+
+## 12. `cr-a390541e5dd2` 复盘修复（2026-10-26）
+
+33 条用例里有 23 条倒在四类**机械缺陷**上，都不是产品问题。逐条修，并把「程序该不该判死」
+重新划了一遍：程序只判自己确定知道的事，不确定就交回模型看截图。
+
+### 12.1 `run_flow_block` 派发用批次 run_id → `binding_run_mismatch` ×10
+
+**证据**：`cr-a390541e5dd2` 的 213/217/219/220/221/222/223/224/227/234 全部
+`contract/blocked reason_code=binding_run_mismatch`，一次设备动作都没发。
+
+**根因**：`local_executors` 把 `run_id=str(params.get("run_id") or "")` 传下去，
+`event_interpreter._rid_of` 拿不到就退回 `ctx.run_id`（**批次** id `cr-…`），
+而 `RouterProxy` 比对的是 `self.run_id`（**会话** id `cr-…::case-…::sn`），永远不等。
+
+**改法**：`_rid_of` 优先用 `ctx.session_id`（`agent_loop` 里等于 stream_id），批次 id 不再参与派发。
+
+### 12.2 逻辑块版本梯子 → 协议弹窗「原子拒绝」×5
+
+**证据**：228–232 各卡 10 秒后 `screen/recovery_rejected`，
+`diagnostics=[{milestone_id: privacy_verified, reason_code: recovery_operation_not_bound,
+missing_capabilities: [confirm_login_state]}]`。
+
+**根因**：库里 `fb.global.privacy.accept` 的 steps 还是 v1（`privacy_verified.cap=confirm_login_state`），
+代码里早改成 `screenshot`，但种子带版本号且只在「版本更高」时才覆盖 —— 版本阶梯让库和代码永久分叉。
+
+**改法**：删掉 `_LOGIN_VERSION_ORDER` / `_VERSION_ORDER` / `_is_seed_upgrade`，
+`SEED_VERSION = "code"`，启动时**无条件**把全局块的步骤同步成代码里的样子（只跳过非 `global_catalog` 行）。
+块的内容以代码为准，库只是投影。
+
+### 12.3 系统权限弹窗被算成「异应用」→ 扣图 + 不调模型就 `give_up` ×3
+
+**证据**：214/226/233 的 `foreground_image_withheld` → `blocked_visual_decision` 直接 `give_up`，
+`model_called=false`；前台混着 `com.mathmagic.magicam` + `com.android.permissioncontroller`。
+
+**根因**：`nav_target_scope.infer_foreground` 只把 systemui / IME 当系统包，
+`permissioncontroller` 落进 `app_pkgs` → `kind="foreign"` → `app_foreground="no"` →
+送图策略扣图 → 视觉兜底无图可看 → 弃赛。
+
+**改法**（三层）：
+
+| 位置 | 改动 |
+|------|------|
+| `nav_target_scope` | 新增 `SYSTEM_DIALOG_PKGS` / `is_system_dialog_pkg()`；弹窗包存在时 `kind="system_dialog"`、`foreground_package` 仍是被测应用、`overlay_package` 记弹窗包 |
+| `nav_capture_store.run_guard_foreground` | `system_dialog` 算 `app_foreground=yes` + `system_overlay=yes`（不再扣图） |
+| `recovery_permission` | 新增 `system_dialog_present()` / `try_handle_system_dialog()`：结构确认是系统弹窗就派 `fb.global.system_dialog`（允许/拒绝由 `case_scene.system_dialog_block_id` 在编译期定），本回合 defer，下一回合重新观察 |
+
+`agent_loop` 在 `select_observation` 之后、看图之前调用它，所以既不扣图也不让模型猜。
+
+### 12.4 无导航图时回看太严 → 同一个点反复重做 ×5
+
+**证据**：211/212/218/225/case-47530ac5：点「返回」→ 灵感首页 → 我的 → 个人中心 → swipe，
+7 回合 34 次设备动作后 `action_result_unverified`。
+
+**根因**：`settle_pending_review` 把 `unlisted`（落点不在里程碑目标面）和 `exclude`（点到了明确不该点的）
+同等对待：都 `_rewind()` 里程碑、都连续 2 次就 stop。没有导航图时目标面本身就弱，
+`unlisted` 只能说明「这次没落在预期文字上」，据此把里程碑打回重来，模型就会原地重复同一个点。
+
+**改法**：`unlisted` 变成**软失败** —— 不回退里程碑、阈值 3 次、hint 明确写「换入口或换路径，不要重复同一点」，
+事件改记 `review/soft_miss`；`exclude` 保持原样（2 次 stop）。
+
+### 12.5 `studio_nav` 删除
+
+`studio_nav` 不是导航图，是 **MinoStudio 侧栏入口白名单**（`testing/agent/knowledge/...`，
+Console 决定、Nexus 落盘、Studio 只读）。Studio 已取消，这块逻辑整体删除：
+`navigation/atlas/studio_nav.py`、`models/nav.py`、`/me/bootstrap` 里的 `studio_nav` 字段、
+`GET/PUT /me/studio-nav`、`capabilities.write_studio_nav`。
+
+### 12.6 恢复路径重复 `launch_app` / 前台探测过密
+
+| 问题 | 改动 |
+|------|------|
+| 一次 prep 里 `bring_target_app_foreground` 连发 3 次启动（211） | `apply_rule` 遇到 `launch_app` 且 `app_launch_confirmed` 就跳过并记 `app_already_launched`；`close_app/kill_app/clear_app_cache` 通过或派发后把标记复位，保证重启块仍能起应用 |
+| `get_foreground_app` 占全部设备动作 68%（683/1010） | `_fill_foreground_from_get_app` 加 2 秒同拍缓存；`RouterProxy.dispatch` 对任何界面写入动作清空缓存 |
+
+### 12.7 程序块定位不到控件不该终止整条用例
+
+**证据**：`cr-318e39386a3b` 的 213：`do_s1_1_hook` → `tap_element` `tap_target_unresolved`
+（`execution_started=no`）→ `program_hook_failed` → `tool_blocked`；228：`intent_handoff_do`
+→ `general.navigate` 锚点未命中 → 模型 `status=fail` → `milestone_plan_incomplete`；233：模型报
+`report_screen_obstacle` 但漏了 `kind` → `screen_obstacle_invalid` → `tool_blocked`。
+
+**改法**：
+
+| 位置 | 改动 |
+|------|------|
+| `flow_block_executor` | 新增 `_target_unresolved()`：只认 `execution_started=no` + unresolved 证据。命中时把里程碑转成 `visual_tap`（去掉 `hook_cap`）、打开视觉兜底、写 `program/handoff`，本回合 defer，最多 2 次；第 3 次才按失败记账 |
+| `vision_plan.handle_execution_obstacle` | 漏 `kind` 时先用结构（系统弹窗 / 协议控件）和模型自己的 summary 推断类别；实在没有则 `contract/reask` 让模型补一次（最多 2 次），不再一次就判死 |
+| `do_program_plan` | 「在按钮界面不做任何操作」这类步骤不再生成意图交接，直接按 `do/noop_step` 通过 |
+| `local_executors` | 意图因锚点未命中失败时，错误码给 `intent_target_unresolved` 并附「改由模型看图定位」，模型不会再据此 `give_up` |
+
+### 12.8 复跑验证
+
+`cr-318e39386a3b`（3 条）在修复 12.3/12.7 之前跑出的是**新的**失败点，说明 12.1/12.2 已生效：
+
+| 用例 | 旧失败 | 新失败 |
+|------|--------|--------|
+| api-1-213 | `binding_run_mismatch` | `program_hook_failed`（已由 12.7 修复） |
+| api-1-228 | `screen_obstacle_consent` | `milestone_plan_incomplete`（已由 12.7 修复） |
+| api-1-233 | `foreground_image_withheld` | `screen_obstacle_invalid`（已由 12.7 修复） |
+
+### 12.9 复跑继续暴露的三处「一次判死」
+
+第 4 次复跑（`cr-9bbe7ff87da2`，211/213）已经跑到第 9 步（手机号、验证码、勾选协议都过了），
+但仍在三个地方被一次判死：
+
+| 现象 | 位置 | 改法 |
+|------|------|------|
+| `input_text` 的 `focus_ref` 指向已经被后续点击覆盖的聚焦动作 → `parameter_contract_mismatch` 直接终止 | `loop/execution/tap_params.py` | 先 `contract/reask` 让人重新聚焦再输入（最多 2 次），仍不行才阻断 |
+| `run_flow_block` 在视觉模式下按意图展开时没有锚点，模型连试两次后判失败 | `loop/local_executors.py` | 视觉模式直接拒绝意图展开，回一句「用 tap_element 给坐标或给 block_id」 |
+| do 步骤没有专门意图时落到 `general.navigate` 兜底，绕一圈必然 `intent_target_unresolved` | `loop/do_program_plan.py` | 没有专门意图（排除兜底）就直接生成模型视角里程碑，不再经意图 |
+
+仍待处理（本轮未改）：
+
+1. **`prep_lease_account` → `event_not_registered`**（`cr-9bbe7ff87da2` 的 api-1-213）：
+   库里 `lease_account` 行是 `caller=system` / `visible_to=["system"]`，而前置按用例侧操作派发，
+   能力快照里没有它。要么把租号明确成程序侧操作（`caller=program`），要么允许前置派发 system 能力。
+2. **无导航图时坐标靠猜**：`login_entry` / `do_s1_0_nav` 的落点由模型按截图给坐标，
+   回看只能判断「这一屏对不对」，判断不了「这一步该点哪」。需要把导航图补起来（见 §12.4），
+   代码侧的放宽已经做完（软失败 + 换路重试），剩下的靠数据。
+3. **开发操作队列自锁**（`api/development.py:239`）：Nexus 在跑批中途被重启后，
+   `restart` 操作排在「等设备空闲」上，而设备又被这个操作占着，形成死锁；
+   此时走 PyCharm 控制连接直接 stop/execute 运行配置可以解开。
+
+### 12.10 坐标不该靠猜：能从节点算就别让人再给一次
+
+`cr-f35d6cae59f2` 的 api-1-211 已经跑过前置启动、登录页、第 1–2 步，倒在
+「当前视觉操作缺少完整坐标，未派发到节点」：模型手里有 hierarchy 节点（`target.bounds`），
+但没写 x/y，于是要重来一次、再判失败。
+
+| 改动 | 位置 |
+|------|------|
+| 缺 x/y 且带 `target.bounds` 时，用节点中心点按 0–1000 换算补上（`point_source=bounds`） | `action_space/assemble.py` |
+| 系统弹窗挡屏时前台记 `unknown`（既不算异应用扣图，也不算「应用在前台」跳过启动核验） | `navigation/atlas/nav_target_scope.py`、`nav_capture_store.py` |
+| 独立补答第一次判「未达成」不再直接停：先允许换入口重做一次，重做后仍不达成才停 | `loop/visual_review.py` |
+
+`prepare_launch_unverified` 的根因就是第 12.3 条放松过头：只有系统弹窗、看不到应用自己的节点时
+仍被算成 `app_foreground=yes`，前置启动核验于是被跳过。现在弹窗场景只记 `system_overlay=yes`，
+前台归 `unknown`。
+
+### 12.11 意图没落成动作 = 交回模型，不是用例失败
+
+`cr-13cf1f327373` / `cr-2c396b2a7228` 的 api-1-211 在第 3 步「查看倒计时显示」卡住：
+程序块这一步的意图是 `general.observe`，没有对应通道 → `intent/handoff` → `general.navigate`
+→ 结构锚点没命中也没坐标 → `run_flow_block` 返回 fail → 里程碑记 fail → `milestone_plan_incomplete`。
+
+| 改动 | 说明 |
+|------|------|
+| `loop/local_executors.py` | 意图返回 fail 时不再给 `FAIL`，改为 `SKIPPED` + 「本回合不推进，改由模型看图操作」；视觉模式下的意图展开同样只 skip，不判死 |
+| `loop/flow_block_executor.py` | `_target_unresolved` 增加「缺少完整坐标 / 未派发到节点 / tap_target_unresolved」三种证据 |
+| `action_space/assemble.py` | 模型给了节点 `bounds` 却没给坐标时，用节点中心点换算 0–1000 补上 |
+| `loop/visual_review.py` | 独立补答第一次判「未达成」先允许换入口重做一次，重做后仍不达成才停 |
+
+改完后 211 的失败点从「第 3 步 plan_incomplete」推进到最后一屏的 `model_parse`（模型输出不是合法 JSON），
+属于模型侧问题，不再是程序判死。
+
+### 12.12 仍然开着的三件事
+
+1. `prep_lease_account` → `event_not_registered`：库里 `lease_account` 是 `caller=system` / `visible_to=["system"]`，
+   前置按用例侧派发时能力快照里没有它。要么改 `caller=program`，要么允许前置派发 system 能力。
+2. 「查看/确认」这类纯观察步骤：现在能交回模型了，但模型常常直接给一句自然语言（`model_parse`）。
+   应该在只观察的里程碑里显式给一个「观察确认」动作，而不是让它从工具列表里挑。
+3. 开发操作队列自锁（`api/development.py:239`）：跑批中途重启 Nexus 会让 `restart` 操作排在「等设备空闲」上，
+   而设备又被这个操作占住。此时用 PyCharm 控制连接直接 stop/execute 运行配置可解开；
+   代码侧应让 claim 阶段排除自己这条排队项。
+
+## 13. `cr-9f7f478af02c` 复盘（2026-10-26 13:23–13:51）
+
+33 条：pass 1 / fail 3 / blocked 21 / unverified 8。批次墙钟 1658 s，设备动作 986 次，
+其中 `get_foreground_app` 409（41%）、screenshot 163、probe_device_state 135、hierarchy 128，
+真正写界面的只有 `tap_element` 52 + `launch_app` 46。
+
+### 13.1 `system_dialog_block_failed` ×21（本轮回归）
+
+上一节 12.3 加的「结构确认是系统弹窗就派 `fb.global.system_dialog`」直接变成了 21 条一次判死：
+块的允许步骤是 DOM 锚点，Scout 回「DOM 点击锚点未命中，不用坐标兜底」，
+`try_handle_system_dialog` 于是 `_leave_execution_blocked`，每条用例 3.1–4.0 s 结束。
+
+| 改动 | 位置 |
+|------|------|
+| 块失败后按节点 `bounds` 点一次（挑「允许」类文案、排除拒绝类） | `loop/recovery_permission.py::tap_dialog_button` |
+| 这一拍强制走坐标系（DOM 方案会把 x/y 抹掉、改回 node 锚点） | 同上，临时切 `ctx.action_scheme="visual"` |
+| 用真实画面尺寸换算，没有就**不点**（按 bounds 反推会把 y 算到 2514px） | 同上，由 `agent_loop` 传入本回合 `shot` |
+
+### 13.2 `observation_missing` ×4 = 账号依赖没满足却继续跑
+
+`api-1-215` 的 `execution/blocked`：`dependency_unknown`，`missing_fields: ["resource:account"]`；
+`case-50b5e242` 是 `dependency_blocked`，`block:fb.global.login` 状态 blocked。
+两种情况 `agent_loop.py:383` 都只写事件、随后照常 `execution_admitted = True` 进循环，
+而这一轮没有 preflight 截图 → `capture_ok=no` → 被 `_infer_blocked_from_capture` 当成锁屏 →
+`wake_screen`+`dismiss_keyguard` 各两轮 → 仍无观察 → `observation_missing`。
+
+| 改动 | 位置 |
+|------|------|
+| `capture_ok=no` 不再等于锁屏（设备 awake 且未锁屏时不翻 `screen_blocked`） | `loop/device_display_guard.py` |
+
+**待办**：`execution/blocked` 里 `responsibility=resource` 的依赖缺失应当**直接以该原因结束**
+（`env_blocked` + `dependency_blocked`），而不是继续跑 4 个恢复动作再报一个假原因。
+
+### 13.3 `resource_wait_deadline_exceeded` ×3
+
+`case-5c5bf758` / `case-ed07139f` / `case-bc49fd61` 在 admission 阶段等资源组合超时，
+103 ms 就结束（排队时间在此之前已经耗尽）。这三条要的是**新用户/未登录**账号，
+批次里 `pool_accounts` 的租约被 210/214 等旧账号占用，可复用账号不够。
+属于数据面（号池），不是代码。
+
+### 13.4 `model_parse` ×2 = 模型 JSON 少写引号
+
+`api-1-212` 的 `ds-2a5e5e66e64a` 原始输出：
+`{"thought":当前do_s2_0_hook为查看吸底区域…,"milestones_append":[]}` —— `thought` 的值没加引号。
+
+| 改动 | 位置 |
+|------|------|
+| 解析失败前先做两类无歧义修复：给缺引号的字符串值补引号、去掉尾逗号 | `contract/tool_calls.py::_repair_loose_json` |
+
+用那条真实输出验证：修复后能解析出 `thought / milestones_append / screen_obstacle / exit_allowed`。
+
+### 13.5 复跑验证
+
+| 用例 | 修复前 | 修复后 |
+|------|--------|--------|
+| api-1-214 | 弹窗块 DOM 锚点未命中，3.1 s blocked | 弹窗被点掉，进 `do` 到 `do_s1_0_nav` 回看未通过（原有导航图问题） |
+| api-1-216 | 同上 | 进 `do` 到 `intent_handoff_do` |
+| api-1-212 | 同上 | 同 214（本轮未跑到模型 JSON 那一屏） |
+
+## 14. 第二轮：`cr-9f7f478af02c` 七个问题的处理（2026-10-26 14:30–14:50）
+
+### 14.1 号池 `resource_wait_deadline_exceeded` ×3 —— 不是并发，是 facet 不可满足
+
+`case-5c5bf758` 的 `resource_allocation_logs` 每 16 秒一条 `lease_fail`，从 13:27:59 一直等
+到自己的 deadline 13:32:44，说明等待窗口是真的用满了，不是并发抢占。
+
+要求：`health=available`、`avatar_ready=custom`、`profile_data=filled`。
+`pool_account_facets` 里这个项目 26 个账号全是 `lifecycle=unregistered`、`profile_data=none`，
+没有 `avatar_ready` 这一项 —— 0 个满足。
+
+补号逻辑按设计不会兜这种情况：`phone_pool_lease.should_provision_phone_seq` 要求
+`_fresh_requirements_match`，新号只有「未注册/空资料」，给不出 `custom` 形象，
+所以它正确拒绝，只是失败文案写成「可能都被占用或状态不符」，把人引到并发上。
+
+**结论**：这三条要么先在 Workbench 预热「自定义形象 + 资料已填」的账号，要么把前置降级；
+代码侧建议把 `lease_fail` 文案改成点名不满足的 facet（未做）。
+
+### 14.2 账号依赖缺失 → 直接停（已改，已验证）
+
+`agent_loop` 的 `BindingAdmissionError` 分支现在先认账号缺口（`missing_fields` 含
+`resource:account`），命中就写 `execution/dependency_blocked` 并以 `env_blocked` 结束，
+不再进循环。`api-1-215` 复跑：从 `observation_missing`（烧 4 个恢复动作）
+变成 `env_blocked / dependency_unknown`，一句「账号资源未就绪（resource:account=unknown）」结束。
+
+### 14.3 系统弹窗的 DOM 来源 —— DOM 是对的，锚点是空的
+
+`observe/hierarchy` 在弹窗那一刻给的是 `com.android.permissioncontroller` 的 12 个节点，
+`bounds`、文案都对；Scout 失败原因是 `execution_started: no / tap_target_unresolved`，
+即块步骤只声明了 `match` 候选文案，没有 `selector_text`，DOM 没有可锚的东西。
+
+三处改动：
+
+| 改动 | 位置 |
+|------|------|
+| `match` / `target.name` 命中唯一节点时落成 `selector_text` | `loop/event_interpreter.py::events_from_steps` |
+| 块失败后按 `bounds` 点一次，强制坐标系、用真实画面尺寸 | `loop/recovery_permission.py::tap_dialog_button` |
+| 目录里没有这一行时不再拦派发（`hierarchy`/`screenshot` 无目录行） | `catalog/skill_channel.py::capability_enabled` |
+
+第三条是复跑时暴露的新缺陷：`api-1-216` 的意图 `order.pay` 因为 caps 里带 `hierarchy`
+直接被判「能力未启用或当前不可覆盖」，而 `hierarchy` 走 device/probe 通道、本来就没有目录行。
+
+### 14.4 前台探测仍是 4 次/回合（未收敛）
+
+`_fg_probe_cache` 改成 20 秒窗口、`RouterProxy.dispatch` 出口又加了一层结果去重，
+启动核验轮询显式绕过去重；复跑 `cr-55bc51195f34` 仍测得 4 次/回合。
+说明四个调用点拿到的 `ctx` 不是同一个对象（或不在同一次 dispatch 出口），
+需要按调用链逐个确认；本条不算修好。
+
+### 14.5 复跑结果
+
+| 用例 | 结果 |
+|------|------|
+| api-1-215 | `env_blocked / dependency_unknown`（新增，真实原因） |
+| api-1-216 | 弹窗与私有块均已通过，停在 `order.pay` → `intent_handoff_do` 锚点未命中 |
+| api-1-214 | 走到 `do` 深处，最后 `execution_deadline_exceeded`（405 秒预算耗尽） |
+| api-1-212 | 不再 `model_parse`，停在 `do_s2_0_hook` 缺完整坐标 |
+
+## 15. 页面/控件语义收口（2026-10-27）
+
+用例整句不再同时冒充页面和控件：
+
+- 编译 `stamp_compiled_plans` 只从显式 `target.name` 建控件；`nav`、`check`、`flow_block`、`remark` 不建控件，检查步骤 `control_id` 置空。
+- `page_semantics.analyze_clause` 把“进入/跳转”“查看/观察/状态”“放弃/返回流程”分开；页面短名与业务状态（`variant`）分离，`首条` 落为 `data.position=first`。
+- `control_page_binding` 不再用整句 `nav_target` 建页面；同一 `page_key` 的多个状态保留为同一页面的页面状态。
+- 旧 8 个 `case_flow` 页面经 `page_semantic_repair` 清理：5 rename / 1 keep / 2 reject；`商品详情页` 保留 `新人折扣`、`退款成功后` 两个状态；真实库生成 68 条 `nav_case_page_refs`。
+- Workbench 应用逻辑左侧按 `page_key` 聚合；页面详情显示“页面状态 / 进入这个页面的用例引用 / 控件 / 断言”，控件只显示 `semantic_role=element`。
+- 入口缺口仍是运行时阻断，不做编译期整案拒绝；本改动不改变 `case_preflight` 的 pass-through 行为。
+
+## 16. 预编译产物与程序版本（2026-10-27）
+
+复跑 `api-1-210` 时发现：用例编译任务记录的是 `nexus_version=0.1.69`，当前进程是
+`0.1.70`，但旧产物仍被当成可执行计划。根因是 `contract/case_view.readiness` 只比较
+`compiler_contract` 和 `resource_catalog_version`，漏了 `nexus_version`；而
+`case_compilation.run_one` 明明会把 `nexus_version` 算进编译身份。两边口径不一致，
+于是版本升级后旧计划继续被选中。
+
+改动：
+
+- `readiness` 同时比较 `nexus_version`、`compiler_contract`、`resource_catalog_version`；
+- `execution_requirements.ordinary_compilation_diagnostics` 先做同一份 readiness 检查，
+  旧产物在绑定前以 `requirements_need_compile / compile_contract_changed` 停住，
+  不再拿旧的 `resource_key` / `case_scene` 去租号和执行；
+- `run_comparison.frozen_identity` 记录当前 build identity，避免两次跑批把不同程序版本的
+  同一计划误判成“没有变化”。
+
+注意：`VERSION` 升级后已有编译产物会统一视为过期，需要重新编译。仅改运行时代码
+（不影响编译产物的路径）不应触发整库重编；但如果改的是编译器语义、prompt 或资源目录，
+仍应同步提升 `COMPILE_CONTRACT_REVISION` / `CATALOG_VERSION`，不能只靠版本号。
+
+## 17. 账号事实 `registered_days`（2026-10-27）
+
+「账号注册≤30天」不是注册流程状态，不能编译成 `register_flow=registered`。新增内置账号事实：
+
+```text
+facet: registered_days
+label: 注册天数
+value_kind: number
+unit: 天
+min/max: 0 / 36500
+```
+
+用例侧生成：
+
+```text
+账号注册≤30天          → registered_days lte 30
+注册超过30天           → registered_days gt 30
+注册未满7天            → registered_days lt 7
+注册满7天              → registered_days gte 7
+```
+
+链路：
+
+- `resources/accounts/account_facts.py` 定义字段和自然语言抽取；`compile_resource_key_from_precondition`
+  会把它写进 `account.requirements.all` 与 `case_scene.lease_requirements`，不依赖模型也能得到确定事实。
+- `case_semantic_integrity.validate_precondition_hits` 支持数值字段的 `lt/lte/gt/gte`，并把误选的
+  `register_flow` 在同一条含注册天数的原文上纠正为 `registered_days`。
+- `case_step_span_llm` 把 `value_kind/unit/min/max/help` 和 `op` 槽交给模型；prompt 明确示例
+  「注册≤30天 → registered_days/lte/30」。模型输出仍受字段和值校验，不允许自造 facet。
+- `resource_pool.match_requirements` 对数值事实做数值比较，而不是字符串比较；`unknown` 不满足。
+- 号池账号的 `registered_days` 是事实值（例如 `7`），需要由真实账号资料、夹具或证据化写回填入；
+  没有该值的账号不会被 `lte 30` 命中，不能靠模型猜一个值来冒充账号事实。
+- `account-facet-commit` 的模型写回也接受数值事实，但只生成候选；仍需证据、规则和确认，
+  不会因为模型输出一个天数就直接变成可分配事实。
+
+`account-facet-schema` 的 AI 字段扩展也允许 `value_kind=number`，避免「注册天数」被拆成多个枚举。
+编译合同升到 `COMPILE_CONTRACT_REVISION=17`，资源目录升到 `CATALOG_VERSION=14`。

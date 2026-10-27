@@ -9,7 +9,7 @@ from mino_nexus.assistant.assistant_tools import ToolOutcome, get_tool, run_tool
 
 
 def _task_id(outcome: ToolOutcome | None) -> str:
-    if not outcome or not outcome.ok or outcome.tool_id not in ('case.run', 'case.retry_failed', 'app.explore'):
+    if not outcome or not outcome.ok or outcome.tool_id not in ('case.run', 'case.retry_failed'):
         return ''
     data = outcome.data
     return str(data if isinstance(data, str) else (data.get('task_id') or data.get('run_id') or '') if isinstance(data, dict) else '')
@@ -61,7 +61,7 @@ def result_for(*, answer: str, origin: dict, outcome: ToolOutcome | None = None,
     from mino_nexus.assistant.assistant_errors import explain
     question = bool(outcome and outcome.ask)
     failed = bool(runtime_stop or model_error or (outcome and not outcome.ok and not outcome.ask))
-    task_id = _task_id(outcome) if outcome and outcome.tool_id in ('case.run', 'case.retry_failed', 'app.explore') else ''
+    task_id = _task_id(outcome) if outcome and outcome.tool_id in ('case.run', 'case.retry_failed') else ''
     card_type = 'clarification' if question else 'notification' if outcome or failed else 'dialogue'
     uncertain = bool(failed and outcome and outcome.status >= 500 and (request or {}).get('state') == 'uncertain')
     status = 'need_input' if question else 'uncertain' if uncertain else 'blocked' if failed else 'submitted' if task_id else 'done'
@@ -69,7 +69,7 @@ def result_for(*, answer: str, origin: dict, outcome: ToolOutcome | None = None,
     issue, suggestions = '', []
     if failed:
         issue, suggestions = explain(answer, outcome.data if outcome else None)
-        answer = '本次请求未完成。' if model_error or (outcome and not outcome.tool_id.endswith(('run', 'explore'))) else '本次测试尚未开始。'
+        answer = '本次请求未完成。' if model_error or (outcome and not outcome.tool_id.endswith('run')) else '本次测试尚未开始。'
     if runtime_stop:
         title, answer = '请求未完成', '本次请求未完成，尚未提交新的执行任务。'
         issue = ('这次请求的处理时间已用完，不能再启动新的操作。' if runtime_stop == 'deadline'

@@ -208,7 +208,9 @@ def coverage_matches(row, claim):
                 return False
         elif reference == 'precondition.account_field':
             required = ((claim.get('account') or {}).get('requirements') or {}).get('all') or []
-            if {'facet': rules.get('facet'), 'op': 'eq', 'value': rules.get('value')} not in required:
+            clause = {'facet': rules.get('facet'), 'op': str(rules.get('op') or 'eq').lower(),
+                      'value': rules.get('value')}
+            if clause not in required:
                 return False
         elif reference == 'precondition.clear_cache':
             if not any(item.get('kind') == 'clear_cache' for item in (claim.get('case_scene') or {}).get('prep_items') or []):
@@ -280,12 +282,51 @@ def validate_precondition_hits(hits, claim, fields):
             claim.setdefault('account', {})['required_session'] = required
             mapped.append('account.required_session.' + required)
         elif reference == 'precondition.account_field':
+            from mino_nexus.resources.accounts.account_facts import (
+                CLAUSE_OPS,
+                NUMERIC_OPS,
+                is_numeric_fact,
+                normalize_fact_value,
+                registration_age_clauses,
+            )
+
             facet, value = rules.get('facet'), rules.get('value')
+            op = str(rules.get('op') or 'eq').strip().lower()
+            # 「注册≤30天」只能落在 registered_days，不能复用注册流程阶段。
+            age_clause = (registration_age_clauses(str(hit.get('clause') or ''))
+                          or registration_age_clauses(str(hit.get('quote') or '')))
+            if age_clause:
+                facet, op, value = age_clause[0]['facet'], age_clause[0]['op'], age_clause[0]['value']
+            rules = {**rules, 'facet': facet, 'op': op, 'value': value}
+            hit['rules'] = rules
             definition = definitions.get(facet)
-            if not definition or value not in {option.get('value') for option in definition.get('options') or []}:
+            if not definition:
                 raise ValueError('precondition_account_field_unavailable')
+            if op not in CLAUSE_OPS:
+                raise ValueError('precondition_account_field_op_invalid')
+            if is_numeric_fact(definition):
+                if op not in NUMERIC_OPS | {'eq', 'ne'}:
+                    raise ValueError('precondition_account_field_op_invalid')
+                value = normalize_fact_value(definition, value)
+                if value == 'unknown':
+                    raise ValueError('precondition_account_field_unavailable')
+            else:
+                if op in NUMERIC_OPS:
+                    raise ValueError('precondition_account_field_op_invalid')
+                options = {str(option.get('value') or '') for option in definition.get('options') or []}
+                if op == 'in':
+                    wanted = {item.strip() for item in str(value or '').split(',') if item.strip()}
+                    if not wanted or not wanted <= options:
+                        raise ValueError('precondition_account_field_unavailable')
+                elif str(value) not in options:
+                    raise ValueError('precondition_account_field_unavailable')
+                value = str(value)
             constraints = claim['account']['requirements'].setdefault('all', [])
-            clause = {'facet': facet, 'op': 'eq', 'value': value}
+            if age_clause:
+                constraints[:] = [row for row in constraints
+                                  if row.get('facet') not in {'register_flow', 'login_flow', 'audit_flow', 'kyc_flow'}
+                                  and row.get('facet') != facet]
+            clause = {'facet': facet, 'op': op, 'value': value}
             if any(row.get('facet') == facet and row != clause for row in constraints):
                 raise ValueError('precondition_account_field_conflict')
             if clause not in constraints:

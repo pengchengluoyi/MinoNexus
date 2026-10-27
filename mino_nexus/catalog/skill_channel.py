@@ -94,6 +94,15 @@ SYSTEM_ONLY_IDS = frozenset({
 # 程序直接派到设备、不进用例菜单的系统动作。启动时按这份声明入库。
 SYSTEM_DEVICE_IDS = frozenset({"wake_screen", "dismiss_keyguard", "probe_device_state"})
 
+# 程序内部流转的取证通道。不是暴露给模型的能力，目录生命周期不能把意图判死。
+INTERNAL_FLOW_IDS = frozenset({
+    "hierarchy",
+    "screenshot",
+    "observe_screen",
+    "get_foreground_app",
+    "get_app_version",
+})
+
 
 
 
@@ -113,15 +122,21 @@ def is_program_caller(cap_id: str) -> bool:
 
 
 def capability_enabled(cap_id: str) -> bool:
-    """未启用或已废弃的技能，模型和程序都不派。目录没有这一行时不拦（逻辑块特例仍走自己的函数）。"""
+    """未启用或已废弃的模型技能不派。内部取证和 caller=system 不读目录生命周期。"""
     cap = canonical_cap(cap_id)
+    if cap in INTERNAL_FLOW_IDS:
+        return True
     if not cap or cap.startswith("guard.") or cap in V5_EXCLUDED_IDS or cap in RETIRED_BUSINESS_EVENTS:
         return False
     from mino_nexus.catalog.registry import get_capability
 
     row = get_capability(cap)
     if row is None:
-        return False
+        # 目录没有这一行时不拦：观察通道没有目录行，拦了会把带 hierarchy 的意图整条判死。
+        return True
+    if str(getattr(row, "caller", "") or "") == "system" or system_device_dispatch(cap):
+        # 系统能力由代码声明版本合同。Workbench 改 lifecycle 不能把程序派发静默关掉。
+        return True
     if getattr(row, "enabled", True) is False:
         return False
     return str(getattr(row, "lifecycle", "")) == "active"
@@ -189,7 +204,9 @@ def phase_allows(cap_id: str, phase: str) -> bool:
 
 
 def menu_caller_ok(cap: Any, phase: str) -> bool:
-    return cap.caller == "case" and phase in cap.phases and cap.lifecycle == "active" and cap.enabled
+    """阶段不再裁剪模型能调用的事件。prep/do/check 只保留在用例存储里。"""
+    del phase
+    return cap.caller == "case" and cap.lifecycle == "active" and cap.enabled
 
 
 def canonical_cap(cap_id: str) -> str:
@@ -244,7 +261,7 @@ def apply_channel_skip(row: dict[str, Any], platform: str) -> bool:
     declared = row.get("platforms")
     unsupported = bool(isinstance(declared, list) and declared and got
                        and got not in {normalize_platform(str(x)) for x in declared})
-    caps = milestone_cap_ids(row)
+    caps = [cap for cap in milestone_cap_ids(row) if cap not in INTERNAL_FLOW_IDS]
     if not unsupported and (not caps or any(channel_supports(cap, platform) for cap in caps)):
         return restored
     row["status"] = "skipped" if row.get("optional") else "failed"
@@ -281,6 +298,8 @@ def milestone_caps_registered(
     allowed = set(menu_ids)
 
     def _cap_ok(cap: str) -> bool:
+        if cap in INTERNAL_FLOW_IDS:
+            return True
         if cap in allowed:
             return True
         from mino_nexus.catalog.exec_classes import LOCAL_EXECUTOR_IDS

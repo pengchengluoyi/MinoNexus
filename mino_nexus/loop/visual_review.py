@@ -751,16 +751,57 @@ def apply_same_turn_prior(
     cursor.review_wait_budget = None
     transition = same_turn_review_targets(cursor)
     if status == "fail" and confirmation and review_only:
-        cursor.semantic_stop = f"{mid} 的动作结果经独立补答仍未达成；停止执行，保留失败证据。"
-        cursor.visual_prior = None
-        cursor.pending_visual_review = None
+        # 独立补答第一次就说「没达成」不等于用例失败：此时还没换过路径。
+        # 没导航图时模型本来就靠截图猜落点（cr-f35d6cae59f2 的 api-1-211 在登录入口被这里直接停掉），
+        # 先按普通回看失败处理，允许换入口重做；重做过之后仍不达成才停。
+        prior_tries = _redo_attempts(getattr(cursor, "visual_redo_sent", None), mid)[0]
+        if prior_tries >= 1:
+            cursor.semantic_stop = f"{mid} 的动作结果经独立补答仍未达成；停止执行，保留失败证据。"
+            cursor.visual_prior = None
+            cursor.pending_visual_review = None
+            if writer:
+                writer.append("review/fail", {"milestone_id": mid, "reason": "review_only_failed",
+                    "business_verdict": "unmet", "execution_started": False})
+            return "stop"
         if writer:
-            writer.append("review/fail", {"milestone_id": mid, "reason": "review_only_failed",
-                "business_verdict": "unmet", "execution_started": False})
-        return "stop"
+            writer.append("review/soft_miss", {"milestone_id": mid, "reason": "review_only_retry",
+                "prior_attempts": prior_tries})
     if status != "pass" and transition and transition.get("if_fail"):
         allowed = transition["if_fail"]["capabilities"]
-        if action_cap not in allowed:
+        if confirmation:
+            # 用 confirm_action_result 回答「没达成」是**回看回答**，不是重做动作，
+            # 不能拿它去比 if_fail 白名单。以前这样比会把回答判成违约，
+            # 整条用例停在 review_redo_action_mismatch
+            # （cr-1dd866f93044 的 api-1-211：allowed=[press_key,tap_element,...]，cap=confirm_action_result）。
+            hint = (f"上一动作没有达成目标。下一步必须用 {'、'.join(allowed) or '当前目标允许的能力'} "
+                    f"重做本步，不要再次只回答回看。")
+            if str(getattr(decision, "thought", "") or "").strip():
+                hint += f" 你的判断是：{str(decision.thought)[:120]}"
+            setattr(cursor, "correction_hint", hint)
+            asked = dict(getattr(cursor, "visual_redo_reask", None) or {})
+            if asked.get(mid):
+                # 已经明确要求过一次「别只回看、给动作」，模型还是照旧：这时才停，
+                # 而且要给可读原因 —— 不能把 confirm_action_result 当设备动作派发出去
+                # （那会变成 event_not_registered，cr-8d33bcfe4537 的 api-1-211）。
+                asked.pop(mid, None)
+                setattr(cursor, "visual_redo_reask", asked)
+                setattr(cursor, "semantic_stop",
+                        f"{mid} 回看只给出「未达成」而没有重做动作，要求过一次后仍未改变；停止执行。")
+                if writer:
+                    writer.append("review/fail", {
+                        "milestone_id": mid, "reason": "redo_action_absent",
+                        "allowed_capabilities": allowed,
+                    })
+                return "stop"
+            asked[mid] = True
+            setattr(cursor, "visual_redo_reask", asked)
+            if writer:
+                writer.append("review/redo_directive", {
+                    "milestone_id": mid, "reason": "review_answer_is_not_redo",
+                    "allowed_capabilities": allowed,
+                })
+            return "reask"
+        elif action_cap not in allowed:
             return _review_contract_reask(
                 cursor, prior, "review_redo_action_mismatch",
                 f"上一动作未通过，重做必须使用当前目标允许的能力：{', '.join(allowed)}；本轮未派发。",
@@ -794,22 +835,38 @@ def apply_same_turn_prior(
         sent = getattr(cursor, "visual_redo_sent", None)
         if not isinstance(sent, dict):
             sent = {}
-        already = bool(sent.get(mid))
+        attempts, last_sig = _redo_attempts(sent, mid)
+        sig = _action_signature(prior)
+        # 没有上一次指纹（例如 guard 侧发起的重做）时无法判断是否换路，按「允许」处理，次数仍封顶。
+        changed = (not last_sig) or sig != last_sig
         # 回看判未达成：同位置再点不能被「重复点击=已满足」直接记 pass（见 focus_turn）。
         setattr(cursor, "visual_failed_milestone", mid)
         hint = _hint(cursor, mid, "画面上上一步还没完成")
+        # 把模型自己给的「为什么没达成」带回提示：以前只写一句 prior_fail，
+        # 模型下一回合看不到任何新信息，只能再猜一个坐标（api-1-214 的 60 次空转）。
+        said = str(getattr(decision, "thought", "") or "").strip()
+        if said:
+            hint = f"{hint} 上一次的判断：{said[:160]}"
+        if last_sig and changed and attempts < 3:
+            hint = f"{hint} 换的路径已经生效，继续换入口；不要回到上一个位置。"
         setattr(cursor, "correction_hint", hint)
         if writer:
             writer.append(
                 "review/fail",
-                {"milestone_id": mid, "reason": "prior_fail", "redo_already_sent": already},
+                {"milestone_id": mid, "reason": "prior_fail", "attempts": attempts,
+                 "path_changed": changed},
             )
-        if already:
+        # 只惩罚「原地重复同一个点」：换个入口/换条路径重试不算无效重做。
+        # 以前第二次失败一律停止，坐标靠猜的模型在无导航图时必然踩中
+        # （cr-c950174d1217 的 211/233：login_entry 点 (85,76) → (808,955) → 停止）。
+        if attempts and not (changed and attempts < 3):
             sent.pop(mid, None)
             setattr(cursor, "visual_redo_sent", sent)
             setattr(cursor, "semantic_stop", f"{hint} 重做之后画面仍未达成，已停止。")
             setattr(cursor, "visual_prior", None)
             return "stop"
+        sent[mid] = {"attempts": attempts + 1, "sig": sig}
+        setattr(cursor, "visual_redo_sent", sent)
         return "redo"
     sent = getattr(cursor, "visual_redo_sent", None)
     if isinstance(sent, dict) and mid in sent:
@@ -990,13 +1047,21 @@ def settle_pending_review(
                 {"milestone_id": mid, "capability_id": cap, "reason": reason, "label": label},
             )
         return "pass"
-    _rewind(cursor, mid)
+    # 「落点不在目标面」（unlisted）和「点到了明确不该点的」（exclude）不是一回事。
+    # 没有导航图时目标面本身很弱，unlisted 只能说明这次没落在预期文字上，
+    # 不能据此把里程碑打回重来 —— 那会让模型原地重复同一个点，最后以「重做之后仍未达成」收场
+    # （cr-a390541e5dd2 的 211/212/218/225）。
+    soft = reason == "unlisted"
+    if not soft:
+        _rewind(cursor, mid)
     streak = _bump_streak(cursor, mid)
     hint = _hint(cursor, mid, label or reason)
+    if soft and streak < 3:
+        hint = f"{hint} 本次落点不在目标面：换入口或换路径，不要重复同一点。"
     setattr(cursor, "correction_hint", hint)
     if writer:
         writer.append(
-            "review/fail",
+            "review/soft_miss" if soft else "review/fail",
             {
                 "milestone_id": mid,
                 "capability_id": cap,
@@ -1010,7 +1075,8 @@ def settle_pending_review(
                 "semantic/reject",
                 {"milestone_id": mid, "reason": reason, "label": label, "streak": streak},
             )
-    if streak >= 2:
+    limit = 3 if soft else 2
+    if streak >= limit:
         setattr(cursor, "semantic_stop", f"{hint} 连续 {streak} 次回看未通过，已停止。")
         return "stop"
     return "fail"
@@ -1322,6 +1388,25 @@ def _confirm_visual_prior(
         try_transition_after_tool_pass(
             cursor, ctx, writer=writer, in_prep=in_prep, in_check=in_check
         )
+
+
+def _redo_attempts(sent: Any, milestone_id: str) -> tuple[int, str]:
+    """这个里程碑已经重做过几次、上一次是什么动作（用于判断是否只是原地重复）。"""
+    raw = (sent or {}).get(milestone_id) if isinstance(sent, dict) else None
+    if isinstance(raw, dict):
+        return int(raw.get("attempts") or 0), str(raw.get("sig") or "")
+    return (1, "") if raw else (0, "")
+
+
+def _action_signature(prior: dict[str, Any]) -> str:
+    """动作指纹：能力 + 落点/文案。只用来区分「换路」和「原地再点一次」。"""
+    params = prior.get("params") if isinstance(prior.get("params"), dict) else {}
+    return "|".join((
+        str(prior.get("capability_id") or ""),
+        str(params.get("x") or ""), str(params.get("y") or ""),
+        str(params.get("selector_text") or ""),
+        str(prior.get("summary") or "")[:60],
+    ))
 
 
 def _hint(cursor: Any, milestone_id: str, label: str) -> str:

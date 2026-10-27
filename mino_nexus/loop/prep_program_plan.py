@@ -65,6 +65,9 @@ def milestones_from_prep_program(plan: dict[str, Any]) -> list[dict[str, Any]]:
             expanded = milestones_from_flow_steps(block_steps, block_id=block_id)
             for item in expanded:
                 item = {**item, "source": "prep_block", "source_block": block_id}
+                from mino_nexus.action_space.locator_chain import attach_to_row
+
+                attach_to_row(item, app_id=app_id)
                 rows.append(item)
             continue
         rows.append(row)

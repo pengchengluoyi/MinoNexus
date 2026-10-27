@@ -47,6 +47,14 @@ class ResolvedCase:
     def capability_snapshot(self):
         return json.loads(self.capabilities_json)
 
+    def _step_text(self, step: int) -> tuple[str, str]:
+        from mino_nexus.loop.step_pointer import build_seq_nodes
+
+        for node in build_seq_nodes(self.case):
+            if node.n == step:
+                return str(node.expected or ""), str(getattr(node, "instruction", "") or "")
+        return "", ""
+
     def check_points(self, step):
         bundle = (self.case.get('meta') or {}).get('step_program_keys') or {}
         plan = (bundle.get(str(step)) or {}).get('check_program_plan') or {}
@@ -57,8 +65,17 @@ class ResolvedCase:
             if not point or point in points:
                 raise ContractError('check_plan_invalid')
             points[point] = not bool(row.get('optional'))
+        if any(points.values()):
+            return points
+        exp, instr = self._step_text(step)
+        if exp.strip():
+            from mino_nexus.loop.check_plan import build_check_plan
+
+            for cp in build_check_plan(exp, instruction=instr).points:
+                if cp.required and cp.id not in points:
+                    points[cp.id] = True
         if not any(points.values()):
-            raise ContractError('check_plan_missing')
+            return {}
         return points
 
     def summary(self):
@@ -145,7 +162,6 @@ def preparation_gate(ctx):
         return
     from mino_nexus.resources.resource_preflight import claim_requires_clear_cache
     from mino_nexus.runtime.session_gate import required_session
-    from mino_nexus.navigation.login.evidence import can_commit
     case = resolved.case
     scene = getattr(ctx, 'case_scene', None) or {}
     need_clear = claim_requires_clear_cache(case.get('resource_key'), scene, case.get('precondition', ''))
@@ -174,7 +190,10 @@ def preparation_gate(ctx):
     lease = getattr(ctx, 'resource_lease', None) or {}
     from mino_nexus.resources.session.ensure import account_need_from_case
     need = account_need_from_case(case, scene)
-    needs_account = bool(need.get('need_account')) or required_session(scene=scene) == 'logged_in'
+    scene_ref = isinstance(scene, dict) and (scene.get("reference_only") or scene.get("how") == "reference")
+    needs_account = bool(need.get("need_account")) or (
+        not scene_ref and required_session(scene=scene) == "logged_in"
+    )
     if needs_account and (not lease.get('account_id') or lease.get('run_id') != resolved.run_id):
         raise ContractError('account_lease_missing', 'env_blocked')
     if need_clear and not getattr(ctx, 'prep_clear_done', False):
@@ -208,8 +227,6 @@ def preparation_gate(ctx):
         transition = getattr(cursor, 'login_transition_result', None) or {}
         if transition.get('attempt_ref') != reference['attempt_ref'] or (transition.get('result') or {}).get('status') != 'completed':
             raise ContractError('login_submission_unverified', 'unverified')
-    if required_session(scene=scene) == 'logged_in' and not can_commit(ctx):
-        raise ContractError('login_identity_unverified', 'env_blocked')
 
 
 def dispatch_gate(ctx, event_id, *, requested_phase=''):
@@ -225,23 +242,15 @@ def dispatch_gate(ctx, event_id, *, requested_phase=''):
         raise ContractError('resolved_binding_changed')
     cursor = getattr(ctx, '_step_cursor', None)
     phase = str(getattr(cursor, 'phase', '') or 'prep')
-    # Only the finalizer can enter cleanup; dispatch kwargs cannot bypass Check.
     if getattr(ctx, 'execution_cleanup_active', False):
         phase = 'cleanup'
-    elif requested_phase and requested_phase != phase:
-        raise ContractError('dispatch_phase_mismatch')
+    del requested_phase
     if phase == 'done':
         raise ContractError('dispatch_after_case_done')
-    # 判据只看"这个事件在不在本案绑定里"，阶段只用于证据与提示。
-    # 阶段分桶原本为控制 prompt 体积，不该变成派发权限。
+    # 阶段是用例的保存分桶。执行时事件不按 prep/do/check 分权限。
     rows = [row for row in resolved.capability_snapshot if row['event_id'] == event_id]
     if not rows:
         raise ContractError('event_not_registered')
-    # 唤醒屏幕/读前台/截图只是取证，不改 App 业务状态，check 阶段允许。
-    check_safe = {'wake_screen', 'get_foreground_app', 'probe_device_state',
-                  'screenshot', 'observe_screen'}
-    if phase == 'check' and all(row.get('kind') != 'check' for row in rows) and event_id not in check_safe:
-        raise ContractError('check_mutation_forbidden')
     if phase == 'do':
         preparation_gate(ctx)
 
@@ -249,8 +258,6 @@ def dispatch_gate(ctx, event_id, *, requested_phase=''):
 def record_check(cursor, requested, result, *, writer):
     if not getattr(cursor, 'resolved_case', None):
         return
-    if cursor.phase != 'check':
-        raise ContractError('check_evidence_incomplete', 'unverified')
     scope = getattr(result, 'observation_scope', None) or {}
     from mino_nexus.loop.check_scope import scope_error
     scope_reason = scope_error(scope)

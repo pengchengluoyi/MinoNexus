@@ -202,6 +202,11 @@ def _nav_cli(argv: list[str]) -> int:
     p_m.add_argument("--run-id", default="")
     p_m.add_argument("--limit", type=int, default=50)
 
+    p_sem = sub.add_parser("semantics", help="审计/清理 case_flow 的动作页面名与误建控件")
+    p_sem.add_argument("app_id")
+    p_sem.add_argument("--project-id", default="")
+    p_sem.add_argument("--apply", action="store_true", help="实际写入；缺省只 dry-run")
+
     args = ap.parse_args(argv)
 
     from mino_nexus.core.database import ensure_db
@@ -292,6 +297,13 @@ def _nav_cli(argv: list[str]) -> int:
             print(f"未写库：{exc}")
             return 1
         return dump({"app_id": saved["app_id"], "states": len(saved["states"]), "edges": len(saved["edges"])})
+
+    if args.cmd == "semantics":
+        app = ps.find_app(args.app_id)
+        project_id = str(args.project_id or (app or {}).get("project_id") or "")
+        from mino_nexus.casework import page_semantic_repair
+
+        return dump(page_semantic_repair.repair(project_id, args.app_id, apply=bool(args.apply)))
 
     if args.cmd == "metrics":
         from mino_nexus.navigation.atlas.nav_telemetry import aggregate_app

@@ -96,10 +96,19 @@ def plan_and_dispatch_next(
     )
     fsm = fsm_doc or {}
     if not fsm:
-        return _degrade(
-            "没有 NavFSM 配置，无法规划路线",
-            "missing fsm",
-            _attempt(plan_ok=False, plan_error="missing fsm"),
+        # 没有已发布路线图时，不再转去开环乱点；先查页面入口档案。
+        # 入口也缺失就明确报缺口，由 dispatch_pending 阻断当前用例。
+        from mino_nexus.navigation.entries.plan import dispatch_entry
+
+        return dispatch_entry(
+            event=event,
+            ctx=ctx,
+            router=router,
+            t0=t0,
+            app_id=app_id,
+            project_id=project_id,
+            target=to_raw,
+            nav_attempt=_attempt(plan_ok=False, plan_error="missing fsm"),
         )
 
     from mino_nexus.navigation.atlas.nav_route import coerce_oral_nav_ref
@@ -302,12 +311,18 @@ def plan_and_dispatch_next(
             nav_attempt["plan_ok"] = False
             nav_attempt["plan_error"] = err
             if _skip_tab_fallback(localized, ctx):
-                two_stage = nav_route.tab_root_entry_hint(
-                    fsm, resolve.get("resolved_to") or to_raw
+                from mino_nexus.navigation.entries.plan import dispatch_entry
+
+                return dispatch_entry(
+                    event=event,
+                    ctx=ctx,
+                    router=router,
+                    t0=t0,
+                    app_id=app_id,
+                    project_id=project_id,
+                    target=to_raw,
+                    nav_attempt=nav_attempt,
                 )
-                hint = f"{err}；{two_stage or '无 nav 路线（L1 降级），请 tap 探索或补 Atlas 边。'}"
-                nav_attempt["degrade_level"] = 1
-                return _degrade(hint, err, nav_attempt)
             else:
                 step_params = nav_route.direct_tab_tap_params(
                     fsm, resolve.get("resolved_to") or to_raw
@@ -319,7 +334,19 @@ def plan_and_dispatch_next(
                     )
                     nav_attempt["fallback_tab"] = step_params.get("selector_text") or ""
                 else:
-                    return _degrade(err, err, nav_attempt)
+                    # 图上没有路，也没有可直点的 Tab：查入口档案，不转开环乱点。
+                    from mino_nexus.navigation.entries.plan import dispatch_entry
+
+                    return dispatch_entry(
+                        event=event,
+                        ctx=ctx,
+                        router=router,
+                        t0=t0,
+                        app_id=app_id,
+                        project_id=project_id,
+                        target=to_raw,
+                        nav_attempt=nav_attempt,
+                    )
     else:
         plan_msg = f"未提供当前屏，直接尝试点击目标 Tab「{to_raw}」"
         step_params = nav_route.direct_tab_tap_params(fsm, to_raw)
@@ -486,7 +513,8 @@ def dispatch_pending(proxy, ctx, cursor, *, turn_seq, writer=None):
                 'summary': degrade_summary}
     ok = result.status == EventStatus.PASS
     # A planned edge reaching the destination is not observation of arrival.
-    arrived = bool(ok and attempt.get('resolved_to') and
+    arrived = bool(ok and attempt.get('entry_arrived')) or bool(
+        ok and attempt.get('resolved_to') and
         str(getattr(ctx, 'nav_localized_state', '') or '') == attempt['resolved_to'] and
         float(getattr(ctx, 'nav_localized_confidence', 0) or 0) >= .8 and not attempt.get('exec_cap'))
     if arrived:
@@ -496,7 +524,10 @@ def dispatch_pending(proxy, ctx, cursor, *, turn_seq, writer=None):
     if writer:
         writer.append('policy/navigation', {'milestone_id': pending['id'], 'attempt': attempt,
             'status': 'pass' if arrived else 'defer' if ok else 'blocked', 'raw_response': result.raw_response})
+    entry_gap = bool(str(getattr(result, 'error', '') or '') == 'entry_gap' or attempt.get('entry_gap_id'))
     return {'ok': arrived, 'defer': ok and not arrived, 'case_fail': not ok,
             'status': 'pass' if arrived else 'defer' if ok else 'blocked',
             'milestone_id': pending['id'], 'capability_id': attempt.get('exec_cap', ''),
-            'summary': result.summary, 'error_kind': '' if ok else 'navigation_policy_failed'}
+            'summary': result.summary,
+            'error_kind': '' if ok else ('entry_gap' if entry_gap else 'navigation_policy_failed'),
+            'gap_id': str(attempt.get('entry_gap_id') or '')}

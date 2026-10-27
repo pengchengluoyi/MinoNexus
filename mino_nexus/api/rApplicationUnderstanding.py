@@ -58,6 +58,11 @@ def pages(project_id: str, app_id: str):
 def trends(project_id: str, app_id: str, platform: str = Query(default='', max_length=40)):
     return call(svc.trends, project_id, app_id, platform=platform)
 
+
+@router.get('/pages/{state_id}/case-refs')
+def case_refs(project_id: str, app_id: str, state_id: str):
+    return call(svc.case_refs, project_id, app_id, state_id)
+
 @router.post('/pages/{state_id}/reviews', dependencies=[Depends(project_maintainer)])
 def propose(project_id: str, app_id: str, state_id: str, body: Proposal):
     return call(svc.propose, project_id, app_id, state_id, body)

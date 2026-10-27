@@ -105,7 +105,8 @@ DOMAINS: tuple[dict[str, Any], ...] = (
         "intents": (
             {"id": "general.observe", "label": "观察界面", "caps": ("hierarchy", "screenshot"), "triggers": ("prep", "do", "check")},
             {"id": "general.navigate", "label": "页面导航", "caps": ("tap_element",), "triggers": ("prep", "do")},
-            {"id": "general.step", "label": "通用步骤", "triggers": ("prep", "do", "check")},
+            {"id": "general.step", "label": "通用步骤",
+             "caps": ("hierarchy", "screenshot", "tap_element"), "triggers": ("prep", "do", "check")},
         ),
     },
 )

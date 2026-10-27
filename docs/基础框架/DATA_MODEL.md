@@ -30,6 +30,7 @@
 | IM 轮次证据 | `assistant_turns` | `detail_json.user_text/assistant_text/outbound_text/sent_text/request_id` 与 `card_json`；正文最多保留 8000 字符及截断标记，敏感值隐藏；记录发送状态和片数，仅当前账号可查 |
 | 能力目录 | `catalog_entries`（`kind` 区分五类） | 空库不灌；只经 Console `/packs` 写入 |
 | NavFSM（导航图配置） | `nav_fsm` / `nav_fsm_states` / `nav_fsm_edges` | Studio / `PUT /nav-fsm/{app_id}`；见 [NAVIGATION_ATLAS.md](NAVIGATION_ATLAS.md)。键：`app_id` + `project_id`（来自 `apps`） |
+| 用例页面引用 | `nav_case_page_refs` | 用例步骤 → 页面/控件（`enters`/`operates`/`asserts`）；页面详情“进入这个页面的用例引用”；一个页面多个 `page_state_id` 按 `page_key`/`page_label` 聚合 |
 | NavFSM 校准证据（文件） | `{data_dir}/nav/calibration/{app_id}/{calibration_id}/` | 与 `mino.db` 同根；不进 git、不进 ORM 正文 |
 | AppIntel 关联（规划） | `app_intel_links`（P1 可选） | 导航 / 知识 / 文档交叉引用；投影层见 [9月12日_AppIntel信息基座.md](9月12日_AppIntel信息基座.md) |
 | 技能 | `skills`（角色 + SOP + prompt + `view.id`） | builtin 从代码灌种一次，之后以库为准；坏行回退 `ai/skill_defs.py` |

@@ -1,6 +1,8 @@
 """Session Event Log：append-only 会话轨迹 API。"""
 from __future__ import annotations
 
+import json
+
 import contextvars
 import hashlib
 import threading
@@ -188,6 +190,15 @@ class SessionWriter:
             self._tool_ms += int(body.get("elapsed_ms") or 0)
         elif evt_type == "guard/block":
             self._guard_blocks += 1
+        # 同一个动作会被写成多条事件（tool/call + device/action + tool/result +
+        # stream/emit + review/dispatched），Workbench 时间线上看起来像「同一步做了两次」。
+        # 真正的重复是逐字节相同的：同类型 + 同 payload 在 5 秒内只留第一条。
+        dedupe_key = (evt_type, json.dumps(body, sort_keys=True, ensure_ascii=False))
+        if getattr(self, "_last_event_key", None) == dedupe_key and (
+                time.time() - float(getattr(self, "_last_event_at", 0) or 0)) <= 5.0:
+            return 0
+        self._last_event_key = dedupe_key
+        self._last_event_at = time.time()
         if evt_type in ("guard/block", "contract/blocked") and self._first_blocker is None:
             self._first_blocker = {
                 "event_type": evt_type,

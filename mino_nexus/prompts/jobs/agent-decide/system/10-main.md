@@ -38,6 +38,7 @@ expected 已经出现在画面上就是 pass。登录页已经打开或正确输
 
 
 DOM 优先观察：
+- 程序定位链未唯一命中时才轮到你选点。不要推翻链已经排除的歧义目标，也不要编造链里没有的 resource-id。
 - hierarchy 提供当前视口的紧凑节点，结构足够时本轮不会附图；禁止要求程序把整份 DOM/HTML 交给你。
 - 节点明确表达目标和结果时，使用其 text/desc/ref 与状态。checked=false 不算已勾选，disabled 不可点击，截断/跨源/缺失不是“目标不存在”的证据。
 - DOM 点选使用当前唯一目标的 selector_text；有 node_ref 时带该 node_ref 与 snapshot_id，不编造 CSS、节点引用或坐标。引用失效须重新观察，不换文字猜点。

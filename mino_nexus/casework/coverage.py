@@ -78,10 +78,12 @@ def intent_coverage(project_id: str, app_id: str = "") -> dict[str, Any]:
         cid = str(case.get("case_id") or "")
         last = results.get(cid) or {}
         passed = _status_of(last) in _PASS
-        ids = [str(x) for x in (case.get("point_ids") or []) if str(x)]
-        if not ids:
-            ids = ["case:" + cid]
-            unidentified.append({"unit_id": ids[0], "case_id": cid, "status": _status_of(last)})
+        from mino_nexus.casework.requirement_points import requirement_point_ids
+
+        ids, pid_source = requirement_point_ids(case)
+        if pid_source == "fallback":
+            unidentified.append({"unit_id": ids[0] if ids else ("case:" + cid),
+                                 "case_id": cid, "status": _status_of(last)})
         for pid in ids:
             row = points.setdefault(pid, {"point_id": pid, "cases": [], "covered": False,
                                           "attribution_class": ""})

@@ -43,21 +43,6 @@ def _plugin_user(sess: dict[str, Any]) -> str:
     return str(sess.get("user_id") or "").strip()
 
 
-class ExploreRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    app_id: str = ""
-    sn: str = ""
-    platform: str = "android"
-    async_exec: bool = True
-    instruction: str = ""
-    provider_id: str = ""
-    max_steps: int = 80
-    max_idle_steps: int = 15
-    playwright_headless: bool = True
-    env_profile: str = ""
-    env_surface: str = ""
-
 
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -215,49 +200,6 @@ def run_cases(body: RunRequest, sess: dict = Depends(current_session)):
         raise HTTPException(
             status_code=409 if exc.compilation_jobs else 400,
             detail={"message": str(exc), "blocked": exc.blocked, "compilation_jobs": exc.compilation_jobs},
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/explore")
-def run_explore(body: ExploreRequest, sess: dict = Depends(current_session)):
-    if not str(body.app_id or "").strip():
-        raise HTTPException(status_code=400, detail="缺少 app_id")
-    try:
-        app = ps.require_app(body.app_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="App not found") from exc
-    try:
-        snapshot = cr.run_explore(
-            app,
-            sn=body.sn,
-            max_steps=int(body.max_steps or 80),
-            max_idle_steps=int(body.max_idle_steps or 15),
-            instruction=str(body.instruction or "").strip(),
-            provider_id=str(body.provider_id or "").strip(),
-            async_exec=bool(body.async_exec),
-            platform=body.platform or "android",
-            playwright_headless=bool(body.playwright_headless),
-            env_profile=str(body.env_profile or "").strip(),
-            env_surface=str(body.env_surface or "").strip(),
-            plugin_user_id=_plugin_user(sess),
-        )
-        return ok(snapshot, msg="应用探索已启动")
-    except (cr.DeviceBusy, ResourceBusy) as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"message": "device busy", "busy_task_id": exc.busy_task_id, "sn": exc.sn},
-        ) from exc
-    except cr.WebSlotFull as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": "web parallel full",
-                "sn": exc.sn,
-                "active": exc.active,
-                "max": exc.limit,
-            },
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

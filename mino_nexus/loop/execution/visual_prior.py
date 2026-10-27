@@ -18,7 +18,6 @@ TAG = "AgentLoop"
 
 def probe_visual_prior(
     *,
-    is_explore: bool,
     cursor: Any,
     screen_fp_turn: Any,
     nav: Any,
@@ -27,7 +26,7 @@ def probe_visual_prior(
     cid: str,
     scout_run_id: str,
 ) -> None:
-    if not is_explore and isinstance(cursor, StepCursor):
+    if isinstance(cursor, StepCursor):
         if cursor.phase == "do" and not cursor.step_start_fp:
             cursor.refresh_step_start_fp(screen_fp_turn)
         cur_probe = cursor.current()

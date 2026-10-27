@@ -63,6 +63,16 @@ class LoopState:
     device_session_source: str = field(default='', metadata={"runtime_only": True})
     _evidence_cache: Any = field(default=None, metadata={"runtime_only": True})
     app_foreground: str = field(default='', metadata={"runtime_only": True})
+    # 定位链开关（off / on）；由 stamp_runtime 写，slot dataclass 必须显式声明。
+    locator_chain: str | None = field(default=None, metadata={"runtime_only": True})
+    # 前台探测去重（取证 / guard / 启动核验在一回合里会各问一次）
+    _fg_probe_cache: Any = field(default=None, metadata={"runtime_only": True})
+    _fg_result_cache: Any = field(default=None, metadata={"runtime_only": True})
+    # 程序块连续「拿不到锚点/坐标」的次数，用于退化到看图 + 三次后记账
+    program_block_unresolved: Any = field(default=None, metadata={"runtime_only": True})
+    # 页面入口（navigation/entries）刚点过的入口 id；slots 数据集里没声明就会
+    # 直接 AttributeError（cr-f27bf8835b60 的 case-f1cba7fc 死在 15 秒）。
+    _nav_entry_tapped: Any = field(default=None, metadata={"runtime_only": True})
     app_launch_confirmed: bool = field(default=False, metadata={"runtime_only": True})
     web_focus: Any = field(default=None, metadata={"runtime_only": True})
     nav_localized: Any = field(default=None, metadata={"runtime_only": True})
@@ -176,6 +186,7 @@ class RunContext(LoopState):
     action_scheme: str = "dom_preferred"
     observation_mode: str = ""
     observation_fallback_reason: str = ""
+    observation_fallback_milestone: str = ""
     observation_contract: dict[str, Any] = field(default_factory=dict)
     env_label: str = ""
     env_fact: dict[str, Any] = field(default_factory=dict)

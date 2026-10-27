@@ -7,7 +7,7 @@
 - 登录/登出以实际登录提交、退出及独立观察证据为准，不靠前置或租号假设
 - clear_app_cache 仅清缓存，不能作为退出登录、账号未配置形象或业务数据复位的证据；超时与失败不能当作清理成功
 - 用例 fail 或超时，若轨迹已证明某状态达成，仍可在 updates 中写该状态
-- updates 的 key/value 必须来自 field_catalog 的枚举
+- updates 的 key/value 必须来自 field_catalog；枚举字段用枚举 value，数值事实（value_kind=number）用数值字符串，且必须有实际注册时间证据
 - author_facet_hints 仅供参考，不能替代证据
 
 只输出 JSON：

@@ -19,18 +19,12 @@ from mino_nexus.navigation.login.transition import update_auth_state
 
 def refresh_step_navigation(
     *,
-    is_explore: bool,
     cursor: Any,
     cur: Any,
     ctx: Any,
     case: dict[str, Any],
 ) -> None:
-    if (
-        not is_explore
-        and isinstance(cursor, StepCursor)
-        and cursor.phase == "do"
-        and cur
-    ):
+    if isinstance(cursor, StepCursor) and cursor.phase == "do" and cur:
         from mino_nexus.loop.step_nav_plan import build_step_nav_plan_hint, step_needs_nav_plan
 
         if int(cur.n) != int(cursor.step_nav_plan_step_n or 0):
@@ -41,6 +35,7 @@ def refresh_step_navigation(
             update_auth_state(ctx, login_flow_macro_active=False)
             ctx.system_dialog_macro_done = False
             ctx.recovery_allow_back = False
+            ctx._nav_entry_tapped = ""
             instr_nav = str(cur.instruction or "")
             from mino_nexus.loop.nav_session_fork import (
                 detect_guest_tab_login_fork,
@@ -58,7 +53,7 @@ def refresh_step_navigation(
                 required_session=req_sess,
             )
             ctx.nav_guest_tab_fork = fork
-            if step_needs_nav_plan(instr_nav):
+            if step_needs_nav_plan(instr_nav, exp_nav):
                 cursor.step_nav_plan_hint = build_step_nav_plan_hint(
                     instruction=instr_nav,
                     app_id=str(getattr(ctx, "app_id", "") or ""),
@@ -70,6 +65,7 @@ def refresh_step_navigation(
                     precondition=str(
                         getattr(cursor, "precondition", "") or case.get("precondition") or ""
                     ),
+                    ctx=ctx,
                 )
             else:
                 cursor.step_nav_plan_hint = (

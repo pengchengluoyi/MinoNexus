@@ -38,8 +38,9 @@ from mino_nexus.models.assistant_conversation import AssistantRequest, Assistant
 from mino_nexus.models.assistant_delivery import AssistantReceipt, AssistantNotification
 from mino_nexus.models.doc_library import DocChunk, DocSource
 from mino_nexus.models.knowledge import KnowledgeEntry
-from mino_nexus.models.nav import StudioNav
 from mino_nexus.models.nav_fsm import NavFsm, NavFsmEdge, NavFsmState
+from mino_nexus.models.nav_page_entry import NavPageEntry, NavPageEntryEvidence, NavPageGap
+from mino_nexus.models.nav_case_page_ref import NavCasePageRef
 from mino_nexus.models.nav_flow_block_catalog import NavFlowBlockCatalog
 from mino_nexus.models.node import Node, Studio
 from mino_nexus.models.plugin import PluginPolicy, UserPluginSecret
@@ -107,6 +108,10 @@ __all__ = [
     "NavFsm",
     "NavFsmEdge",
     "NavFsmState",
+    "NavPageEntry",
+    "NavPageEntryEvidence",
+    "NavPageGap",
+    "NavCasePageRef",
     "NavFlowBlockCatalog",
     "Node",
     "PluginPolicy",
@@ -125,7 +130,6 @@ __all__ = [
     "SessionMeta",
     "Settings",
     "Studio",
-    "StudioNav",
     "Task",
     "User",
     "UserPluginSecret",

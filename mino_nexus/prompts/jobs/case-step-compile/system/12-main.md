@@ -16,7 +16,9 @@ quote 必须逐字引用 source，所有非标点原文都要有对应 span；�
 
 前置层按原文完整语义映射，不要求固定标题，也不能因为出现冒号而漏掉该行：
 - precondition.device_session：required_session=logged_in 或 guest；「用户登录」「用户处于登录状态」都是已登录要求。
-- precondition.account_field：facet/value 只能从 account_fields 的真实字段和选项选择。必须精确表达注册时间、新老账号等限定；没有对应字段或日期条件不能精确表达时保留未覆盖。
+- precondition.account_field：facet/value 只能从 account_fields 的真实字段和选项选择。枚举字段默认 op=eq；数值字段（如 registered_days）用 op=lte/lt/gt/gte 表达边界。
+  例：「账号注册≤30天」→ facet=registered_days, op=lte, value=30；「注册超过30天」→ facet=registered_days, op=gt, value=30；「注册满7天」→ op=gte, value=7。
+  注册天数必须落在 registered_days；不能映射为 register_flow（注册流程阶段不是账号年龄）。没有对应字段或无法精确表达时保留未覆盖。
 - precondition.clear_cache：仅用于明确清理应用缓存。
 - precondition.author_remark：仅用于原文明示的备注，不代替业务条件。
 商品折扣配置、订单状态、退款完成、时间边界或后台任务，若目录无实际验证能力或已绑定夹具，必须保留未覆盖。不能把「商品已配置」解释为「账号已配置」。

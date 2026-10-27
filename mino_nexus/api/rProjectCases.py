@@ -111,6 +111,7 @@ class V5ControlBody(BaseModel):
     locator_spec: dict[str, Any]
     sensitive: bool = False
     publish: bool = False
+    page_state_id: str | None = None
 
 
 class V5ControlProbeBody(BaseModel):

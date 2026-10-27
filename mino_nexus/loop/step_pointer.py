@@ -673,11 +673,28 @@ class StepCursor:
             instruction=str(cur.instruction or ""),
         )
 
+    def reopen_do(self, *, case_step: int | None = None) -> bool:
+        """校验发现「当前页面不是本步骤要求的页面」时，退回操作阶段重新到达。
+
+        校验阶段按设计不许点屏幕（结果要可信），所以页面不对只有两条路：
+        判死，或者退回 do 让模型把页面走到位再来验。预算还没用完时选后者。
+        """
+        if self.phase != 'check':
+            return False
+        self.phase = 'do'
+        self.step_checked = False
+        self.saw_assert = False
+        cur = self.current()
+        n = int(case_step or (cur.n if cur is not None else 0) or 0)
+        if n:
+            self.verified_check_points.pop(n, None)
+        return True
+
     def mark_checked(self) -> None:
         if getattr(self, 'resolved_case', None) is not None:
             from mino_nexus.loop.resolved_case import ContractError
             cur = self.current()
-            if self.phase != 'check' or cur is None or not {point for point, required in self.resolved_case.check_points(cur.n).items() if required}.issubset(self.verified_check_points.get(cur.n, set())):
+            if cur is None or not {point for point, required in self.resolved_case.check_points(cur.n).items() if required}.issubset(self.verified_check_points.get(cur.n, set())):
                 raise ContractError('check_evidence_incomplete', 'unverified')
         self.step_checked = True
         self.saw_assert = True

@@ -418,8 +418,7 @@ class ProgressGate:
                 "请优先换一条策略边。"
             )
 
-        explore = self.profile == "explore"
-        budget = 80 if explore else int(MILESTONE_BUDGET.get(str(phase or "do"), 10))
+        budget = int(MILESTONE_BUDGET.get(str(phase or "do"), 10))
         if self._milestone_exhausted:
             if cap_id in ("signal_done", "signal_give_up", "wait_ms"):
                 return None
@@ -458,7 +457,7 @@ class ProgressGate:
                 )
 
         states = self._post_states
-        if not explore and len(states) >= STATE_MIN_SAMPLES:
+        if len(states) >= STATE_MIN_SAMPLES:
             recent = states[-STATE_WINDOW:]
             uniq = len(set(recent))
             if uniq <= STATE_MAX_UNIQUE:
@@ -474,20 +473,19 @@ class ProgressGate:
                         f"{hint}"
                     )
 
-        if not explore:
-            cycle = _detect_state_cycle(states)
+        cycle = _detect_state_cycle(states)
+        if cycle is not None:
+            period, _pat = cycle
+            if profile_shape_completion and cap_id == "tap_element":
+                lab = str((params or {}).get("selector_text") or (params or {}).get("text") or "")
+                if re.search(r"完成|保存", lab):
+                    cycle = None
             if cycle is not None:
                 period, _pat = cycle
-                if profile_shape_completion and cap_id == "tap_element":
-                    lab = str((params or {}).get("selector_text") or (params or {}).get("text") or "")
-                    if re.search(r"完成|保存", lab):
-                        cycle = None
-                if cycle is not None:
-                    period, _pat = cycle
-                    hint = fuse_hint(cap_id, params, reason="state_cycle", **kw)
-                    return (
-                        f"【熔断·状态循环】界面在 {period} 个状态间循环重复。{hint}"
-                    )
+                hint = fuse_hint(cap_id, params, reason="state_cycle", **kw)
+                return (
+                    f"【熔断·状态循环】界面在 {period} 个状态间循环重复。{hint}"
+                )
 
         if not web_channel and _detect_action_pattern_cycle(self._coarse_actions):
             skip_pat = False

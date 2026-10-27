@@ -6,6 +6,33 @@ from typing import Any
 from mino_nexus.models.nav_flow_block_catalog import GLOBAL_APP_ID, NavFlowBlockCatalog
 
 # 文档 / catalog 示例里的短 id → 库内 block_id
+_BLOCK_META_PREFIX = "mino.block_meta.v1:"
+
+
+def _pack_block_description(text: str, *, case_ids: list[str] | None = None) -> str:
+    ids = [str(x).strip() for x in (case_ids or []) if str(x).strip()]
+    if not ids:
+        return str(text or "")
+    import json
+
+    return _BLOCK_META_PREFIX + json.dumps({"text": str(text or ""), "case_ids": ids}, ensure_ascii=False)
+
+
+def _unpack_block_description(desc: str) -> tuple[str, list[str]]:
+    raw = str(desc or "")
+    if not raw.startswith(_BLOCK_META_PREFIX):
+        return raw, []
+    import json
+
+    try:
+        doc = json.loads(raw[len(_BLOCK_META_PREFIX) :])
+    except json.JSONDecodeError:
+        return raw, []
+    if not isinstance(doc, dict):
+        return raw, []
+    return str(doc.get("text") or ""), [str(x) for x in (doc.get("case_ids") or []) if str(x).strip()]
+
+
 BLOCK_ID_ALIASES: dict[str, str] = {
     "login_email": "fb.global.login",
     "email_web_login": "fb.global.login",
@@ -56,12 +83,14 @@ def _row_dict(row: NavFlowBlockCatalog) -> dict[str, Any]:
 
     bid = str(row.block_id or "")
     ref = str(getattr(row, "key_ref", "") or "").strip() or default_block_key_ref(bid)
+    desc_text, case_ids = _unpack_block_description(str(row.description or ""))
     return {
         "app_id": str(row.app_id or ""),
         "block_id": bid,
         "block_origin": str(row.block_origin or ""),
         "display_name": str(row.display_name or ""),
-        "description": str(row.description or ""),
+        "description": desc_text,
+        "case_ids": case_ids,
         "steps_json": list(row.steps_json or []),
         "version": str(row.version or "v1"),
         "enabled": bool(int(row.enabled or 0)),
@@ -253,6 +282,7 @@ def upsert_app_block(
     enabled: bool = True,
     key_ref: str = "",
     block_origin: str = "app",
+    case_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """App 私有块：从用例拓扑沉淀，不进 global 骨架。"""
     from mino_nexus.core.database import SessionLocal
@@ -263,6 +293,7 @@ def upsert_app_block(
     if not app or app == GLOBAL_APP_ID or not bid:
         return {}
     resolved_ref = str(key_ref or "").strip() or default_block_key_ref(bid)
+    packed_desc = _pack_block_description(description, case_ids=case_ids)
     db = SessionLocal()
     try:
         row = (
@@ -273,7 +304,7 @@ def upsert_app_block(
         if row is None:
             row = NavFlowBlockCatalog(
                 app_id=app, block_id=bid, block_origin=block_origin,
-                display_name=display_name or bid, description=description or "",
+                display_name=display_name or bid, description=packed_desc,
                 steps_json=list(steps_json or []), version=version,
                 enabled=1 if enabled else 0, key_ref=resolved_ref,
             )
@@ -281,8 +312,8 @@ def upsert_app_block(
         else:
             if display_name:
                 row.display_name = display_name
-            if description:
-                row.description = description
+            if description or case_ids:
+                row.description = packed_desc
             if steps_json is not None:
                 row.steps_json = list(steps_json)
             if version:

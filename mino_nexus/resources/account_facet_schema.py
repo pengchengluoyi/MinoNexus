@@ -6,6 +6,14 @@ import re
 from typing import Any
 
 from mino_nexus.core.log import SLog
+from mino_nexus.resources.accounts.account_facts import (
+    FACT_VALUE_KIND_ENUM,
+    FACT_VALUE_KIND_NUMBER,
+    FACT_VALUE_KINDS,
+    fact_value_configured,
+    is_numeric_fact,
+    normalize_fact_value,
+)
 from mino_nexus.resources.resource_pool import DEFAULT_FACETS, FACET_LABELS, normalize_facets
 
 TAG = "FacetSchema"
@@ -47,20 +55,31 @@ def normalize_extension(raw: Any, seen: set[str]) -> dict[str, Any] | None:
         o = _norm_option(item)
         if o and o["value"] not in {x["value"] for x in opts}:
             opts.append(o)
-    if not opts:
-        opts = [{"value": "unknown", "label": "未设置"}, {"value": "yes", "label": "是"}, {"value": "no", "label": "否"}]
-    seen.add(key)
     kind = str(raw.get("data_kind") or "").strip().lower()
     if kind not in ("static", "dynamic"):
         kind = "static"
-    return {
+    value_kind = str(raw.get("value_kind") or "").strip().lower()
+    if value_kind not in FACT_VALUE_KINDS:
+        value_kind = FACT_VALUE_KIND_ENUM
+    if value_kind == FACT_VALUE_KIND_NUMBER:
+        opts = [o for o in opts if o.get("value") == "unknown"] or [{"value": "unknown", "label": "未设置"}]
+    if not opts:
+        opts = [{"value": "unknown", "label": "未设置"}, {"value": "yes", "label": "是"}, {"value": "no", "label": "否"}]
+    seen.add(key)
+    row = {
         "key": key,
         "label": label,
         "options": opts[:16],
         "help": str(raw.get("help") or "").strip()[:200],
         "source": str(raw.get("source") or "manual").strip()[:16] or "manual",
         "data_kind": kind,
+        "value_kind": value_kind,
     }
+    if value_kind == FACT_VALUE_KIND_NUMBER:
+        for key_name in ("unit", "min", "max"):
+            if raw.get(key_name) is not None:
+                row[key_name] = raw[key_name]
+    return row
 
 
 def normalize_extensions(raw: Any) -> list[dict[str, Any]]:
@@ -92,9 +111,12 @@ def merge_account_facets(
             if not key:
                 continue
             val = str(src.get(key) or "unknown").strip().lower()
-            opts = {str(o.get("value") or "") for o in (defn.get("options") or []) if isinstance(o, dict)}
-            if val not in opts:
-                val = "unknown" if "unknown" in opts else (next(iter(opts), "unknown") if opts else "unknown")
+            if is_numeric_fact(defn):
+                val = normalize_fact_value(defn, val)
+            else:
+                opts = {str(o.get("value") or "") for o in (defn.get("options") or []) if isinstance(o, dict)}
+                if val not in opts:
+                    val = "unknown" if "unknown" in opts else (next(iter(opts), "unknown") if opts else "unknown")
             out[key] = val
         for k, v in src.items():
             if k not in out and str(v).strip():
@@ -107,6 +129,8 @@ def is_configured_facet_value(defn: dict[str, Any], value: str) -> bool:
     val = str(value or "").strip().lower()
     if not val or val == "unknown":
         return False
+    if is_numeric_fact(defn):
+        return fact_value_configured(defn, val)
     for o in defn.get("options") or []:
         if isinstance(o, dict) and str(o.get("value") or "").strip().lower() == val:
             lab = str(o.get("label") or "").strip()
@@ -138,7 +162,7 @@ def facets_for_storage(
         val = str(raw or "").strip().lower()
         defn = defs.get(k)
         if defn and is_configured_facet_value(defn, val):
-            out[k] = val
+            out[k] = normalize_fact_value(defn, val) if is_numeric_fact(defn) else val
     return out
 
 
@@ -161,6 +185,8 @@ def extension_display_rows(
             if isinstance(o, dict) and str(o.get("value")) == val:
                 label = str(o.get("label") or val)
                 break
+        if is_numeric_fact(defn) and val != "unknown" and str(defn.get("unit") or "").strip():
+            label = f"{val} {str(defn.get('unit')).strip()}"
         rows.append({
             "key": key,
             "title": str(defn.get("label") or key),

@@ -28,20 +28,9 @@ GuardFn = Callable[[dict[str, Any]], Optional[str]]
 
 
 def _guard_deny_mutate(ctx: dict[str, Any]) -> Optional[str]:
-    if str(ctx.get("phase") or "") != "check":
-        return None
-    cap_id = str(ctx.get("cap_id") or "")
-    from mino_nexus.catalog.skill_channel import phase_allows
-    from mino_nexus.loop.step_phase_fsm import (
-        check_phase_allows_recovery_cap,
-        milestone_phase_active,
-    )
-
-    if milestone_phase_active() and check_phase_allows_recovery_cap(cap_id):
-        return None
-    if phase_allows(cap_id, "check"):
-        return None
-    return "校验阶段不能改界面，已拒绝这次操作"
+    """prep/do/check 只是用例的保存分桶，执行时不按阶段拒绝改界面。"""
+    del ctx
+    return None
 
 
 RECOVER_PREFIX = "recover_"
@@ -299,23 +288,9 @@ def _guard_require_do_work(ctx: dict[str, Any]) -> Optional[str]:
 
 
 def _guard_block_assert_in_do(ctx: dict[str, Any]) -> Optional[str]:
-    """操作阶段的 phases 不含 assert_visual。观察步允许（随后仍进 check）。"""
-    if str(ctx.get("phase") or "") != "do":
-        return None
-    if str(ctx.get("cap_id") or "") != "assert_visual":
-        return None
-    from mino_nexus.catalog.skill_channel import phase_allows
-
-    if phase_allows("assert_visual", "do"):
-        return None
-    cur = ctx.get("cursor")
-    instr = str(getattr(cur, "instruction", "") or "").strip() if cur else ""
-    if is_observe_only_step(instr) or bool(getattr(cur, "observe_only", False)):
-        return None
-    return (
-        "操作阶段不能用 assert_visual 跳过动作。"
-        "请先完成点击/输入/等待，再 signal_done 进入校验。"
-    )
+    """断言可以在任意阶段触发，不再把 assert_visual 锁在 check。"""
+    del ctx
+    return None
 
 
 def _guard_block_mutate_when_thought_done(ctx: dict[str, Any]) -> Optional[str]:

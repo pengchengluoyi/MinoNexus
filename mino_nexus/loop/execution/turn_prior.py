@@ -102,7 +102,15 @@ def apply_turn_prior(
             prior = getattr(cursor, "visual_prior", None)
             mid = str(prior.get("milestone_id") or "") if isinstance(prior, dict) else ""
             if mid:
-                sent[mid] = True
+                # 这里以前把整个记录覆盖成 True，把 attempts/sig 抹掉了：
+                # _redo_attempts 于是永远读到 (1, "")，changed 永远为真，
+                # 重做次数封顶 3 次永远不成立 → 同一步空转 60 个回合
+                # （cr-1dd866f93044 的 api-1-214：65 回合只下发 8 个动作）。
+                prev = sent.get(mid)
+                record = dict(prev) if isinstance(prev, dict) else {}
+                record["dispatched"] = True
+                record.setdefault("attempts", 1 if prev else 0)
+                sent[mid] = record
                 setattr(cursor, "visual_redo_sent", sent)
     elif prior_kind == "settled":
         from mino_nexus.loop.milestone_orchestrator import in_progress_milestone, program_hook_to_dispatch

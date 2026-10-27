@@ -112,7 +112,7 @@ def seed_private_blocks(project_id: str, app_id: str, *, min_cases: int = MIN_CA
         saved = upsert_app_block(app_id=str(app_id or ""), block_id=row["block_id"],
                                  display_name=row["display_name"], description=row["description"],
                                  steps_json=row["steps"], version="v1", enabled=True,
-                                 block_origin="app")
+                                 block_origin="app", case_ids=list(row.get("case_ids") or []))
         if saved:
             written.append({"block_id": row["block_id"], "case_count": row["case_count"],
                             "steps": len(row["steps"])})
@@ -141,8 +141,9 @@ def reverse_metrics(project_id: str, app_id: str) -> dict[str, Any]:
     metrics: dict[str, dict[str, Any]] = {}
     for block in blocks:
         bid = str(block.get("block_id") or "")
+        stored_ids = [str(x) for x in (block.get("case_ids") or []) if str(x)]
         metrics[bid] = {"block_id": bid, "private": str(block.get("app_id") or "") == app,
-                        "case_ids": [], "executions": 0, "branch_points": 0,
+                        "case_ids": list(stored_ids), "executions": 0, "branch_points": 0,
                         "steps": len(block.get("steps_json") or [])}
     for case in cases:
         cid = str(case.get("case_id") or "")

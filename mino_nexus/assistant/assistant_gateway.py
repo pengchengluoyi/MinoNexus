@@ -289,8 +289,13 @@ def _handle_owned_inbound(inbound: dict[str, Any], owner: str) -> None:
     try:
         _process_claimed_inbound(inbound, owner, key)
     except Exception as exc:
-        receipts.finish(key, token, "retryable")
         diagnostic = _failure_diagnostic(exc, "inbound")
+        if diagnostic.get("error_reason") == "generation_superseded":
+            # 新消息已接管会话；旧消息不能再重放，否则会反复生成并可能重复写入。
+            receipts.finish(key, token, "rejected")
+            _ack(inbound)
+        else:
+            receipts.finish(key, token, "retryable")
         SLog.w(TAG, f"入站处理失败，可恢复状态已记录：{diagnostic['error_type']} reason={diagnostic['error_reason']} site={diagnostic['error_site']}")
     else:
         receipts.finish(key, token, "done")
@@ -344,7 +349,10 @@ def _process_claimed_inbound(inbound: dict[str, Any], owner: str, key: str) -> N
     from mino_nexus.platform.llm import dispatch_log
     from mino_nexus.assistant.assistant_stream import DraftStream
     stream = DraftStream(inbound, origin, generation, group)
+    attachment_refs = [str(item.get("ref") or "") for item in inbound.get("attachments") or [] if item.get("ref")]
     context_token = dispatch_log.bind(assistant_origin=origin, assistant_generation=generation, assistant_group_policy=group,
+                                      assistant_attachments=attachment_refs,
+                                      assistant_user_text=str(inbound.get("text") or ""),
                                       assistant_stream_callback=stream.accept if stream.enabled else None)
     started = time.time()
     turn_id = store.new_turn_id()

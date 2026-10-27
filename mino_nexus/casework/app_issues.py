@@ -1,4 +1,8 @@
-"""Read-only application issue rollup; diagnostics are not product failures."""
+"""Read-only application issue rollup; diagnostics are not product failures.
+
+This rollup is a triage/observability view. It is not imported by preflight or
+execution, and must not be turned into a compile/run gate.
+"""
 from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timezone

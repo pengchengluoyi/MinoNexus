@@ -2,9 +2,11 @@
 from copy import deepcopy
 import uuid
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from mino_nexus.core.database import session_scope
 from mino_nexus.platform.identity import require_user_id
+from mino_nexus.knowledge.page_semantics import analyze_clause, page_key
+from mino_nexus.models.nav_case_page_ref import NavCasePageRef
 from mino_nexus.models.nav_fsm import NavFsm, NavFsmState
 from mino_nexus.models.project import App
 from mino_nexus.models.session_event import SessionMeta, SessionEvent
@@ -40,21 +42,122 @@ def _state(db, app_id, version, state_id):
     return row
 
 
+def _publish_capture_pages(project_id, app_id):
+    """导航图还没有页面时，用采集合成并写入同一份 nav_fsm。"""
+    from mino_nexus.navigation.atlas import nav_fsm_store as store
+
+    raw = store.read_raw(app_id)
+    if raw and raw.get("states") and str(raw.get("project_id") or "") == str(project_id or ""):
+        return
+    from mino_nexus.navigation.atlas.nav_candidate_compiler import publish_pages_from_captures
+
+    publish_pages_from_captures(app_id, project_id=project_id, updated_by="application_logic")
+
+
+def _page_anchors(meta: dict) -> list[str]:
+    """这一页采集到的稳定文案。页面身份仍是骨架指纹，这些文字只是该页上的内容。"""
+    seen: list[str] = []
+    for key in ("chrome_texts", "name_samples", "aliases"):
+        for raw in meta.get(key) or []:
+            for line in str(raw).splitlines():
+                text = " ".join(str(line or "").split()).strip()
+                if len(text) < 2 or text in seen or text in {"页面", "EditText"}:
+                    continue
+                seen.append(text)
+                if len(seen) >= 24:
+                    return seen
+    return seen
+
+
 def pages(project_id, app_id):
+    _publish_capture_pages(project_id, app_id)
     with session_scope() as db:
         actor = scope(db, project_id, app_id)
+        ref_counts = {
+            state_id: int(count or 0)
+            for state_id, count in db.query(NavCasePageRef.page_state_id, func.count(NavCasePageRef.id))
+            .filter(NavCasePageRef.app_id == app_id, NavCasePageRef.project_id == project_id)
+            .group_by(NavCasePageRef.page_state_id).all()
+        }
+        label_counts = {
+            label: int(count or 0)
+            for label, count in db.query(NavCasePageRef.page_label, func.count(NavCasePageRef.id))
+            .filter(NavCasePageRef.app_id == app_id, NavCasePageRef.project_id == project_id)
+            .group_by(NavCasePageRef.page_label).all()
+        }
         result = []
         for fsm in db.query(NavFsm).filter_by(app_id=app_id, project_id=project_id).order_by(NavFsm.version):
             for row in db.query(NavFsmState).filter_by(fsm_id=fsm.id).order_by(NavFsmState.state_id):
                 meta = row.meta or {}
+                if str(meta.get('semantic_status') or '') == 'rejected':
+                    continue
+                sem = analyze_clause(str(meta.get('display_name') or ''))
+                page_source = str(meta.get('page_source') or '')
+                # 旧 case_flow 长句即使还没物理清理，也不再把动作句当页面展示。
+                if page_source == 'case_flow' and (not sem.page_label or sem.role in ('assertion', 'flow')):
+                    continue
+                label = sem.page_label if page_source == 'case_flow' and sem.page_label else (meta.get('display_name') or row.state_id)
+                key = str(meta.get('page_key') or '') or page_key(label)
+                status = str(meta.get('semantic_status') or '')
+                if not status:
+                    status = 'provisional' if page_source == 'case_flow' else 'captured'
                 # Candidates and private session references are only visible to their author.
                 records = [deepcopy(r) for r in meta.get('knowledge_reviews', []) if r.get('owner_user_id') == actor]
                 for r in records:
                     r['stale'] = r.get('base_digest') != base_digest(state_view(row))
                 result.append({'state_id': row.state_id, 'version': fsm.version,
-                    'label': meta.get('display_name') or row.state_id,
-                    'revision': meta.get('knowledge_revision', 0), 'reviews': records})
+                    'label': label,
+                    'page_key': key,
+                    'variant': str(meta.get('variant') or sem.variant or ''),
+                    'semantic_status': status,
+                    'case_ref_count': label_counts.get(label, ref_counts.get(row.state_id, 0)),
+                    'revision': meta.get('knowledge_revision', 0), 'reviews': records,
+                    'visit_count': int(meta.get('visit_count') or 0),
+                    'anchors': _page_anchors(meta)})
         return {'owner_user_id': actor, 'app_id': app_id, 'project_id': project_id, 'pages': result}
+
+
+def case_refs(project_id, app_id, state_id):
+    """某一页的用例引用：进入/操作/断言，按用例和步骤返回。"""
+    with session_scope() as db:
+        scope(db, project_id, app_id)
+        state = db.query(NavFsmState).filter_by(state_id=str(state_id or '')).one_or_none()
+        meta = (state.meta or {}) if state is not None else {}
+        label = str(meta.get('display_name') or '')
+        query = db.query(NavCasePageRef).filter_by(project_id=project_id, app_id=app_id)
+        # 同页面的多个业务状态共用一个页面短名；引用按页面聚合，
+        # 不强迫前端为一个页面状态重复请求。
+        if label:
+            query = query.filter(NavCasePageRef.page_label == label)
+        else:
+            query = query.filter(NavCasePageRef.page_state_id == str(state_id or ''))
+        rows = (
+            query
+            .order_by(NavCasePageRef.case_id, NavCasePageRef.step_index, NavCasePageRef.relation)
+            .limit(500)
+            .all()
+        )
+        return {
+            'project_id': project_id,
+            'app_id': app_id,
+            'state_id': state_id,
+            'items': [
+                {
+                    'case_id': row.case_id,
+                    'case_name': row.case_name,
+                    'step_index': int(row.step_index or 0),
+                    'step_id': row.step_id,
+                    'page_state_id': row.page_state_id,
+                    'page_label': row.page_label,
+                    'control_id': row.control_id,
+                    'relation': row.relation,
+                    'quote': row.quote,
+                    'variant': row.variant,
+                    'data': deepcopy(row.data or {}),
+                }
+                for row in rows
+            ],
+        }
 
 
 def _evidence(db, app_id, examples, actor):

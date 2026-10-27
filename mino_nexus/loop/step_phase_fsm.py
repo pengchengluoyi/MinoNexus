@@ -90,6 +90,12 @@ def mark_milestone_program_fail(
         break
     state["milestones"] = ms
     write_state(cursor, state)
+    # 记住真正的程序失败原因：退出路径以前统一写 observation_missing，
+    # 把 capability_revision_changed / 锚点未命中这类真因盖掉了
+    # （cr-4bb057df581d 的 api-1-217：milestone/program_fail 写的是
+    # capability_revision_changed，session/end 却是 observation_missing）。
+    cursor.last_program_fail_reason = str(reason or "")[:160]
+    cursor.last_program_fail_milestone = mid
     if writer:
         writer.append(
             "milestone/program_fail",

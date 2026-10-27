@@ -102,10 +102,21 @@ def session_events(
     last_seq = int(events[-1]["seq"]) if events else start
     has_more = bool(total and last_seq < total) or (not total and len(events) >= lim)
     next_from_seq = last_seq + 1 if has_more else None
+    # 终态归因在长会话末尾；首屏事件只取前 N 条时，单独把最后一条 attribution
+    # 带回来，避免时间线/详情为了一个 pill 先读完 100+ 条事件。
+    attribution = next((row.get("payload") for row in reversed(events)
+                        if str(row.get("type") or "") == "session/attribution"), None)
+    if start == 0 and total > len(events):
+        tail = read_events(session_id, from_seq=max(0, total - 20), limit=20)
+        for row in reversed(tail):
+            if str(row.get("type") or "") == "session/attribution":
+                attribution = row.get("payload")
+                break
     return ok({
         "session_id": session_id,
         "meta": meta,
         "events": events,
+        "attribution": attribution,
         "count": len(events),
         "total": total,
         "from_seq": start,
@@ -142,6 +153,53 @@ def session_audit(session_id: str, _sess: dict = Depends(current_session)):
     if data is None:
         raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
     return ok(data)
+
+
+@router.get("/sessions/{session_id:path}/locator-chain")
+def session_locator_chain(session_id: str, _sess: dict = Depends(current_session)):
+    """Read-only chain hit/miss/ambiguous/skip for Workbench. Does not change execution."""
+    from collections import Counter
+
+    from mino_nexus.records.eventlog.writer import get_meta, read_events
+
+    meta = get_meta(session_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
+    events = read_events(session_id, from_seq=0, limit=5000)
+    rows = []
+    counts: Counter[str] = Counter()
+    for event in events:
+        kind = str(event.get("type") or "")
+        if not kind.startswith("locator_chain/"):
+            continue
+        status = kind.split("/", 1)[-1]
+        counts[status] += 1
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        rows.append({
+            "seq": event.get("seq"),
+            "turn": event.get("turn"),
+            "phase": event.get("phase"),
+            "status": status,
+            "reason": payload.get("reason") or "",
+            "used_key": payload.get("used_key") or "",
+            "used_value": payload.get("used_value") or "",
+            "source": payload.get("source") or "",
+            "platform": payload.get("platform") or "",
+            "milestone_id": payload.get("milestone_id") or "",
+            "capability_id": payload.get("capability_id") or "",
+            "hit_count": payload.get("hit_count") or 0,
+        })
+    cfg = ((meta.get("runtime_context") or {}).get("locator_chain")
+           if isinstance(meta.get("runtime_context"), dict) else {}) or {}
+    total = sum(counts.values())
+    hits = int(counts.get("hit") or 0)
+    return ok({
+        "session_id": session_id,
+        "config": cfg,
+        "counts": dict(counts),
+        "hit_ratio": (hits / total) if total else 0,
+        "items": rows[-200:],
+    })
 
 
 @router.get("/sessions/{session_id:path}/replay-plan")

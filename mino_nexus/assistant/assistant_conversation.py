@@ -59,7 +59,7 @@ def create(tool_id: str, args: dict, target: dict, question: dict, origin: dict,
                       created_at=now, updated_at=now, expires_at=now + 1800)
         db.add(row)
         db.flush()
-        if state == 'need_input' or tool_id in ('case.run', 'case.retry_failed', 'app.explore'):
+        if state == 'need_input' or tool_id in ('case.run', 'case.retry_failed'):
             _set_focus(db, uid, lane, row.id)
         source_id = str(origin.get('source_message_id') or '')
         if source_id:

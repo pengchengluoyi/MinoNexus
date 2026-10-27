@@ -101,6 +101,8 @@ def _find_quote(source: str, quote: str, occupied: list[tuple[int, int]]) -> tup
 
 
 def _coerce_param(slot_id: str, value: Any) -> Any:
+    if slot_id == "op":
+        return str(value or "").strip().lower()
     if slot_id == "relation":
         return _RELATION.get(str(value or "").strip(), str(value or "").strip())
     if slot_id in ("exclusive", "present", "accepts_special"):
@@ -515,8 +517,11 @@ def compile_step_spans(
         "other_layer_key_refs": [str(row.get("key_ref") or "") for row in layer_menu(other_layer)] if other_layer else [],
     }
     if field_defs is not None:
-        payload["account_fields"] = [{key: row[key] for key in ("key", "label", "options") if key in row}
-                                     for row in field_defs]
+        payload["account_fields"] = [
+            {key: row[key] for key in ("key", "label", "options", "value_kind", "unit", "min", "max", "help")
+             if key in row}
+            for row in field_defs
+        ]
     spans, err = _ask(payload)
     errors: list[str] = [err] if err else []
     hits: list[dict[str, Any]] = []

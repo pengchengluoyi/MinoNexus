@@ -130,6 +130,61 @@ def merge_tool_call_deltas(acc: list[dict[str, Any]], deltas: Any) -> None:
             dest["arguments"] = str(dest.get("arguments") or "") + str(fn.get("arguments") or "")
 
 
+# 值里允许换行：doubao-lite 会把一段中文说明直接写在不带引号的 thought 里，
+# 一旦跨行，旧模式（排除 \n）就整条匹配不上（cr-42e45025fcee 的 api-1-212）。
+_LOOSE_VALUE_RE = re.compile(
+    r'("(?:[A-Za-z_][A-Za-z0-9_]*)"\s*:\s*)(?![\[{"\d\-tfn])([^,{}\[\]]*?)(\s*[,}\]])',
+    re.S,
+)
+_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+
+
+def _repair_loose_json(text: str) -> Optional[dict[str, Any]]:
+    """修常见的手写 JSON 缺陷后再解析。
+
+    实测 doubao-lite 会输出 ``{"thought":当前..., "milestones_append":[]}``
+    —— 值本身对，但**没加引号**，于是整条用例被判 ``model_parse``
+    （cr-9f7f478af02c 的 api-1-212/213）。这里只做两类无歧义修复：
+    给缺引号的字符串值补引号、去掉多出来的尾逗号；仍解析不了就返回 None。
+    """
+    if not text:
+        return None
+    fixed = text.strip()
+    if fixed.startswith("```"):
+        fixed = re.sub(r"^```(?:json|JSON)?\s*", "", fixed)
+        fixed = re.sub(r"\s*```$", "", fixed)
+
+    def _quote(match: "re.Match[str]") -> str:
+        lead, value, tail = match.group(1), match.group(2), match.group(3)
+        val = value.strip()
+        # 模型常见写法：**开头少引号、结尾有引号**（``"thought":文本"``）。
+        # 这时非贪婪值会把结尾那个引号一起吃进来，直接判「值里有引号」放弃修复 ——
+        # 于是整条用例 model_parse（cr-1dd866f93044 的 api-1-212/216）。
+        if val.endswith('"'):
+            val = val[:-1].rstrip()
+        if not val or '"' in val:
+            return match.group(0)
+        # 补引号之后必须是合法 JSON 字符串：原文里的换行/制表符要转义，
+        # 否则补了引号仍然解析失败（多行 thought 就是这种）。
+        val = (val.replace("\\", "\\\\").replace("\n", "\\n")
+               .replace("\r", "\\r").replace("\t", "\\t"))
+        return f'{lead}"{val}"{tail}'
+
+    for candidate in (fixed, text):
+        for attempt in (
+            candidate,
+            _LOOSE_VALUE_RE.sub(_quote, candidate),
+            _TRAILING_COMMA_RE.sub(r"\1", _LOOSE_VALUE_RE.sub(_quote, candidate)),
+        ):
+            try:
+                parsed = json.loads(attempt)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
+
+
 def _extract_first_json_object(text: str) -> Optional[dict[str, Any]]:
     """从 LLM 文本里抠出第一个完整 JSON 对象（容错 Markdown / 思考链外泄）。"""
     if not text:
@@ -173,7 +228,8 @@ def _extract_first_json_object(text: str) -> Optional[dict[str, Any]]:
                     except Exception:
                         start = -1
                         continue
-        return None
+        repaired = _repair_loose_json(candidate) or _repair_loose_json(text)
+        return repaired
 
 
 def _pop_visual_envelope(args: dict[str, Any]) -> dict[str, Any]:

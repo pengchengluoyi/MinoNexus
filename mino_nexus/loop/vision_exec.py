@@ -71,6 +71,9 @@ def run_vision_exec_turn(
     reference = restore_execution_reference(cursor, ctx)
     from mino_nexus.loop.prep_program_plan import active_reauthentication_navigation
     current_navigation = bool(reference) or active_reauthentication_navigation(cursor) or active_evidence_navigation(cursor)
+    # 视觉通道默认只以截图为观察合同；但截图一旦送不进去（异应用/送图策略），
+    # 结构文本就是唯一还能用的观察 —— 先留着，等确认要扣图再清。
+    full_hierarchy_text = str(inspect_slots.get("hierarchy_text") or "")
     if execution_scheme(ctx) == "visual" and not (current_navigation and action_scheme(ctx) == "dom_preferred"):
         # 截图兜底以当前图为观察合同，不再把低置信 DOM 页名/控件提示喂给执行模型。
         inspect_slots["hierarchy_text"] = ""
@@ -86,6 +89,19 @@ def run_vision_exec_turn(
              "raw_image_hash": hashlib.sha256(raw_image.encode()).hexdigest() if raw_image else "",
              "width": int(getattr(shot, "width", 0) or 0), "height": int(getattr(shot, "height", 0) or 0)}
     reason = visual_execution_block_reason(shot, inspect_slots, send_image=send_image, ctx=ctx)
+    if reason in ("foreground_image_withheld", "model_image_withheld") and full_hierarchy_text.strip():
+        # 截图扣下来了，但结构节点还在（cr-1dd866f93044 的 api-1-219：30 个节点）。
+        # 与其「没有任何观察 → give_up 整条用例」，不如让模型只拿结构文本继续决策。
+        inspect_slots["hierarchy_text"] = full_hierarchy_text
+        inspect_slots["nav_assist"] = ""
+        facts["model_hierarchy_chars"] = len(full_hierarchy_text.strip())
+        if writer is not None:
+            writer.append("exec/hierarchy_fallback", {
+                "reason": reason, "node_count": facts.get("source_node_count"),
+                "hierarchy_chars": len(full_hierarchy_text.strip()),
+                "note": "截图未送入模型，改用结构文本作为本回合观察",
+            })
+        reason = visual_execution_block_reason(shot, inspect_slots, send_image=send_image, ctx=ctx)
     if reason:
         return blocked_visual_decision(reason, writer, facts=facts)
     from mino_nexus.loop.vision_observation import apply_vision_observation_slots

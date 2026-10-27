@@ -171,8 +171,6 @@ def compile_assist(
 ) -> str:
     if plan is None or not plan.state_id:
         return ""
-    if str(run_type or "").lower() == "explore":
-        return ""
 
     from mino_nexus.navigation.atlas.nav_flow_blocks import build_flow_context, format_flow_context_block
 

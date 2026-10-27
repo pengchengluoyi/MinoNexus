@@ -17,6 +17,30 @@ from mino_nexus.casework.case_step_key_compiler import step_bundle
 from mino_nexus.navigation.atlas.nav_flow_block_catalog import resolve_effective_steps
 
 
+_NOOP_MARKERS = (
+    "不做任何操作", "不做操作", "无需操作", "无需额外操作", "不执行操作",
+    "保持不动", "停留在当前", "不进行任何操作", "不用操作",
+)
+
+
+def _specific_intent(clause: str, ctx: Any) -> str:
+    """这段话有没有**专门**的意图条目（排除 general.navigate 兜底）。"""
+    try:
+        from mino_nexus.knowledge.intent_graph import intent_for_text
+
+        node = intent_for_text(clause, app_id=str(getattr(ctx, "app_id", "") or "")) or {}
+    except Exception:  # noqa: BLE001
+        return ""
+    iid = str(node.get("id") or "")
+    return "" if iid in ("", "general.navigate") else iid
+
+
+def _observation_only(clause: str) -> bool:
+    """这一步原文是否只是观察/不操作。"""
+    text = str(clause or "")
+    return any(m in text for m in _NOOP_MARKERS)
+
+
 def _case_with_meta(case: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(case, dict):
         return {}
@@ -70,6 +94,15 @@ def milestones_from_do_program(plan: dict[str, Any], *, app_id: str = "", ctx: A
                     row["source"] = "do_program"
                     row["source_block"] = bid
                     row["key_ref"] = str(step.get("key_ref") or "")
+                    from mino_nexus.action_space.locator_chain import attach_to_row, platform_of
+
+                    attach_to_row(
+                        row,
+                        platform=platform_of(ctx, row),
+                        app_id=str(app_id or getattr(ctx, "app_id", "") or ""),
+                        project_id=str(getattr(ctx, "project_id", "") or ""),
+                        ctx=ctx,
+                    )
                     rows.append(row)
                 continue
         row: dict[str, Any] = {
@@ -101,6 +134,19 @@ def milestones_from_do_program(plan: dict[str, Any], *, app_id: str = "", ctx: A
             row["observe"] = str(step.get("observe") or "exec")
         if isinstance(step.get("params"), dict) and step.get("params"):
             row["params"] = dict(step["params"])
+        if step.get("control_id"):
+            row["control_id"] = str(step.get("control_id") or "")
+        if isinstance(step.get("locator_chain"), dict) and step.get("locator_chain"):
+            row["locator_chain"] = dict(step["locator_chain"])
+        from mino_nexus.action_space.locator_chain import attach_to_row, platform_of
+
+        attach_to_row(
+            row,
+            platform=platform_of(ctx, row),
+            app_id=str(app_id or getattr(ctx, "app_id", "") or ""),
+            project_id=str(getattr(ctx, "project_id", "") or ""),
+            ctx=ctx,
+        )
         if row.get("hook_cap") == "input_text":
             # 原子输入也需要明确的聚焦动作，不能只给全局登录块配对。
             # 目标继承作者输入项，绝不把待写入值作为 selector。
@@ -111,10 +157,30 @@ def milestones_from_do_program(plan: dict[str, Any], *, app_id: str = "", ctx: A
             focus_params = {"target": {**target, "role": "input"}}
             if params.get("field"):
                 focus_params["field"] = params["field"]
-            rows.append({"id": sid + "__focus", "title": "聚焦当前输入项的目标输入框",
-                         "kind": "hook", "hook_cap": "tap_element", "status": "pending",
-                         "optional": row["optional"], "source": "do_program",
-                         "key_ref": "operation.tap", "focus_for": sid, "params": focus_params})
+            focus_row = {
+                "id": sid + "__focus",
+                "title": "聚焦当前输入项的目标输入框",
+                "kind": "hook",
+                "hook_cap": "tap_element",
+                "status": "pending",
+                "optional": row["optional"],
+                "source": "do_program",
+                "key_ref": "operation.tap",
+                "focus_for": sid,
+                "params": focus_params,
+            }
+            if row.get("control_id"):
+                focus_row["control_id"] = row["control_id"]
+            from mino_nexus.action_space.locator_chain import attach_to_row, platform_of
+
+            attach_to_row(
+                focus_row,
+                platform=platform_of(ctx, focus_row),
+                app_id=str(app_id or getattr(ctx, "app_id", "") or ""),
+                project_id=str(getattr(ctx, "project_id", "") or ""),
+                ctx=ctx,
+            )
+            rows.append(focus_row)
         rows.append(row)
     return rows
 
@@ -144,7 +210,40 @@ def seed_do_milestones_from_plan(
         clause = str(getattr(current, "instruction", "") or "") if current is not None else ""
         if not clause and isinstance(case, dict):
             clause = str(case.get("steps_raw") or case.get("name") or "")
-        rows = [handoff_milestone(clause, milestone_id="intent_handoff_do", reason="no_executable_steps")]
+        row = handoff_milestone(clause, milestone_id="intent_handoff_do", reason="no_executable_steps")
+        if not _specific_intent(clause, ctx):
+            # 没有专门意图对上这段话时，不要再落到 general.navigate 兜底：
+            # 通用导航需要一个锚点，绕一圈只会以 intent_target_unresolved 收场
+            # （cr-af540b4a6ecf 的 api-1-211）。直接把这一步交给模型看图完成。
+            row.update(kind="visual_action", status="pending", optional=False)
+            row.pop("hook_cap", None)
+            row["intent_handoff"] = False
+            row["source"] = "do_program_model"
+            row["title"] = f"{clause[:200]}（按截图自行完成这一步）"
+            if writer:
+                writer.append("do/model_step", {"milestone_id": "intent_handoff_do",
+                              "clause": clause[:200], "reason": "no_specific_intent"})
+        if _observation_only(clause):
+            # 「在按钮界面不做任何操作」这类步骤本来就没有可执行动作。
+            # 以前无条件派意图，模型被迫去点一个不存在的锚点，最后以
+            # milestone_plan_incomplete 收场（cr-318e39386a3b 的 api-1-228）。
+            row.update(status="pass", optional=True, noop=True,
+                       title=f"{clause[:200]}（该步骤不要求操作）")
+            row.pop("hook_cap", None)
+            row["intent_handoff"] = False
+            if writer:
+                writer.append("do/noop_step", {"milestone_id": "intent_handoff_do",
+                              "clause": clause[:200], "reason": "observation_only"})
+        from mino_nexus.action_space.locator_chain import attach_to_row, platform_of
+
+        attach_to_row(
+            row,
+            platform=platform_of(ctx, row),
+            app_id=str(app_id or getattr(ctx, "app_id", "") or ""),
+            project_id=str(getattr(ctx, "project_id", "") or ""),
+            ctx=ctx,
+        )
+        rows = [row]
         state["milestones"] = rows
         state["status"] = "in_progress"
         write_state(cursor, state)

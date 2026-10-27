@@ -4,7 +4,10 @@ from __future__ import annotations
 import re
 import copy
 import unicodedata
+from contextvars import ContextVar
 from typing import Any
+
+_COMPILE_SCOPE: ContextVar[dict[str, str]] = ContextVar("locator_compile_scope", default={})
 
 from mino_nexus.ai.case_text import parse_numbered_items_rules
 from mino_nexus.contract.step_pointer import build_seq_nodes
@@ -381,6 +384,18 @@ def _observe_for_match(match: dict[str, Any] | None, clause: str, *, layer: str)
     return "exec"
 
 
+def _attach_locator_chain(row: dict[str, Any]) -> dict[str, Any]:
+    from mino_nexus.action_space.locator_chain import attach_to_row
+
+    scope = _COMPILE_SCOPE.get() or {}
+    return attach_to_row(
+        row,
+        platform=str(scope.get("platform") or row.get("platform") or ""),
+        project_id=str(scope.get("project_id") or ""),
+        app_id=str(scope.get("app_id") or ""),
+    )
+
+
 def _plan_step_from_match(
     *,
     clause: str,
@@ -445,7 +460,7 @@ def _plan_step_from_match(
             row["_block_reason"] = reason
         if params:
             row["params"] = params
-        return row
+        return _attach_locator_chain(row)
     if layer == "expected":
         mode = "vlm"
         if "session=" in clause.lower():
@@ -491,7 +506,7 @@ def _plan_step_from_match(
             step["_block_reason"] = reason
     if params:
         step["params"] = params
-    return step
+    return _attach_locator_chain(step)
 
 
 def _input_bind_id(do_steps: list[dict[str, Any]] | None) -> str:
@@ -641,7 +656,7 @@ def _step_from_hit(hit: dict[str, Any], *, case_step: int, sub_idx: int) -> dict
         reason = _cap_block_reason(str(row.get("hook_cap") or ""))
         if reason:
             row["_block_reason"] = reason
-    return row
+    return _attach_locator_chain(row)
 
 
 def _classify_block(
@@ -1274,6 +1289,19 @@ def compile_case_step_program_keys(case: dict[str, Any]) -> dict[str, Any]:
 
     require_project(project_id)  # 应用 ID 不是控件项目命名空间。
     case = {**case, "project_id": project_id}
+    token = _COMPILE_SCOPE.set({
+        "platform": str(case.get("platform") or ""),
+        "project_id": project_id,
+        "app_id": str(case.get("app_id") or ""),
+    })
+    try:
+        return _compile_case_step_program_keys_body(case)
+    finally:
+        _COMPILE_SCOPE.reset(token)
+
+
+def _compile_case_step_program_keys_body(case: dict[str, Any]) -> dict[str, Any]:
+    project_id = str(case.get("project_id") or "").strip()
     step_keys: dict[str, Any] = {}
     all_warnings: list[dict[str, Any]] = []
     platform = str(case.get("platform") or "")
@@ -1417,6 +1445,9 @@ def sync_case_step_program_keys(row: dict[str, Any]) -> dict[str, Any]:
     meta["intent_summary"] = compiled.get("intent_summary") or {}
     meta["compile_provenance"] = compiled.get("compile_provenance", [])
     out["meta"] = meta
+    from mino_nexus.casework.requirement_points import ensure_point_ids
+
+    ensure_point_ids(out)
     return out
 
 

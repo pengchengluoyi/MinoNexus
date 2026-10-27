@@ -273,7 +273,7 @@ def run_cases(
             "package": package, "environment": (env_doc.get("profiles") or {}).get(resolved_env),
             "channels": env_doc.get("channels") or []}),
         "execution_policy": {"version": 1, "batch_deadline_at": time.time() + batch_budget,
-            "batch_budget_seconds": batch_budget, "resource_wait_seconds": 120, "cleanup_seconds": 10},
+            "batch_budget_seconds": batch_budget, "resource_wait_seconds": 300, "cleanup_seconds": 10},
         "task_id": run_id,
         "engine": "agent",
         "execution_mode": execution_mode,
@@ -364,134 +364,6 @@ def _run_in_background(**kwargs):
     from mino_nexus.loop.case_exec import _run_in_background as _impl
     return _impl(**kwargs)
 
-
-
-def run_explore(
-    app: dict[str, Any],
-    *,
-    sn: str = "",
-    max_steps: int = 80,
-    max_idle_steps: int = 15,
-    instruction: str = "",
-    provider_id: str = "",
-    async_exec: bool = True,
-    platform: str = "android",
-    playwright_headless: bool = True,
-    env_profile: str = "",
-    env_surface: str = "",
-    plugin_user_id: str = "",
-) -> dict[str, Any]:
-    """发起应用探索：LLM 自由操作，被动采集拓展 Screen Atlas。"""
-    from mino_nexus.loop.explore_case import build_explore_case
-
-    require_user_id(plugin_user_id or None)
-    from mino_nexus.resources.access_scope import require_owned_device
-    device_sns = _normalize_sns(sn, None)
-    for owned_sn in device_sns:
-        require_owned_device(owned_sn)
-    from mino_nexus.resources.device_targets import select
-    device_sns, device_targets = select(app, device_sns, surface=env_surface, profile=env_profile,
-                                        headless=playwright_headless)
-    platform = str(device_targets[device_sns[0]]["platform"])
-    explore_case = build_explore_case(
-        platform=platform,
-        instruction=str(instruction or "").strip(),
-        max_steps=max_steps,
-        max_idle_steps=max_idle_steps,
-    )
-    cfg = aas.get_automation_config(app)
-    plat_for_pkg = platform
-    if platform == "desktop":
-        native_os = device_targets[device_sns[0]]["os"]
-        plat_for_pkg = {"macos": "mac", "windows": "pc", "linux": "linux"}[native_os]
-        env_surface = device_targets[device_sns[0]].get("target_surface") or env_surface
-    resolved_env = str(env_profile or cfg.get("env_profile") or "test").strip()
-    env_surface_id = str(env_surface or "").strip()
-    package = aas.package_for_app(
-        app,
-        env_profile=resolved_env,
-        platform=plat_for_pkg,
-        surface=env_surface_id,
-    )
-    playbook = aas.get_playbook(app)
-    run_id = run_store.new_run_id()
-    seeded = run_store.seed_case(run_id, explore_case, 0, sn=device_sns[0] if device_sns else "", coverage="once")
-    from mino_nexus.resources.access_scope import require_owned_device
-    for owned_sn in device_sns:
-        require_owned_device(owned_sn)
-    provider, gate = resolve_regression_provider(str(provider_id or "").strip() or None)
-    doc: dict[str, Any] = {
-        "run_id": run_id,
-        "task_id": run_id,
-        "engine": "agent",
-        "run_type": "explore",
-        "session_kind": "explore",
-        "action_scheme": normalize_action_scheme(None),
-        "app_id": str(app.get("id") or ""),
-        "app_name": str(app.get("name") or ""),
-        "sn": device_sns[0] if device_sns else "",
-        "sns": device_sns,
-        "coverage": "once",
-        "platform": platform,
-        "platforms_by_sn": {s: device_targets[s]["platform"] for s in device_sns},
-        "device_targets": device_targets,
-        "env_profile": resolved_env,
-        "env_surface": env_surface_id,
-        "owner_user_id": require_user_id(plugin_user_id or None),
-        "plugin_user_id": require_user_id(plugin_user_id or None),
-        "package": package,
-        "playbook": playbook if isinstance(playbook, dict) else {},
-        "provider_id": (provider or {}).get("id") or gate.get("provider_id") or "",
-        "provider_name": (provider or {}).get("name") or "",
-        "model_name": (provider or {}).get("model") or "",
-        "playwright_headless": bool(playwright_headless),
-        "status": "running",
-        "started_at": _now(),
-        "finished_at": None,
-        "cases": [seeded],
-        "error": "",
-        "total": 1,
-        "completed": 0,
-        "passed": 0,
-        "failed": 0,
-        "explore": {
-            "max_steps": int(explore_case.get("max_steps") or 80),
-            "max_idle_steps": int(explore_case.get("max_idle_steps") or 15),
-        },
-    }
-    run_store.put(doc)
-    persist_run_finish(doc)
-    emit_testing_task({"event": "task_created", "run_id": run_id, "task_id": run_id, "app_id": doc["app_id"], "kind": "explore"})
-
-    fail_reason = ""
-    if not device_sns:
-        fail_reason = "没有在线设备。请在 Workbench 连接 Scout 后再发起探索。"
-    elif device_sns and not any(
-        d.get("status") == "online" and d.get("sn") == device_sns[0]
-        for d in ui_devices.ui_devices()
-    ):
-        fail_reason = f"设备 {device_sns[0]} 已离线，请连接 Scout 后重试。"
-    elif not provider:
-        fail_reason = gate.get("reason") or "未配置用例执行大模型（Workbench → 大模型设置）"
-
-    if fail_reason:
-        run_store.patch_case(run_id, explore_case["case_id"], status="fail", summary=fail_reason, error=fail_reason)
-        finished = run_store.finish(run_id, status="failed", error=fail_reason)
-        persist_run_finish(finished)
-        return run_store.to_task_json(finished)
-
-    worker = user_thread(
-        target=_run_in_background,
-        kwargs={"run_id": run_id, "package": package, "playbook": playbook, "provider_id": doc["provider_id"]},
-        daemon=True,
-        name=f"explore-run-{run_id}",
-    )
-    worker.start()
-    if not async_exec:
-        worker.join(timeout=1200)
-        latest = run_store.get(run_id) or doc
-        return run_store.to_task_json(latest)
-    return run_store.to_task_json(doc)
 
 
 def retry_failed(task_id: str, *, sn: str = "", execution_unit_ids=None, client_request_id="") -> dict[str, Any]:

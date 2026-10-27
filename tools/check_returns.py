@@ -77,6 +77,21 @@ def _terminates(stmts: list[ast.stmt]) -> bool:
     return False
 
 
+def _protocol_methods(tree: ast.AST) -> set[int]:
+    """找出 Protocol 类里的方法（它们用 `...` 声明形状，没有实现，也就不会掉出末尾）。"""
+    out: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        bases = [ast.unparse(b).replace(" ", "") for b in node.bases]
+        if "Protocol" not in bases and "typing.Protocol" not in bases:
+            continue
+        for item in node.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out.add(id(item))
+    return out
+
+
 def scan() -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for path in sorted(PKG.rglob("*.py")):
@@ -87,9 +102,12 @@ def scan() -> list[tuple[str, str]]:
         except SyntaxError:
             continue
         rel = path.relative_to(ROOT).as_posix()
+        protocol_methods = _protocol_methods(tree)
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
+            if id(node) in protocol_methods:
+                continue  # Protocol 的 ... 存根永远不会被调用，不按「掉出末尾」报
             if _returns_none_only(node.returns):
                 continue
             if any(isinstance(n, (ast.Yield, ast.YieldFrom)) for n in ast.walk(node)):

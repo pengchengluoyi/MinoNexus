@@ -12,6 +12,20 @@ from mino_nexus.core.protocol import EventStatus
 from mino_nexus.core.schemas import EventResult, PlanEvent
 
 
+def _intent_failure_text(intent_id: str, out: dict[str, Any]) -> tuple[str, str]:
+    """意图执行失败时给模型一个能继续的说法。
+
+    锚点没命中不是用例失败：Scout 按合同拒绝坐标兜底，这一步就该回到模型手上，
+    模型看到「改自己定位」才会继续，而不是直接 give_up
+    （cr-318e39386a3b 的 api-1-228：意图失败 → 模型 status=fail → 整条用例判失败）。
+    """
+    detail = str(out.get("summary") or out.get("error") or "")
+    summary = f"意图 {intent_id}：" + detail
+    if "未命中" in detail or "unresolved" in detail.lower():
+        return summary + "（结构锚点没命中，改由模型看图定位）", "intent_target_unresolved"
+    return summary, str(out.get("error") or "intent_not_executable")
+
+
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -128,6 +142,58 @@ from mino_nexus.resources.otp_resolve import (
 )
 
 
+_DEGRADE_MARKERS = ("缺少完整坐标", "未派发到节点", "锚点未命中", "tap_target_unresolved",
+                    "target_unresolved", "无锚点也无坐标")
+
+
+def degrade_program_block_to_visual(
+    ctx: Any, *, key: str, summary: str, writer: Any = None,
+) -> bool:
+    """程序块拿不到锚点/坐标时，把这一步交给模型看图，而不是把它记成失败。
+
+    以前这种「参数退化」会回 FAIL，里程碑记 failed，然后下一回合重新观察、
+    重新生成同一个决策 —— 一条用例白烧两轮 LLM 和两轮设备观察
+    （cr-9f7f478af02c 的 api-1-211 第 37/38 回合）。
+    """
+    text = str(summary or "")
+    if not any(marker in text for marker in _DEGRADE_MARKERS):
+        return False
+    streaks = dict(getattr(ctx, "program_block_unresolved", None) or {})
+    streak = int(streaks.get(key) or 0) + 1
+    streaks[key] = streak
+    ctx.program_block_unresolved = streaks
+    if streak > 2:
+        return False
+    cursor = getattr(ctx, "_step_cursor", None)
+    if cursor is not None:
+        from mino_nexus.runtime.cursor_state import read_state, write_state
+
+        state = read_state(cursor)
+        for row in state.get("milestones") or []:
+            if not isinstance(row, dict) or str(row.get("status") or "") not in ("pending", "in_progress"):
+                continue
+            row["kind"] = "visual_tap"
+            row["device_cap"] = "tap_element"
+            row.pop("hook_cap", None)
+            row["converted_from_program"] = key
+            row["title"] = str(row.get("title") or "") + "（程序未定位到控件，改为看图定位）"
+            break
+        write_state(cursor, state)
+        if hasattr(cursor, "correction_hint"):
+            cursor.correction_hint = (
+                f"「{key}」程序块没拿到可用锚点或坐标。用当前截图自己定位该控件并完成这一步，"
+                f"给出点击坐标，不要重复上一个动作。")
+    from mino_nexus.action_space.scheme import use_visual_fallback
+
+    use_visual_fallback(ctx, reason="program_block_coordinate_missing", writer=writer)
+    if writer:
+        writer.append("program/handoff", {
+            "block_id": key, "reason": "coordinate_missing", "streak": streak, "to": "model_visual",
+            "summary": text[:200],
+        })
+    return True
+
+
 def dispatch_local(
     event: PlanEvent,
     *,
@@ -176,18 +242,86 @@ def dispatch_local(
                              run_id=str(params.get("run_id") or ""),
                              purpose="plan_action",
                              target_package=str(params.get("package") or ""))
+            _summary, _error = _intent_failure_text(intent_id, out)
+            if not out.get("ok"):
+                # 意图没落成动作（结构锚点未命中 / 缺坐标 / 只含观察动作）不是用例失败，
+                # 是「程序不该继续猜」：交回模型看图，并把里程碑改成看图步骤，
+                # 否则下一回合还会选同一个意图（cr-9f7f478af02c 的 api-1-211 37/38 回合）。
+                from mino_nexus.records.eventlog.writer import active_writer
+
+                degrade_program_block_to_visual(ctx, key=intent_id, summary=_summary,
+                                                writer=active_writer())
+                return _result(
+                    event,
+                    status=EventStatus.SKIPPED,
+                    summary=f"意图 {intent_id}：{_summary} 本回合不推进，改由模型看图操作。",
+                    error=_error,
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                    executor="internal",
+                    raw_response=out,
+                )
             return _result(
                 event,
-                status=EventStatus.PASS if out.get("ok") else EventStatus.FAIL,
-                summary=f"意图 {intent_id}：" + str(out.get("summary") or out.get("error") or ""),
-                error="" if out.get("ok") else str(out.get("error") or "intent_not_executable"),
+                status=EventStatus.PASS,
+                summary=f"意图 {intent_id}：" + str(out.get("summary") or ""),
                 elapsed_ms=int((time.time() - t0) * 1000),
                 executor="internal",
                 raw_response=out,
             )
         if not block_id:
-            return _result(event, status=EventStatus.FAIL, summary="缺少 block_id 或 intent_id",
-                           error="missing_block_id", elapsed_ms=int((time.time() - t0) * 1000))
+            from mino_nexus.action_space.scheme import action_scheme
+
+            if action_scheme(ctx) != "dom_preferred":
+                # 意图按结构锚点展开，视觉模式下没有锚点可依；再猜就是浪费回合。
+                # 直接告诉模型该怎么做（cr-c950174d1217 的 api-1-213 在这里空转两次后判失败）。
+                return _result(
+                    event,
+                    status=EventStatus.SKIPPED,
+                    summary="视觉模式下执行意图没有结构锚点：请用 tap_element 并给出完整坐标/文案，或指定 block_id。",
+                    error="intent_needs_visual_target",
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                    executor="internal",
+                )
+            from mino_nexus.loop.intent_handoff import choose_intent_id, question_of
+            from mino_nexus.loop.milestones import read_state
+
+            cursor = getattr(ctx, "_step_cursor", None)
+            question = ""
+            if cursor is not None:
+                for row in read_state(cursor).get("milestones") or []:
+                    if not isinstance(row, dict):
+                        continue
+                    if str(row.get("status") or "") in {"in_progress", "pending", "running"}:
+                        question = question_of(row)
+                        if question:
+                            break
+            intent_id = choose_intent_id(question, ctx=ctx, phase=str(getattr(cursor, "phase", "") or ""))
+            params["intent_id"] = intent_id
+            from mino_nexus.loop.event_interpreter import run_intent
+
+            out = run_intent(intent_id, ctx=ctx, router=router, params=params,
+                             run_id=str(params.get("run_id") or ""),
+                             purpose="plan_action",
+                             target_package=str(params.get("package") or ""))
+            _summary, _error = _intent_failure_text(intent_id, out)
+            if not out.get("ok"):
+                return _result(
+                    event,
+                    status=EventStatus.SKIPPED,
+                    summary=f"意图 {intent_id}：{_summary} 本回合不推进，改由模型看图操作。",
+                    error=_error,
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                    executor="internal",
+                    raw_response=out,
+                )
+            return _result(
+                event,
+                status=EventStatus.PASS,
+                summary=f"意图 {intent_id}：" + str(out.get("summary") or ""),
+                elapsed_ms=int((time.time() - t0) * 1000),
+                executor="internal",
+                raw_response=out,
+            )
         # 不再限定 recovery 白名单：登录/协议/私有块都可由意图图调度（规划 §4/§6）。
         if not is_block_dispatchable(block_id, app_id=app_id):
             return _result(event, status=EventStatus.FAIL,
@@ -199,10 +333,25 @@ def dispatch_local(
                         purpose="plan_action",
                         target_package=str(params.get("package") or ""),
                         params=params)
+        block_summary = f"逻辑块 {block_id}：" + str(out.get("summary") or out.get("error") or "")
+        if not out.get("ok"):
+            from mino_nexus.records.eventlog.writer import active_writer
+
+            if degrade_program_block_to_visual(ctx, key=block_id, summary=block_summary,
+                                               writer=active_writer()):
+                return _result(
+                    event,
+                    status=EventStatus.SKIPPED,
+                    summary=block_summary + "（程序未定位到控件，已改由模型看图定位）",
+                    error="program_block_degraded",
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                    executor="internal",
+                    raw_response={**out, "degraded_to_visual": True},
+                )
         return _result(
             event,
             status=EventStatus.PASS if out.get("ok") else EventStatus.FAIL,
-            summary=f"逻辑块 {block_id}：" + str(out.get("summary") or out.get("error") or ""),
+            summary=block_summary,
             error="" if out.get("ok") else str(out.get("error") or "block_step_failed"),
             elapsed_ms=int((time.time() - t0) * 1000),
             executor="internal",

@@ -191,6 +191,194 @@ def pick_permission_dismiss_text(
     return found[0]
 
 
+def system_dialog_present(hierarchy_nodes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """结构上确认前台是 Android 系统弹窗（权限 / 安装器 / 选择器）。
+
+    与 ``permission_choice_dialog_present`` 的区别：不要求「允许 + 拒绝」同时可见，
+    也不要求有等待回看的业务动作。只要有系统弹窗宿主包名 + 至少一个可点选择，
+    就认定是系统弹窗 —— 这类挡屏应该由 ``fb.global.system_dialog`` 处理，
+    而不是判成「异应用」把截图扣掉（cr-a390541e5dd2 的 214/226/233）。
+    """
+    from mino_nexus.navigation.atlas.nav_target_scope import is_system_dialog_pkg
+
+    owners = ("com.android.permissioncontroller", "com.google.android.permissioncontroller",
+              "com.android.packageinstaller", "com.google.android.packageinstaller",
+              "com.android.documentsui", "com.android.providers.media.module")
+    nodes = [n for n in (hierarchy_nodes or [])
+             if isinstance(n, dict) and n.get("visible", True) and not n.get("cross_origin")]
+    hosting = [n for n in nodes
+               if any(str(n.get("package") or "") == owner or str(n.get("resource_id") or "").startswith(owner + ":id/")
+                      for owner in owners)]
+    if not hosting:
+        return {}
+    titles = [str(n.get("text") or n.get("content_desc") or "").strip() for n in hosting
+              if str(n.get("resource_id") or "").endswith(":id/alertTitle")]
+    title = next((t for t in titles if t), "")
+    if not title:
+        title = next((str(n.get("text") or "").strip() for n in nodes
+                      if str(n.get("clickable")) in ("True", "true", "1") and str(n.get("text") or "").strip()), "")
+    if not title:
+        return {}
+    package = str(hosting[0].get("package") or "").split(":")[0] or next(
+        (owner for owner in owners if str(hosting[0].get("resource_id") or "").startswith(owner + ":id/")), "")
+    return {"title": title, "package": package, "dialog_kind": "permission" if is_system_dialog_pkg(package) else "system"}
+
+
+def system_dialog_block_id(ctx: Any) -> str:
+    """编译期定好的系统弹窗处置块（allow / deny），缺省按允许。"""
+    scene = getattr(ctx, "case_scene", None) or {}
+    block = str(scene.get("system_dialog_block_id") or "").strip() if isinstance(scene, dict) else ""
+    return block or "fb.global.system_dialog"
+
+
+def _dialog_button_bounds(nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    """从系统弹窗结构里挑「允许」类按钮，返回它的 bounds 与文案。
+
+    块里的 ``tap_element`` 走结构锚点（DOM），厂商文案和资源 id 一变就整块失败；
+    而节点本身带 bounds —— 按 bounds 点中心是不需要猜的确定性动作。
+    优先级：允许类文案 > 任意可点且非拒绝文案 > 无。
+    """
+    best: tuple[int, dict[str, Any]] = (-1, {})
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("visible", True)) in ("False", "false") or str(node.get("enabled", True)) in ("False", "false"):
+            continue
+        bounds = node.get("bounds")
+        if not isinstance(bounds, (list, tuple)) or len(bounds) != 4:
+            continue
+        texts = " ".join(str(node.get(k) or "") for k in ("text", "content_desc", "label")).strip()
+        if not texts:
+            continue
+        if _DENY_RE.search(texts):
+            continue
+        clickable = str(node.get("clickable")) in ("True", "true", "1")
+        score = -1
+        if _ALLOW_RE.search(texts):
+            score = 100 + (10 if clickable else 0)
+            for rank, word in enumerate(_PREFERRED_ALLOW_ORDER):
+                if word and word.lower() in texts.lower():
+                    score += 20 - rank
+                    break
+        elif clickable and _GRANT_LIKE_RE.search(texts):
+            score = 10
+        if score > best[0]:
+            best = (score, {"bounds": [int(v) for v in bounds], "text": texts, "clickable": clickable})
+    return best[1] if best[0] >= 0 else {}
+
+
+def tap_dialog_button(router: Any, ctx: Any, info: dict[str, Any], *, writer: Any = None,
+                      shot: Any = None) -> dict[str, Any]:
+    """按 bounds 点系统弹窗里的允许按钮（块的 DOM 锚点失败时的确定性兜底）。"""
+    nodes = [n for n in (getattr(ctx, "nav_hierarchy_nodes", None) or [])
+             if isinstance(n, dict) and n.get("visible", True) and not n.get("cross_origin")]
+    host = str(info.get("package") or "")
+    scoped = [n for n in nodes if host and str(n.get("package") or "").split(":")[0] == host] or nodes
+    pick = _dialog_button_bounds(scoped)
+    if not pick:
+        return {"ok": False, "reason": "no_dialog_button"}
+    shot = shot if shot is not None else getattr(ctx, "last_shot", None)
+    width = int(getattr(shot, "width", 0) or getattr(ctx, "screen_width", 0) or 0)
+    height = int(getattr(shot, "height", 0) or getattr(ctx, "screen_height", 0) or 0)
+    left, top, right, bottom = pick["bounds"]
+    if width <= 0 or height <= 0:
+        # 没有真实画面尺寸就不能自己编：按 bounds 反推会把相对坐标算偏
+        # （cr-d1189fc4ddcf 用 1078×2084 当屏宽高，点出来的 y=964 实际落到 2514px）。
+        return {"ok": False, "reason": "screen_size_unknown", "bounds": pick["bounds"]}
+    x_param = {"x": int(round(((left + right) / 2.0) / width * 1000)),
+               "y": int(round(((top + bottom) / 2.0) / height * 1000))}
+    from mino_nexus.loop.recovery import _dispatch
+    from mino_nexus.core.schemas import PlanEvent
+
+    event = PlanEvent(
+        seq=0, capability_id="tap_element", event_kind="tap_element",
+        params={**x_param, "point_policy": "coordinate", "package": str(getattr(ctx, "target_package", "") or "")},
+        ai_reasoning="系统弹窗按节点 bounds 点允许", label="点系统弹窗允许",
+    )
+    # 这一拍必须走坐标：DOM 方案会把 x/y 抹掉并改回 node 锚点，
+    # Scout 于是回「DOM 点击锚点未命中，不用坐标兜底」，坐标就成了死参数。
+    prev_scheme = getattr(ctx, "action_scheme", None)
+    prev_obs = getattr(ctx, "observation_mode", None)
+    try:
+        ctx.action_scheme = "visual"
+        ctx.observation_mode = "visual"
+        res = _dispatch(router, ctx, event, agent_turn=int(getattr(ctx, "turn", 0) or 0),
+                        diagnostic_purpose="recovery_action")
+    finally:
+        if prev_scheme is None:
+            try:
+                delattr(ctx, "action_scheme")
+            except AttributeError:
+                pass
+        else:
+            ctx.action_scheme = prev_scheme
+        if prev_obs is None:
+            try:
+                delattr(ctx, "observation_mode")
+            except AttributeError:
+                pass
+        else:
+            ctx.observation_mode = prev_obs
+    status = str(getattr(getattr(res, "status", None), "value", getattr(res, "status", "")) or "")
+    ok = status == "pass"
+    if writer:
+        writer.append("recovery/dialog_bounds_tap", {
+            "status": status or "fail", "text": pick.get("text"), "bounds": pick["bounds"],
+            "xy": x_param, "summary": str(getattr(res, "summary", ""))[:200],
+        })
+    return {"ok": ok, "summary": f"按 bounds 点「{pick.get('text')}」", "bounds": pick["bounds"], **x_param}
+
+
+def try_handle_system_dialog(
+    router: Any, ctx: Any, cursor: Any, *, turn_seq: int, writer: Any = None, shot: Any = None,
+) -> Optional[dict[str, Any]]:
+    """系统弹窗直接走 ``fb.global.system_dialog`` 逻辑块。
+
+    不依赖「业务动作待回看」，也不让模型看着一张被扣掉的截图猜：
+    当前结构能确认是系统弹窗，就派块（点允许/拒绝 → 确认 → 核验），
+    本回合按 defer 结束，下一回合重新观察。
+    """
+    from mino_nexus.action_space.scheme import action_scheme
+    from mino_nexus.contract.execution.ui import UiChannel, ui_channel_from_ctx
+
+    if action_scheme(ctx) != "dom_preferred" or ui_channel_from_ctx(ctx) != UiChannel.ANDROID:
+        return None
+    info = system_dialog_present(getattr(ctx, "nav_hierarchy_nodes", None))
+    if not info:
+        return None
+    attempts = getattr(cursor, "system_dialog_block_attempts", None)
+    if not isinstance(attempts, dict):
+        attempts = {}
+    key = str(info.get("title") or "")
+    if key in attempts or len(attempts) >= 4:
+        return {"ok": False, "status": "blocked", "capability_id": "tap_element",
+                "summary": "系统弹窗点击后仍未消失，或处理次数已达上限；原业务动作尚未确认。"}
+    attempts[key] = str(info.get("package") or "")
+    cursor.system_dialog_block_attempts = attempts
+    block = system_dialog_block_id(ctx)
+    from mino_nexus.loop.block_dispatch import run_block
+
+    out = run_block(block, ctx=ctx, router=router, purpose="recovery_action",
+                    target_package=str(getattr(ctx, "target_package", "") or ""))
+    ok = bool(out.get("ok"))
+    if not ok:
+        # 块的允许步骤走 DOM 锚点，厂商文案/资源 id 一变就整块失败；
+        # 结构里已经有按钮 bounds，按中心点点一次是确定的，不需要模型或猜测。
+        fb = tap_dialog_button(router, ctx, info, writer=writer, shot=shot)
+        if fb.get("ok"):
+            ok = True
+            out = {**out, "summary": fb.get("summary"), "fallback": "dialog_bounds_tap"}
+    if writer:
+        writer.append("recovery/system_dialog", {
+            "status": "pass" if ok else "fail", "block_id": block, "title": key,
+            "package": info.get("package"), "turn": int(turn_seq),
+            "business_result_confirmed": False, "fresh_observation_required": True,
+        })
+    return {"ok": ok, "status": "defer" if ok else "blocked", "capability_id": "tap_element",
+            "block_id": block, "title": key,
+            "summary": (f"系统弹窗「{key}」由 {block} 处理" if ok else f"系统弹窗「{key}」处理失败：{out.get('error') or out.get('summary') or ''}")}
+
+
 def try_recover_pending_system_permission(
     router: Any, ctx: Any, cursor: Any, *, turn_seq: int, writer: Any = None,
 ) -> Optional[dict[str, Any]]:

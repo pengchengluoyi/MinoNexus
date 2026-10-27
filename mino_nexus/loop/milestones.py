@@ -175,6 +175,15 @@ def milestones_from_flow_steps(
         for key in ("match", "exclude", "match_when"):
             if step.get(key):
                 row[key] = step.get(key)
+        if isinstance(step.get("params"), dict) and step.get("params"):
+            row["params"] = dict(step["params"])
+        if step.get("control_id"):
+            row["control_id"] = str(step.get("control_id") or "")
+        if isinstance(step.get("locator_chain"), dict) and step.get("locator_chain"):
+            row["locator_chain"] = dict(step["locator_chain"])
+        from mino_nexus.action_space.locator_chain import attach_to_row
+
+        attach_to_row(row)
         rows.append(row)
     if rows:
         return rows
@@ -870,6 +879,10 @@ def note_tool_pass_milestone(
         # 程序派发的启动（prep 里程碑）也要算「已确认启动」，
         # 否则 prep_launch_app 仍 pending，逻辑块会再启动一次（api-1-218 实测两次）。
         ctx.app_launch_confirmed = True
+    if ctx is not None and cap in ("close_app", "kill_app", "clear_app_cache"):
+        # 关进程 / 清数据之后应用不再运行，之前的「已启动」事实作废；
+        # 否则恢复块里的 launch_app 会被去重逻辑跳过，应用永远起不来。
+        ctx.app_launch_confirmed = False
     if ctx is not None and cap == "close_app":
         plat = str(getattr(ctx, "platform", "") or "").strip().lower()
         if plat in ("web", "browser", "playwright"):

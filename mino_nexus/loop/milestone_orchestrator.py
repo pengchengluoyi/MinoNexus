@@ -142,7 +142,21 @@ def ensure_single_in_progress(cursor: Any, *, writer: Any = None) -> bool:
         state["status"] = "in_progress"
         write_state(cursor, state)
         if writer:
-            writer.append("milestone/focus", {"milestone_id": focus_id, **dict(zip(("case_step", "phase"), step_scope_key(cursor)))})
+            # 同一里程碑在同一回合里会被反复 focus（观察、恢复、块派发各查一次），
+            # 以前每次都写一条，导致 milestone/focus 是回合数的 2.8 倍
+            # （cr-1dd866f93044 的 api-1-214：65 回合 187 条），时间线上看起来「同一步做了三次」。
+            # 去重键带上 turn，跨回合仍然留痕。
+            turn = int(getattr(writer, "_turn", 0) or 0)
+            key = f"{turn}:{focus_id}:{step_scope_key(cursor)}"
+            seen = getattr(cursor, "milestone_focus_emitted", None)
+            if not isinstance(seen, set):
+                seen = set()
+            if key not in seen:
+                seen.add(key)
+                if len(seen) > 200:
+                    seen = {k for k in seen if k.startswith(f"{turn}:")}
+                cursor.milestone_focus_emitted = seen
+                writer.append("milestone/focus", {"milestone_id": focus_id, **dict(zip(("case_step", "phase"), step_scope_key(cursor)))})
         return True
     return False
 
@@ -801,6 +815,13 @@ def run_vision_orchestrated_turn(
 
     skip_login_entry_if_form_visible(cursor, ctx, writer=writer)
     retire_repeat_wait_focus(cursor, writer=writer)
+    from mino_nexus.action_space.locator_chain import locator_chain_enabled
+    from mino_nexus.loop.locator_dispatch import try_locator_chain_decision
+
+    if locator_chain_enabled(ctx):
+        chained = try_locator_chain_decision(cursor, ctx, writer=writer)
+        if chained is not None:
+            return OrchestratedTurn(decision=chained)
     state = read_state(cursor)
 
     if not milestones_empty(state) and count_open_milestones(state) == 0 and _may_eval_auto_phase_transition(
@@ -978,6 +999,10 @@ def run_vision_orchestrated_turn(
         else {}
     )
     hook_now = program_hook_to_dispatch(focus)
+    from mino_nexus.action_space.locator_chain import needs_locator
+
+    if hook_now and needs_locator(hook_now):
+        hook_now = ""
     if hook_now:
         from mino_nexus.catalog.skill_channel import capability_enabled
 
@@ -1007,7 +1032,7 @@ def run_vision_orchestrated_turn(
                 action=AgentAction(capability_id=hook_now, params=focus_params),
             )
         )
-    if focus_obs == "program" and focus_cap:
+    if focus_obs == "program" and focus_cap and not needs_locator(focus_cap):
         title = str((focus or {}).get("title") or focus_cap)
         return OrchestratedTurn(
             decision=AgentDecision(
@@ -1035,11 +1060,13 @@ def run_vision_orchestrated_turn(
     if observation_block:
         return OrchestratedTurn(decision=blocked_visual_decision(observation_block, writer), plan_only=True)
 
+    from mino_nexus.action_space.locator_chain import locator_chain_enabled
     from mino_nexus.loop.binding_cache import try_replay_decision
 
-    replayed = try_replay_decision(cursor, ctx, writer=writer, focus=focus)
-    if replayed is not None:
-        return OrchestratedTurn(decision=replayed)
+    if not locator_chain_enabled(ctx):
+        replayed = try_replay_decision(cursor, ctx, writer=writer, focus=focus)
+        if replayed is not None:
+            return OrchestratedTurn(decision=replayed)
 
     exec_mode = "replay"
     try:

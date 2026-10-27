@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import time as _t
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -182,6 +183,12 @@ def _enrich_evidence_from_run_context(
 
     if fpkg and not _looks_like_android_pkg(fpkg) and not _looks_like_url(fpkg):
         fpkg = ""
+    if kind == "system_dialog":
+        # 系统弹窗挡屏：既不是「异应用」（不该判死/触发拉起），也不能算「应用在前台」。
+        if fpkg:
+            ev.foreground_pkg = fpkg
+            ev.top_window_pkg = fpkg
+        return
     if kind in ("launcher", "foreign"):
         ev.app_foreground = "no"
         if fpkg:
@@ -212,6 +219,22 @@ def _fill_foreground_from_get_app(
     if ev.foreground_pkg and ev.app_foreground in ("yes", "no"):
         return
     pkg = str(target_package or "").strip()
+    # 同一拍内的前台结论复用：guard / 取证 / 启动核验会在一回合里各问一次，
+    # 每次都是一个 Scout 往返（cr-a390541e5dd2 平均每条 20.7 次，占总设备动作 68%）。
+    # 任何界面写入动作都会在 RouterProxy.dispatch 里清掉这份缓存。
+    cache = getattr(ctx, "_fg_probe_cache", None)
+    if isinstance(cache, dict) and (not pkg or not cache.get("pkg")
+                                    or str(cache.get("pkg")) == pkg):
+        # 取证、guard、启动核验在一回合里会对同一个事实各问一次（实测 4 次/回合）。
+        # 失效靠 RouterProxy.dispatch：任何界面写入动作都会把这份缓存清掉，
+        # 所以窗口用到 20 秒也不会拿旧结论顶替刚点过的界面。
+        fresh = (_t.time() - float(cache.get("stamp") or 0)) <= 20.0
+        if fresh:
+            ev.app_foreground = str(cache.get("app_fg") or "unknown")
+            ev.foreground_pkg = str(cache.get("fg_pkg") or "")
+            ev.top_window_pkg = str(cache.get("top_pkg") or "")
+            ev.raw = {"package": str(cache.get("fg_pkg") or ""), "cached": True}
+            return
     event = PlanEvent(
         seq=0,
         capability_id="get_foreground_app",
@@ -247,8 +270,27 @@ def _fill_foreground_from_get_app(
         return
     ev.foreground_pkg = fg_pkg
     ev.top_window_pkg = fg_pkg
+    from mino_nexus.navigation.atlas.nav_target_scope import is_system_dialog_pkg
+
+    if is_system_dialog_pkg(fg_pkg):
+        # 系统弹窗在前台时 app_foreground 只能是 unknown：算 no 会触发
+        # bring_target_app_foreground 去反复重启应用（cr-9f7f478af02c 的 214 连拉两次）。
+        ev.app_foreground = "unknown"
+        try:
+            ctx._fg_probe_cache = {"pkg": pkg, "stamp": _t.time(), "app_fg": "unknown",
+                "fg_pkg": ev.foreground_pkg, "top_pkg": ev.top_window_pkg,
+                "turn": getattr(ctx, "turn", None)}
+        except Exception:  # noqa: BLE001
+            pass
+        return
     if pkg:
         ev.app_foreground = _yes_no(fg_pkg == pkg)
+    try:
+        ctx._fg_probe_cache = {"pkg": pkg, "stamp": _t.time(), "app_fg": ev.app_foreground,
+            "fg_pkg": ev.foreground_pkg, "top_pkg": ev.top_window_pkg,
+            "turn": getattr(ctx, "turn", None)}
+    except Exception:  # noqa: BLE001
+        pass
 
 
 _EVIDENCE_TTL_SEC = 1.5
@@ -516,6 +558,9 @@ def _dispatch(
         st = str(getattr(getattr(res, "status", None), "value", getattr(res, "status", "")) or "")
         if cap in ("launch_app", "open_app", "open_url") and st == "pass":
             ctx.app_launch_confirmed = True
+        elif cap in ("close_app", "kill_app", "clear_app_cache") and st == "pass":
+            # 重启块 = close_app + launch_app；关了之后必须允许再启动。
+            ctx.app_launch_confirmed = False
     except Exception:  # noqa: BLE001
         pass
     return res
@@ -646,6 +691,12 @@ def apply_rule(
                 params.setdefault("y", int(action.fallback_xy[1]))
             if action.capability in ("launch_app", "close_app") and target_package:
                 params.setdefault("package", target_package)
+            # 恢复块里的 launch_app 也要去重：同一 prep 里 bring_target_app_foreground
+            # 会连续触发多次，每条都重发一次启动，屏幕被反复拉回首屏/首启弹窗
+            # （cr-a390541e5dd2 的 api-1-211 一次 prep 起了 3 次）。
+            if action.capability in ("launch_app", "open_app") and bool(getattr(ctx, "app_launch_confirmed", False)):
+                out.actions.append({"capability": action.capability, "skipped": "app_already_launched"})
+                continue
             event = PlanEvent(
                 seq=idx,
                 capability_id=action.capability,
