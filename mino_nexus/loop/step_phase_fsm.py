@@ -50,14 +50,8 @@ def program_fail_review_text(cursor: Any) -> str:
 
 
 def check_phase_allows_recovery_cap(cap_id: str) -> bool:
-    cid = str(cap_id or "").strip()
-    if not cid:
-        return False
-    if cid.startswith("recover_") or cid == "run_flow_block":
-        return True
-    if cid in ("wait_ms", "noop"):
-        return True
-    return False
+    """校验阶段不再单独限制可执行的事件。"""
+    return bool(str(cap_id or "").strip())
 
 
 def mark_milestone_program_fail(

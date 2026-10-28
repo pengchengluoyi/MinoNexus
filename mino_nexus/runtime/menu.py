@@ -36,21 +36,11 @@ def _cap_summary(cap: Capability) -> str:
 
 
 def phase_kinds(phase: str, *, tool_kinds: Optional[list[str]] = None, phase_cfg: Optional[dict] = None) -> list[str]:
-    """前置和操作只注入通用。校验只注入预期。恢复不进平时菜单。"""
-    del phase_cfg
-    p = str(phase or "do").strip().lower()
-    if p == "check":
-        kinds = ["check"]
-    elif p in ("prep", "do"):
-        kinds = ["generic"]
-    else:
-        kinds = ["generic", "check"]
-    if tool_kinds:
-        allow = {str(x) for x in tool_kinds}
-        if allow & {"prep", "do", "generic"} and "generic" not in allow:
-            allow.add("generic")
-        kinds = [k for k in kinds if k in allow]
-    return kinds
+    """prep / do / check 使用同一份事件能力，不再按阶段裁剪。"""
+    del phase, tool_kinds, phase_cfg
+    from mino_nexus.catalog.exec_classes import MENU_ATOMIC_KINDS
+
+    return list(MENU_ATOMIC_KINDS)
 
 
 def available_capabilities(

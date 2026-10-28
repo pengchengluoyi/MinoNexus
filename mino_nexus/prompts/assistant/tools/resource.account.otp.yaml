@@ -1,0 +1,74 @@
+id: resource.account.otp
+title: 统一获取账号验证码
+description: >-
+  按 account_id 统一解析验证码：账号自带的固定 OTP -> 项目环境 otp.fixed ->
+  Gmail 收件箱（当前用户 Scout 节点）-> 人工。返回 code/source/requires_human/hint。
+  没有固定码、没有 Gmail 收件箱、也没有真实短信读取通道时，不会伪造验证码；
+  requires_human=true 时必须让用户从手机短信或邮箱读出后填写。
+  取 Gmail 会等待最多 max_wait_ms；不要用 resource_account_get 代替取码。
+route: POST /project/{project_id}/resources/accounts/{account_id}/otp
+risk: read
+async: false
+timeout_sec: 75
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    account_id:
+      type: string
+      description: 账号 id，来自 resource_account_list
+    env_profile:
+      type: string
+      description: 环境 key；省略时用账号行的 env，再缺省 test
+    env_surface:
+      type: string
+      description: 渠道 key；用于 channel_secrets 覆盖，例如 Agent/macagent 对应的渠道
+    node_id:
+      type: string
+      description: 可选；持有 Gmail 配置的本人 Scout 节点 id
+    sn:
+      type: string
+      description: 可选；按设备序列号定位 Gmail 节点
+    since_ts:
+      type: number
+      minimum: 0
+      description: 可选；只查该 Unix 秒之后的邮件
+    lookback_seconds:
+      type: integer
+      minimum: 10
+      maximum: 86400
+      default: 600
+    max_wait_ms:
+      type: integer
+      minimum: 1000
+      maximum: 45000
+      default: 15000
+      description: Gmail 等待窗口；固定码/人工路径不等
+    poll_interval_ms:
+      type: integer
+      minimum: 500
+      maximum: 10000
+      default: 3000
+    from_allowlist:
+      type: array
+      maxItems: 20
+      items:
+        type: string
+      description: 可选；覆盖项目环境的发件人白名单
+    subject_contains:
+      type: string
+      maxLength: 200
+      description: 可选；覆盖项目环境的主题过滤
+  required:
+  - project_id
+  - account_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

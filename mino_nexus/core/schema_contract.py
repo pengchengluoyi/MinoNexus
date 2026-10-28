@@ -16,7 +16,7 @@ def initialize_current_schema(engine, metadata):
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
     expected = set(metadata.tables)
-    additive = {"node_tool_tasks"} & expected
+    additive = {"node_tool_tasks", "external_leases"} & expected
     issues = ["missing_table:" + name for name in sorted(expected - tables - additive)]
     for name in sorted(expected & tables):
         actual = {column["name"] for column in inspector.get_columns(name)}

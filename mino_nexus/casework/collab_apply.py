@@ -82,7 +82,7 @@ def apply_case_drafts(
         added.append(str(patch.get("case_id") or title))
 
     if to_write:
-        upsert_cases(project_id, rid, to_write, replace=replace, collab_emit=False)
+        upsert_cases(project_id, rid, to_write, replace=replace)
 
     evidence = {
         "added": added,

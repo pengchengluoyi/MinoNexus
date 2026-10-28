@@ -1013,18 +1013,9 @@ def _run_loop(
                 if screen_out is not None and (screen_out.applied or screen_out.recovered):
                     shot = proxy.observe("screenshot", force_fresh=True)
 
-        from mino_nexus.action_space.scheme import action_scheme as _action_scheme, select_observation
+        from mino_nexus.action_space.scheme import select_observation
 
-        if _action_scheme(ctx) == "visual":
-            inspect_slots["hierarchy_text"] = ""
-            inspect_slots["nav_assist"] = ""
-            ctx.nav_hierarchy_nodes = []
-            if writer:
-                writer.append(
-                    "nav/localize",
-                    {"turn_id": seq, "skipped": "visual", "result": "skip"},
-                )
-        elif nav is not None:
+        if nav is not None:
             nav.observe(
                 proxy,
                 ctx=ctx,

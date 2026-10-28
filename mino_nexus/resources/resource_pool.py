@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import copy
 import re
-import time
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
@@ -87,8 +86,6 @@ POOL_PROFILES: dict[str, dict[str, str]] = {
 }
 
 DEFAULT_LEASE_TTL_SEC = 7200
-ACQUIRE_WAIT_MS_DEFAULT = 300_000
-ACQUIRE_POLL_MS = 500
 
 _REQUIREMENT_RE = re.compile(r"新用户|老用户|未注册|已注册|未登录|已登录|游客|资料|昵称|头像|地址|收货", re.I)
 
@@ -900,9 +897,3 @@ def lease_blocks_other_holder(
     if holder_sn and lease_sn and lease_sn != holder_sn:
         return True
     return False
-
-
-def sleep_wait(remaining_ms: int) -> None:
-    if remaining_ms <= 0:
-        return
-    time.sleep(min(ACQUIRE_POLL_MS, remaining_ms) / 1000.0)

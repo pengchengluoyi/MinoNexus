@@ -112,6 +112,7 @@ class V5ControlBody(BaseModel):
     sensitive: bool = False
     publish: bool = False
     page_state_id: str | None = None
+    platform: str = "web"
 
 
 class V5ControlProbeBody(BaseModel):
@@ -346,7 +347,10 @@ def v5_configure_control(project_id: str, control_id: str, body: V5ControlBody, 
     try:
         return ok(configure(project_id, control_id, **body.model_dump()))
     except ValueError as exc:
-        raise HTTPException(status_code=409 if "conflict" in str(exc) else 400, detail={"reason_code": str(exc)}) from exc
+        reason = str(exc)
+        if reason == "control_missing":
+            raise HTTPException(status_code=404, detail={"reason_code": "control_not_found", "message": "控件不存在"}) from exc
+        raise HTTPException(status_code=409 if "conflict" in reason else 400, detail={"reason_code": reason}) from exc
 
 
 @router.post("/{project_id}/controls/{control_id}/probe")
@@ -777,16 +781,3 @@ def resume_import_receipt(project_id: str, receipt_id: str, _sess: dict = Depend
     if get(project_id, receipt_id=receipt_id) is None:
         raise HTTPException(status_code=404, detail="未找到本次提交收据")
     return ok(resume(project_id, receipt_id))
-
-
-@router.get("/{project_id}/apps/{app_id}/issues")
-def application_issues(project_id: str, app_id: str,
-                       platform: str = Query(default="", max_length=40),
-                       category: str = Query(default="", max_length=80),
-                       status: str = Query(default="", max_length=80),
-                       page: int = Query(default=1, ge=1),
-                       size: int = Query(default=50, ge=1, le=100),
-                       _sess: dict = Depends(current_session)):
-    from mino_nexus.casework.app_issues import list_issues
-    return ok(list_issues(project_id, app_id, platform=platform.lower(),
-                          category=category, status=status, page=page, size=size))

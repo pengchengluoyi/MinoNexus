@@ -1,4 +1,4 @@
-"""集成插件（飞书 / 禅道 / Figma / IM）。
+"""集成插件（飞书 / 禅道 / IM）。
 
 - Console：`plugin_policies` —— 客户端是否展示、是否启用。不存密钥。
 - Studio：`user_plugin_secrets` —— 当前登录用户自己的 key。
@@ -23,7 +23,6 @@ INTEGRATION_PLUGIN_CATEGORIES: list[dict[str, str]] = [
     {"id": "docs", "label": "文档", "desc": "Wiki 副本"},
     {"id": "im", "label": "IM", "desc": "群通知、对话与提缺陷"},
     {"id": "defect", "label": "缺陷", "desc": "缺陷库同步"},
-    {"id": "design", "label": "设计", "desc": "设计稿学习"},
 ]
 
 INTEGRATION_PLUGIN_SPECS: list[dict[str, Any]] = [
@@ -65,18 +64,6 @@ INTEGRATION_PLUGIN_SPECS: list[dict[str, Any]] = [
             {"id": "bind", "label": "产品绑定", "desc": "项目对应禅道产品", "categories": ["defect"]},
             {"id": "flow", "label": "提单规则", "desc": "失败如何进缺陷", "categories": ["defect"]},
             {"id": "templates", "label": "提单模板", "desc": "标题和描述怎么填", "categories": ["defect"]},
-        ],
-    },
-    {
-        "id": "figma",
-        "name": "Figma",
-        "kind": "design",
-        "categories": ["design"],
-        "color": "#a259ff",
-        "summary": "用设计稿学习页面结构。Token 在这里，文件链接按应用绑定。",
-        "capabilities": [
-            {"id": "connect", "label": "连接", "desc": "Personal Access Token", "categories": ["design"]},
-            {"id": "bind", "label": "应用绑定", "desc": "每个应用的设计稿", "categories": ["design"]},
         ],
     },
     {
@@ -190,7 +177,7 @@ def _deep_merge(base: dict[str, Any], overlay: Optional[dict[str, Any]]) -> dict
 
 
 def _empty_user_root() -> dict[str, Any]:
-    return {"integrations": {}, "robots": {"items": []}, "figma": {}}
+    return {"integrations": {}, "robots": {"items": []}}
 
 
 def _normalize_user_root(raw: Any) -> dict[str, Any]:
@@ -202,8 +189,6 @@ def _normalize_user_root(raw: Any) -> dict[str, Any]:
         root["robots"] = {"items": []}
     elif not isinstance(robots.get("items"), list):
         root["robots"]["items"] = []
-    if not isinstance(root.get("figma"), dict):
-        root["figma"] = {}
     return root
 
 
@@ -414,8 +399,6 @@ def _default_plugin_config(plugin_id: str) -> dict[str, Any]:
             "templates": [default_zentao_template_row()],
             "bindings": [],
         }
-    if plugin_id == "figma":
-        return {"enabled": True, "capabilities": cap_on}
     if plugin_id == "gmail_otp":
         return {"enabled": True, "capabilities": cap_on, "app_password": ""}
     if plugin_id in IM_PLUGIN_IDS:
@@ -645,20 +628,6 @@ def _gmail_otp_settings(user_id: str = "") -> dict[str, Any]:
     }
 
 
-def _figma_settings(user_id: str = "") -> dict[str, Any]:
-    uid = str(user_id or "").strip()
-    if uid:
-        user = _load_user(uid)
-        fig = user.get("figma") if isinstance(user.get("figma"), dict) else {}
-        token = str((fig or {}).get("access_token") or "").strip()
-        return {
-            "configured": bool(token),
-            "default_file_url": str((fig or {}).get("default_file_url") or "").strip(),
-            "has_token": bool(token),
-        }
-    return ss.get_figma_settings()
-
-
 def _plugin_configured(plugin_id: str, cfg: dict[str, Any], user_id: str = "") -> bool:
     if plugin_id == "feishu":
         return any(b.get("platform") == "lark" and b.get("configured") for b in list_robot_integrations(user_id))
@@ -668,8 +637,6 @@ def _plugin_configured(plugin_id: str, cfg: dict[str, Any], user_id: str = "") -
         from mino_nexus.assistant.connectors.wechat_ilink import is_logged_in
 
         return is_logged_in()
-    if plugin_id == "figma":
-        return bool(_figma_settings(user_id).get("configured"))
     if plugin_id == "gmail_otp":
         return bool(get_gmail_app_password(user_id) and get_gmail_inbox_address(user_id))
     if plugin_id == "zentao":
@@ -756,25 +723,12 @@ def _plugin_app_bindings(plugin_id: str, user_id: str = "") -> list[dict[str, An
                     "data_range": feishu.get("data_range") or "A1:O500",
                     "case_count": count_qa_process_cases_from_env(env, project_id=str(project.get("id") or "")),
                 })
-            elif plugin_id == "figma":
-                automation = env.get("automation") if isinstance(env.get("automation"), dict) else {}
-                figma = automation.get("figma") if isinstance(automation.get("figma"), dict) else {}
-                rows.append({
-                    "project_id": project.get("id"),
-                    "project_name": project.get("name") or "",
-                    "app_id": app.get("id"),
-                    "app_name": app.get("name") or "",
-                    "file_url": figma.get("file_url") or "",
-                    "file_key": figma.get("file_key") or "",
-                    "last_sync_at": figma.get("last_sync_at") or "",
-                })
     return rows
 
 
 def list_integration_plugins(user_id: str = "") -> dict[str, Any]:
     uid = str(user_id or "").strip()
     robots = list_robot_integrations(uid)
-    figma = _figma_settings(uid)
     out = []
     for spec in INTEGRATION_PLUGIN_SPECS:
         pid = spec["id"]
@@ -784,8 +738,6 @@ def list_integration_plugins(user_id: str = "") -> dict[str, Any]:
         platform = spec.get("robot_platform")
         if platform:
             robot_n = sum(1 for b in robots if b.get("platform") == platform and b.get("configured"))
-        if pid == "figma" and figma.get("configured"):
-            robot_n = 1
         if pid == "gmail_otp" and configured:
             robot_n = 1
         if pid == "zentao" and configured:
@@ -830,11 +782,9 @@ def get_integration_plugin(plugin_id: str, user_id: str = "") -> dict[str, Any]:
     if platform:
         data["robots"] = [b for b in list_robot_integrations(uid) if b.get("platform") == platform]
         data["robot_platform"] = platform
-    if plugin_id == "figma":
-        data["figma"] = _figma_settings(uid)
     if plugin_id == "gmail_otp":
         data["gmail_otp"] = _gmail_otp_settings(uid)
-    if plugin_id in ("feishu", "figma"):
+    if plugin_id == "feishu":
         data["bindings"] = _plugin_app_bindings(plugin_id, uid)
     return data
 
@@ -912,19 +862,6 @@ def save_integration_plugin(plugin_id: str, body: dict[str, Any], user_id: str =
             current["app_password"] = str(incoming.get("app_password") or "").strip()
         if "inbox_address" in incoming:
             current["inbox_address"] = str(incoming.get("inbox_address") or "").strip()[:200]
-    elif plugin_id == "figma":
-        root = _load_user(uid)
-        fig = root.setdefault("figma", {}) if isinstance(root.get("figma"), dict) else {}
-        if not isinstance(root.get("figma"), dict):
-            fig = {}
-            root["figma"] = fig
-        if incoming.get("clear_token"):
-            fig["access_token"] = ""
-        elif "access_token" in incoming and str(incoming.get("access_token") or "").strip():
-            fig["access_token"] = str(incoming.get("access_token") or "").strip()
-        if "default_file_url" in incoming:
-            fig["default_file_url"] = str(incoming.get("default_file_url") or "").strip()
-        _save_user(uid, root)
 
     to_store = dict(current)
     for drop in ("enabled", "visible"):
@@ -937,10 +874,9 @@ def save_integration_plugin(plugin_id: str, body: dict[str, Any], user_id: str =
         prev = _raw_plugin_config(plugin_id, uid)
         if str(prev.get("app_password") or "").strip() and not incoming.get("clear_app_password"):
             to_store["app_password"] = prev["app_password"]
-    if plugin_id != "figma":
-        root = _load_user(uid)
-        root.setdefault("integrations", {})[plugin_id] = to_store
-        _save_user(uid, root)
+    root = _load_user(uid)
+    root.setdefault("integrations", {})[plugin_id] = to_store
+    _save_user(uid, root)
     return get_integration_plugin(plugin_id, uid)
 
 

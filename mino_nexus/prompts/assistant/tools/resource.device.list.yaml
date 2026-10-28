@@ -1,0 +1,48 @@
+id: resource.device.list
+title: 测试设备台账
+description: 列出设备台账：在线/就绪、桌面状态、阻塞原因、能力和机态 App 记录。默认不返回 session_key、会话 generation 等凭据；include_sessions=true 时每台设备最多带 5 条机态记录。用户问“现在有哪些设备/为什么不可用”时用。
+route: GET /project/{project_id}/resources/devices
+risk: read
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    status:
+      type: string
+      enum:
+      - online
+      - offline
+      description: 按在线状态筛选
+    platform:
+      type: string
+      description: 平台，例如 android/ios/web/mac/win
+    sn:
+      type: string
+      description: 设备序列号或别名，精确匹配
+    include_sessions:
+      type: boolean
+      default: false
+      description: 是否带机态 App 记录；需要看某台设备上登录了哪个号时传 true
+    limit:
+      type: integer
+      default: 50
+      minimum: 1
+      maximum: 200
+    offset:
+      type: integer
+      default: 0
+      minimum: 0
+  required:
+  - project_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

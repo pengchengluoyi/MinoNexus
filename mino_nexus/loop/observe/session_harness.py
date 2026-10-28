@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from mino_nexus.contract.execution_event import is_failure
 from mino_nexus.loop.observe.session_project import project_turns
 from mino_nexus.records.eventlog import store as session_store
 
@@ -194,10 +195,13 @@ def project_audit(session_id: str) -> dict[str, Any] | None:
             "hitl/blocked",
             "turn/end",
             "tool/result",
+            "ext/action", "ext/observe", "ext/phase_end",
         ):
             payload = dict(row.get("payload") or {})
             st = str(payload.get("status") or "").lower()
             if typ == "tool/result" and st not in ("fail", "failed", "declined", "blocked"):
+                continue
+            if typ.startswith("ext/") and not is_failure(row):
                 continue
             chain.append({
                 "seq": row.get("seq"),

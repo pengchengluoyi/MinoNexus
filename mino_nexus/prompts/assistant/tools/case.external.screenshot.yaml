@@ -1,0 +1,25 @@
+id: case.external.screenshot
+title: 上传外部执行截图
+description: 上传一张 PNG/JPEG 截图（base64，最大 5MB），返回 screenshot_ref。把它填进 case.external.report 事件的 screenshot_ref，页面就能显示这张图。
+route: POST /case-runner/external/{run_id}/screenshot
+risk: write
+async: false
+params_schema:
+  type: object
+  properties:
+    run_id:
+      type: string
+    case_id:
+      type: string
+    image_base64:
+      type: string
+  required:
+  - run_id
+  - case_id
+  - image_base64
+param_resolvers: {}
+result_pick:
+- data
+surfaces:
+- mcp
+enabled: true

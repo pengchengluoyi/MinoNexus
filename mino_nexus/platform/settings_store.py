@@ -76,7 +76,6 @@ def _root() -> dict[str, Any]:
     raw.setdefault("mail", {})
     raw.setdefault("ai", {})
     raw.setdefault("layer_stack", {})
-    raw.setdefault("figma", {})
     raw.setdefault("integrations", {})
     raw.setdefault("robots", {"items": []})
     raw.setdefault("knowledge_jobs", {})
@@ -501,40 +500,6 @@ def should_use_ai_planning(channel: str, provider_id: str | None = None, user_id
         "channel": normalized,
         "provider": public,
     }
-
-
-def get_figma_settings() -> dict[str, Any]:
-    raw = _root().get("figma") if isinstance(_root().get("figma"), dict) else {}
-    token = str(raw.get("access_token") or "").strip()
-    return {
-        "access_token_masked": _mask_secret(token),
-        "configured": bool(token),
-        "default_file_url": str(raw.get("default_file_url") or "").strip(),
-    }
-
-
-def get_figma_access_token() -> str:
-    raw = _root().get("figma") if isinstance(_root().get("figma"), dict) else {}
-    return str(raw.get("access_token") or "").strip()
-
-
-def save_figma_settings(
-    *,
-    access_token: str = "",
-    clear_token: bool = False,
-    default_file_url: Optional[str] = None,
-) -> dict[str, Any]:
-    root = _root()
-    row = root.get("figma") if isinstance(root.get("figma"), dict) else {}
-    if clear_token:
-        row["access_token"] = ""
-    elif str(access_token or "").strip():
-        row["access_token"] = str(access_token).strip()
-    if default_file_url is not None:
-        row["default_file_url"] = str(default_file_url or "").strip()
-    root["figma"] = row
-    _save(root)
-    return get_figma_settings()
 
 
 def get_openhands_settings() -> dict[str, Any]:

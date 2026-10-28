@@ -1,0 +1,56 @@
+id: logic.control.update
+title: 修改控件定位
+description: 写入单个控件的定位器（locator_spec），可同时调整敏感标记和所属页面。必须带 expected_revision 做乐观锁；revision 冲突时先重新读取再改。写入立即生效，不需要审核。用户明确要求“改这个控件的定位/把控件绑到某页”时用。
+route: PUT /project/{project_id}/controls/{control_id}
+risk: write
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    control_id:
+      type: string
+      description: 控件 id，必须来自 logic.control.list
+    expected_revision:
+      type: integer
+      minimum: 1
+      description: 当前 revision；冲突时不要盲目重试，先重新读取
+    locator_spec:
+      type: object
+      description: 新的定位器 spec；平台结构由 logic.control.get 返回的 locator_source 决定
+    sensitive:
+      type: boolean
+      description: 必须显式传当前值；省略会按 false 保存，可能把敏感控件改成非敏感
+    publish:
+      type: boolean
+      default: false
+      description: 兼容字段；当前保存即生效，不需要发布
+    page_state_id:
+      type: string
+      description: 把控件挂到哪个页面状态；留空表示不绑定
+    platform:
+      type: string
+      default: web
+      enum:
+      - web
+      - android
+      - ios
+      - pc
+      description: 定位器所属平台
+  required:
+  - project_id
+  - control_id
+  - expected_revision
+  - locator_spec
+  - sensitive
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

@@ -1,9 +1,10 @@
 id: cli.execute
-version: 2
+version: 3
 title: 执行飞书和 Meego CLI 操作
 description: >-
   根据用户明确请求，在本人 Scout 的飞书或 Meego 上创建或修改业务数据。
-  复用现有 IM 身份、群聊执行权限、任务记录和写入去重，不需要再次确认已明确授权的操作。
+  复用现有身份、群聊执行权限、任务记录和写入去重，不需要再次确认已明确授权的操作。
+  IM 与 MCP 都可调用；MCP 入口没有会话附件，attachments / attachment_ref 只适用于 IM 消息。
   command 为不含程序名的命令名称数组，options 为不带 -- 的 CLI 参数名到值的映射。
   没有参数时传 options={} 或不传 options；绝不要使用空字符串作为参数名。若工具拒绝无名参数，不要声称操作已执行。
   提交 Bug 前使用 cli.query 查询实际空间、类型、字段和模板；未确定空间先查询 project list，链接或别名先用 project get 的 simple-names 解析真实 key。
@@ -17,6 +18,7 @@ description: >-
 route: POST /runtime/cli/execute
 risk: write
 async: false
+timeout_sec: 130
 params_schema:
   type: object
   additionalProperties: false
@@ -52,5 +54,5 @@ params_schema:
         required: [ref, field_key, resource_type]
   required: [plugin, command]
 result_pick: [data]
-surfaces: [im]
+surfaces: [im, mcp]
 enabled: true

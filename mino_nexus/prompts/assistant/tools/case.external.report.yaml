@@ -1,0 +1,72 @@
+id: case.external.report
+title: 上报外部执行事件
+description: 把你按用例阶段（prep 前置 / do 操作 / check 校验）执行的事件写入该用例的任务详情。一次最多 100 条；带整数 seq 时按 seq 去重，可安全重试。输入的账号密码等敏感值会被脱敏，但仍不要上报明文密钥。
+route: POST /case-runner/external/{run_id}/events
+risk: write
+async: false
+params_schema:
+  type: object
+  properties:
+    run_id:
+      type: string
+      description: case.external.begin 返回的 run_id
+    case_id:
+      type: string
+    events:
+      type: array
+      minItems: 1
+      maxItems: 100
+      items:
+        type: object
+        properties:
+          kind:
+            type: string
+            enum: [phase_start, phase_end, action, observe, note]
+          phase:
+            type: string
+            enum: [prep, do, check]
+          seq:
+            type: integer
+            description: 你自己递增的序号，用于去重
+          case_step:
+            type: integer
+            description: 对应用例第几步，额外动作可省略
+          action:
+            type: string
+            description: 做了什么，例如 click / type / goto / assert
+          target:
+            type: string
+            description: 操作对象的描述或你实际使用的定位方式
+          value:
+            type: string
+          result:
+            type: string
+          status:
+            type: string
+            description: phase_end 时的阶段结果 pass/fail/blocked
+          note:
+            type: string
+          page:
+            type: string
+          duration_ms:
+            type: integer
+          started_at:
+            type: string
+          ended_at:
+            type: string
+          error:
+            type: string
+          screenshot_ref:
+            type: string
+            description: case.external.screenshot 返回的引用，或可访问的 URL；不要传 base64
+        required: [kind, phase]
+  required:
+  - run_id
+  - case_id
+  - events
+param_resolvers: {}
+result_pick:
+- data
+surfaces:
+- mcp
+enabled: true

@@ -1,0 +1,56 @@
+id: logic.entry.list
+title: 应用入口与缺口
+description: 读取应用逻辑的页面入口、入口缺口或入口统计。kind=entry 返回入口候选（含触发条件、置信度、成功/失败次数）；kind=gap 返回未关闭缺口；kind=summary 返回按状态/来源的计数。用户问“这页怎么进/为什么没有入口/还有哪些缺口”时用。
+route: GET /project/{project_id}/apps/{app_id}/logic/entries
+risk: read
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    app_id:
+      type: string
+      description: 应用 id 或应用名
+    kind:
+      type: string
+      enum:
+      - entry
+      - gap
+      - summary
+      default: entry
+    target:
+      type: string
+      description: 目标页短名；只用于入口候选打分
+    from_state_id:
+      type: string
+      description: 当前页面状态 id
+    status:
+      type: string
+      description: 入口状态 active/stale/rejected；缺口状态 open/resolved
+    platform:
+      type: string
+      description: 平台筛选
+    limit:
+      type: integer
+      default: 50
+      minimum: 1
+      maximum: 200
+    offset:
+      type: integer
+      default: 0
+      minimum: 0
+  required:
+  - project_id
+  - app_id
+param_resolvers:
+  project_id: project.by_name
+  app_id: app.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

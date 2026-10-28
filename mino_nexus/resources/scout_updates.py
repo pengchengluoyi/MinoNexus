@@ -115,7 +115,6 @@ def cancel(node_id, opid):
 def busy(db, node_id):
     from mino_nexus.models.run import AppRegressionRun
     from mino_nexus.models.device_reservation import DeviceReservation
-    from mino_nexus.models.development import DevelopmentOperation
     from mino_nexus.resources.device_admission import _recorded_target
     # Include unresolved reservations even if their batch is already terminal.
     reserved = {r.run_id for r in db.query(DeviceReservation)}
@@ -128,11 +127,7 @@ def busy(db, node_id):
             return True
     # Unknown IDE effects remain blocking until the existing review path resolves them.
     from mino_nexus.models.node_tool_task import NodeToolTask
-    if db.query(NodeToolTask).filter_by(node_id=node_id).filter(NodeToolTask.active_slot.is_not(None)).first():
-        return True
-    return db.query(DevelopmentOperation).filter_by(node_id=node_id).filter(
-        (DevelopmentOperation.state == "running") |
-        ((DevelopmentOperation.state == "unknown") & DevelopmentOperation.slot.is_not(None))).first() is not None
+    return db.query(NodeToolTask).filter_by(node_id=node_id).filter(NodeToolTask.active_slot.is_not(None)).first() is not None
 
 
 async def _send(live, action, opid, params=None):

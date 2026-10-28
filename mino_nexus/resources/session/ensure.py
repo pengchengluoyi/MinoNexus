@@ -145,7 +145,6 @@ def ensure_case_account(ctx: Any, case: dict[str, Any] | None = None) -> tuple[d
         params["precondition"] = prompt
     observed = getattr(ctx, "account_probe_facets", None)
     obs_map = observed if isinstance(observed, dict) else None
-    from mino_nexus.resources.accounts.lease import INTERACTIVE_ACQUIRE_WAIT_MS
 
     row, err = lease_for_context(
         ctx,
@@ -153,7 +152,6 @@ def ensure_case_account(ctx: Any, case: dict[str, Any] | None = None) -> tuple[d
         ai_reasoning=prompt,
         need_facets=need,
         observed_by_account=obs_map,
-        wait_ms=INTERACTIVE_ACQUIRE_WAIT_MS,
     )
     if row:
         score = int(row.get("score") or 0)

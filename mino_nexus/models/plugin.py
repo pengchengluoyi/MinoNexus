@@ -16,7 +16,7 @@ class PluginPolicy(Base):
 
 
 class UserPluginSecret(Base):
-    """每用户集成配置（飞书/禅道/Figma key、机器人）。"""
+    """每用户集成配置（飞书/禅道 key、机器人）。"""
 
     __tablename__ = "user_plugin_secrets"
 

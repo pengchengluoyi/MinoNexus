@@ -1,0 +1,27 @@
+id: resource.account.get
+title: 测试账号详情
+description: 读取单个测试账号的 facets、租约、绑定的机态记录和最近 10 条资源日志。返回账号、密码、OTP、手机号/邮箱明文，以及租约、机态和最近日志。用户问“这个号什么状态/为什么被占用”时用。
+route: GET /project/{project_id}/resources/accounts/{account_id}
+risk: read
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    account_id:
+      type: string
+      description: 账号 id，必须来自 resource.account.list，不要用手机号猜
+  required:
+  - project_id
+  - account_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

@@ -1,0 +1,65 @@
+id: case.api
+version: 1
+title: 查询用例服务 API
+description: >-
+  读取 Workbench「API」集成里配置的用例服务，不写第三方、不导入用例。
+  configuration.node_id 是持有该 API 凭据的 Scout 节点；service_url 可省略，省略时用全局集成地址。
+  operation=projects 列出可访问的远端项目；sessions 需要 remote_project_id，列出该项目下的会话；
+  cases 读取远端用例表，scope=project 或 session，会话范围还需要 session_id。
+  用例表可能很大，默认最多返回 200 行，truncated=true 表示还有未返回内容；优先按 session 缩小范围。
+  app_id 与 default_platform 会写入导入字段，查询阶段可省略。凭据只留在 Scout，工具不会返回密码或令牌。
+route: POST /runtime/case-api/read
+risk: read
+async: false
+timeout_sec: 140
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    project_id:
+      type: string
+      description: 当前 Nexus 项目 id；用于校验你的项目权限
+    operation:
+      type: string
+      enum: [projects, sessions, cases]
+      description: projects 列远端项目，sessions 列会话，cases 读用例
+    configuration:
+      type: object
+      additionalProperties: false
+      description: 用例服务读取配置；node_id 必填，其余按 operation 补充
+      properties:
+        node_id:
+          type: string
+          description: 持有 case_api 凭据的本人 Scout 节点 id
+        service_url:
+          type: string
+          description: 可省略；填写时必须与全局 API 集成地址一致
+        remote_project_id:
+          type: string
+          description: 远端项目 id，sessions 和 cases 需要
+        scope:
+          type: string
+          enum: [project, session]
+          default: project
+          description: cases 的范围；session 需要同时给 session_id
+        session_id:
+          type: string
+          description: 远端会话 id，scope=session 时必填
+        app_id:
+          type: string
+          description: 可选；写入读取结果的平台应用 id
+        default_platform:
+          type: string
+          enum: [web, android, ios, mac, win, linux]
+          description: 可选；写入读取结果的默认平台
+      required: [node_id]
+    limit:
+      type: integer
+      minimum: 1
+      maximum: 500
+      default: 200
+      description: 最多返回的行数或条目数
+  required: [project_id, operation, configuration]
+result_pick: [data]
+surfaces: [mcp]
+enabled: true

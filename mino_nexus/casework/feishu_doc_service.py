@@ -88,20 +88,4 @@ def sync_feishu_document(
     if enable_auto_sync and row.get("id"):
         ds.set_sync_settings(str(row["id"]), auto_sync=1)
     SLog.i(TAG, f"synced feishu doc {doc_id} -> {row.get('id')}")
-    try:
-        from mino_nexus.casework.collab_events import emit
-
-        excerpt = body.strip()[:3000]
-        emit(
-            "doc_synced",
-            project_id=project_id,
-            app_id=aid,
-            source_id=str(row.get("id") or ""),
-            title=display,
-            body_excerpt=excerpt,
-            owner_user_id=str(row.get("owner_user_id") or ""),
-            change_summary="飞书文档内容已更新",
-        )
-    except Exception:
-        pass
     return row

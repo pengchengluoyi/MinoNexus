@@ -1,0 +1,48 @@
+id: logic.page.list
+title: 应用页面列表
+description: 列出应用逻辑里的页面状态，返回 state_id、页面短名、page_key、语义状态、用例引用数、访问次数和稳定文案锚点。用户问“有哪些页面/某个页面叫什么”时用；state_id 必须来自这里，不要用页面标题猜。
+route: GET /project/{project_id}/apps/{app_id}/logic/pages
+risk: read
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    app_id:
+      type: string
+      description: 应用 id 或应用名
+    status:
+      type: string
+      enum:
+      - captured
+      - provisional
+      - confirmed
+      - rejected
+      description: 语义状态筛选
+    q:
+      type: string
+      description: 按页面短名/page_key/state_id 模糊搜索
+    limit:
+      type: integer
+      default: 50
+      minimum: 1
+      maximum: 200
+    offset:
+      type: integer
+      default: 0
+      minimum: 0
+  required:
+  - project_id
+  - app_id
+param_resolvers:
+  project_id: project.by_name
+  app_id: app.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

@@ -47,7 +47,6 @@ def allocate_by_template(
     env_profile: str = "",
     run_id: str = "",
     requirements: dict[str, Any] | None = None,
-    wait_ms: int | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     tpl = get_template(template_id, env_doc)
     if not tpl:
@@ -98,7 +97,6 @@ def allocate_for_context(
     *,
     template_id: str,
     requirements: dict[str, Any] | None = None,
-    wait_ms: int | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     from mino_nexus.resources import project_store as ps
 
@@ -116,5 +114,4 @@ def allocate_for_context(
         env_profile=str(getattr(ctx, "env_profile", "") or "test"),
         run_id=str(getattr(ctx, "run_id", "") or ""),
         requirements=requirements,
-        wait_ms=wait_ms,
     )

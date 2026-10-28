@@ -97,9 +97,19 @@ def extract_entries(
     body: ExtractEntriesBody,
     sess: dict = Depends(current_session),
 ):
-    project_id = _project_of(app_id, body.project_id)
+    given_raw = str(body.project_id or "").strip()
+    project_id = _project_of(app_id, given_raw)
     if not project_id:
         raise HTTPException(status_code=400, detail="缺少项目归属，无法读取用例/采集")
+    if given_raw:
+        from mino_nexus.resources import project_store as ps
+        app = ps.require_app(app_id)
+        expected = str(app.get("project_id") or "")
+        given = ps.find_project(given_raw)
+        given_id = str((given or {}).get("id") or given_raw).strip()
+        if given_id != expected:
+            raise HTTPException(status_code=422, detail={"reason_code": "app_project_mismatch", "message": "应用不属于该项目"})
+        project_id = expected
     try:
         result = entry_extract.extract_for_app(
             app_id=app_id,

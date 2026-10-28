@@ -98,7 +98,6 @@ _REASON_CLASS: dict[str, str] = {
     "needs_setup": CLASS_B,
     "setup_missing": CLASS_B,
     "resource_blocked": CLASS_B,
-    "resource_wait_deadline_exceeded": CLASS_B,
     "resource_busy": CLASS_B,
     "resource_lease_unavailable": CLASS_B,
     "requirement_blocked": CLASS_B,
@@ -130,7 +129,6 @@ _PREFIX_CLASS: tuple[tuple[str, str], ...] = (
 )
 
 _REASON_LAYER: dict[str, str] = {
-    "resource_wait_deadline_exceeded": "preflight",
     "resource_busy": "preflight",
     "resource_lease_unavailable": "preflight",
     "binding_missing": "dispatch",

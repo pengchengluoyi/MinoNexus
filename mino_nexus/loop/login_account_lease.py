@@ -8,9 +8,6 @@ from mino_nexus.core.log import SLog
 
 TAG = "LoginAccountLease"
 
-# 登录弹窗已出现时再租；略长于开跑时 fail-fast 的 0ms，避免号池短暂占用
-LOGIN_SURFACE_LEASE_WAIT_MS = 8_000
-
 _LOGIN_TAP_RE = re.compile(
     r"log\s*in|sign\s*in|登录|register|注册|\bEmail\b|邮箱|手机|验证码|password|密码",
     re.I,
@@ -60,8 +57,6 @@ def login_surface_detected(
 def try_lease_on_login_surface(
     ctx: Any,
     case: dict[str, Any] | None = None,
-    *,
-    wait_ms: int = LOGIN_SURFACE_LEASE_WAIT_MS,
 ) -> tuple[bool, str, str]:
     """登录界面触发租号。返回 (成功, 错误文案, 成功摘要)。"""
     if picked_account_ready_for_login(ctx):
@@ -90,7 +85,6 @@ def try_lease_on_login_surface(
         params,
         ai_reasoning=prompt,
         need_facets=need,
-        wait_ms=max(0, int(wait_ms or 0)),
     )
     if row:
         brief = format_accounts_brief(row)

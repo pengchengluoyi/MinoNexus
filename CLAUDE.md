@@ -153,7 +153,7 @@ mino_nexus/
 
 ## 6. 不要做的事
 
-- **Agent 调试入口与进程归属硬约束（2026-10-21）**：先读取 `/Users/changpengcheng/code/MinoNexus/.claude/mcp.local.json` 的 `mcpServers.mino`；该文件是本机开发联调入口。经 Mino MCP 读取实际工具、应用开发绑定和运行状态，在任务及绑定已授权时执行启动或重启；不要默认要求用户在 PyCharm 手动操作。实际工具名、参数和结果以服务返回为准，不猜端口、不复制或输出凭据。进程仍经 Scout 和 IDE 运行配置管理，禁止 shell 杀进程、另起替代服务或未知结果重复执行。仅在真实连接、能力或授权缺失时说明具体阻断；详细流程遵循 [开发手册 §0](docs/开发手册.md#0-agent-调试入口与进程归属2026-10-21优先约束)，与 `AGENTS.md §6` 保持一致。
+- **Agent 调试入口与进程归属硬约束（2026-10-27）**：直接调用本机 PyCharm MCP 的 HTTP 流，用已保存运行配置检查、启动和重启。不经 Mino、不经 Scout 调度 IDE。地址以当前 PyCharm 进程的 MCP HTTP 流为准，IDE 重启后重新读取，不猜端口、不复制或输出凭据。实际工具名、参数和结果以服务返回为准。`list_running_run_configurations`、`stop_run_configuration`、`execute_run_configuration` 必须带项目路径。进程仍由 PyCharm 运行配置持有，禁止 shell 杀进程、另起替代服务或未知结果重复执行。连接或工具缺失时说明具体阻断；详细流程遵循 [开发手册 §0](docs/开发手册.md#0-agent-调试入口与进程归属2026-10-27优先约束)，与 `AGENTS.md §6` 保持一致。
 
 - 不要为了"快一点"在 Nexus 里直接 `subprocess adb ...` —— 那是拆分失败的第一步
 - 不要把设备连通性当成本地可查的状态 —— 它只来自 Scout 的 `REGISTER` / `HEARTBEAT`

@@ -183,18 +183,6 @@ def get_automation_config(app: dict, *, hydrate_cases: bool = True) -> dict[str,
     out["qa_process"] = _normalize_qa_process(raw.get("qa_process"))
     if hydrate_cases:
         out["qa_process"] = _attach_draft_cases(_project_id(app), out["qa_process"])
-    figma = raw.get("figma")
-    if isinstance(figma, dict):
-        out["figma"] = {
-            "file_url": (figma.get("file_url") or "").strip(),
-            "file_key": (figma.get("file_key") or "").strip(),
-            "last_sync_at": figma.get("last_sync_at") or "",
-            "pages_summary": figma.get("pages_summary") or [],
-            "logic": figma.get("logic") if isinstance(figma.get("logic"), dict) else {},
-            "logic_applied_at": figma.get("logic_applied_at") or "",
-            "login_frame": figma.get("login_frame") if isinstance(figma.get("login_frame"), dict) else {},
-            "login_reference": figma.get("login_reference") if isinstance(figma.get("login_reference"), dict) else {},
-        }
     pb = raw.get("playbook")
     out["playbook"] = pb if isinstance(pb, dict) else {}
     return out
@@ -217,19 +205,6 @@ def save_automation_config(app: dict, config: dict[str, Any]) -> dict[str, Any]:
     if "qa_process" in config:
         incoming = config.get("qa_process") if isinstance(config.get("qa_process"), dict) else {}
         current["qa_process"] = _normalize_qa_process(incoming)
-    if "figma" in config and isinstance(config["figma"], dict):
-        prev = current.get("figma") or {}
-        incoming = config["figma"]
-        current["figma"] = {
-            "file_url": (incoming.get("file_url") or "").strip(),
-            "file_key": (incoming.get("file_key") or "").strip(),
-            "last_sync_at": incoming.get("last_sync_at") or prev.get("last_sync_at") or "",
-            "pages_summary": incoming.get("pages_summary") or prev.get("pages_summary") or [],
-            "logic": incoming.get("logic") if isinstance(incoming.get("logic"), dict) else (prev.get("logic") or {}),
-            "logic_applied_at": incoming.get("logic_applied_at") or prev.get("logic_applied_at") or "",
-            "login_frame": incoming.get("login_frame") if isinstance(incoming.get("login_frame"), dict) else (prev.get("login_frame") or {}),
-            "login_reference": incoming.get("login_reference") if isinstance(incoming.get("login_reference"), dict) else (prev.get("login_reference") or {}),
-        }
     if "playbook" in config and isinstance(config.get("playbook"), dict):
         current["playbook"] = config["playbook"]
     env = _app_env(app)

@@ -1,0 +1,27 @@
+id: logic.flow_block.get
+title: 流程块详情
+description: 读取一个流程块的步骤和参数（凭证键会被丢弃，自由文本会掩码手机号/邮箱；最多 100 步）。block_id 必须来自 logic.flow_block.list。用户问“这个流程块怎么执行/需要什么参数”时用。
+route: GET /project/{project_id}/logic/flow-blocks/{block_id}
+risk: read
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名（只用于校验访问权限）
+    block_id:
+      type: string
+      description: 流程块 id，必须来自 logic.flow_block.list
+  required:
+  - project_id
+  - block_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

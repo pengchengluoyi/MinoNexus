@@ -1,0 +1,27 @@
+id: logic.control.get
+title: 应用控件详情
+description: 读取单个控件的定位器、定位来源、revision、敏感标记和历史版本摘要。用户要改控件定位前，先用它拿 expected_revision 和原 locator_spec。
+route: GET /project/{project_id}/logic/controls/{control_id}
+risk: read
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    control_id:
+      type: string
+      description: 控件 id，必须来自 logic.control.list
+  required:
+  - project_id
+  - control_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

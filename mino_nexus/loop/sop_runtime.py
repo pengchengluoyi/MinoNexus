@@ -10,21 +10,21 @@ DEFAULT_PHASES: dict[str, dict[str, Any]] = {
     "prep": {
         "id": "prep",
         "job": "agent-decide",
-        "tool_kinds": ["generic"],
+        "tool_kinds": ["generic", "check", "recovery"],
         "guards": ["skip_repeat_read_device"],
         "advance_on": "signal_done",
     },
     "do": {
         "id": "do",
         "job": "agent-decide",
-        "tool_kinds": ["generic"],
+        "tool_kinds": ["generic", "check", "recovery"],
         "guards": ["skip_repeat_tap"],
         "advance_on": "signal_done",
     },
     "check": {
         "id": "check",
         "job": "agent-decide",
-        "tool_kinds": ["check"],
+        "tool_kinds": ["generic", "check", "recovery"],
         "guards": ["deny_mutate", "force_case_expectation"],
         "advance_on": "signal_done",
         "require": "saw_assert",
@@ -130,14 +130,6 @@ def sop_union_tool_kinds(phases: list[dict[str, Any]]) -> list[str]:
 
 
 def merge_phase_tool_kinds(phase_cfg: dict[str, Any], sop: dict[str, Any]) -> list[str]:
-    """阶段菜单 = 阶段 tool_kinds + SOP 全局声明的 recovery（不并 prep/do/check，避免串阶段）。"""
-    pid = str(phase_cfg.get("id") or "do").strip().lower() or "do"
-    phase_kinds = _norm_str_list(phase_cfg.get("tool_kinds"), set(ALL_KINDS))
-    if not phase_kinds:
-        phase_kinds = list(DEFAULT_PHASES.get(pid, DEFAULT_PHASES["do"]).get("tool_kinds") or [])
-    global_kinds = _norm_str_list(sop.get("tool_kinds"), set(ALL_KINDS))
-    merged = list(phase_kinds)
-    for kind in global_kinds:
-        if kind == "recovery" and kind not in merged:
-            merged.append(kind)
-    return merged
+    """三个阶段共用全部事件种类。阶段配置里的旧 tool_kinds 不再收窄菜单。"""
+    del phase_cfg, sop
+    return ["generic", "check", "recovery"]

@@ -34,5 +34,5 @@ def request_params(ctx):
     return {'to_address': recipient, 'since_ts': since, 'deadline_ts': deadline,
             'from_allowlist': list(otp.get('from_allowlist') or []),
             'subject_contains': str(otp.get('subject_contains') or ''),
-            'poll_interval_ms': max(500, min(10_000, int(otp.get('poll_interval_ms') or 3000))),
+            'poll_interval_ms': 200,
             'max_wait_ms': wait}

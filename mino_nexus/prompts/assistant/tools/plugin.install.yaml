@@ -1,0 +1,46 @@
+id: plugin.install
+version: 1
+title: 安装或更新插件
+description: >-
+  在本人 Scout 节点上提交插件安装或更新任务，由节点下载中心执行，不经过 Nexus 下载。
+  仅支持需要单独安装的 cli.feishu、cli.meego、langbot；case_api、gmail、bot.* 是内置能力，
+  不需要安装，返回的参数错误时应去 Workbench 保存配置而不是反复安装。
+  action=install 安装缺失插件，action=update 更新已安装或缺失插件到最新可用版本。
+  同一 operation_id 只提交一次；MCP 会按 JSON-RPC 请求生成稳定 operation_id，重试不会重复安装。
+  wait_ms>0 时最多等待 60 秒并轮询节点任务；超时或返回 unknown 时先按 task_id 查询状态，不能换请求 ID 重装。
+route: POST /runtime/plugins/install
+risk: write
+async: false
+timeout_sec: 90
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    node_id:
+      type: string
+      minLength: 1
+      maxLength: 128
+      description: 要安装的本人节点 id
+    plugin:
+      type: string
+      enum: [cli.feishu, cli.meego, langbot]
+      description: 插件标识；只有这三个需要单独安装
+    action:
+      type: string
+      enum: [install, update]
+      default: install
+      description: 安装缺失插件或更新到最新版本
+    operation_id:
+      type: string
+      maxLength: 100
+      description: 稳定任务标识；MCP 自动生成，手动重试时沿用同一个
+    wait_ms:
+      type: integer
+      minimum: 0
+      maximum: 60000
+      default: 0
+      description: 等待任务结束的毫秒数；0 表示立即返回任务 id
+  required: [node_id, plugin]
+result_pick: [data]
+surfaces: [mcp]
+enabled: true

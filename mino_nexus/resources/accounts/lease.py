@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import time
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
@@ -18,27 +17,16 @@ from mino_nexus.resources.project_env import (
     save_test_accounts,
 )
 from mino_nexus.resources.resource_pool import (
-    ACQUIRE_WAIT_MS_DEFAULT,
     DEFAULT_LEASE_TTL_SEC,
     account_facets,
     compile_requirements_from_case_need,
     format_facets_brief,
     lease_expired,
     new_lease_record,
-    sleep_wait,
 )
 
 TAG = "AccountLease"
 
-# agent 循环 / prep 内租号必须 fail-fast；长等待只在 run 开跑时做一次
-INTERACTIVE_ACQUIRE_WAIT_MS = 0
-
-
-def _acquire_wait_ms() -> int:
-    raw = str(os.environ.get("MINO_RESOURCE_ACQUIRE_WAIT_MS") or "").strip()
-    if raw.isdigit():
-        return max(0, int(raw))
-    return ACQUIRE_WAIT_MS_DEFAULT
 
 
 def _lease_ttl_sec() -> int:
@@ -285,6 +273,7 @@ def _mark_leased(
     sn: str = "",
     env: str = "",
     requirements: dict[str, Any] | None = None,
+    ttl_sec: int | None = None,
 ) -> bool:
     from mino_nexus.resources.pool_account_store import try_claim_account_lease
 
@@ -298,7 +287,7 @@ def _mark_leased(
 
     rec = new_lease_record(
         run_id,
-        ttl_sec=_lease_ttl_sec(),
+        ttl_sec=max(60, int(ttl_sec)) if ttl_sec else _lease_ttl_sec(),
         case_id=cid,
         sn=str(sn or "")[:64],
     )
@@ -576,7 +565,6 @@ def _lease_for_context(
     ai_reasoning: str = "",
     need_facets: dict[str, Any] | None = None,
     observed_by_account: dict[str, dict[str, str]] | None = None,
-    wait_ms: int | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     """从 ctx.app_id 对应项目号池租号。成功返回 (row, '')，失败返回 (None, reason)。"""
     run_id = str(getattr(ctx, "run_id", "") or "").strip()
@@ -753,45 +741,37 @@ def _lease_for_context(
     ):
         return None, "号池为空，请先在项目里添加测试账号"
 
-    wait_budget = wait_ms if wait_ms is not None else _acquire_wait_ms()
-    deadline = time.monotonic() + (wait_budget / 1000.0) if wait_budget > 0 else time.monotonic()
-
+    _purge_expired_leases(project_id)
+    candidate = _pick_row(
+        env_doc,
+        project_id=project_id,
+        requirements=requirements,
+        env_profile=env_profile,
+        platform=platform,
+        target_id=target_id,
+        run_id=run_id,
+        holder_sn=holder_sn,
+        prompt=prompt,
+        observed_by_account=observed_by_account,
+    )
     row: dict[str, Any] | None = None
-    while True:
-        _purge_expired_leases(project_id)
-        candidate = _pick_row(
-            env_doc,
-            project_id=project_id,
-            requirements=requirements,
-            env_profile=env_profile,
-            platform=platform,
-            target_id=target_id,
-            run_id=run_id,
-            holder_sn=holder_sn,
-            prompt=prompt,
-            observed_by_account=observed_by_account,
-        )
-        if candidate:
-            account_id = str(candidate.get("id") or "")
-            if account_id and run_id:
-                claimed = _mark_leased(
-                    project_id,
-                    account_id,
-                    run_id,
-                    case_id=str(getattr(ctx, "case_id", "") or "")[:64],
-                    sn=holder_sn,
-                    env=env_profile,
-                    requirements=requirements,
-                )
-                if claimed:
-                    row = candidate
-                    break
-            else:
+    if candidate:
+        account_id = str(candidate.get("id") or "")
+        if account_id and run_id:
+            if _mark_leased(
+                project_id,
+                account_id,
+                run_id,
+                case_id=str(getattr(ctx, "case_id", "") or "")[:64],
+                sn=holder_sn,
+                env=env_profile,
+                requirements=requirements,
+            ):
                 row = candidate
-                break
-        if wait_budget <= 0 or time.monotonic() >= deadline:
-            break
-        sleep_wait(int((deadline - time.monotonic()) * 1000))
+            else:
+                return None, "resource_busy"
+        else:
+            row = candidate
 
     if not row:
         alias_row = try_provision_gmail_after_miss(
@@ -865,7 +845,6 @@ def ensure_case_account_lease(
     case: dict[str, Any] | None = None,
     scene: dict[str, Any] | None = None,
     plugin_user_id: str = "",
-    wait_ms: int | None = None,
 ) -> tuple[bool, str]:
     """按当前用例前置租号；与同 run 已有租约冲突时释放并重新选号。"""
     from mino_nexus.resources.session.ensure import account_need_from_case
@@ -917,7 +896,6 @@ def ensure_case_account_lease(
         ctx,
         {"precondition": prompt} if prompt else {},
         need_facets=need,
-        wait_ms=min(_acquire_wait_ms(), 15_000) if wait_ms is None else max(0, min(wait_ms, 15_000)),
     )
     if row:
         SLog.i(

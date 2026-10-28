@@ -4,7 +4,6 @@ Leases fence results, not payments: expired claims become interrupted and requir
 an explicit new request. A cancelled model call may still finish remotely.
 """
 from __future__ import annotations
-from mino_nexus.platform.project_guard import _maintainer  # noqa: F401
 
 
 from copy import deepcopy
@@ -257,7 +256,8 @@ def enqueue(project_id, case_id, expected_revision, request_id, *, parent_job_id
 
 def _owner_matches(db, job):
     from mino_nexus.models.project import Project
-    return _maintainer(db, db.get(Project, job.project_id), job.owner_user_id)
+    from mino_nexus.models.auth import User
+    return bool(db.get(Project, job.project_id) and db.get(User, job.owner_user_id))
 
 
 def _source_matches(db, job):

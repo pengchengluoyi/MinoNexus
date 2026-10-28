@@ -12,7 +12,7 @@ RECOVERY_KIND = "recovery"
 BASE_KIND = "base"
 PACK_KINDS: Tuple[str, ...] = (RECOVERY_KIND, BASE_KIND)
 ALL_KINDS: Tuple[str, ...] = CAPABILITY_KINDS + PACK_KINDS
-# 菜单 / 派单：阶段 tool_kinds 含 recovery 时，recovery 原子能力也进 capabilities。
+# 菜单 / 派单：prep、do、check 都包含这些种类，不再按阶段拆开。
 MENU_ATOMIC_KINDS: Tuple[str, ...] = CAPABILITY_KINDS + (RECOVERY_KIND,)
 
 # 不出网的本地执行器。菜单过滤和派发读同一份。
@@ -25,8 +25,8 @@ LOCAL_EXECUTOR_IDS = frozenset({
 LOCAL_ORCH_IDS = LOCAL_EXECUTOR_IDS
 
 KIND_META: Dict[str, Dict[str, str]] = {
-    "check": {"label": "预期", "desc": "只在校验阶段注入模型"},
-    "generic": {"label": "通用", "desc": "前置和操作阶段注入模型"},
+    "check": {"label": "预期", "desc": "任意阶段都可执行"},
+    "generic": {"label": "通用", "desc": "任意阶段都可执行"},
     "recovery": {"label": "恢复", "desc": "模型无法继续时，或程序内部处理屏幕不可用"},
     "base": {"label": "基座", "desc": "平台入口与提供面。不进模型菜单"},
 }

@@ -1,0 +1,25 @@
+id: plugin.status
+version: 1
+title: 查看插件安装状态
+description: >-
+  查看本人 Scout 节点上的插件是否已安装、是否已配置，以及下载中心里的安装/更新能力。
+  插件按 class/id 区分：cli.feishu、cli.meego、langbot 需要单独安装；
+  cli.case_api、mail.gmail、bot.* 等是内置能力，installed=true 表示无需安装，只需保存配置。
+  不传 node_id 时列出当前账号可见的全部节点，只返回插件快照；指定 node_id 时还会读取下载中心，
+  返回每个插件的 installable、updatable、version、install_state 和最近安装任务。
+  不返回密钥、webhook、插件参数值或聊天正文。安装或更新前先用本工具确认节点、插件和当前任务。
+route: GET /runtime/plugins/status
+risk: read
+async: false
+timeout_sec: 30
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    node_id:
+      type: string
+      description: 可选；只看这一台节点，并刷新下载中心的安装项
+  required: []
+result_pick: [data]
+surfaces: [mcp]
+enabled: true

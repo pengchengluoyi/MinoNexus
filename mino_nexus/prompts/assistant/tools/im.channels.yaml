@@ -1,0 +1,18 @@
+id: im.channels
+version: 1
+title: 查看已配置的 IM 渠道
+description: >-
+  列出当前账号节点已上报的飞书 CLI、微信和 LangBot（飞书/企微/钉钉）渠道，
+  包含节点、实例、连接状态、是否已绑定当前账号以及消息能力。
+  不返回机器人密钥、webhook 或聊天正文。发送消息前先用本工具确认目标节点和渠道可用；
+  chat_id 需要用户提供，本工具不会猜测或枚举历史会话。
+route: GET /assistant/capabilities
+risk: read
+async: false
+params_schema:
+  type: object
+  additionalProperties: false
+  properties: {}
+result_pick: [data]
+surfaces: [mcp]
+enabled: true

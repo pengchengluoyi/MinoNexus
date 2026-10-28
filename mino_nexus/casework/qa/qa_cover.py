@@ -158,7 +158,7 @@ def _apply_cases(req: dict, payload: dict, *, project_id: str = "", replace: boo
 
             apply_case_drafts(project_id, rid, {"payload": {"cases": rows}}, replace=replace)
         elif replace:
-            upsert_cases(project_id, rid, rows, replace=replace, collab_emit=False)
+            upsert_cases(project_id, rid, rows, replace=replace)
         req.pop("draft_cases", None)
     elif replace:
         req["draft_cases"] = rows

@@ -1,0 +1,28 @@
+id: case.external.finish
+title: 结束外部执行记录
+description: 给出该用例的最终结果并关闭会话和任务。结果在报告中标注为 agent 自述，不等同于 Nexus 亲自验证。
+route: POST /case-runner/external/{run_id}/finish
+risk: write
+async: false
+params_schema:
+  type: object
+  properties:
+    run_id:
+      type: string
+    case_id:
+      type: string
+    status:
+      type: string
+      enum: [pass, fail, blocked, skip]
+    summary:
+      type: string
+  required:
+  - run_id
+  - case_id
+  - status
+param_resolvers: {}
+result_pick:
+- data
+surfaces:
+- mcp
+enabled: true

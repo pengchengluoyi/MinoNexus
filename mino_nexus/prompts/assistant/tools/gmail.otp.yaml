@@ -1,0 +1,59 @@
+id: gmail.otp
+version: 1
+title: 从 Gmail 取验证码
+description: >-
+  在本人 Scout 上通过已配置的 Gmail 插件读取最近一封邮件的验证码，只返回 4-8 位数字和有限诊断，
+  不返回邮件正文、发件人、主题、应用专用密码或收件箱密码。
+  node_id 省略时自动选本人唯一已配置 Gmail 的节点；多台节点需要明确指定。
+  to_address 省略时使用该节点配置的收件地址。since_ts 是 Unix 秒，省略时按 lookback_seconds 回看。
+  max_wait_ms 是本次等待窗口，最大 45 秒；取不到时不要反复扩大窗口，先确认邮件是否已到达。
+route: POST /runtime/gmail/otp
+risk: read
+async: false
+timeout_sec: 75
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    node_id:
+      type: string
+      description: 可选；持有 Gmail 配置的本人 Scout 节点 id
+    to_address:
+      type: string
+      maxLength: 320
+      description: 可选；收件地址过滤，省略时用节点配置的收件箱
+    since_ts:
+      type: number
+      minimum: 0
+      description: 可选；只查该 Unix 秒之后的邮件
+    lookback_seconds:
+      type: integer
+      minimum: 10
+      maximum: 86400
+      default: 600
+      description: 未给 since_ts 时回看多少秒
+    max_wait_ms:
+      type: integer
+      minimum: 1000
+      maximum: 45000
+      default: 15000
+      description: 等待新邮件的总时长，最大 45 秒
+    poll_interval_ms:
+      type: integer
+      minimum: 500
+      maximum: 10000
+      default: 3000
+      description: 轮询间隔
+    subject_contains:
+      type: string
+      maxLength: 200
+      description: 可选；主题包含的文本
+    from_allowlist:
+      type: array
+      maxItems: 10
+      items: {type: string}
+      description: 可选；只接受这些发件人地址或域名的邮件
+  required: []
+result_pick: [data]
+surfaces: [mcp]
+enabled: true

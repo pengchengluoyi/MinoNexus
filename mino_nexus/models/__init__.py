@@ -1,8 +1,6 @@
 """ORM：一张表一个文件。这里的类名对应 mino.db 的表，改字段要同步 docs/DATA_MODEL.md。"""
 from mino_nexus.models.node_tool_task import NodeToolTask
-from mino_nexus.models.collab_message_job import CollabMessageJob
 from mino_nexus.models.account_fact_candidate import AccountFactCandidate
-from mino_nexus.models.development import DevelopmentBinding, DevelopmentOperation
 from mino_nexus.models.app_intel import AppIntelLink, AppIntelProposal
 from mino_nexus.models.assistant import (
     AssistantMcpToken,
@@ -23,6 +21,7 @@ from mino_nexus.models.case_import_receipt import CaseImportReceipt
 from mino_nexus.models.case_import_receipt_line import CaseImportReceiptLine
 from mino_nexus.models.catalog import CatalogEntry, CatalogMeta
 from mino_nexus.models.device_reservation import DeviceReservation
+from mino_nexus.models.external_lease import ExternalLease
 from mino_nexus.models.device import Device
 from mino_nexus.models.device_app_session import DeviceAppSession
 from mino_nexus.models.resource_ops import (
@@ -46,33 +45,15 @@ from mino_nexus.models.node import Node, Studio
 from mino_nexus.models.plugin import PluginPolicy, UserPluginSecret
 from mino_nexus.models.pool_account import PoolAccount, PoolAccountFacet
 from mino_nexus.models.project import App, Project
-from mino_nexus.models.project_member import ProjectMember
 from mino_nexus.models.project_pool_config import ProjectPoolConfig
 from mino_nexus.models.run import AppRegressionRun, MCaseBaseline, MCaseRunTrace
 from mino_nexus.models.session_event import SessionEvent, SessionMeta
 from mino_nexus.models.settings import Settings
-from mino_nexus.models.collab_approval import CollabApproval
-from mino_nexus.models.collab_policy import CollabPolicy
-from mino_nexus.models.mino_bots import (
-    CollabMessage,
-    CollabTopic,
-    CollabTopicMember,
-    CollabWorkItem,
-    ProjectBot,
-)
-from mino_nexus.models.task import Task
 from mino_nexus.models.token import InstallToken, NodeCredential
 from mino_nexus.models.ui_control import UiControl
-from mino_nexus.models.work_item import WorkItem
-from mino_nexus.models.work_step import WorkStep
-from mino_nexus.models.work_event import WorkEvent
-from mino_nexus.models.work_approval import WorkApproval
-from mino_nexus.models.work_artifact import WorkArtifact
-from mino_nexus.models.work_link import WorkLink
-from mino_nexus.models.work_agent_session import WorkAgentSession
-from mino_nexus.models.work_agent_memory import WorkAgentMemory
 
 __all__ = [
+    "ExternalLease",
     "AssistantMcpToken",
     "AssistantProfile",
     "AssistantSubscription",
@@ -119,28 +100,12 @@ __all__ = [
     "PoolAccountFacet",
     "ProjectPoolConfig",
     "Project",
-    "ProjectMember",
-    "ProjectBot",
-    "CollabTopic",
-    "CollabTopicMember",
-    "CollabMessage",
-    "CollabWorkItem",
-    "CollabPolicy",
     "SessionEvent",
     "SessionMeta",
     "Settings",
     "Studio",
-    "Task",
     "User",
     "UserPluginSecret",
-    "WorkItem",
-    "WorkStep",
-    "WorkEvent",
-    "WorkApproval",
-    "WorkArtifact",
-    "WorkLink",
-    "WorkAgentSession",
-    "WorkAgentMemory",
 ]
 
 from mino_nexus.models.case_revision import CaseRevision
@@ -148,9 +113,6 @@ from mino_nexus.models.case_compile_job import CaseCompileJob
 from mino_nexus.models.case_review_record import CaseReviewRecord
 
 from mino_nexus.models.scout_update import ScoutUpdate
-
-from mino_nexus.models.collab_read import CollabWorkspaceRead
-
 
 from mino_nexus.core.database import register_model_loader as _register_model_loader  # noqa: E402
 

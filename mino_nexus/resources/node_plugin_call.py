@@ -60,7 +60,7 @@ def node_for_plugin(kind: str, plugin_id: str, node_id: str = ""):
     return node
 
 
-def call_plugin(
+def _plugin_result(
     *,
     kind: str,
     plugin_id: str,
@@ -68,7 +68,7 @@ def call_plugin(
     params: dict[str, Any],
     node_id: str = "",
     timeout: float = 60,
-) -> dict[str, Any]:
+):
     if capability_id not in _ALLOWED:
         raise PluginCallError(f"不允许的插件能力 {capability_id}")
     node = node_for_plugin(kind, plugin_id, node_id)
@@ -101,8 +101,41 @@ def call_plugin(
     error = str(getattr(result, "error", "") or "")
     if str(status).lower() not in ("pass", "passed", "ok", "success"):
         raise PluginCallError(error or summary or "插件调用失败")
-    data = dict(getattr(result, "data", None) or {})
-    return _safe(data)
+    return result, node, summary
+
+
+def call_plugin(
+    *,
+    kind: str,
+    plugin_id: str,
+    capability_id: str,
+    params: dict[str, Any],
+    node_id: str = "",
+    timeout: float = 60,
+) -> dict[str, Any]:
+    result, _node, _summary = _plugin_result(
+        kind=kind, plugin_id=plugin_id, capability_id=capability_id, params=params,
+        node_id=node_id, timeout=timeout,
+    )
+    return _safe(dict(getattr(result, "data", None) or {}))
+
+
+def call_plugin_with_raw(
+    *,
+    kind: str,
+    plugin_id: str,
+    capability_id: str,
+    params: dict[str, Any],
+    node_id: str = "",
+    timeout: float = 60,
+) -> tuple[dict[str, Any], dict[str, Any], str, Any]:
+    """返回公开 data、原始回执、摘要和节点；原始回执只给明确需要结构字段的调用方。"""
+    result, node, summary = _plugin_result(
+        kind=kind, plugin_id=plugin_id, capability_id=capability_id, params=params,
+        node_id=node_id, timeout=timeout,
+    )
+    raw = dict(getattr(result, "raw_response", None) or {})
+    return _safe(dict(getattr(result, "data", None) or {})), raw, summary, node
 
 
 def _safe(data: dict[str, Any]) -> dict[str, Any]:

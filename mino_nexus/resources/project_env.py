@@ -130,7 +130,7 @@ def default_env_secrets() -> dict:
             "fixed": "",
             "from_allowlist": [],
             "subject_contains": "",
-            "poll_interval_ms": 3000,
+            "poll_interval_ms": 200,
             "max_wait_ms": 90000,
         },
         "login": {"mode": "auto", "kind": "phone"},
@@ -158,7 +158,7 @@ def _norm_otp_slot(raw: Any) -> dict:
         "fixed": str(src.get("fixed") or "").strip()[:32],
         "from_allowlist": allow,
         "subject_contains": str(src.get("subject_contains") or "").strip()[:120],
-        "poll_interval_ms": max(1000, min(int(src.get("poll_interval_ms") or 3000), 30_000)),
+        "poll_interval_ms": 200,
         "max_wait_ms": max(5000, min(int(src.get("max_wait_ms") or 90_000), 180_000)),
     }
 
@@ -856,11 +856,25 @@ def _stored_login_contract(raw: Any) -> Any:
     return doc
 
 
+def adapt_stored_project_env(raw: Any) -> Any:
+    """Adapt legacy login aliases in a persisted environment without normalizing."""
+    return _stored_login_contract(raw)
+
+
+def normalize_stored_project_env(raw: Any) -> dict:
+    """Normalize a persisted environment, adapting legacy login aliases first.
+
+    New writes still go through validate_environment_write, so obsolete fields in
+    an incoming payload remain rejected; this adapter only forgives stored docs.
+    """
+    return normalize_project_env(adapt_stored_project_env(raw))
+
+
 def env_from_project_row(project: dict | None, apps: Optional[List[dict]] = None) -> dict:
     """Read this project's environment only; app order cannot select its values."""
     if not isinstance(project, dict):
         return default_project_env()
-    return normalize_project_env(_stored_login_contract(project.get("env")))
+    return normalize_stored_project_env(project.get("env"))
 
 
 

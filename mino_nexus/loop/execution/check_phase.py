@@ -651,8 +651,6 @@ def run_check_phase(
                 from mino_nexus.loop.vision_plan import run_vision_plan_turn_if_enabled
 
                 screenshot_slots = dict(inspect_slots)
-                screenshot_slots["hierarchy_text"] = ""
-                screenshot_slots["nav_assist"] = ""
                 screenshot_plan = run_vision_plan_turn_if_enabled(
                     cursor=cursor, ctx=ctx, writer=writer, shot=shot, steps=steps,
                     inspect_slots=screenshot_slots, provider_id=str(provider_id or ""),

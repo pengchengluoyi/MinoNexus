@@ -1,0 +1,38 @@
+id: case.external.begin
+title: 开始外部执行记录
+description: 你自己执行某条用例（自带浏览器或自动化工具），先调用本工具为该用例创建任务和会话，再用 case.external.report 按阶段上报你做了什么，最后用 case.external.finish 收尾。本工具不占用设备、不启动 Nexus 的执行循环。返回 run_id 与用例步骤。
+route: POST /case-runner/external/begin
+risk: write
+async: false
+params_schema:
+  type: object
+  properties:
+    app_id:
+      type: string
+      description: 应用 id 或应用名
+    case_id:
+      type: string
+      description: 用例 id，来自 case_list
+    agent:
+      type: string
+      description: 你的名称或版本，便于报告里标明来源
+    sn:
+      type: string
+      description: 你要使用的设备序列号。填写后登记软租约；与他人或 Nexus 任务冲突时只在返回的 conflicts 里提示，不会拒绝。
+    lease_minutes:
+      type: integer
+      minimum: 1
+      maximum: 240
+      default: 30
+    client_request_id:
+      type: string
+      maxLength: 160
+  required:
+  - app_id
+  - case_id
+param_resolvers: {}
+result_pick:
+- data
+surfaces:
+- mcp
+enabled: true

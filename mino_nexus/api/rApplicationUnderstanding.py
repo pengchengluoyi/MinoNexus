@@ -91,9 +91,10 @@ class FactDecision(StrictBody):
 
 @resource_router.get('')
 def account_facts(project_id: str, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
-                  status: str = Query('', pattern='^(|candidate|confirmed|rejected)$')):
+                  status: str = Query('', pattern='^(|candidate|confirmed|rejected)$'),
+                  latest: int = Query(0, ge=0, le=1)):
     from mino_nexus.resources.account_fact_review import listing
-    return call(listing, project_id, limit=limit, offset=offset, status=status)
+    return call(listing, project_id, limit=limit, offset=offset, status=status, latest=bool(latest))
 
 @resource_router.post('/{candidate_id}', dependencies=[Depends(project_maintainer)])
 def account_fact_decide(project_id: str, candidate_id: str, body: FactDecision):

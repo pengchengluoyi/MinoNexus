@@ -63,21 +63,13 @@ def run_vision_exec_turn(
     send_image: bool = True,
     exec_mode: str = "",
 ) -> AgentDecision:
-    from mino_nexus.action_space.scheme import action_scheme, execution_scheme
-    from mino_nexus.loop.login_evidence_navigation import active_evidence_navigation, restore_execution_reference
+    from mino_nexus.loop.login_evidence_navigation import restore_execution_reference
 
     inspect_slots = dict(inspect_slots)
     source_hierarchy_chars = len(str(inspect_slots.get("hierarchy_text") or "").strip())
     reference = restore_execution_reference(cursor, ctx)
-    from mino_nexus.loop.prep_program_plan import active_reauthentication_navigation
-    current_navigation = bool(reference) or active_reauthentication_navigation(cursor) or active_evidence_navigation(cursor)
-    # 视觉通道默认只以截图为观察合同；但截图一旦送不进去（异应用/送图策略），
-    # 结构文本就是唯一还能用的观察 —— 先留着，等确认要扣图再清。
+    # 截图和结构一起交给模型：有哪份传哪份，两份都在就都传。
     full_hierarchy_text = str(inspect_slots.get("hierarchy_text") or "")
-    if execution_scheme(ctx) == "visual" and not (current_navigation and action_scheme(ctx) == "dom_preferred"):
-        # 截图兜底以当前图为观察合同，不再把低置信 DOM 页名/控件提示喂给执行模型。
-        inspect_slots["hierarchy_text"] = ""
-        inspect_slots["nav_assist"] = ""
     import hashlib
     from mino_nexus.loop.screen_capture import analyze_shot
     raw_image = str(getattr(shot, "image_base64", "") or "")

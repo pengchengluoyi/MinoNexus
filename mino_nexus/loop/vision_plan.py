@@ -420,12 +420,7 @@ def run_vision_plan_turn_if_enabled(
         review = program_fail_review_text(cursor)
     from mino_nexus.loop.vision_observation import apply_vision_observation_slots
 
-    from mino_nexus.action_space.scheme import execution_scheme
-
     inspect_slots = dict(inspect_slots)
-    if execution_scheme(ctx) == "visual":
-        inspect_slots["hierarchy_text"] = ""
-        inspect_slots["nav_assist"] = ""
     apply_vision_observation_slots(inspect_slots, cursor, writer=writer)
     case_step, phase = step_scope_key(cursor)
     from mino_nexus.loop.case_menu import case_menu_ids

@@ -314,7 +314,7 @@ def resolve_args(spec: dict[str, Any], args: dict[str, Any], *, user_id: str = "
         if ident != str(raw):
             notes.append(f"{key} 用的是 {label}")
         out[key] = ident
-    if spec.get("id") != "collab.scope_update" and out.get("app_id") and "env_surface" in ((spec.get("params_schema") or {}).get("properties") or {}) and (spec.get("risk") == "write" or spec.get("id") == "device.list"):
+    if out.get("app_id") and "env_surface" in ((spec.get("params_schema") or {}).get("properties") or {}) and (spec.get("risk") == "write" or spec.get("id") == "device.list"):
         from mino_nexus.resources import project_store as ps
 
         app = ps.require_app(str(out["app_id"]))
@@ -354,7 +354,7 @@ def resolve_args(spec: dict[str, Any], args: dict[str, Any], *, user_id: str = "
     return out, "", [], notes
 
 
-def _asgi_request(method: str, url: str, rest: dict[str, Any], headers: dict[str, str]) -> "httpx.Response":
+def _asgi_request(method: str, url: str, rest: dict[str, Any], headers: dict[str, str], timeout: float = 60) -> "httpx.Response":
     """进程内调用现有路由。ASGITransport 只能配异步客户端，所以在自己的事件循环里跑；
     调用方线程里已经有事件循环（例如 MCP 的异步处理函数）时换一个线程再跑。"""
     import asyncio
@@ -362,7 +362,7 @@ def _asgi_request(method: str, url: str, rest: dict[str, Any], headers: dict[str
 
     async def _once() -> "httpx.Response":
         transport = httpx.ASGITransport(app=_app())
-        async with httpx.AsyncClient(transport=transport, base_url="http://nexus", timeout=60) as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://nexus", timeout=timeout) as client:
             if method == "GET":
                 return await client.request(method, url, params=rest, headers=headers)
             return await client.request(method, url, json=rest, headers=headers)
@@ -409,7 +409,11 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
     method = method.upper()
     props = (spec.get("params_schema") or {}).get("properties") or {}
     args = dict(args or {})
+    if spec.get("id") == "plugin.install" and surface != "mcp":
+        return ToolOutcome(ok=False, summary="插件安装/更新仅支持 MCP 入口；请在 Workbench 下载中心操作。", tool_id=str(spec.get("id") or ""))
     if spec.get("id") == "cli.execute":
+        if surface == "mcp" and (args.get("attachments") or args.get("attachment_ref")):
+            return ToolOutcome(ok=False, status=422, summary="MCP 入口没有 IM 会话附件；请先通过 IM 发送附件，或在 Workbench 中操作。", tool_id=str(spec.get("id") or ""))
         # 用户明确把截图/文件随 Bug 提交时，不能因为模型漏填 attachments 就静默创建空附件。
         refs = [str(ref) for ref in (context.get("assistant_attachments") or []) if ref]
         text = str(context.get("assistant_user_text") or "")
@@ -418,6 +422,17 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
                 and re.search(r"截图|图片|附件|文件", text)):
             args["attachments"] = [{"ref": ref, "field_key": "__auto__", "resource_type": 15}
                                    for ref in refs[:4]]
+    if spec.get("id") == "im.send" and surface == "mcp" and not args.get("client_request_id"):
+        # MCP 的稳定请求标识就是 JSON-RPC id：同一请求重试不重复发，新请求自然得到新 key。
+        scope = str(context.get("assistant_mutation_scope") or "")
+        if scope:
+            args["client_request_id"] = scope[:160]
+    if spec.get("id") == "plugin.install" and surface == "mcp" and not args.get("operation_id"):
+        # 安装任务在 Scout 侧也按 operation_id 幂等；用稳定 scope 派生，避免超时重试重复安装。
+        import hashlib
+        scope = str(context.get("assistant_mutation_scope") or "")
+        if scope:
+            args["operation_id"] = hashlib.sha256(scope.encode()).hexdigest()[:32]
     if spec.get('id') in {'cli.query', 'cli.execute'} and not args.get('node_id'):
         origin = context.get('assistant_origin') or {}
         if origin.get('node_id'):
@@ -558,8 +573,9 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
     rest = {k: v for k, v in args.items() if k not in names and k not in ("project_id", "module", "modules", "ordinal", "scope", "scope_revision", "all_cases", "intent") and v not in (None, "")}
     if spec.get('id') in {'cli.query', 'cli.execute'}:
         rest = {key: value for key, value in rest.items() if key in props}
-    if spec.get("id") == "collab.scope_update":
-        rest = {k: v for k, v in args.items() if k in props and k not in names}
+    if spec.get('id') == 'case.api':
+        # 这个工具把 project_id 放在 body 里，而不是路径参数。
+        rest = {key: value for key, value in args.items() if key in props and value not in (None, '')}
     if spec.get("id") == "case.list":
         rest["limit"] = min(200, max(1, int(args.get("limit") or 50)))
         if args.get("module"):
@@ -591,6 +607,10 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
                         summary = '参数已经预览，尚未提交'
                     elif saved.get('id'):
                         summary = '已处理该写操作，原业务标识：' + str(saved['id'])
+                elif spec.get('id') == 'im.send':
+                    summary = '已处理该发送请求，原投递标识：' + str(saved.get('id') or saved.get('delivery_id') or '')
+                elif spec.get('id') == 'plugin.install':
+                    summary = '已提交插件任务，原任务标识：' + str(saved.get('task_id') or '')
                 return ToolOutcome(ok=True, summary=summary, data=saved, tool_id=str(spec.get("id") or ""))
             return ToolOutcome(ok=False, status=503, summary="该操作正在处理或结果未知，请先查询任务状态；不会重复创建", tool_id=str(spec.get("id") or ""), args=args)
         if context.get("assistant_origin") and context.get("assistant_generation"):
@@ -603,7 +623,7 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
         receipts.mark_side_effect(str(ctx().get("assistant_inbound_key") or ""), str(ctx().get("assistant_inbound_token") or ""))
         receipts.mark_side_effect(receipt_key, receipt_token)
     try:
-        response = _asgi_request(method, url, rest, headers)
+        response = _asgi_request(method, url, rest, headers, timeout=float(spec.get("timeout_sec") or 60))
     except Exception as exc:
         if receipt_key:
             receipts.finish(receipt_key, receipt_token, "uncertain")
@@ -682,8 +702,6 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
             identifiers['dry_run'] = bool(receipt_data.get('dry_run'))
             identifiers.update({key: receipt_data[key] for key in ('file_token', 'file_url', 'name', 'mime_type', 'size', 'attachment_count')
                                 if isinstance(receipt_data.get(key), (str, int))})
-        if spec.get("id") == "collab.scope_update":
-            identifiers["topic_id"] = receipt_data.get("topic_id", args.get("topic_id", ""))
         if spec.get("id", "").startswith(("workbench.update", "nexus.update")):
             identifiers.update({k: receipt_data[k] for k in (
                 "installation_id", "operation_id", "build_id", "state", "observation", "helper_started", "recovery"

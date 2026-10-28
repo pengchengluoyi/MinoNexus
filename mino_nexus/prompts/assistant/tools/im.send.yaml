@@ -1,0 +1,55 @@
+id: im.send
+version: 1
+title: 发送 IM 文本
+description: >-
+  通过本人 Scout 上已配置并上报的机器人实例发送一条文本。
+  channel=feishu_cli 走飞书 CLI；channel=wechat 走微信；feishu/wecom/dingtalk 走 LangBot。
+  chat_id 必须由用户提供，不能猜；群聊时把 chat_type 设为 group，并确认机器人已在群内。
+  微信主动发送还需要入站会话的 reply_ctx.context_token；仅有插件配置无法新开微信对话。
+  飞书 CLI 有活跃入站监听时走回复路由；没有监听但提供 chat_id 时回退到 bot CLI 发送。LangBot 的机器人实例由服务端从节点配置读取，调用方不需要也不要伪造 bot_uuid。
+  同一 client_request_id 只会发送一次；不填时按内容和目标去重，重复发送请换新的 client_request_id。
+  发送失败时不要声称已送达，先查看返回的 delivery_id 和错误。
+route: POST /runtime/im/send
+risk: write
+async: false
+timeout_sec: 60
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    channel:
+      type: string
+      enum: [feishu_cli, wechat, feishu, wecom, dingtalk]
+      description: 目标渠道；LangBot 的 feishu/wecom/dingtalk 不需要加 langbot 前缀
+    chat_id:
+      type: string
+      minLength: 1
+      maxLength: 256
+      description: 目标会话 id，由用户提供
+    text:
+      type: string
+      minLength: 1
+      maxLength: 4000
+      description: 要发送的纯文本
+    node_id:
+      type: string
+      description: 可选；多台节点都配置了该渠道时指定
+    sender_id:
+      type: string
+      description: 可选；部分渠道用于定位私聊对象
+    chat_type:
+      type: string
+      enum: [private, group]
+      default: private
+      description: 群聊时设为 group
+    reply_ctx:
+      type: object
+      description: 可选；微信必须含 context_token，其余渠道由服务端补实例信息
+    client_request_id:
+      type: string
+      maxLength: 160
+      description: 稳定发送标识；重试沿用同一个，新的发送换新值
+  required: [channel, chat_id, text]
+result_pick: [data]
+surfaces: [mcp]
+enabled: true

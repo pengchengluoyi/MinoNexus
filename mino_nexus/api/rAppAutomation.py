@@ -1,4 +1,4 @@
-"""应用配置 / 用例草稿 / qa-process / Figma 同步。"""
+"""应用配置 / 用例草稿 / qa-process。"""
 from __future__ import annotations
 from mino_nexus.platform.identity import user_thread, require_user_id
 from mino_nexus.casework.job_owner import owned_job
@@ -42,13 +42,6 @@ class ExecutionEnvConfig(BaseModel):
     profile: str = "test"
 
 
-class FigmaDesignConfig(BaseModel):
-    file_url: str = ""
-    file_key: str = ""
-    last_sync_at: str = ""
-    pages_summary: list[str] = []
-
-
 class CaseSuiteBody(BaseModel):
     id: str = ""
     name: str
@@ -60,7 +53,6 @@ class AutomationConfigUpdate(BaseModel):
     env_profile: Optional[str] = None
     execution_env: Optional[ExecutionEnvConfig] = None
     skills: Optional[AutomationSkills] = None
-    figma: Optional[FigmaDesignConfig] = None
     suites: Optional[list[CaseSuiteBody]] = None
     qa_process: Optional[dict[str, Any]] = None
 
@@ -109,20 +101,6 @@ class AtlasPatchBody(BaseModel):
 class AtlasAliasUpdateBody(BaseModel):
     review_status: str = ""
     note: str = ""
-
-
-class FigmaSyncBody(BaseModel):
-    file_url: str = ""
-    file_key: str = ""
-    access_token: str = ""
-
-
-class FigmaApplyLogicBody(BaseModel):
-    file_url: str = ""
-    file_key: str = ""
-    access_token: str = ""
-    write_knowledge: bool = True
-    write_graph: bool = True
 
 
 class PublishMindmapBody(BaseModel):
@@ -462,75 +440,3 @@ def delete_alias(app_id: str, alias_id: str, _sess: dict = Depends(current_sessi
         raise HTTPException(status_code=404, detail="别名不存在")
     return ok(msg="已删除")
 
-
-@router.post("/config/{app_id}/figma/sync")
-def figma_sync(app_id: str, body: FigmaSyncBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.resources import figma_service as fs
-    from mino_nexus.platform import settings_store as ss
-
-    app = _app(app_id)
-    file_key = ""
-    try:
-        file_key = fs.parse_file_key(file_url=body.file_url, file_key=body.file_key)
-    except ValueError:
-        file_key = str(body.file_key or "").strip()
-    if body.file_url or file_key:
-        aas.save_automation_config(app, {"figma": {"file_url": body.file_url or "", "file_key": file_key}})
-        app = _app(app_id)
-    token = (body.access_token or ss.get_figma_access_token() or "").strip()
-    if not token:
-        raise HTTPException(
-            status_code=400,
-            detail="还没有设计稿凭证。请到 Studio → 设置 → Figma 填写 Personal Access Token，或在同步请求里带 access_token。",
-        )
-    try:
-        synced = fs.sync_figma_file(
-            file_url=body.file_url,
-            file_key=body.file_key,
-            depth=8,
-            token=token,
-            include_raw_document=False,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    payload = {k: v for k, v in synced.items() if k != "raw_document"}
-    cfg = aas.save_automation_config(app, {"figma": payload})
-    return ok(
-        {
-            "figma": cfg.get("figma") or payload,
-            "page_count": synced.get("page_count", 0),
-            "frame_count": synced.get("frame_count", 0),
-            "logic_pages": len((synced.get("logic") or {}).get("pages") or []),
-            "login_icons": {},
-        },
-        msg="设计稿已同步",
-    )
-
-
-@router.post("/config/{app_id}/figma/apply-logic", dependencies=[Depends(app_maintainer)])
-def figma_apply(app_id: str, body: FigmaApplyLogicBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.resources import figma_logic as fls
-    from mino_nexus.platform import settings_store as ss
-
-    app = _app(app_id)
-    if body.file_url or body.file_key:
-        aas.save_automation_config(app, {"figma": {"file_url": body.file_url or "", "file_key": body.file_key or ""}})
-        app = _app(app_id)
-    token = (body.access_token or ss.get_figma_access_token() or "").strip()
-    if not token:
-        raise HTTPException(
-            status_code=400,
-            detail="还没有设计稿凭证。请到 Studio → 设置 → Figma 填写 Personal Access Token，或在请求里带 access_token。",
-        )
-    try:
-        result = fls.apply_figma_logic(
-            app,
-            file_url=body.file_url,
-            file_key=body.file_key,
-            token=token,
-            write_knowledge=body.write_knowledge,
-            write_graph=body.write_graph,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    return ok(result, msg="已从 Figma 学习应用逻辑")

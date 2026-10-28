@@ -74,6 +74,16 @@ class NodePluginCallBody(BaseModel):
     params: dict[str, Any] = {}
 
 
+class PluginInstallBody(BaseModel):
+    """插件安装/更新任务；不接收下载地址或密钥。"""
+    model_config = ConfigDict(extra='forbid')
+    node_id: str = Field(min_length=1, max_length=128)
+    plugin: Literal['cli.feishu', 'cli.meego', 'langbot']
+    action: Literal['install', 'update'] = 'install'
+    operation_id: str = Field(default='', max_length=100)
+    wait_ms: int = Field(default=0, ge=0, le=60000)
+
+
 class CliAttachmentBody(BaseModel):
     model_config = ConfigDict(extra='forbid')
     ref: str = Field(pattern=r'^media-[0-9a-f]{32}$')
@@ -90,6 +100,41 @@ class CliCommandBody(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
     attachment_ref: str = Field(default='', pattern=r'^(media-[0-9a-f]{32})?$')
     attachments: list[CliAttachmentBody] = Field(default_factory=list, max_length=4)
+
+
+class CaseApiReadBody(BaseModel):
+    """MCP 读取用例服务 API；配置里的密钥仍只留在节点上。"""
+    model_config = ConfigDict(extra='forbid')
+    project_id: str = Field(min_length=1, max_length=100)
+    operation: Literal['projects', 'sessions', 'cases'] = 'cases'
+    configuration: dict[str, Any] = Field(default_factory=dict)
+    limit: int = Field(default=200, ge=1, le=500)
+
+
+class ImSendBody(BaseModel):
+    """向已上报的 IM 渠道发一条文本。渠道和机器人实例由服务端按节点配置校验。"""
+    model_config = ConfigDict(extra='forbid')
+    channel: str = Field(min_length=1, max_length=64)
+    node_id: str = Field(default='', max_length=128)
+    chat_id: str = Field(min_length=1, max_length=256)
+    sender_id: str = Field(default='', max_length=256)
+    text: str = Field(min_length=1, max_length=4000)
+    chat_type: Literal['private', 'group'] = 'private'
+    reply_ctx: dict[str, Any] = Field(default_factory=dict)
+    client_request_id: str = Field(default='', max_length=160)
+
+
+class GmailOtpBody(BaseModel):
+    """从当前账号节点上的 Gmail 插件取一封邮件的验证码。"""
+    model_config = ConfigDict(extra='forbid')
+    node_id: str = Field(default='', max_length=128)
+    to_address: str = Field(default='', max_length=320)
+    since_ts: float | None = Field(default=None, ge=0)
+    lookback_seconds: int = Field(default=600, ge=10, le=86400)
+    max_wait_ms: int = Field(default=15000, ge=1000, le=45000)
+    poll_interval_ms: int = Field(default=200, ge=200, le=10000)
+    subject_contains: str = Field(default='', max_length=200)
+    from_allowlist: list[str] = Field(default_factory=list, max_length=10)
 
 
 async def _cli_command(body: CliCommandBody, sess: dict, mode: str):
@@ -138,6 +183,180 @@ async def query_cli(body: CliCommandBody, sess: dict = Depends(current_session))
 @router.post('/cli/execute')
 async def execute_cli(body: CliCommandBody, sess: dict = Depends(current_session)):
     return await _cli_command(body, sess, 'write')
+
+
+@router.post('/case-api/read')
+def read_case_api(body: CaseApiReadBody, sess: dict = Depends(current_session)):
+    """读取用例服务 API 的项目/会话/用例。只读，不触发导入或写第三方。"""
+    from mino_nexus.casework.case_import_sources import read as read_source
+
+    operation = 'read' if body.operation == 'cases' else body.operation
+    try:
+        data = read_source(body.project_id, 'case_api', body.configuration, operation)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={'reason_code': str(exc)}) from exc
+    import json
+
+    def size(value: Any) -> int:
+        return len(json.dumps(value, ensure_ascii=False, default=str).encode('utf-8'))
+
+    if body.operation == 'cases':
+        rows = data.get('table') if isinstance(data.get('table'), list) else []
+        total = max(0, len(rows) - 1)
+        table = rows[:body.limit + 1]
+        data = {**data, 'table': table, 'total_rows': total,
+                'returned_rows': max(0, len(table) - 1), 'truncated': total > body.limit}
+        # MCP 客户端对超大 JSON 很敏感；保留表头，按整行减半直到 240KB 以内。
+        while len(table) > 2 and size(data) > 240_000:
+            table = table[:max(2, len(table) // 2)]
+            data = {**data, 'table': table, 'returned_rows': len(table) - 1, 'truncated': True}
+        if len(table) > 1 and size(data) > 240_000:
+            data = {**data, 'table': table[:1], 'returned_rows': 0, 'truncated': True}
+    else:
+        items = data.get('items') if isinstance(data.get('items'), list) else []
+        data = {**data, 'items': items[:body.limit], 'total': len(items),
+                'returned': min(len(items), body.limit), 'truncated': len(items) > body.limit}
+        while len(items) > 1 and size(data) > 240_000:
+            items = items[:max(1, len(items) // 2)]
+            data = {**data, 'items': items, 'returned': len(items), 'truncated': True}
+        if items and size(data) > 240_000:
+            data = {**data, 'items': [], 'returned': 0, 'truncated': True}
+    return ok(data)
+
+
+def _im_route(channel: str) -> tuple[str, str, str, str]:
+    """(kind, plugin_id, 节点渠道名, Scout 渠道名)。只接受已建模的三类宿主。"""
+    key = str(channel or '').strip()
+    if key == 'feishu_cli':
+        return 'cli', 'feishu', 'feishu_cli', 'feishu_cli'
+    if key == 'wechat':
+        return 'bot', 'wechat', 'wechat', 'wechat'
+    key = key.removeprefix('langbot:')
+    if key in ('feishu', 'wecom', 'dingtalk'):
+        return 'im', 'langbot', f'langbot:{key}', key
+    raise HTTPException(status_code=400, detail='渠道只能是 feishu_cli、wechat、feishu、wecom 或 dingtalk')
+
+
+@router.post('/im/send')
+def send_im_message(body: ImSendBody, sess: dict = Depends(current_session)):
+    """按节点已上报的机器人实例发送文本。微信主动发送仍要求入站 context_token。"""
+    import hashlib
+    import json
+
+    from mino_nexus.platform.identity import execution_user
+    from mino_nexus.platform.im_channels import normalize_im_channels
+    from mino_nexus.resources.node_plugin_call import PluginCallError, call_plugin, node_for_plugin
+
+    kind, plugin_id, row_channel, scout_channel = _im_route(body.channel)
+    uid = str(sess.get('user_id') or '')
+    with execution_user(uid):
+        try:
+            node = node_for_plugin(kind, plugin_id, body.node_id)
+        except PluginCallError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        row = next((item for item in normalize_im_channels(node.plugins)
+                    if item.get('channel') == row_channel), None)
+        if row is None:
+            raise HTTPException(status_code=409, detail='节点尚未上报该 IM 渠道，请先在 Workbench 配置并等待重新上报')
+        if row.get('connection_state') in ('disabled', 'not_installed', 'yielded', 'error'):
+            raise HTTPException(status_code=409, detail=str(row.get('error') or '该 IM 渠道当前不可发送'))
+        instance = str(row.get('instance_id') or '')
+        ctx = {str(key): value for key, value in (body.reply_ctx or {}).items()}
+        ctx['instance_id'] = instance
+        if scout_channel == 'wechat':
+            if not str(ctx.get('context_token') or '').strip():
+                raise HTTPException(status_code=422, detail='微信主动发送需要入站会话的 context_token；仅配置插件不足以新开对话')
+        elif scout_channel == 'feishu_cli':
+            if not instance:
+                raise HTTPException(status_code=409, detail='飞书 CLI 尚未上报可用实例，请先完成配置')
+        else:
+            # 机器人实例只认节点上报值，不接受调用方伪造另一个 bot。
+            bot_uuid = instance.strip()
+            if not bot_uuid:
+                raise HTTPException(status_code=409, detail='LangBot 机器人实例尚未就绪，请先完成配置')
+            ctx['bot_uuid'] = bot_uuid
+            ctx['target_type'] = 'group' if body.chat_type == 'group' else 'person'
+            ctx['target_id'] = body.chat_id
+            ctx.setdefault('tenant', '')
+        delivery_id = body.client_request_id.strip() or hashlib.sha256(json.dumps(
+            [uid, scout_channel, instance, body.chat_id, body.sender_id, body.chat_type, body.text],
+            ensure_ascii=False).encode('utf-8')).hexdigest()[:48]
+        try:
+            data = call_plugin(
+                kind=kind, plugin_id=plugin_id, node_id=node.node_id,
+                capability_id='plugin.im.send',
+                params={'channel': scout_channel, 'chat_id': body.chat_id, 'sender_id': body.sender_id,
+                        'text': body.text, 'reply_ctx': ctx, 'delivery_id': delivery_id},
+                timeout=45,
+            )
+        except PluginCallError as exc:
+            raise HTTPException(status_code=503, detail={'message': str(exc), 'delivery_id': delivery_id}) from exc
+    if data.get('ok') is not True:
+        raise HTTPException(status_code=502, detail={'message': str(data.get('summary') or 'IM 发送未确认完成'),
+                                                    'delivery_id': delivery_id})
+    provider_message_id = str(data.get('provider_message_id') or '')
+    return ok({'id': provider_message_id or delivery_id, 'node_id': node.node_id,
+               'channel': body.channel, 'chat_id': body.chat_id,
+               'provider_message_id': provider_message_id,
+               'delivery_id': delivery_id}, msg=str(data.get('summary') or '已发送'))
+
+
+@router.post('/gmail/otp')
+def fetch_gmail_otp(body: GmailOtpBody, sess: dict = Depends(current_session)):
+    """从当前账号节点上的 Gmail 插件取码；只返回验证码和有限诊断，不回传邮件正文。"""
+    import re
+    import time
+
+    from mino_nexus.platform.identity import execution_user
+    from mino_nexus.resources.node_plugin_call import PluginCallError, call_plugin_with_raw, node_for_plugin
+
+    uid = str(sess.get('user_id') or '')
+    with execution_user(uid):
+        try:
+            node = node_for_plugin('mail', 'gmail', body.node_id)
+        except PluginCallError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        to_address = body.to_address.strip()
+        if not to_address:
+            for plugin in node.plugins or []:
+                if plugin.get('class') == 'mail' and plugin.get('id') == 'gmail':
+                    to_address = str((plugin.get('values') or {}).get('inbox_address') or '').strip()
+                    break
+        if to_address and ('@' not in to_address or any(ch.isspace() for ch in to_address)):
+            raise HTTPException(status_code=422, detail='收件地址不合法')
+        now = time.time()
+        since_ts = float(body.since_ts) if body.since_ts else now - body.lookback_seconds
+        import math
+        if not math.isfinite(since_ts) or since_ts > now + 60 or since_ts < now - 86400 * 7:
+            raise HTTPException(status_code=422, detail='since_ts 只能取最近 7 天，且不能晚于当前时间')
+        try:
+            data, raw, summary, _node = call_plugin_with_raw(
+                kind='mail', plugin_id='gmail', node_id=node.node_id,
+                capability_id='plugin.gmail.fetch_otp',
+                params={'to_address': to_address, 'since_ts': since_ts,
+                        'deadline_ts': now + body.max_wait_ms / 1000.0 + 5,
+                        'poll_interval_ms': body.poll_interval_ms, 'max_wait_ms': body.max_wait_ms,
+                        'from_allowlist': body.from_allowlist, 'subject_contains': body.subject_contains},
+                timeout=body.max_wait_ms / 1000.0 + 10,
+            )
+        except PluginCallError as exc:
+            error_text = str(exc)
+            error_text = {
+                'otp_mail_not_received': '等待窗口内没有收到验证码邮件',
+                'otp_mail_filter_no_match': '有邮件，但没有匹配到指定发件人、主题或收件人',
+                'otp_mail_code_not_found': '邮件里没有找到 4-8 位验证码',
+                'otp_wait_stopped': '取码等待已停止，请缩短等待窗口后重试',
+                'otp_request_invalid': '取码参数不合法，请核对收件地址和等待窗口',
+            }.get(error_text, error_text)
+            raise HTTPException(status_code=502, detail={'message': error_text}) from exc
+    code = str(raw.get('code') or data.get('code') or '').strip()
+    if not re.fullmatch(r'\d{4,8}', code):
+        raise HTTPException(status_code=502, detail={'message': summary or '没有取到验证码，请确认收件邮箱和等待窗口'})
+    raw_diag = raw.get('otp_diagnostics') if isinstance(raw.get('otp_diagnostics'), dict) else {}
+    diagnostics = {key: raw_diag[key] for key in ('connection_attempts', 'reconnects', 'error_code', 'phase')
+                   if isinstance(raw_diag.get(key), (str, int, float, bool))}
+    return ok({'node_id': node.node_id, 'code': code, 'source': 'gmail',
+               'summary': summary or '已取到验证码', 'diagnostics': diagnostics})
 
 
 @router.get("/nodes")
@@ -460,6 +679,187 @@ async def config_node_plugin(
         timeout=30.0,
     )
     return ok(out)
+
+
+_PLUGIN_STATUS_KEYS = (
+    'state', 'enabled', 'connected', 'connection_verified', 'connection_source',
+    'holding', 'last_message_at', 'error', 'version', 'healthy', 'restarts',
+)
+_COMPONENT_KEYS = (
+    'tool_id', 'label', 'purpose', 'state', 'version', 'installable', 'updatable',
+    'removable', 'configured', 'plugin_class', 'plugin_id', 'detail',
+    'runtime_environment', 'running_version', 'source_version', 'source_changed',
+    'restart_required', 'required_by_config', 'config_key',
+)
+
+
+def _compact_plugin_status(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    out = {key: raw[key] for key in _PLUGIN_STATUS_KEYS if key in raw}
+    if isinstance(raw.get('platforms'), dict):
+        out['platforms'] = {
+            str(platform): _compact_plugin_status(value)
+            for platform, value in raw['platforms'].items()
+            if isinstance(value, dict)
+        }
+    return out
+
+
+def _compact_platforms(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(platform): _compact_plugin_status(value)
+        for platform, value in raw.items() if isinstance(value, dict)
+    }
+
+
+def _compact_component(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    return {key: raw[key] for key in _COMPONENT_KEYS if key in raw}
+
+
+def _compact_task(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    keys = ('task_id', 'operation_id', 'tool_id', 'action', 'state', 'active', 'stage',
+            'label', 'percent', 'error', 'created_at', 'updated_at')
+    return {key: raw[key] for key in keys if key in raw}
+
+
+def _plugin_status_row(row: dict[str, Any], tools: dict[str, Any] | None, tools_error: str) -> dict[str, Any]:
+    plugin_tool_ids = {'cli.feishu', 'cli.meego', 'langbot'}
+    components = [
+        _compact_component(item) for item in (tools or {}).get('items', [])
+        if isinstance(item, dict) and item.get('tool_id') in plugin_tool_ids
+    ]
+    by_plugin = {
+        (item.get('plugin_class'), item.get('plugin_id')): item
+        for item in components if item.get('plugin_class') and item.get('plugin_id')
+    }
+    plugins = []
+    raw_plugins = row.get('plugins') if isinstance(row.get('plugins'), list) else None
+    for raw in raw_plugins or []:
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get('class') or '')
+        plugin_id = str(raw.get('id') or '')
+        if not kind or not plugin_id:
+            continue
+        component = by_plugin.get((kind, plugin_id), {})
+        installed = bool(raw.get('installed'))
+        entry = {
+            'class': kind,
+            'id': plugin_id,
+            'label': str(raw.get('label') or plugin_id),
+            'installed': installed,
+            'configured': bool(raw.get('configured')),
+            'import_blocked': bool(raw.get('import_blocked')),
+            'installable': component.get('installable'),
+            'updatable': component.get('updatable'),
+            'removable': component.get('removable'),
+            'install_state': component.get('state') or ('installed' if installed else 'missing'),
+            'version': component.get('version'),
+            'detail': component.get('detail') or ('' if installed else '需要安装后才能保存配置'),
+            'status': _compact_plugin_status(raw.get('status')),
+        }
+        platforms = _compact_platforms(raw.get('platforms'))
+        if platforms:
+            entry['platforms'] = platforms
+        plugins.append(entry)
+    return {
+        'node_id': str(row.get('node_id') or ''),
+        'hostname': str(row.get('hostname') or ''),
+        'online': bool(row.get('online')),
+        'plugins_known': raw_plugins is not None,
+        'plugins_ready': row.get('plugins_ready'),
+        'plugin_warning': str(row.get('plugin_warning') or ''),
+        'plugin_job': dict(row.get('plugin_job') or {}) if isinstance(row.get('plugin_job'), dict) else {},
+        'plugins': plugins,
+        'components': components,
+        'tasks': [_compact_task(task) for task in (tools or {}).get('tasks', [])
+                  if isinstance(task, dict) and task.get('tool_id') in plugin_tool_ids],
+        'tools_checked': tools is not None,
+        'tools_supported': bool((tools or {}).get('supported')),
+        'tools_contract_version': int((tools or {}).get('contract_version') or 0),
+        'tools_stale': bool((tools or {}).get('stale')),
+        'tools_error': tools_error,
+    }
+
+
+@router.get('/plugins/status')
+async def plugin_status(node_id: str = Query(default=''), sess: dict = Depends(current_session)):
+    """插件安装/配置状态；指定 node_id 时同时刷新下载中心的安装项。只读。"""
+    from mino_nexus.resources import node_tools as service
+
+    rows = filter_nodes(ui_nodes(), sess, studio_id='')
+    if node_id:
+        nid = sanitize_id(node_id)
+        rows = [row for row in rows if str(row.get('node_id') or '') == nid] if nid else []
+        if not rows:
+            raise HTTPException(status_code=404, detail='没有这个节点')
+    uid = str(sess.get('user_id') or '')
+    items = []
+    for row in rows:
+        nid = str(row.get('node_id') or '')
+        tools = None
+        tools_error = ''
+        # node_tools 只允许 owner 读取安装合同；管理员查看他人节点时只返回插件快照。
+        if node_id and nid and str(row.get('owner_user_id') or '') == uid:
+            try:
+                tools = await service.tools(nid, uid)
+            except HTTPException as exc:
+                tools_error = str(exc.detail)
+            except Exception:
+                tools_error = '读取下载中心状态失败'
+        items.append(_plugin_status_row(row, tools, tools_error))
+    return ok({'items': items, 'count': len(items)})
+
+
+@router.post('/plugins/install', status_code=202)
+async def install_plugin(body: PluginInstallBody, sess: dict = Depends(current_session)):
+    """提交插件安装/更新任务；真正下载和安装由 Scout 下载中心执行。"""
+    import asyncio
+    import re
+    import time
+    import uuid
+    from mino_nexus.resources import node_tools as service
+
+    operation_id = str(body.operation_id or '').strip() or uuid.uuid4().hex
+    if not re.fullmatch(r'[A-Za-z0-9_-]{8,100}', operation_id):
+        raise HTTPException(status_code=422, detail='operation_id 必须为 8-100 位字母、数字、下划线或短横线')
+    task = await service.submit(str(body.node_id), str(sess.get('user_id') or ''), operation_id,
+                                body.plugin, body.action)
+    deadline = time.monotonic() + body.wait_ms / 1000.0
+    while body.wait_ms and task.get('state') in service.ACTIVE:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(1.0, remaining))
+        try:
+            task = await service.refresh_task(str(body.node_id), str(sess.get('user_id') or ''), str(task['task_id']))
+        except Exception:
+            # 任务已提交，轮询失败不能把已完成/进行中的安装变成请求失败。
+            break
+    state = str(task.get('state') or '')
+    if state == 'succeeded':
+        message = '插件安装完成' if body.action == 'install' else '插件更新完成'
+    elif state == 'failed':
+        message = '插件任务失败，请查看任务 error'
+    elif state == 'unknown':
+        message = '插件任务结果待确认，请按 task_id 查询'
+    else:
+        message = '已提交安装任务' if body.action == 'install' else '已提交更新任务'
+    return ok({
+        'task_id': str(task.get('task_id') or ''),
+        'state': state,
+        'active': bool(task.get('active')),
+        'plugin': body.plugin,
+        'action': body.action,
+        'task': task,
+    }, msg=message)
 
 
 @router.post("/nodes/{node_id}/plugins/install")

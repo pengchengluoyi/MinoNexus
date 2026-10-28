@@ -412,6 +412,35 @@ Scout `REGISTER.account_isolation_version=1` 才可接入；旧客户端在安�
 
 Workbench 入口：项目配置 → 「项目维护者」。
 
+## MCP 安全读模型与预约（2026-10-27）
+
+前缀 `/project/{project_id}/resources`；应用逻辑读模型在 `/project/{project_id}/apps/{app_id}/logic` 与 `/project/{project_id}/logic`。这些路由是为 MCP 新加的返回字段受控模型；账号接口返回明文账号密码，日志/环境/设备仍脱敏。不登记 Workbench 现有的账号/环境/设备/控件路由（MCP token 的 HTTP 白名单是路由级，登记旧路由等于放行明文）。读接口要求登录；写接口沿用 `project_maintainer`。详细设计与工具表见 [测试资源与应用逻辑的 MCP 暴露方案](../架构/V8/测试资源与应用逻辑的MCP暴露方案-20261027.md)。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/resources/overview` | 账号/设备/租约计数、最近资源日志、告警；不含 ident |
+| GET | `/resources/accounts` | 账号列表；`env`、`state`（`free`/`occupied`/`locked`）、`lifecycle`、`q`、`limit≤200`、`offset`；返回账号/密码/OTP/手机号/邮箱明文、租约、`has_password/has_otp` |
+| GET | `/resources/accounts/{account_id}` | 账号详情 + 租约 + 机态 + 最近日志；账号/密码/OTP 明文，日志 `detail` 递归脱敏 |
+| POST | `/resources/accounts/{account_id}/otp` | 统一取码；body `{env_profile?, env_surface?, node_id?, sn?, since_ts?, max_wait_ms?, ...}`；返回 `code/source/requires_human/hint`，固定码优先，Gmail 其次，真实短信人工兜底 |
+| GET | `/resources/devices` | 设备台账；`include_sessions=true` 时带最多 5 条机态（掩码 `identity_hint`） |
+| GET | `/resources/logs` | 资源分配日志；`account_ident` 掩码、`detail` 递归脱敏、`page_size≤100` |
+| GET | `/resources/env` | 环境/渠道/号池结构；只返回 `configured` 与 `secret_slots` 名称，不返回密钥 |
+| POST | `/resources/accounts/reserve` | MCP 预约；body `{account_id?, env?, lifecycle?, run_id?, ttl_sec?}`；写号池 lease，账号立刻算 `occupied`；返回账号/密码/OTP 明文 |
+| POST | `/resources/accounts/{account_id}/release` | body `{run_id}`；必须与当前 lease 一致，否则 409 |
+| GET | `/apps/{app_id}/logic/overview` | 页面/控件/入口/缺口覆盖度 |
+| GET | `/apps/{app_id}/logic/pages` | 页面列表；`q`、`status`、`limit≤200`、`offset` |
+| GET | `/apps/{app_id}/logic/pages/{state_id}` | 页面详情；`include=controls,case_refs,entry,gaps,reviews`，控件≤100、引用≤50、评审≤20 |
+| GET | `/logic/controls` | 控件列表；`app_id`、`page_state_id`、`semantic_role`、`sensitive`、`q`、`limit≤200` |
+| GET | `/logic/controls/{control_id}` | 控件全量 locator + 版本历史（≤20） |
+| GET | `/apps/{app_id}/logic/entries` | 入口/缺口/摘要；`kind=entry\|gap\|summary`、`target`、`status`、`platform`、`limit≤200` |
+| POST | `/apps/{app_id}/logic/entries/extract` | 重抽入口/缺口；body `{platform?, case_ids?, include_cases?, include_capture?}`；只回各来源计数，明细用 GET entries |
+| POST | `/apps/{app_id}/logic/pages/{state_id}/review-proposals` | 提交页面评审候选；body 同 `Proposal`；只回候选摘要，批准/驳回仍在 Workbench |
+| POST | `/apps/{app_id}/logic/pages/{state_id}/review-proposals` | 提交页面评审候选；body 同 `Proposal`；只回候选摘要，批准/驳回仍在 Workbench `understanding/.../reviews/{review_id}` |
+| GET | `/logic/flow-blocks` | 流程块目录；只返回块定义、步骤数、用例引用，不返回步骤正文 |
+| GET | `/logic/flow-blocks/{block_id}` | 流程块详情；最多 100 步，凭证键丢弃、自由文本掩码 |
+
+注意：`/resources/accounts` 与 `/resources/env` **不是** Workbench 旧接口的别名；旧 `/project/{id}/accounts`、`/project/{id}/env` 仍可能返回明文/密钥，禁止登记到 MCP 工具表。`logic.control.update` 复用 `PUT /project/{id}/controls/{control_id}`（新增 `platform`）；`logic.entry.extract` 走新的 `POST /project/{id}/apps/{app_id}/logic/entries/extract`，先校验 app 归属、只回计数。旧 `POST /nav-fsm/{app_id}/entries/extract` 仍服务 Workbench，但不登记 MCP。页面评审的 `decide` 也未登记 MCP，避免模型自批。
+
 ## Mino Bots 协作（2026-10-19）
 
 前缀 `/project/{project_id}/collab`。写接口需项目维护者（与上节一致）。执行类工作项在创建时固化 `holder_user_id`，仅持有人可触发。
@@ -568,6 +597,43 @@ Meego 明确返回 `Check Token Perm Failed` 时，保留错误码、鉴权/业�
 Meego 空间发现返回空列表时，助手不重复相同查询，而是询问目标空间链接或别名，将待补充查询保存为 `project get`；补充后继续解析真实空间 key。空的空间详情提示核对目标和访问范围，空的工作项类型或创建模板明确阻断创建，不猜测业务 ID。空结果本身不能证明权限被拒绝。CLI 无进展提示不再要求选择 Mino 应用或测试模块。
 
 追问无候选项时使用直接输入提示，不生成空 choices，也不要求回复序号；确认或继续消息沿用同一输入提示。CLI HTTP 响应排除 Scout 附带的顶层 `plugins` 状态快照，避免无关状态造成长度截断并丢失业务权限错误码及具体处理指引；业务结果和权限拒绝状态仍按原合同返回。
+
+## 节点配置能力对 MCP 开放（2026-10-27）
+
+Workbench 节点配置里的 CLI、用例服务 API、IM 和 Gmail 不再只服务 IM 助手。新增 MCP 工具如下；工具仍经 `run_tool`、`route_allowed`、执行账号和写回执，不新增通用 HTTP 代理，不把节点密钥带回 Nexus：
+
+| MCP 工具 | 路由 | 风险 | 说明 |
+|---|---|---|---|
+| `cli_query` | `POST /runtime/cli/query` | read | `cli.query` 的 `surfaces` 增加 `mcp`；节点未指定时自动选本人唯一已配置在线节点 |
+| `cli_execute` | `POST /runtime/cli/execute` | write | `cli.execute` 的 `surfaces` 增加 `mcp`；MCP 入口没有 IM 会话附件，传 `attachments` / `attachment_ref` 直接 422 |
+| `case_api` | `POST /runtime/case-api/read` | read | 读 Workbench「API」集成；`operation=projects/sessions/cases`，`configuration.node_id` 必填；最多返回 `limit` 行并标 `truncated` |
+| `im_channels` | `GET /assistant/capabilities` | read | 列本人节点的飞书 CLI、微信、LangBot 渠道、连接状态、绑定和消息能力；不含密钥和聊天正文 |
+| `im_send` | `POST /runtime/im/send` | write | 向已上报渠道发文本；`chat_id` 必须显式给；飞书 CLI / LangBot 的实例由节点状态补全，微信仍要求入站 `context_token` |
+| `gmail_otp` | `POST /runtime/gmail/otp` | read | 调当前账号节点上的 `plugin.gmail.fetch_otp`；只返回 4-8 位验证码和有限诊断，不回传邮件正文或密码 |
+
+约束：
+
+- `case_api` 走现有 `case_import_sources.read` 和 `case_source_transport`，只读、受项目权限约束；`configuration` 的密钥仍在 Scout，Nexus 只接收 `node_id`、远端项目/会话和范围。
+- `im_send` 的 `channel` 只接受 `feishu_cli`、`wechat`、`feishu`、`wecom`、`dingtalk`；LangBot 不接受调用方伪造 `bot_uuid`，服务端按节点上报的 `instance_id` 覆盖。`delivery_id` 取 `client_request_id`，未给时按内容与目标哈希，避免同一请求重发。
+- `gmail_otp` 的 `max_wait_ms` 上限 45 秒，`since_ts` 只能取最近 7 天；`to_address` 省略时用该节点 Gmail 配置的收件地址。超时或未配置返回明确失败，不猜验证码。
+- 以上工具均为 `surfaces: [mcp]`；`cli.query` / `cli.execute` 同时保留 `im`。MCP 工具仍受 `assert_no_delete` 和写回执约束，不新增 DELETE、任意 Shell、节点本地文件读取或凭据写接口。
+
+### 插件安装状态与安装/更新（2026-10-27）
+
+在同一个 MCP 入口增加两个插件生命周期工具。它们复用 Workbench 已使用的节点归属、`node_tools` 下载中心合同和 Scout 持久任务，不新增下载源、不接收任意 URL 或密钥：
+
+| MCP 工具 | 路由 | 风险 | 说明 |
+|---|---|---|---|
+| `plugin_status` | `GET /runtime/plugins/status?node_id=` | read | 列当前账号可见节点的插件 `installed/configured` 状态；指定 `node_id` 时同时读取下载中心，返回 `installable/updatable/version/install_state` 和最近任务 |
+| `plugin_install` | `POST /runtime/plugins/install` | write | 提交 `cli.feishu`、`cli.meego` 或 `langbot` 的 `install/update` 任务；返回 Scout 任务 `task_id/state`，`wait_ms>0` 可在 60 秒内轮询 |
+
+约束：
+
+- `plugin_status` 不返回插件密钥、webhook、字段值或聊天正文；只保留安装、配置、连接和版本状态。`plugins_known=false` 表示节点尚未上报插件快照，不等于未安装。
+- `plugin_install` 只接受三个需要单独安装的插件；`case_api`、`gmail`、`bot.*` 等内置能力返回参数错误，应去 Workbench 保存配置。该工具只允许 MCP 入口，IM 助手调用会明确拒绝并提示去 Workbench 下载中心。
+- 安装由 Scout 下载中心异步执行，任务绑定节点当前进程；同一 `operation_id` 幂等。MCP 按 JSON-RPC 请求派生稳定 `operation_id`，超时后先用 `task_id` 查询，不能换请求 ID 重装。
+- 只允许节点 owner 提交；管理员查看他人节点时可以读插件快照，但不能通过本工具安装。离线、插件归属未确认、旧版 Scout 或已有活动任务时明确拒绝。
+- 状态和安装任务仍只走 SQLite 的 `NodeToolTask` 与节点归属，不在 Nexus 落插件配置；不开放删除、卸载或任意工具安装。
 
 ## 多 Agent 工作层（2026-10-22，v1）
 

@@ -7,7 +7,6 @@ DRIVERS: list[dict[str, Any]] = [
     {"id": "adb", "label": "真机 ADB", "kind": "device", "summary": "本机点按、截图、装包"},
     {"id": "claw", "label": "Scout 远程", "kind": "device", "summary": "经 Scout 执行"},
     {"id": "im.send", "label": "IM 发消息", "kind": "channel", "summary": "通道回消息"},
-    {"id": "figma.sync", "label": "Figma 拉稿", "kind": "plugin", "summary": "按应用拉设计稿"},
 ]
 
 SKILL_CATEGORIES: list[dict[str, str]] = [

@@ -379,14 +379,7 @@ def save_case(project_id: str, row: dict[str, Any], *, requirement_id: str = "")
             raise ValueError("case_revision_conflict")
         _persist_fields(db, fields, obj)
     saved = get_case(pid, cid)
-    out = saved or {**row, "case_id": cid, "project_id": pid, "requirement_id": rid}
-    try:
-        from mino_nexus.casework.collab_events import emit
-
-        emit("case_changed", project_id=pid, case_id=cid, requirement_id=rid)
-    except Exception:
-        pass
-    return out
+    return saved or {**row, "case_id": cid, "project_id": pid, "requirement_id": rid}
 
 
 def upsert_cases(
@@ -395,7 +388,6 @@ def upsert_cases(
     rows: list[dict[str, Any]],
     *,
     replace: bool = False,
-    collab_emit: bool = True,
 ) -> list[dict[str, Any]]:
     """LLM / 配置回写。replace=True 时整需求替换。"""
     from mino_nexus.core.database import session_scope
@@ -426,20 +418,7 @@ def upsert_cases(
         for fields in prepared:
             obj = db.query(ProjectCase).filter_by(project_id=pid, case_id=fields["case_id"]).one_or_none()
             _persist_fields(db, fields, obj, origin={"kind": "upsert"})
-    result = list_cases(pid, rid)
-    if collab_emit and incoming:
-        try:
-            from mino_nexus.casework.collab_events import emit
-
-            emit(
-                "case_changed",
-                project_id=pid,
-                case_ids=[str(x.get("case_id") or "") for x in incoming],
-                requirement_id=rid,
-            )
-        except Exception:
-            pass
-    return result
+    return list_cases(pid, rid)
 
 
 def apply_import_row(
@@ -489,19 +468,7 @@ def apply_prepared_import(database, prepared):
         raise ValueError("import_target_changed")
     status = "updated" if existing is not None else "created"
     existing = _persist_fields(database, fields, existing, origin=prepared.get("origin") or {"kind": "import"})
-    pub = _public(existing)
-    try:
-        from mino_nexus.casework.collab_events import emit
-
-        emit(
-            "case_changed",
-            project_id=fields["project_id"],
-            case_id=fields["case_id"],
-            requirement_id=fields.get("requirement_id") or "",
-        )
-    except Exception:
-        pass
-    return status, pub
+    return status, _public(existing)
 
 
 def delete_case(project_id: str, case_id: str) -> bool:

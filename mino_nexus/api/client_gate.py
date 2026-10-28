@@ -26,7 +26,6 @@ _CONSOLE_DENY: list[tuple[str, set[str]]] = [
 _STUDIO_DENY: list[tuple[str, set[str]]] = [
     (r"^/settings/ai/jobs(/|$)", {"PUT", "POST"}),
     (r"^/settings/robots(/|$)", {"POST", "PUT", "DELETE"}),
-    (r"^/settings/figma(/|$)", {"PUT", "POST"}),
     (r"^/me/studio-nav$", {"PUT"}),
 ]
 

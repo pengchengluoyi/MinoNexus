@@ -41,12 +41,12 @@ from mino_nexus.api import (
     rPacks,
     rProject,
     rProjectCases,
+    rResourceView,
+    rLogicView,
     rReleases,
     rRuntime,
     rSettings,
     rSys,
-    rTask,
-    rMinoBots,
 )
 from mino_nexus.core.schemas import PlanEvent
 from mino_nexus.api.ws import node as node_ws
@@ -128,21 +128,6 @@ async def lifespan(app: FastAPI):
 
     compile_task = asyncio.create_task(_case_compile_loop())
 
-    async def _collab_loop() -> None:
-        from mino_nexus.assistant.workspace.workspace_automation import tick
-        while True:
-            try:
-                await asyncio.to_thread(tick)
-            except Exception as exc:
-                SLog.w(TAG, f"workspace automation: {type(exc).__name__}")
-            await asyncio.sleep(2)
-
-    collab_task = asyncio.create_task(_collab_loop())
-    from mino_nexus.assistant.workspace.collab_message_queue import recover_interrupted, worker as message_worker
-    await asyncio.to_thread(recover_interrupted)
-    message_task = asyncio.create_task(message_worker())
-    from mino_nexus.api.development import worker as development_worker
-    development_task = asyncio.create_task(development_worker())
     from mino_nexus.resources.scout_updates import worker as scout_update_worker
     scout_update_task = asyncio.create_task(scout_update_worker())
     from mino_nexus.platform.identity import execution_user, user_thread
@@ -165,31 +150,11 @@ async def lifespan(app: FastAPI):
                 SLog.w(TAG, f"execution policy tick: {type(exc).__name__}")
             await asyncio.sleep(2)
     policy_task = asyncio.create_task(execution_policy_worker())
-    from mino_nexus.assistant.work.work_runner import (
-        recover_stale_work as recover_stale_work_items,
-        start as start_work_runner,
-        stop as stop_work_runner,
-        maintenance_worker as work_maintenance_worker,
-        worker as work_worker,
-    )
-    await asyncio.to_thread(recover_stale_work_items)
-    start_work_runner()
-    work_task = asyncio.create_task(work_worker())
-    work_maintenance_task = asyncio.create_task(work_maintenance_worker())
     yield
-    stop_work_runner()
-    work_task.cancel()
-    work_maintenance_task.cancel()
-    await asyncio.gather(work_task, work_maintenance_task, return_exceptions=True)
-    message_task.cancel()
-    await asyncio.gather(message_task, return_exceptions=True)
-    collab_task.cancel()
     policy_task.cancel()
-    await asyncio.gather(collab_task, policy_task, return_exceptions=True)
+    await asyncio.gather(policy_task, return_exceptions=True)
     scout_update_task.cancel()
     await asyncio.gather(scout_update_task, return_exceptions=True)
-    development_task.cancel()
-    await asyncio.gather(development_task, return_exceptions=True)
     compile_task.cancel()
     doc_sync_task.cancel()
     delivery_task.cancel()
@@ -250,8 +215,6 @@ def create_app() -> FastAPI:
     app.include_router(rSys.router)
     app.include_router(rAuth.router)
     app.include_router(rMe.router)
-    from mino_nexus.api import rDevelopment
-    app.include_router(rDevelopment.router)
     from mino_nexus.api import rDevelopmentEvidence
     app.include_router(rDevelopmentEvidence.router)
     app.include_router(rRuntime.router)
@@ -259,11 +222,15 @@ def create_app() -> FastAPI:
     app.include_router(rDevice.router)
     app.include_router(rCaseRunner.router)
     app.include_router(rObserve.router)
+    from mino_nexus.api import rExternalRun
+    app.include_router(rExternalRun.router)
     app.include_router(rSettings.router)
     app.include_router(rDocs.router)
     app.include_router(rPacks.router)
     app.include_router(rProject.router)
     app.include_router(rProjectCases.router)
+    app.include_router(rResourceView.router)
+    app.include_router(rLogicView.router)
     from mino_nexus.api import rApplicationUnderstanding
     app.include_router(rApplicationUnderstanding.router)
     app.include_router(rApplicationUnderstanding.resource_router)
@@ -272,12 +239,8 @@ def create_app() -> FastAPI:
     app.include_router(rNavEntries.router)
     app.include_router(rFlowBlocks.router)
     app.include_router(rAppIntel.router)
-    app.include_router(rTask.router)
-    app.include_router(rMinoBots.router)
     app.include_router(rAssistant.router)
     app.include_router(rMcp.router)
-    from mino_nexus.api import rWork
-    app.include_router(rWork.router)
     from mino_nexus.assistant.assistant_tools import bind_app
 
     bind_app(app)

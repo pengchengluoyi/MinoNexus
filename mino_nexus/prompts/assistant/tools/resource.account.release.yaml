@@ -1,0 +1,31 @@
+id: resource.account.release
+title: 释放 MCP 预约账号
+description: 释放一个由 MCP 预约的账号。必须传当前租约的 run_id；只允许释放 case_id=mcp-reserve 的租约，run 执行中的租约不通过此工具释放。不匹配时拒绝，避免释放别人的号。释放后租约清空（账号未被手动锁定时回到 free），并写资源日志。
+route: POST /project/{project_id}/resources/accounts/{account_id}/release
+risk: write
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    account_id:
+      type: string
+      description: 账号 id
+    run_id:
+      type: string
+      description: 预约时返回的 run_id；必须与当前租约一致
+  required:
+  - project_id
+  - account_id
+  - run_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

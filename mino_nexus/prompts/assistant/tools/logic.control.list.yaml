@@ -1,0 +1,58 @@
+id: logic.control.list
+title: 应用控件列表
+description: 列出应用逻辑的控件：target_desc、element_type、page_state_id、semantic_role、revision、是否敏感、定位来源。semantic_role=element 才是可操作控件；action/assertion
+  是用例句子。用户问“这页有哪些控件/哪个控件没定位”时用。
+route: GET /project/{project_id}/logic/controls
+risk: read
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    app_id:
+      type: string
+      description: 应用 id 或应用名；给了就只返回该应用页面上的控件
+    page_state_id:
+      type: string
+      description: 页面状态 id
+    semantic_role:
+      type: string
+      enum:
+      - element
+      - action
+      - assertion
+      - page
+      - unknown
+      description: 控件文案归类
+    sensitive:
+      type: string
+      enum:
+      - 'true'
+      - 'false'
+      description: 是否敏感控件
+    q:
+      type: string
+      description: 按目标描述/control_id 模糊搜索
+    limit:
+      type: integer
+      default: 50
+      minimum: 1
+      maximum: 200
+    offset:
+      type: integer
+      default: 0
+      minimum: 0
+  required:
+  - project_id
+param_resolvers:
+  project_id: project.by_name
+  app_id: app.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

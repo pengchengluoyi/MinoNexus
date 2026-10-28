@@ -237,20 +237,23 @@ def _run_case_list(
         from mino_nexus.resources.device_resource_lease import (
             release_device_lease,
         )
-        from mino_nexus.casework.execution_resources import admission, wait_for_admission, heartbeat, release as release_bundle
+        from mino_nexus.casework.execution_resources import admission, claim_without_account, heartbeat, release as release_bundle
 
         device_held = False
         result = None
         try:
             from mino_nexus.resources.accounts.lease import ensure_case_account_lease
             with admission(doc, case, project_id=project_id, package=package, platform=platform) as resource_attempt:
-                ok, lease_err = wait_for_admission(doc, case, resource_attempt, lambda wait_ms: ensure_case_account_lease(
+                ok, lease_err = ensure_case_account_lease(
                     run_id, app_id=app_id, env_profile=str(doc.get("env_profile") or "test"),
-                    platform=platform, target_package=package, case=case, scene=scene, wait_ms=wait_ms,
-                    plugin_user_id=str(doc.get("plugin_user_id") or "")))
+                    platform=platform, target_package=package, case=case, scene=scene,
+                    plugin_user_id=str(doc.get("plugin_user_id") or ""))
+                if ok and not resource_attempt["claimed"]:
+                    ok = claim_without_account()
+                    lease_err = resource_attempt.get("reason") or "" if not ok else ""
             device_held = resource_attempt["claimed"]
-            if not ok and lease_err:
-                reason = f"资源组合准入：{lease_err}"
+            if not ok:
+                reason = lease_err or "租号失败"
                 _record_case_preflight_fail(
                     run_id=run_id,
                     case=case,
@@ -258,10 +261,10 @@ def _run_case_list(
                     app_id=app_id,
                     sn=sn,
                     provider_id=str(doc.get("provider_id") or ""),
-                    reason_code=str(lease_err or "resource_wait_deadline_exceeded"),
+                    reason_code=reason,
                 )
                 run_store.patch_case(run_id, cid, target_sn=sn, status="fail", summary=reason, error=reason,
-                    reason_code=str(lease_err or "resource_wait_deadline_exceeded"), **_case_trace_fields(run_id, case))
+                    reason_code=reason, **_case_trace_fields(run_id, case))
                 emit_testing_task({
                     "event": "case_finished",
                     "run_id": run_id,

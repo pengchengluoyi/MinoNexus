@@ -131,7 +131,7 @@ def __getattr__(name: str) -> Any:
     """本模块没显式包装的东西，一律转发给 `settings_store`。
 
     为什么要这一层：本模块只需要对**受 env 影响的函数**做包装（provider 凭据、
-    默认 provider、用例 provider、AI 闸门）。其余几十个设置项（邮件 / Figma /
+    默认 provider、用例 provider、AI 闸门）。其余几十个设置项（邮件 /
     layer_stack / role prompt / usage …）与 env 无关，逐个 re-export 只会漏。
 
     已经漏过一次：`llm_client` 调 `ss.should_use_ai_planning`，而本模块当时没包装，

@@ -88,14 +88,25 @@ def capture(ctx, proposed, *, source, expected_before):
         return view(row)
 
 
-def listing(project_id, *, limit=50, offset=0, status=""):
+def listing(project_id, *, limit=50, offset=0, status="", latest=False):
     with session_scope() as db:
         actor = owned(db, project_id, write=False)
         query = db.query(AccountFactCandidate).filter_by(project_id=project_id, owner_user_id=actor)
         if status:
             query = query.filter_by(status=status)
-        total = query.count()
-        rows = query.order_by(AccountFactCandidate.created_at.desc(), AccountFactCandidate.candidate_id).offset(offset).limit(limit).all()
+        ordered = query.order_by(AccountFactCandidate.created_at.desc(), AccountFactCandidate.candidate_id)
+        if latest:
+            seen = set()
+            rows = []
+            for row in ordered.all():
+                if row.account_id in seen:
+                    continue
+                seen.add(row.account_id)
+                rows.append(row)
+            total = len(rows)
+        else:
+            total = query.count()
+            rows = ordered.offset(offset).limit(limit).all()
         items = []
         for row in rows:
             account = db.get(PoolAccount, row.account_id)

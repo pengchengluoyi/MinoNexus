@@ -43,10 +43,6 @@ def claim_in_transaction(db, account_id=""):
     if remaining(run.payload, case) == 0:
         request["reason"] = "attempt_deadline_exceeded"
         return False
-    wait_end = case.get("resource_wait_deadline_at")
-    if wait_end is not None and time.time() >= wait_end:
-        request["reason"] = "resource_wait_deadline_exceeded"
-        return False
     is_web = is_web_slot(request["sn"], request["platform"])
     keys = ["device:" + request["sn"] + (":" + request["run_id"] if is_web else "")]
     if account_id:

@@ -1,0 +1,50 @@
+id: resource.log.list
+title: 测试资源日志
+description: 分页读取租号、释放、facet 变更等资源日志。账号标识默认掩码，detail 里的凭证键会被丢弃。用户问“这个号谁租的/什么时候释放/为什么没号”时用。
+route: GET /project/{project_id}/resources/logs
+risk: read
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    action:
+      type: string
+      description: 动作精确匹配，例如 lease_claim/lease_release/facet_update
+    env:
+      type: string
+      description: 环境 key
+    run_id:
+      type: string
+      description: run id 片段
+    case_id:
+      type: string
+      description: 用例 id 片段
+    account_ident:
+      type: string
+      description: 账号标识片段；服务端会掩码输出
+    sn:
+      type: string
+      description: 设备序列号片段
+    page:
+      type: integer
+      default: 1
+      minimum: 1
+    page_size:
+      type: integer
+      default: 50
+      minimum: 1
+      maximum: 100
+  required:
+  - project_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

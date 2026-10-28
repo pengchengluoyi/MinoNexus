@@ -1,5 +1,5 @@
 id: cli.query
-version: 1
+version: 2
 title: 查询飞书和 Meego CLI
 description: >-
   在本人已配置的 Scout 上运行飞书或 Meego 查询命令。
@@ -13,11 +13,12 @@ description: >-
   [workitem,meta-fields]、[workitem,meta-templates] 可核对字段和模板，
   [workitem,get] 还需 work-item-type、work-item-id。
   不清楚命令时先传 [help]、[schema,服务.资源.方法] 或 [inspect,workitem.create]。
-  节点默认来自当前 IM 会话，否则自动选本人唯一已配置节点；多节点须明确 node_id。
+  节点默认来自当前 IM 会话或 MCP 调用；没有会话时自动选本人唯一已配置节点，多节点须明确 node_id。
   本工具不能创建、修改或删除，写操作使用 cli.execute。CLI 授权失败时展示工具提供的具体原因和下一步，不重复尝试同一个被拒绝的接口，不声称执行成功。
 route: POST /runtime/cli/query
 risk: read
 async: false
+timeout_sec: 130
 params_schema:
   type: object
   additionalProperties: false
@@ -36,5 +37,5 @@ params_schema:
     node_id: {type: string}
   required: [plugin, command]
 result_pick: [data]
-surfaces: [im]
+surfaces: [im, mcp]
 enabled: true

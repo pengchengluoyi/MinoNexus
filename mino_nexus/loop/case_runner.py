@@ -273,7 +273,7 @@ def run_cases(
             "package": package, "environment": (env_doc.get("profiles") or {}).get(resolved_env),
             "channels": env_doc.get("channels") or []}),
         "execution_policy": {"version": 1, "batch_deadline_at": time.time() + batch_budget,
-            "batch_budget_seconds": batch_budget, "resource_wait_seconds": 300, "cleanup_seconds": 10},
+            "batch_budget_seconds": batch_budget, "cleanup_seconds": 10},
         "task_id": run_id,
         "engine": "agent",
         "execution_mode": execution_mode,

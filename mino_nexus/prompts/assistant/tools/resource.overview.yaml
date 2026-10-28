@@ -1,0 +1,26 @@
+id: resource.overview
+title: 测试资源总览
+description: 查看一个项目的测试资源总览：设备在线/就绪、账号占用与未注册数量、最近租号日志、需要留意的告警。用户问“资源够不够/现在有哪些设备/号池怎么样”时先用它。返回的是计数和摘要，不含账号密码、OTP、渠道密钥。
+route: GET /project/{project_id}/resources/overview
+risk: read
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    env:
+      type: string
+      description: 只统计某个环境，例如 test/pre/prod；留空统计全部
+  required:
+  - project_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

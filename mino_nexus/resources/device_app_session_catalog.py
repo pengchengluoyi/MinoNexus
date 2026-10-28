@@ -124,7 +124,7 @@ def list_project_device_app_matrix(
         if pkg not in pkg_set:
             continue
         key = (str(row.get("sn") or ""), pkg)
-        if key[0] and key[1]:
+        if key[0] and key[1] and key not in by_key:
             by_key[key] = {**row, "registered": True}
 
     devices = _device_sns(online_only=not include_offline_devices)

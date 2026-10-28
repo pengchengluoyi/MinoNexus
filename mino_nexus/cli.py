@@ -76,6 +76,78 @@ def _catalog_cli(argv: list[str]) -> int:
     return 0
 
 
+def _otp_cli(argv: list[str]) -> int:
+    import json
+
+    ap = argparse.ArgumentParser(prog="mino-nexus otp", description="统一取验证码")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("get", help="按账号取验证码；固定码优先，其次 Gmail，最后人工")
+    p.add_argument("project_id")
+    p.add_argument("account_id")
+    p.add_argument("--user-id", default="", help="Gmail 插件归属用户；不填则不走 Gmail")
+    p.add_argument("--env-profile", default="")
+    p.add_argument("--env-surface", default="")
+    p.add_argument("--node-id", default="")
+    p.add_argument("--sn", default="")
+    p.add_argument("--since-ts", type=float, default=None)
+    p.add_argument("--lookback-seconds", type=int, default=600)
+    p.add_argument("--max-wait-ms", type=int, default=15000)
+    p.add_argument("--poll-interval-ms", type=int, default=200)
+    p.add_argument("--from-allowlist", action="append", default=[])
+    p.add_argument("--subject-contains", default="")
+    p.add_argument("--json", action="store_true")
+    args = ap.parse_args(argv)
+
+    from mino_nexus.core.database import ensure_db
+
+    ensure_db()
+    from mino_nexus.resources.resource_view import account_otp
+
+    data = account_otp(
+        args.project_id, args.account_id,
+        env_profile=args.env_profile, env_surface=args.env_surface,
+        node_id=args.node_id, sn=args.sn, plugin_user_id=args.user_id,
+        from_allowlist=args.from_allowlist or None,
+        subject_contains=args.subject_contains,
+    )
+    if data is None:
+        print("账号不存在", file=sys.stderr)
+        return 2
+    if data.get("source") == "gmail":
+        from fastapi import HTTPException
+        from mino_nexus.api.rRuntime import GmailOtpBody, fetch_gmail_otp
+
+        gmail = data.get("gmail") if isinstance(data.get("gmail"), dict) else {}
+        try:
+            res = fetch_gmail_otp(
+                GmailOtpBody(
+                    node_id=args.node_id,
+                    to_address=str(data.get("recipient") or ""),
+                    since_ts=args.since_ts,
+                    lookback_seconds=args.lookback_seconds,
+                    max_wait_ms=args.max_wait_ms,
+                    poll_interval_ms=args.poll_interval_ms,
+                    subject_contains=args.subject_contains or str(gmail.get("subject_contains") or ""),
+                    from_allowlist=args.from_allowlist or list(gmail.get("from_allowlist") or []),
+                ),
+                {"user_id": args.user_id},
+            )
+        except HTTPException as exc:
+            print(json.dumps({"ok": False, "error": exc.detail}, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 2
+        data["code"] = str((res.get("data") or {}).get("code") or "")
+        data["source"] = "gmail"
+        data["requires_human"] = False
+        data["hint"] = "已从 Gmail 取到验证码"
+    if args.json:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+    elif data.get("code"):
+        print(data["code"])
+    else:
+        print(data.get("hint") or "未取到验证码", file=sys.stderr)
+    return 0 if data.get("code") else 2
+
+
 def _session_cli(argv: list[str]) -> int:
     import json
 
@@ -350,6 +422,8 @@ def main(argv: list[str] | None = None) -> int:
         return _catalog_cli(argv[1:])
     if argv and argv[0] == "session":
         return _session_cli(argv[1:])
+    if argv and argv[0] == "otp":
+        return _otp_cli(argv[1:])
     if argv and argv[0] == "nav":
         return _nav_cli(argv[1:])
 

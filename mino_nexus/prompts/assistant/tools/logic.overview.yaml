@@ -1,0 +1,28 @@
+id: logic.overview
+title: 应用逻辑总览
+description: 查看一个应用的应用逻辑总览：页面数、有用例引用的页面占比、控件数与元素控件数、入口/缺口统计、重复 control_id。用户问“这个应用逻辑覆盖怎么样/缺哪些入口”时先用它。
+route: GET /project/{project_id}/apps/{app_id}/logic/overview
+risk: read
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    app_id:
+      type: string
+      description: 应用 id 或应用名
+  required:
+  - project_id
+  - app_id
+param_resolvers:
+  project_id: project.by_name
+  app_id: app.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

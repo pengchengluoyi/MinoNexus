@@ -1,0 +1,105 @@
+id: logic.page.review.propose
+title: 提交页面评审提案
+description: 为一个页面状态创建知识评审候选：给出页面特征的正/负例、别名和证据事件。只创建 candidate，不会自动批准；批准/驳回必须由人在 Workbench 的页面评审里完成（HITL）。用户明确要求“提交页面评审/提议这个页面的特征”时用。证据必须是当前账号已结束 session 里的 observe/screen、observe/hierarchy、tool/result 或 inspection/done 事件。
+route: POST /project/{project_id}/apps/{app_id}/logic/pages/{state_id}/review-proposals
+risk: write
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    app_id:
+      type: string
+      description: 应用 id 或应用名
+    state_id:
+      type: string
+      description: 页面状态 id，必须来自 logic.page.list；expected_revision 用该页的 knowledge_revision
+    request_id:
+      type: string
+      description: 稳定请求 id；相同内容重试返回原候选，不同内容会拒绝
+    version:
+      type: string
+      default: v1
+      description: 导航版本
+    expected_revision:
+      type: integer
+      minimum: 0
+      description: 页面当前 knowledge_revision；冲突时重新读取 pages
+    platform:
+      type: string
+      enum:
+      - web
+      - android
+      - ios
+      - pc
+    build:
+      type: string
+      description: 证据对应的构建号/版本
+    reason:
+      type: string
+      description: 为什么提出这次评审
+    aliases:
+      type: array
+      items:
+        type: string
+      description: 页面别名，最多 30 个
+    positive_terms:
+      type: array
+      items:
+        type: string
+      minItems: 1
+      maxItems: 30
+      description: 能标识该页面的正例特征
+    negative_terms:
+      type: array
+      items:
+        type: string
+      minItems: 1
+      maxItems: 30
+      description: 不应标识该页面的负例特征
+    examples:
+      type: array
+      minItems: 2
+      maxItems: 30
+      items:
+        type: object
+        properties:
+          session_id:
+            type: string
+          seq:
+            type: integer
+            minimum: 0
+          polarity:
+            type: string
+            enum:
+            - positive
+            - negative
+        required:
+        - session_id
+        - seq
+        - polarity
+      description: 证据事件；会话必须已结束且属于当前账号
+  required:
+  - project_id
+  - app_id
+  - state_id
+  - request_id
+  - expected_revision
+  - platform
+  - build
+  - reason
+  - positive_terms
+  - negative_terms
+  - examples
+param_resolvers:
+  project_id: project.by_name
+  app_id: app.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

@@ -1,0 +1,44 @@
+id: logic.entry.extract
+title: 重抽页面入口
+description: 从用例和采集证据重新抽取页面入口与缺口。写入 nav_page_entries/nav_page_gaps，入口直接 active。用户明确要求“重抽入口/补一下页面入口”时用。MCP 只返回各来源计数，明细请随后用 logic.entry.list 查；只想看现状直接用 logic.entry.list。
+route: POST /project/{project_id}/apps/{app_id}/logic/entries/extract
+risk: write
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+    app_id:
+      type: string
+      description: 应用 id 或应用名
+    platform:
+      type: string
+      description: 只抽某个平台；留空抽全部
+    case_ids:
+      type: array
+      items:
+        type: string
+      description: 只抽指定用例；留空按 include_cases 抽全部
+    include_cases:
+      type: boolean
+      default: true
+      description: 是否从用例抽入口
+    include_capture:
+      type: boolean
+      default: true
+      description: 是否从采集/导航图抽入口
+  required:
+  - project_id
+  - app_id
+param_resolvers:
+  project_id: project.by_name
+  app_id: app.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

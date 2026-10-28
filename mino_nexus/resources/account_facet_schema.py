@@ -154,12 +154,21 @@ def facets_for_storage(
     out: dict[str, str] = {}
     health = str(src.get("health") or "available").strip().lower()
     if health and health != "available":
-        out["health"] = health
+        norm_health = normalize_facets({"health": health}).get("health")
+        if norm_health and norm_health != "available":
+            out["health"] = norm_health
     for key, raw in src.items():
         k = str(key or "").strip()
         if not k or k == "health":
             continue
         val = str(raw or "").strip().lower()
+        if k in CORE_KEYS:
+            # 五维核心 facet 不在扩展 defs 里，但用户显式改过就必须落盘；
+            # 否则 lifecycle/session 会被下一次读取当成 unknown。
+            norm = normalize_facets({k: val}).get(k)
+            if norm and norm != "unknown" and not (k == "health" and norm == "available"):
+                out[k] = norm
+            continue
         defn = defs.get(k)
         if defn and is_configured_facet_value(defn, val):
             out[k] = normalize_fact_value(defn, val) if is_numeric_fact(defn) else val

@@ -11,7 +11,7 @@ from mino_nexus.resources.project_env import (
     default_project_env,
     env_from_project_row,
     list_test_accounts,
-    normalize_project_env,
+    normalize_stored_project_env,
 )
 
 
@@ -398,7 +398,7 @@ def update_app_env(app_id: str, env: dict) -> dict[str, Any]:
     pid = str(app.get("project_id") or "")
     project = require_project(pid)
     from mino_nexus.resources.project_env import validate_environment_write
-    doc = normalize_project_env(project.get("env") or default_project_env())
+    doc = normalize_stored_project_env(project.get("env") or default_project_env())
     validate_environment_write(doc)
     # This legacy endpoint edits values only. Channel/platform changes use project env.
     if not isinstance(env, dict) or any(k in env for k in ("channels", "profiles", "environments")):

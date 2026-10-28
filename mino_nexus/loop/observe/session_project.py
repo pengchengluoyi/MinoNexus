@@ -23,6 +23,9 @@ def _is_valid_thumb(thumb: str) -> bool:
     return len(raw) >= 64
 
 
+from mino_nexus.contract.execution_event import is_action, is_failure, normalize  # noqa: E402
+
+
 def _normalize_thumb(thumb: str) -> str:
     s = str(thumb or "").strip()
     if not _is_valid_thumb(s):
@@ -667,6 +670,30 @@ def _merge_resource_transition_events(
     return [t[2] for t in pins]
 
 
+def _ext_to_ui(typ: str, payload: dict[str, Any], *, turn: int, phase: str, status: str = "") -> dict[str, Any]:
+    """外部 agent 上报的 ext/* 事件 → 时间线行。状态只取 agent 自述的值。"""
+    kind = typ.split("/", 1)[1]
+    label = " ".join(str(payload.get(k)) for k in ("action", "target") if payload.get(k))
+    summary = str(payload.get("note") or payload.get("result") or label or kind)
+    base: dict[str, Any] = {
+        "phase": "step" if kind in ("action", "phase_start") else "result",
+        "step": int(payload.get("case_step") or 0),
+        "loop_phase": str(payload.get("phase") or phase),
+        "capability_id": f"ext.{payload.get('action') or kind}",
+        "summary": summary[:300],
+        "source": "external_agent",
+        "ext_kind": kind,
+        "status": status,
+        "duration_ms": payload.get("duration_ms"),
+    }
+    if payload.get("error"):
+        base["error"] = payload["error"]
+    ref = str(payload.get("screenshot_ref") or "")
+    if ref:
+        base["thumb"] = _normalize_thumb(ref)
+    return base
+
+
 def _structured_to_ui(
     events: list[dict[str, Any]],
     *,
@@ -736,6 +763,8 @@ def _structured_to_ui(
                 "summary": _resource_transition_summary(payload),
                 "resource_transition": payload,
             }
+        elif typ.startswith("ext/") and typ not in ("ext/begin",):
+            base = _ext_to_ui(typ, payload, turn=turn, phase=phase, status=(normalize(row) or {}).get("status", ""))
         if base is not None:
             out.append(_enrich_ui_event(
                 base,
@@ -799,8 +828,9 @@ def project_metrics(session_id: str) -> dict[str, Any]:
     meta = session_store.get_meta(sid) or {}
     events = session_store.read_events(sid, limit=2000)
     llm_rows = [e for e in events if e.get("type") == "llm/response"]
-    tool_calls = [e for e in events if e.get("type") == "tool/call"]
+    tool_calls = [e for e in events if e.get("type") == "tool/call" or is_action(e)]
     tool_results = [e for e in events if e.get("type") == "tool/result"]
+    ext_failures = sum(1 for e in events if str(e.get("type") or "").startswith("ext/") and is_failure(e))
     recovery = [e for e in events if e.get("type") == "recovery/match"]
     guards = [e for e in events if e.get("type") == "guard/block"]
     inspection_rows = [e for e in events if e.get("type") == "inspection/done"]
@@ -809,7 +839,7 @@ def project_metrics(session_id: str) -> dict[str, Any]:
         1
         for e in tool_results
         if str((e.get("payload") or {}).get("status") or "").lower() in {"fail", "failed", "declined", "blocked"}
-    )
+    ) + ext_failures
     end = next((e for e in reversed(events) if e.get("type") == "session/end"), None)
     task_status = (end or {}).get("payload", {}).get("status") or meta.get("status") or ""
     return {

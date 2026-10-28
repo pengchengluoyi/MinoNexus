@@ -10,13 +10,14 @@ from pydantic import BaseModel
 from mino_nexus.core.http_util import ok
 from mino_nexus.resources.project_env import (
     ENV_PROFILE_LABELS,
+    adapt_stored_project_env,
     list_test_accounts,
     normalize_project_env,
+    normalize_stored_project_env,
     pick_test_accounts,
     public_test_accounts,
     save_test_accounts,
 )
-from mino_nexus.platform import auth_store
 from mino_nexus.resources import project_store as ps
 from mino_nexus.api.deps import app_maintainer, current_session, project_maintainer, require_project_write
 
@@ -34,10 +35,6 @@ class AppCreate(BaseModel):
     description: Optional[str] = None
     platforms: str = ""
     env: dict[str, Any] = {}
-
-
-class MaintainerBody(BaseModel):
-    user_id: str
 
 
 class AppEnvUpdate(BaseModel):
@@ -133,6 +130,7 @@ def list_project_resource_allocation_logs(
     account_ident: str = "",
     sn: str = "",
     env: str = "",
+    latest: int = 0,
     _sess: dict = Depends(current_session),
 ):
     try:
@@ -151,6 +149,7 @@ def list_project_resource_allocation_logs(
         account_ident=account_ident,
         sn=sn,
         env=env,
+        latest=bool(latest),
     )
     return ok(payload)
 
@@ -376,7 +375,12 @@ def update_project_env(project_id: str, item: ProjectEnvUpdate, _sess: dict = De
         project = ps.require_project(project_id)
     except KeyError as exc:
         _missing(exc)
-    prev = project.get("env") if isinstance(project.get("env"), dict) else {}
+    raw_prev = project.get("env") if isinstance(project.get("env"), dict) else {}
+    try:
+        # 仅在合并已保存值时适配旧 phone/login_kind；保留其他字段，避免丢号池配置。
+        prev = adapt_stored_project_env(raw_prev) if raw_prev else {}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     incoming_envs = item.environments if item.environments is not None else prev.get("environments")
     if isinstance(incoming_envs, list) and isinstance(prev.get("environments"), list):
         prev_by_key = {
@@ -420,7 +424,12 @@ def update_project_env(project_id: str, item: ProjectEnvUpdate, _sess: dict = De
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     doc = normalize_project_env(body)
     env_keys = {e["key"] for e in doc.get("environments") or []}
-    prev_norm = normalize_project_env(prev) if isinstance(prev, dict) else {}
+    try:
+        # 旧项目可能仍存有 phone/login_kind；只在合并“已保存值”时适配，
+        # 新写入仍由 validate_environment_write 严格拒绝废弃字段。
+        prev_norm = normalize_stored_project_env(prev) if isinstance(prev, dict) else {}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if item.channel_gmail_alias is not None:
         from mino_nexus.resources.gmail_alias_lease import normalize_channel_gmail_alias
 
@@ -1138,46 +1147,10 @@ def ai_expand_account_facet_extensions(
     return ok({"extensions": merged, "message": err or "仅预览，未写入"})
 
 
-def _maintainer_call(fn, *args):
-    try:
-        return ok(fn(*args))
-    except KeyError as exc:
-        _missing(exc)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail={"reason_code": str(exc), "message": "需要管理员才能调整项目维护者"}) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"reason_code": str(exc)}) from exc
-
-
-@router.get("/{project_id}/maintainers")
-def list_project_maintainers(project_id: str, sess: dict = Depends(current_session)):
-    from mino_nexus.resources import project_members as pm
-    data = _maintainer_call(pm.list_maintainers, project_id)
-    data["data"] = {"items": data["data"], "can_edit": bool(sess.get("user_id")),
-                    "can_manage": auth_store.is_admin_role(str(sess.get("role") or ""))}
-    return data
-
-
-@router.post("/{project_id}/maintainers")
-def add_project_maintainer(project_id: str, body: MaintainerBody, sess: dict = Depends(current_session)):
-    from mino_nexus.resources import project_members as pm
-    return _maintainer_call(pm.add_maintainer, project_id, body.user_id, sess)
-
-
-@router.delete("/{project_id}/maintainers/{user_id}")
-def remove_project_maintainer(project_id: str, user_id: str, sess: dict = Depends(current_session)):
-    from mino_nexus.resources import project_members as pm
-    return _maintainer_call(pm.remove_maintainer, project_id, user_id, sess)
-
-
 @router.delete("/{project_id}", dependencies=[Depends(project_maintainer)])
 def delete_project(project_id: str, _sess: dict = Depends(current_session)):
     try:
         data = ps.delete_project(project_id)
     except KeyError as exc:
         _missing(exc)
-    from mino_nexus.core.database import session_scope
-    from mino_nexus.models.project_member import ProjectMember
-    with session_scope() as db:
-        db.query(ProjectMember).filter_by(project_id=project_id).delete()
     return ok(data, msg="deleted")

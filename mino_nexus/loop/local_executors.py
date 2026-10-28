@@ -514,14 +514,11 @@ def dispatch_local(
                 need.get("requirements") if isinstance(need.get("requirements"), dict) else {},
                 params.get("requirements"),
             )
-        from mino_nexus.resources.accounts.lease import INTERACTIVE_ACQUIRE_WAIT_MS
-
         row, err = lease_for_context(
             ctx,
             params,
             ai_reasoning=str(event.ai_reasoning or ""),
             need_facets=need,
-            wait_ms=INTERACTIVE_ACQUIRE_WAIT_MS,
         )
         if row:
             brief = format_accounts_brief(row)

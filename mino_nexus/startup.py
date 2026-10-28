@@ -21,7 +21,6 @@ def bootstrap() -> None:
     from mino_nexus.catalog.flow_block_seed import seed_global_flow_blocks
     from mino_nexus.loop.login_state_probe import ensure_read_web_auth_capability
     from mino_nexus.catalog.skill_channel import register_program_capabilities
-    from mino_nexus.catalog.development_seed import sync_development_capability
     from mino_nexus.casework.v5_capabilities import register_current_web_capabilities
     register_current_web_capabilities()
     seed_recovery_rules()
@@ -32,7 +31,6 @@ def bootstrap() -> None:
     register_current_local_capabilities()
     ensure_read_web_auth_capability()
     register_program_capabilities()
-    sync_development_capability()
 
 
 register_bootstrap(bootstrap)

@@ -165,6 +165,7 @@ def list_allocation_logs(
     account_ident: str = "",
     sn: str = "",
     env: str = "",
+    latest: bool = False,
 ) -> dict[str, Any]:
     pid = str(project_id or "").strip()
     pg = max(1, int(page or 1))
@@ -189,13 +190,23 @@ def list_allocation_logs(
         env_q = str(env or "").strip()
         if env_q:
             q = q.filter(ResourceAllocationLog.env == env_q)
-        total = q.count()
-        rows = (
-            q.order_by(ResourceAllocationLog.id.desc())
-            .offset((pg - 1) * ps)
-            .limit(ps)
-            .all()
-        )
+        ordered = q.order_by(ResourceAllocationLog.id.desc())
+        if latest:
+            seen: set[str] = set()
+            rows = []
+            for row in ordered.all():
+                ident = str(row.account_ident or "").strip()
+                account_id = str(row.account_id or "").strip()
+                key = ident or account_id or ("lease_fail" if row.action == "lease_fail" else str(row.id))
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(row)
+            total = len(rows)
+            pg, ps = 1, total or 1
+        else:
+            total = q.count()
+            rows = ordered.offset((pg - 1) * ps).limit(ps).all()
         items = [
             {
                 "id": r.id,

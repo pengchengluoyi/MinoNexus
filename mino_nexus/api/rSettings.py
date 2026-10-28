@@ -1,4 +1,4 @@
-"""设置：发信、模型 Key、角色目录、Figma Token、集成插件、调用记录。"""
+"""设置：发信、模型 Key、角色目录、集成插件、调用记录。"""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -74,11 +74,6 @@ class JobPreviewBody(BaseModel):
     flags: dict[str, bool] | None = None
     system_blocks: list[dict[str, Any]] | None = None
     user_blocks: list[dict[str, Any]] | None = None
-
-
-class FigmaSettingsBody(BaseModel):
-    access_token: str = ""
-    clear_token: bool = False
 
 
 @router.get("/mail")
@@ -282,27 +277,6 @@ def chat_role(body: RoleChatBody, _sess: dict = Depends(current_session)):
     finally:
         dispatch.reset(tok)
     return ok(data)
-
-
-@router.get("/figma")
-def get_figma(_sess: dict = Depends(current_session)):
-    return ok(ss.get_figma_settings())
-
-
-@router.put("/figma")
-def save_figma(body: FigmaSettingsBody, _sess: dict = Depends(current_session)):
-    return ok(ss.save_figma_settings(access_token=body.access_token, clear_token=body.clear_token), msg="已保存")
-
-
-@router.post("/figma/test")
-def test_figma(body: FigmaSettingsBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.resources import figma_service as fs
-
-    try:
-        info = fs.test_figma_token(body.access_token or None)
-    except Exception as e:
-        http_error(e)
-    return ok(info, msg="Token 可用")
 
 
 @router.get("/dispatch")

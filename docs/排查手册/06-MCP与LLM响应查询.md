@@ -70,3 +70,78 @@
 当前入口不是 V6 D1 的持久更新队列：尚无跨进程/全入口原子 update_hold，活动任务检查后新任务仍可能竞入；应在维护空闲窗口调用。更新不会清除已有未知写隔离。固定版本、回退、排队和自动终态核验需 Scout/Nexus 后续共同实现。
 
 本次用隔离 SQLite 和真实 ASGI/MCP 完成鉴权、工具发现、离线拒绝、重复请求和参数边界检查；未使用 pytest/mock，未修改业务库，未执行真实节点升级。线上下载安装/重连验收另记。
+
+## 2026-10-27：节点配置能力（CLI / API / IM / Gmail）的 MCP 工具
+
+除诊断工具外，MCP 现在可以直接使用 Workbench 节点配置里的四类能力。工具名与参数：
+
+| 工具名 | 参数 | 用途与边界 |
+|---|---|---|
+| `cli_query` | `plugin`、`command`、`options?`、`node_id?` | 只读跑飞书/Meego CLI；节点默认来自当前 IM 会话，没有会话时自动选本人唯一已配置在线节点 |
+| `cli_execute` | 同上，另可带 `attachment_ref` / `attachments` | 写操作；MCP 入口没有 IM 会话附件，带附件会 422；写回执按 JSON-RPC id 去重 |
+| `case_api` | `project_id`、`operation`、`configuration`、`limit?` | 读 Workbench「API」集成；`operation=projects/sessions/cases`，`configuration.node_id` 必填；结果超过 `limit` 标 `truncated=true` |
+| `im_channels` | 无 | 先看本人节点有哪些 IM 渠道、是否已绑定、是否可发；不返回密钥或聊天正文 |
+| `im_send` | `channel`、`chat_id`、`text`、`chat_type?`、`reply_ctx?`、`client_request_id?` | 发文本；`chat_id` 必须由用户给出；飞书 CLI / LangBot 实例由节点状态补全；微信主动发送需要入站 `context_token` |
+| `gmail_otp` | `node_id?`、`to_address?`、`since_ts?`、`lookback_seconds?`、`max_wait_ms?` | 从本人节点 Gmail 取码；只返回 4-8 位数字和诊断，最多等 45 秒 |
+
+建议顺序：先 `im_channels` 确认渠道与节点，再 `im_send`；Gmail 直接调 `gmail_otp`，取不到时先确认邮件已到达，不要反复扩大等待窗口；CLI 查询用 `cli_query`，明确要创建/修改才用 `cli_execute`；用例服务先用 `operation=projects`/`sessions` 缩小范围，再读 `cases`。
+
+排障要点：
+
+- `im_send` 返回 422 且提示 `context_token`，是微信没有入站会话上下文，不是节点离线；不要声称已发送。
+- `im_send` 返回 409，多为渠道未上报、未配置、被其他节点持有或机器人实例为空；按提示去 Workbench 检查，不换账号或换节点兜底。
+- `gmail_otp` 返回 502/“没有取到验证码”，先核对 `to_address`、`since_ts` 和邮件是否到达；工具不会读取或返回邮件正文。
+- `case_api` 返回 `source_api_*` 原因码时，按原因码检查项目权限、节点合同、远端项目/会话 id 和服务地址；不要把空结果当成“没有权限”。
+- `cli_execute` 超时或返回 503 时按“结果未知”处理，先查第三方业务状态，不换 JSON-RPC id 重放。
+
+## 2026-10-27：插件安装状态与安装/更新
+
+新增两个 MCP 工具：
+
+| 工具名 | 参数 | 用途与边界 |
+|---|---|---|
+| `plugin_status` | `node_id?` | 查看节点插件 `installed/configured`；指定 `node_id` 时附带下载中心 `installable/updatable/version/install_state` 和任务 |
+| `plugin_install` | `node_id`、`plugin`、`action?`、`operation_id?`、`wait_ms?` | 安装或更新 `cli.feishu`、`cli.meego`、`langbot`，由 Scout 下载中心异步执行 |
+
+建议顺序：先 `plugin_status` 找到节点和缺失插件；再 `plugin_install(action=install)`；long 任务用返回的 `task_id` 再查 `plugin_status`，或在提交时给 `wait_ms`。`langbot` 需要可用 Python 3.11+；`missing_python` 应先在节点准备 Python，不要反复提交安装。`case_api`、`gmail`、`bot.*` 属于内置能力，`installed=true` 不代表已配置，保存配置后看 `configured`。
+
+排障：
+
+- `plugin_status` 返回 `plugins_known=false`：节点还没上报插件快照，不是“未安装”，等待节点就绪或检查 Scout 版本。
+- `plugin_install` 返回 409 `tool_busy`：同节点已有安装任务；先查 `tasks` 和任务 `state`，不要换 `operation_id` 重试。
+- 任务 `state=unknown`：节点结果不确定；只查原 `task_id`，不要重新 `install`。
+- 任务 `state=failed` 且 `error` 只给阶段：看节点安装日志中的任务 id；Nexus 不回传下载 URL、凭据或完整子进程输出。
+- 管理员能看到他人节点的 `plugin_status` 快照，但 `plugin_install` 只允许 owner；这是账号隔离，不是节点离线。
+
+## 2026-10-27：测试资源与应用逻辑工具
+
+新增 20 个工具：`resource_*` 9 个、`logic_*` 11 个。它们指向新的安全读模型，不复用 Workbench 的旧账号/环境/设备路由；账号列表/详情/预约返回账号、密码、OTP 明文；日志/环境仍按原脱敏。
+
+| 工具名 | 用途 |
+|---|---|
+| `resource_overview` | 项目资源全景：账号/设备/租约计数、最近日志 |
+| `resource_account_list` | 账号列表；`state=free\|occupied\|locked`、`lifecycle`、`env`、`q` |
+| `resource_account_get` | 单账号：账号/密码/OTP 明文、租约、机态、最近日志 |
+| `resource_device_list` | 设备台账；`include_sessions` 带机态 App |
+| `resource_log_list` | 资源分配日志 |
+| `resource_env_get` | 环境/渠道/号池结构；只给 `configured` 和 `secret_slots` |
+| `resource_account_reserve` | 预约账号；写 lease，立刻算 `occupied`；返回 `run_id` 和账号/密码/OTP 明文 |
+| `resource_account_otp` | 统一取码；账号固定码 → 环境 fixed → Gmail → 人工；`requires_human=true` 时让用户读真实短信 |
+| `resource_account_release` | 用 `account_id + run_id` 释放 |
+| `logic_overview` | 页面/控件/入口/缺口覆盖度 |
+| `logic_page_list` / `logic_page_get` | 页面列表/详情（控件、用例引用、入口、缺口；`include=reviews` 看评审摘要） |
+| `logic_control_list` / `logic_control_get` | 控件列表/详情（完整 locator 只在详情） |
+| `logic_entry_list` | `kind=entry\|gap\|summary` |
+| `logic_flow_block_list` / `logic_flow_block_get` | 通用逻辑块目录/详情 |
+| `logic_control_update` | 改控件定位；必须带 `expected_revision` |
+| `logic_entry_extract` | 重抽入口/缺口；`project_id` 必须属于该应用；只回各来源计数，明细用 `logic_entry_list` |
+| `logic_page_review_propose` | 提交页面评审候选；`expected_revision` 用页面 `knowledge_revision`；证据必须本人已结束 session；批准/驳回仍在 Workbench |
+
+排障顺序：
+
+1. 先 `resource_overview` / `logic_overview` 看是不是空项目、无设备、无页面。
+2. 账号“明明空闲却约不到”：`resource_account_get` 看 `state=occupied` 与 `lease.run_id`；过期未释放仍算占用，先让持有者 `resource_account_release`。
+3. 预约冲突：不要换 `run_id` 抢占；先读 `resource_account_list?state=occupied`，释放或换号。
+4. 控件写冲突 `code=conflict`：重新 `logic_control_get` 取最新 `revision` 再写，不要盲目重试旧 revision。
+5. `logic_entry_extract` 返回 422 `app_project_mismatch`：传的 `project_id` 不是应用所属项目，改用 `logic_overview` 的项目 id。
+6. 环境里看不到密钥是设计行为；不要要求工具返回 `secrets`/`channel_secrets`，需要排障时去 Workbench 配置页核对。
