@@ -277,9 +277,17 @@ def try_claim_account_lease(
                 return False
         existing = row.lease if isinstance(row.lease, dict) else {}
         from mino_nexus.records.write_state import protected
-        if protected(str(existing.get("run_id") or ""), db=db, sn=str(existing.get("sn") or "")):
+        from mino_nexus.resources.resource_claim_tx import deny_claim, holder_reason
+        holder = str(existing.get("run_id") or "")
+        holder_sn = str(existing.get("sn") or "")
+        if protected(holder, db=db, sn=holder_sn):
+            info = holder_reason(db, holder, holder_sn)
+            deny_claim("resource_isolated", info.get("reason_code") or "write_safety_isolated",
+                       account_id=aid, **{key: value for key, value in info.items() if key != "reason_code"})
             return False
         if lease_blocks_other_holder(existing, run_id=rid, sn=sn):
+            deny_claim("resource_busy", "resource_account_lease_held", account_id=aid,
+                       holder_run_id=holder, sn=holder_sn)
             return False
         from mino_nexus.resources.resource_claim_tx import claim_in_transaction
         if not claim_in_transaction(db, aid):

@@ -59,6 +59,7 @@ def _record_case_preflight_fail(
     sn: str,
     provider_id: str = "",
     reason_code: str = "",
+    reason_detail: dict | None = None,
     status: str = "fail",
 ) -> None:
     """开跑前失败（租约/拒跑）也落 session，避免 Studio Session Log 404。"""
@@ -80,7 +81,10 @@ def _record_case_preflight_fail(
             sop_id="run-case",
             extra={"goal": str(case.get("name") or cid), "preflight": True},
         )
-        writer.append("preflight/block", {"reason": summary, "reason_code": reason_code, "execution_started": "no"})
+        block = {"reason": summary, "reason_code": reason_code, "execution_started": "no"}
+        if reason_detail:
+            block["reason_detail"] = reason_detail
+        writer.append("preflight/block", block)
         # close 必须带 reason_code：不带的话 session/end 里 reason_code 是空串，
         # 事后只能看到 status=fail + "unclassified"，查不出是准入失败
         # （cr-1dd866f93044 的 case-5c5bf758/ed07139f/bc49fd61）。
@@ -253,7 +257,17 @@ def _run_case_list(
                     lease_err = resource_attempt.get("reason") or "" if not ok else ""
             device_held = resource_attempt["claimed"]
             if not ok:
+                code = str(resource_attempt.get("reason_code") or lease_err or "租号失败")
+                detail = resource_attempt.get("reason_detail") if isinstance(resource_attempt.get("reason_detail"), dict) else {}
+                coarse = str(resource_attempt.get("reason") or "")
+                holder = str(detail.get("holder_run_id") or detail.get("resource_key") or "")
                 reason = lease_err or "租号失败"
+                if resource_attempt.get("reason_code"):
+                    reason = f"资源组合准入：{code}"
+                    if coarse and coarse != code:
+                        reason += f"（{coarse}）"
+                    if holder:
+                        reason += f"；{holder}"
                 _record_case_preflight_fail(
                     run_id=run_id,
                     case=case,
@@ -261,10 +275,11 @@ def _run_case_list(
                     app_id=app_id,
                     sn=sn,
                     provider_id=str(doc.get("provider_id") or ""),
-                    reason_code=reason,
+                    reason_code=code,
+                    reason_detail=detail or None,
                 )
                 run_store.patch_case(run_id, cid, target_sn=sn, status="fail", summary=reason, error=reason,
-                    reason_code=reason, **_case_trace_fields(run_id, case))
+                    reason_code=code, reason_detail=detail or None, **_case_trace_fields(run_id, case))
                 emit_testing_task({
                     "event": "case_finished",
                     "run_id": run_id,

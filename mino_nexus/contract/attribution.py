@@ -100,6 +100,12 @@ _REASON_CLASS: dict[str, str] = {
     "resource_blocked": CLASS_B,
     "resource_busy": CLASS_B,
     "resource_lease_unavailable": CLASS_B,
+    "resource_account_lease_held": CLASS_B,
+    "resource_device_lease_held": CLASS_B,
+    "resource_held_by_other_attempt": CLASS_B,
+    "resource_state_isolated": CLASS_B,
+    "resource_reset_verification_required": CLASS_B,
+    "write_safety_isolated": CLASS_B,
     "requirement_blocked": CLASS_B,
     "write_outcome_unknown": CLASS_B,
     # C 守卫误拦 / 旧权限墙
@@ -131,6 +137,8 @@ _PREFIX_CLASS: tuple[tuple[str, str], ...] = (
 _REASON_LAYER: dict[str, str] = {
     "resource_busy": "preflight",
     "resource_lease_unavailable": "preflight",
+    "write_safety_isolated": "preflight",
+    "resource_reset_verification_required": "preflight",
     "binding_missing": "dispatch",
     "binding_stale": "dispatch",
     "compile_model_call_failed": "compile",

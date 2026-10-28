@@ -183,9 +183,14 @@ def run_cases(body: RunRequest, sess: dict = Depends(current_session)):
         )
         return ok(snapshot, msg="AI-led 回归任务已启动")
     except (cr.DeviceBusy, ResourceBusy) as exc:
+        from mino_nexus.resources.resource_claim_tx import admission_block
+        block = admission_block(getattr(exc, "busy_task_id", ""), getattr(exc, "sn", ""))
         raise HTTPException(
             status_code=409,
-            detail={"message": "device busy", "busy_task_id": exc.busy_task_id, "sn": exc.sn},
+            detail={"message": "device busy", "busy_task_id": exc.busy_task_id, "sn": exc.sn,
+                    "reason": block.get("reason") or "resource_busy",
+                    "reason_code": block.get("reason_code") or "resource_busy",
+                    "reason_detail": block.get("reason_detail") or {}},
         ) from exc
     except cr.WebSlotFull as exc:
         raise HTTPException(

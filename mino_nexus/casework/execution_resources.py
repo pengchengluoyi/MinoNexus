@@ -134,8 +134,9 @@ def release(run_id, sn="", *, attempt_id=""):
             if row.state == "released":
                 continue
             if row.state == "isolated" or row.expires_at <= time.time() or protected(run_id, db=db, sn=row.sn):
-                # Expiry/unknown effects require explicit reset verification.
-                # Ordinary cleanup is not evidence that the resource is clean.
+                # Expiry or an unknown effect stays isolated. Deleting the ledger
+                # is not a release; stop evidence plus a package baseline commits
+                # device isolation and account leases together.
                 row.state = "isolated"
             else:
                 row.state = "released"
@@ -152,4 +153,3 @@ def assert_current(run_id, sn, *, db):
     rows = db.query(ExecutionResource).filter_by(run_id=run_id, sn=sn).filter(ExecutionResource.state != "released").all()
     if rows and any(row.state != "held" or row.expires_at <= time.time() for row in rows):
         raise ValueError("resource_lease_expired")
-
