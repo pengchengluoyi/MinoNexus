@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import time
-import uuid
 from typing import Any
 
 from mino_nexus.core.database import session_scope
@@ -26,7 +25,8 @@ def acquire(run_id: str, sn: str, *, agent: str = "", minutes: int = DEFAULT_MIN
             ExternalLease.expires_at > now, ExternalLease.run_id != run_id).all()
         conflicts = [{"kind": "external_lease", "run_id": r.run_id, "agent": r.agent,
                       "mine": r.owner_user_id == uid, "expires_at": r.expires_at} for r in overlap]
-        lease = ExternalLease(lease_id="xl-" + uuid.uuid4().hex[:12], run_id=run_id, owner_user_id=uid,
+        from mino_nexus.core.ids import prefixed
+        lease = ExternalLease(lease_id=prefixed("xl", 12), run_id=run_id, owner_user_id=uid,
                               sn=sn, agent=str(agent or "")[:80], starts_at=now, expires_at=now + span)
         db.add(lease)
         lease_id, expires = lease.lease_id, lease.expires_at

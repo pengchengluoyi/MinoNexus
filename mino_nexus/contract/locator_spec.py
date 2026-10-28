@@ -10,10 +10,12 @@ _ANDROID_KINDS = frozenset({"resource_id", "content_desc", "text", "role"})
 _MAC_KINDS = frozenset({"identifier", "title", "text", "role"})
 _WIN_KINDS = frozenset({"automation_id", "name", "text", "role"})
 _FORBIDDEN = ("xpath=", "nth(", "instance=", "index=")
-_CELLS = {"android": "uiautomator", "web": "playwright", "mac": "ax", "win": "uia"}
-_KINDS = {"android": _ANDROID_KINDS, "mac": _MAC_KINDS, "win": _WIN_KINDS}
+_IOS_KINDS = frozenset({"name", "label", "identifier", "text", "role"})
+_CELLS = {"android": "uiautomator", "ios": "xcuitest", "web": "playwright", "mac": "ax", "win": "uia"}
+_KINDS = {"android": _ANDROID_KINDS, "ios": _IOS_KINDS, "mac": _MAC_KINDS, "win": _WIN_KINDS}
 _EXACT = {
     "android": frozenset({"content_desc", "text"}),
+    "ios": frozenset({"name", "label", "text"}),
     "mac": frozenset({"title", "text"}),
     "win": frozenset({"name", "text"}),
 }

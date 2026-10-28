@@ -192,7 +192,8 @@ def _upsert_run(doc: dict[str, Any]) -> None:
                 doc.clear()
                 doc.update(copy.deepcopy(original.payload))
                 return
-            db.add(RunAdmission(id="admission-" + uuid.uuid4().hex, owner_user_id=doc["owner_user_id"],
+            from mino_nexus.core.ids import prefixed
+            db.add(RunAdmission(id=prefixed("admission"), owner_user_id=doc["owner_user_id"],
                 request_id=doc["client_request_id"], request_digest=doc["request_digest"], run_id=doc["run_id"]))
         if previous is None and doc.get("retry_contract"):
             from mino_nexus.casework.run_retry import validate_admission
@@ -278,8 +279,22 @@ def _run_row(row: dict) -> Any:
     )
 
 
+_RUN_ID_LOCK = threading.Lock()
+_LAST_RUN_ID = ""
+
+
 def new_run_id() -> str:
-    return f"cr-{uuid.uuid4().hex[:12]}"
+    global _LAST_RUN_ID
+    from mino_nexus.core.ids import task_id
+
+    with _RUN_ID_LOCK:
+        for _ in range(20):
+            rid = task_id()
+            if rid != _LAST_RUN_ID and get(rid) is None:
+                _LAST_RUN_ID = rid
+                return rid
+            time.sleep(0.001)
+    raise RuntimeError("run_id_exhausted")
 
 
 def report_run_id(run_id: str, case_id: str, *, sn: str = "", coverage: str = "once") -> str:
@@ -312,7 +327,9 @@ def _run_case_meta(raw: dict[str, Any]) -> dict[str, Any]:
 
 def seed_case(run_id: str, raw: dict[str, Any], index: int, *, sn: str = "", coverage: str = "once") -> dict[str, Any]:
     from mino_nexus.casework.run_comparison import frozen_identity
-    cid = str(raw.get("case_id") or "").strip() or f"case-{index}"
+    cid = str(raw.get("case_id") or "").strip()
+    if not cid:
+        raise ValueError("case_id_required")
     steps = spec_lines(raw.get("steps"))
     expected = spec_lines(raw.get("expected"))
     steps_raw = str(raw.get("steps_raw") or "").strip() or "\n".join(
@@ -324,7 +341,7 @@ def seed_case(run_id: str, raw: dict[str, Any], index: int, *, sn: str = "", cov
     title = str(raw.get("title") or raw.get("name") or "").strip() or cid
     return {
         "case_id": cid,
-        "execution_unit_id": "unit-" + uuid.uuid5(uuid.NAMESPACE_URL, f"{run_id}:{cid}:{sn}:{index}").hex,
+        "execution_unit_id": "unit" + uuid.uuid5(uuid.NAMESPACE_URL, f"{run_id}:{cid}:{sn}:{index}").hex,
         "frozen_identity": frozen_identity(raw),
         "source_revision_id": raw.get("source_revision_id") or "",
         "name": title,

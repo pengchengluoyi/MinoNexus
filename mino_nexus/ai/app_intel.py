@@ -903,7 +903,8 @@ def create_proposal(
     if not aid or not kd:
         return {"ok": False, "error": "app_id / kind 必填"}
     ensure_db()
-    pid = f"prop-{uuid.uuid4().hex[:10]}"
+    from mino_nexus.core.ids import prefixed
+    pid = prefixed("prop", 10)
     now = _now()
     db = SessionLocal()
     try:

@@ -653,7 +653,8 @@ def _reserve_run_id(run_id: str) -> str:
     rid = str(run_id or "").strip()
     if rid:
         return rid[:80]
-    return "mcp-" + uuid.uuid4().hex[:16]
+    from mino_nexus.core.ids import prefixed
+    return prefixed("mcp", 16)
 
 
 def reserve_account(

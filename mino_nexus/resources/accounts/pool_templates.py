@@ -832,7 +832,8 @@ def facets_defaults_from_catalog(env_doc: dict | None = None) -> dict[str, str]:
 
 
 def new_account_id() -> str:
-    return f"acc_{uuid.uuid4().hex[:12]}"
+    from mino_nexus.core.ids import prefixed
+    return prefixed("acc", 12)
 
 
 def apply_template_to_account_row(row: dict[str, Any], template: dict[str, Any] | None) -> dict[str, Any]:

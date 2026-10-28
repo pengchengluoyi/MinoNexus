@@ -123,10 +123,15 @@ def apply_xy_params(params: dict[str, Any], width: int, height: int) -> dict[str
 
 
 def lift_selector_target(params: dict[str, Any]) -> dict[str, Any]:
-    """selector_text / description 写入 params.target，Scout 才能用层级点到控件。"""
+    """selector_text / description / 字符串 target 写入 params.target，Scout 才能用层级点到控件。"""
     if not isinstance(params, dict):
         return params
-    target = dict(params.get("target") or {}) if isinstance(params.get("target"), dict) else {}
+    raw_target = params.get("target")
+    if isinstance(raw_target, str) and raw_target.strip():
+        label = raw_target.strip().strip("「」\"'")
+        params["target"] = {"text": label, "content_desc": label}
+        return params
+    target = dict(raw_target) if isinstance(raw_target, dict) else {}
     if any(str(target.get(k) or "").strip() for k in ("text", "content_desc", "resource_id", "id")):
         return params
     label = ""

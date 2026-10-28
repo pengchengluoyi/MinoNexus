@@ -87,16 +87,22 @@ def get_channel_gmail_alias(
     env_surface: str,
     env_profile: str,
     apply_email_default: bool = False,
+    app_id: str = "",
 ) -> dict[str, str]:
+    from mino_nexus.resources.project_env import policy_seq_slot
+
     doc = env_doc if isinstance(env_doc, dict) else {}
     surface = str(env_surface or "").strip()
     env_key = str(env_profile or "test").strip() or "test"
+    policy_slot = policy_seq_slot(doc, "gmail_alias", env_key, app_id)
     ch_map = doc.get("channel_gmail_alias")
     slot: dict[str, Any] = {}
     if surface and isinstance(ch_map, dict):
         per = ch_map.get(surface)
         if isinstance(per, dict):
             slot = per.get(env_key) or {}
+    if policy_slot.get("start"):
+        slot = policy_slot
     out = _norm_alias_slot(slot)
     if out.get("start"):
         return out
@@ -107,7 +113,7 @@ def get_channel_gmail_alias(
         resolve_effective_secrets,
     )
 
-    secrets = resolve_effective_secrets(doc, env_profile=env_key, env_surface=surface)
+    secrets = resolve_effective_secrets(doc, env_profile=env_key, env_surface=surface, app_id=app_id)
     if login_kind_from_secrets(secrets) != "email":
         return out
     otp = secrets.get("otp") if isinstance(secrets.get("otp"), dict) else {}
@@ -287,6 +293,7 @@ def _bump_alias_next(
     *,
     surface: str,
     env_profile: str,
+    app_id: str = "",
 ) -> tuple[str, dict[str, Any]]:
     """返回 (tag_digits, updated_env_doc)。"""
     from mino_nexus.resources import project_store as ps
@@ -299,6 +306,7 @@ def _bump_alias_next(
         env_surface=surface,
         env_profile=env_profile,
         apply_email_default=True,
+        app_id=app_id,
     )
     start = slot.get("start") or ""
     if not start:
@@ -310,11 +318,14 @@ def _bump_alias_next(
         tag_int = int(start)
     tag_str = str(tag_int)
     next_str = str(tag_int + 1)
-    ch_map = dict(doc.get("channel_gmail_alias") or {})
-    per = dict(ch_map.get(surface) or {})
-    per[env_profile] = {"start": start, "next": next_str}
-    ch_map[surface] = per
-    doc["channel_gmail_alias"] = ch_map
+    nxt = {"start": start, "next": next_str}
+    from mino_nexus.resources.project_env import write_policy_seq_slot
+    if not write_policy_seq_slot(doc, "gmail_alias", env_profile, nxt, app_id):
+        ch_map = dict(doc.get("channel_gmail_alias") or {})
+        per = dict(ch_map.get(surface) or {})
+        per[env_profile] = nxt
+        ch_map[surface] = per
+        doc["channel_gmail_alias"] = ch_map
     ps.save_project_env(pid, doc)
     return tag_str, doc
 
@@ -344,7 +355,7 @@ def provision_gmail_alias_account(
 
     pid = str(project_id or "").strip()
     with _project_lock(pid):
-        tag, fresh_doc = _bump_alias_next(pid, surface=surface, env_profile=env_profile)
+        tag, fresh_doc = _bump_alias_next(pid, surface=surface, env_profile=env_profile, app_id=str(getattr(ctx, "app_id", "") or ""))
         email = gmail_plus_address(inbox, tag)
         if not email:
             SLog.w(TAG, f"skip provision: invalid inbox={inbox[:48]!r} tag={tag}")

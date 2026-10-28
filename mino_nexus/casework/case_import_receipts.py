@@ -50,7 +50,8 @@ def create(project_id, client_request_id, digest, snapshot):
             if existing.request_digest != digest:
                 raise ValueError("import_request_conflict")
             return existing.receipt_id
-        receipt_id = "import-" + uuid.uuid4().hex
+        from mino_nexus.core.ids import prefixed
+        receipt_id = prefixed("import")
         timestamp = _now()
         database.add(CaseImportReceipt(receipt_id=receipt_id, owner_user_id=require_user_id(),
             project_id=project_id, client_request_id=client_request_id, request_digest=digest,

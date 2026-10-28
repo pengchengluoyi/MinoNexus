@@ -96,7 +96,7 @@ def _save(root: dict[str, Any]) -> None:
 
 def _kind_of(sn: str, platform: str = "") -> str:
     from mino_nexus.core.platform_contract import target_platform
-    return {"android": "adb", "web": "web", "mac": "desktop", "win": "desktop"}[target_platform(platform)]
+    return {"android": "adb", "ios": "ios", "web": "web", "mac": "desktop", "win": "desktop"}[target_platform(platform)]
 
 
 def list_devices() -> dict[str, dict[str, Any]]:

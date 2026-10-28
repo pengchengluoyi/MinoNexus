@@ -330,10 +330,12 @@ def list_projects() -> list[dict[str, Any]]:
 
 
 def create_project(name: str, description: str = "", owner: dict[str, Any] | None = None) -> dict[str, Any]:
+    from mino_nexus.core.ids import serial
+
     root = _root()
     now = _now()
     row = {
-        "id": str(uuid.uuid4()),
+        "id": serial([str(item.get("id") or "") for item in root["projects"]], "PRJ"),
         "uid": str(uuid.uuid4()),
         "name": str(name or "").strip() or "未命名项目",
         "description": str(description or ""),
@@ -361,10 +363,12 @@ def create_app(
     if not isinstance(platforms, str):
         raise ValueError("platform_set_required")
     platforms = ",".join(platform_set(platforms.split(",") if platforms else []))
+    from mino_nexus.core.ids import serial
+
     root = _root()
     now = _now()
     row = {
-        "id": str(uuid.uuid4()),
+        "id": serial([str(item.get("id") or "") for item in root["apps"]], "APP"),
         "uid": str(uuid.uuid4()),
         "name": str(name or "").strip() or "未命名应用",
         "description": str(description or ""),

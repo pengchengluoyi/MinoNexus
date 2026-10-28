@@ -12,7 +12,6 @@ from typing import Any
 
 async def observe(project_id, run_id):
     """Only the framework screenshot command is allowed, including while quarantined."""
-    import uuid
     from mino_nexus.loop.router_proxy import RouterProxy
     from mino_nexus.resources.access_scope import require_owned_device
     from mino_nexus.records.eventlog import store as session_store
@@ -24,7 +23,8 @@ async def observe(project_id, run_id):
     outputs = []
     for sn in sorted({r['sn'] for r in snapshot['resources']}):
         require_owned_device(sn)
-        session_id = 'recovery-observe-' + uuid.uuid4().hex
+        from mino_nexus.core.ids import prefixed
+        session_id = prefixed('recoveryobserve')
         session_store.open_meta(session_id=session_id, run_id=session_id, case_id='', app_id=snapshot['app_id'])
         context = {'project_id': project_id, 'env_profile': snapshot['env'], 'platform': snapshot['platform'], 'sn': sn,
             'recovery_observation': {'source_run_id': run_id, 'snapshot_digest': snapshot_digest,

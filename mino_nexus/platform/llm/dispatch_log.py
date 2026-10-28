@@ -11,10 +11,10 @@ import json
 import re
 import threading
 from datetime import datetime
-import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+from mino_nexus.core.ids import prefixed
 from mino_nexus.core.paths import APP_DATA_DIR
 
 _CTX: contextvars.ContextVar[dict] = contextvars.ContextVar("dispatch_ctx", default={})
@@ -305,7 +305,7 @@ def _write(row: dict) -> dict:
 
     from mino_nexus.core.secret_redaction import sanitize
     row = sanitize(dict(row))
-    row.setdefault("id", f"ds-{uuid.uuid4().hex[:12]}")
+    row.setdefault("id", prefixed("ds", 12))
     row.setdefault("at", _now())
     with _LOCK:
         with session_scope() as db:
@@ -360,7 +360,7 @@ def record_llm(*, messages: list | None = None, parsed=None, raw_text: str = "",
     skill = env.get("skill") or guessed.get("skill") or skill_from_job(job)
     source = env.get("source") or guessed.get("source") or source_from_trigger(trigger)
     routed_by = env.get("routed_by") or ("conductor" if trigger == "qa_tick" else "")
-    row_id = f"ds-{uuid.uuid4().hex[:12]}"
+    row_id = prefixed("ds", 12)
     if str(job).startswith("assistant"):
         system = f"[redacted {len(str(system))} chars]"
         user = f"[redacted {len(str(user))} chars]"
@@ -455,7 +455,7 @@ def record_job(
     skill_id = skill or env.get("skill") or skill_from_job(job_id)
     source_id = source or env.get("source") or source_from_trigger(trigger)
     router = routed_by or env.get("routed_by") or ("conductor" if trigger == "qa_tick" else "")
-    row_id = f"ds-{uuid.uuid4().hex[:12]}"
+    row_id = prefixed("ds", 12)
     input_text, imgs_u = _clip_media(input_data or env.get("input") or "", stem=f"{row_id}-u")
     output_text, imgs_o = _clip_media(output_data or detail, stem=f"{row_id}-o")
     row = {
@@ -488,10 +488,6 @@ def record_job(
     if routed:
         row["routed"] = routed
     return _write(row)
-
-
-def new_pipeline_id() -> str:
-    return f"pl-{uuid.uuid4().hex[:10]}"
 
 
 def list_calls(

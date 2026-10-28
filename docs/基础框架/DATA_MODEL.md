@@ -8,15 +8,17 @@
 
 | 数据 | 表 | 权威来源 |
 |---|---|---|
-| `App` / 项目 / 环境 | `projects` / `apps` | UI / 飞书同步 |
+| `App` / 项目 / 环境 | `projects` / `apps`。新项目号 `PRJ001` 起，新应用号 `APP001` 起，超过 999 不再补零 | UI |
 | 项目号池账号 | `pool_accounts` + `pool_account_facets` | Studio 账号管理；`projects.env.test_accounts` 仅迁移来源 |
 | 项目号池配置（扩展字段 / 启用模板 / 本地模板） | `project_pool_config` | Studio 号池与模板；`projects.env` 中对应键仅迁移来源 |
 | 用例资源声明（Claim 词汇 / 示例） | 用例 `meta.resource_key` + `case_scene`（真源词汇见 `case_resource_key_catalog.py`） | Console「用例密钥」；见 [CASE_RESOURCE_KEY.md](CASE_RESOURCE_KEY.md) |
 | 用例、前置、预期 | `project_cases`（按 `project_id` + `requirement_id`；需求/脑图仍在 `apps.env.automation.qa_process`） | UI / QA 推进 |
+| 用例脚本 | `case_scripts`（`project_id` + `case_id`；`case_id` 为空是项目级 pretest/posttest） | 未分端的脚本。仓库未配置时，有 `run_body` 的用例仍按库内脚本执行 |
+| 分端用例脚本 | `case_platform_scripts`（`project_id` + `case_id` + `platform`） | 仓库未配置时，按端覆盖库内脚本 |
+| 用例脚本仓库 | `project_script_repos`（`project_id` → `url`、`branch`） | 只存仓库位置。用例的 `script_path` 记录仓库内相对路径。执行前同步到 `case_workspaces/{project_id}/`，用该目录下的虚拟环境运行这个文件 |
 | 用例导入预览 | `case_import_previews`（账号与项目隔离，24 小时有效；解析结果逐行持久化，生命周期独立于提交回执） | 导入预览 API；工作租约避免多进程重复解析，进程退出后恢复未完成行 |
 | 用例导入回执 | `case_import_receipts` / `case_import_receipt_lines`（账号、项目、提交身份唯一；不随预览过期删除） | 确认导入与回执查询/续交 API；保存原始行、决策及实际用例 revision 快照，每行用例与结果原子提交 |
-| `AppRegressionRun`（批次结果） | `app_regression_runs` | Nexus 的循环 |
-| 逐步 trace / baseline | `m_case_run_trace` / `m_case_baseline` | Nexus 的循环 |
+| 跑批任务 | `app_regression_runs`。任务号 `CR` + 本地时间 `yyMMddHHmmss` + 3 位毫秒 | 任务中心 |
 | 设备身份 | `m_device` | **连通性来自 Scout 上报**，其余来自 UI |
 | 设备 × App 会话 | `device_app_sessions` | Scout 执行 + `inspect-session` / 清缓存转移；见 [CASE_RESOURCE_KEY.md](CASE_RESOURCE_KEY.md) |
 | 节点 / 工作台归属 | `nodes` / `studios` | 活连接在内存 `NodeRegistry` |
@@ -144,8 +146,7 @@ Scout 密钥命名空间包含已确认 owner；本地 IM channel 以服务 orig
 
 - `case_revisions`：`revision_id`、owner/project/case、单案递增 revision、不可变 source/source_digest、冻结 compile_input/input_digest、来源 receipt/line 或补充理由、时间。原文和资源配置形成候选版本；旧版本没有更新或删除入口，删除用例也保留历史。首次接管旧用例只登记当前可见快照，`legacy_snapshot` 不伪造旧解析来源。
 - `case_compile_jobs`：owner/project/case/request_id 唯一；revision 引用、构建身份、状态、claim token/worker/租约、取消标记、恢复父任务、产物/诊断/实际 dispatch/model/catalog provenance。状态为 queued/running/succeeded/failed/interrupted/cancelled。领取原子；租约失效标 interrupted，不自动重复模型调用。显式恢复创建新关联 job，同一请求重试返回同一 job。
-- `case_review_records`：轻量追加记录，不是新工单系统。保存 revision/item/context、诊断快照、确认分类、理由、实际复检结果、reviewer/time 和可选 session 引用；不覆盖自动 verdict。静态复检消失记 fixed_pending_run；只有 owner/项目/用例/原文/编译 job/冻结版本匹配且在问题记录之后的 verified_pass session 才能标 verified_resolved。
-- `project_cases.extra` 的 `source_revision_id/source_revision/source_digest/latest_compile_job_id/compile_job/effective_artifact` 是服务端投影。客户端不能写入编译成功或有效产物。保存原文与 revision+queued job 在同一事务；导入行状态/快照/结果也在该事务。receipt result 保存 `revision_id/compile_job_id/source_digest`，不再把预览缓存当权威产物。
+- `project_cases.extra` 的 `source_revision_id/source_revision/source_digest/latest_compile_job_id/compile_job/effective_artifact` 是服务端投影。客户端不能写入编译成功或有效产物。保存原文与 revision+queued job 在同一事务；导入行状态/快照/结果也在该事务。receipt result 保存 `revision_id/compile_job_id/source_digest`，不再把预览缓存当权威产物。用例号一律 `case` + 8 位 hex。
 - worker 只在事务外复用既有 resource/step 编译器；恢复固化 owner，不复制项目环境、服务商密钥或账号整包。结果落盘时校验 claim、租约、取消、owner、最新 revision/job 和冻结输入；旧结果只入历史。新任务使旧有效产物失效；旧 publication 仍可读，必须重审发布才可执行新原文。
 
 

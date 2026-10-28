@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -44,7 +43,8 @@ def _now() -> str:
 
 
 def _nid(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:8]}"
+    from mino_nexus.core.ids import prefixed
+    return prefixed(prefix, 8)
 
 
 def _source_text(req: dict) -> str:
@@ -113,7 +113,7 @@ def _apply_mindmap(req: dict, payload: dict) -> dict:
 
 
 def _norm_case(row: dict, index: int) -> dict:
-    cid = str(row.get("case_id") or "").strip() or f"draft-{_nid('c')}"
+    cid = str(row.get("case_id") or "").strip() or _nid("case")
     steps = row.get("steps")
     expected = row.get("expected")
     if isinstance(steps, str):

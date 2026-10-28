@@ -10,7 +10,6 @@ from typing import Any
 def probe(project_id, control_id, *, expected_revision, sn, url):
     """Observe a saved configuration in a fresh context; never click/fill or publish."""
     import time
-    import uuid
     from urllib.parse import urlsplit
     from mino_nexus.core.schemas import PlanEvent, EventStatus
     from mino_nexus.loop.router_proxy import RouterProxy
@@ -28,7 +27,8 @@ def probe(project_id, control_id, *, expected_revision, sn, url):
     if control["revision"] != expected_revision:
         raise ValueError("control_revision_conflict")
     validate_locator(control["locator_spec"])
-    run_id = "control-probe-" + uuid.uuid4().hex
+    from mino_nexus.core.ids import prefixed
+    run_id = prefixed("controlprobe")
     budget = ExecutionControl(18)
     router = RouterProxy(sn, run_id=run_id, playwright_headless=True, execution_mode="v5", execution_control=budget)
     from mino_nexus.casework.execution_binding_runtime import control_probe_requirements, BindingAdmissionError

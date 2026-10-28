@@ -96,7 +96,8 @@ def create_project_requirement(project_id: str, app_id: str, title: str) -> dict
                     and requirement.get("id") != "__imported_cases__" and requirement.get("title") == title):
                 return {"id": str(requirement["id"]), "title": title}
         stamp = _now()
-        requirement = {"id": "req-" + uuid.uuid4().hex[:16], "title": title, "created_at": stamp, "updated_at": stamp}
+        from mino_nexus.core.ids import prefixed
+        requirement = {"id": prefixed("req", 16), "title": title, "created_at": stamp, "updated_at": stamp}
         requirements.append(requirement)
         process["updated_at"] = stamp
         app.env, app.updated_at = env, int(time.time())

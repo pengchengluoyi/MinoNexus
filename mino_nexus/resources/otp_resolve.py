@@ -10,6 +10,7 @@ from mino_nexus.resources.project_env import (
     _norm_gmail_inbox,
     default_env_secrets,
     env_secrets,
+    matching_login_policy,
 )
 
 
@@ -18,10 +19,17 @@ def resolve_effective_secrets(
     *,
     env_profile: str = "test",
     env_surface: str = "",
+    app_id: str = "",
 ) -> dict[str, Any]:
-    """channel_secrets[surface][env] 优先，否则 environments[env].secrets。"""
+    """登录策略优先。未命中时再用 channel_secrets[surface][env]，最后是环境默认。"""
     doc = env_doc if isinstance(env_doc, dict) else {}
     env_key = str(env_profile or "test").strip() or "test"
+    policy = matching_login_policy(doc, app_id)
+    if isinstance(policy, dict):
+        secrets = policy.get("secrets") if isinstance(policy.get("secrets"), dict) else {}
+        slot = secrets.get(env_key)
+        if isinstance(slot, dict):
+            return _norm_env_secrets(slot)
     surface = str(env_surface or "").strip()
     ch_map = doc.get("channel_secrets")
     if surface and isinstance(ch_map, dict):
@@ -173,6 +181,7 @@ def otp_context(ctx: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any
             env_doc,
             env_profile=env_key,
             env_surface=surface,
+            app_id=app_id,
         )
         otp = secrets.get("otp") if isinstance(secrets, dict) else {}
         if not isinstance(otp, dict):

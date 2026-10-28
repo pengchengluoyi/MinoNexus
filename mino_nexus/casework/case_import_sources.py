@@ -66,8 +66,9 @@ def read(project_id, kind, config, operation="read"):
         if operation != "read":
             raise ValueError("source_kind_invalid")
         config = sheets_configuration(config)
+    from mino_nexus.core.ids import prefixed
     result = read_source({"configuration": config, "kind": kind, "owner_user_id": actor,
-        "source_id": "import-" + uuid.uuid4().hex, "read_id": uuid.uuid4().hex, "generation": 1})
+        "source_id": prefixed("src"), "read_id": prefixed("read"), "generation": 1})
     if result.get("complete") is not True:
         raise ValueError("source_snapshot_incomplete")
     if kind == "case_api":

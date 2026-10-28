@@ -20,10 +20,11 @@ ENV_PROFILE_LABELS = {
 }
 
 CHANNEL_KINDS = ("app", "web", "server")
-CHANNEL_PLATFORMS = ("mac", "win", "android", "web")
+CHANNEL_PLATFORMS = ("mac", "win", "android", "ios", "web")
 
 DEFAULT_CHANNELS = [
     {"id": "android", "kind": "app", "platform": "android", "alias": "", "third_party": False, "label": "安卓", "field": "package", "placeholder": "com.example.app"},
+    {"id": "ios", "kind": "app", "platform": "ios", "alias": "", "third_party": False, "label": "iOS", "field": "bundle", "placeholder": "com.example.ios"},
     {"id": "web", "kind": "web", "platform": "web", "alias": "", "third_party": False, "label": "Web", "field": "base_url", "placeholder": "https://test.example.com"},
     {"id": "win", "kind": "app", "platform": "win", "alias": "", "third_party": False, "label": "Windows", "field": "path", "placeholder": "完整 EXE 路径或 AUMID"},
     {"id": "mac", "kind": "app", "platform": "mac", "alias": "", "third_party": False, "label": "Mac", "field": "bundle", "placeholder": "com.example.desktop"},
@@ -78,6 +79,7 @@ def default_project_env() -> dict:
         "channel_secrets": {},
         "channel_gmail_alias": {},
         "channel_phone_seq": {},
+        "login_policies": [_blank_login_policy({e["key"] for e in environments})],
     }
 
 
@@ -237,6 +239,122 @@ def _norm_channel_secrets(raw: Any, channels: List[dict], env_keys: set[str]) ->
     return out
 
 
+def _norm_seq_slot(raw: Any) -> dict[str, str]:
+    src = raw if isinstance(raw, dict) else {}
+    start = str(src.get("start") or "").strip()[:32]
+    nxt = str(src.get("next") or start).strip()[:32]
+    return {"start": start, "next": nxt}
+
+
+def _blank_login_policy(env_keys: set[str]) -> dict:
+    keys = list(env_keys) or ["test"]
+    return {
+        "id": "default",
+        "label": "默认登录策略",
+        "apply": "all",
+        "app_ids": [],
+        "secrets": {key: default_env_secrets() for key in keys},
+        "phone_seq": {key: {"start": "17000000000", "next": "17000000000"} for key in keys},
+        "gmail_alias": {key: {"start": "", "next": ""} for key in keys},
+    }
+
+
+def _norm_login_policies(raw: Any, env_keys: set[str]) -> list[dict]:
+    if not isinstance(raw, list):
+        raise ValueError("login_policies_invalid")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("login_policy_object_required")
+        pid = str(item.get("id") or "").strip()
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,40}", pid) or pid in seen:
+            raise ValueError("login_policy_identity_invalid")
+        seen.add(pid)
+        apply = str(item.get("apply") or "all").strip()
+        if apply not in ("all", "selected"):
+            raise ValueError("login_policy_apply_invalid")
+        app_ids: list[str] = []
+        if apply == "selected":
+            for app_id in item.get("app_ids") or []:
+                text = str(app_id or "").strip()[:80]
+                if text and text not in app_ids:
+                    app_ids.append(text)
+            app_ids = app_ids[:200]
+        secrets_in = item.get("secrets") if isinstance(item.get("secrets"), dict) else {}
+        phone_in = item.get("phone_seq") if isinstance(item.get("phone_seq"), dict) else {}
+        gmail_in = item.get("gmail_alias") if isinstance(item.get("gmail_alias"), dict) else {}
+        secrets = {key: _norm_env_secrets(secrets_in.get(key)) for key in env_keys}
+        phone_seq = {key: _norm_seq_slot(phone_in.get(key)) for key in env_keys}
+        gmail_alias = {key: _norm_seq_slot(gmail_in.get(key)) for key in env_keys}
+        out.append({
+            "id": pid,
+            "label": str(item.get("label") or "登录策略").strip()[:40] or "登录策略",
+            "apply": apply,
+            "app_ids": app_ids,
+            "secrets": secrets,
+            "phone_seq": phone_seq,
+            "gmail_alias": gmail_alias,
+        })
+    return out
+
+
+def _policies_from_channels(
+    env_keys: set[str],
+    channel_secrets: dict,
+    phone: dict,
+    gmail: dict,
+) -> list[dict]:
+    source = ""
+    score = -1
+    for cid, per in channel_secrets.items():
+        count = len(per) if isinstance(per, dict) else 0
+        if count > score:
+            source, score = str(cid), count
+    policy = _blank_login_policy(env_keys)
+    if source and isinstance(channel_secrets.get(source), dict):
+        policy["secrets"] = {key: _norm_env_secrets(channel_secrets[source].get(key)) for key in env_keys}
+        phone_src = phone.get(source) if isinstance(phone.get(source), dict) else {}
+        gmail_src = gmail.get(source) if isinstance(gmail.get(source), dict) else {}
+        policy["phone_seq"] = {key: _norm_seq_slot(phone_src.get(key) or policy["phone_seq"][key]) for key in env_keys}
+        policy["gmail_alias"] = {key: _norm_seq_slot(gmail_src.get(key)) for key in env_keys}
+    return [policy]
+
+
+def login_policy_matches(policy: dict, app_id: str) -> bool:
+    if str(policy.get("apply") or "all") != "selected":
+        return True
+    wanted = str(app_id or "").strip()
+    return bool(wanted) and wanted in {str(item) for item in policy.get("app_ids") or []}
+
+
+def matching_login_policy(env_doc: dict | None, app_id: str = "") -> dict | None:
+    policies = (env_doc or {}).get("login_policies")
+    if not isinstance(policies, list):
+        return None
+    for policy in policies:
+        if isinstance(policy, dict) and login_policy_matches(policy, app_id):
+            return policy
+    return None
+
+
+def policy_seq_slot(env_doc: dict | None, key: str, env_key: str, app_id: str = "") -> dict[str, str]:
+    policy = matching_login_policy(env_doc, app_id)
+    bucket = policy.get(key) if isinstance(policy, dict) and isinstance(policy.get(key), dict) else {}
+    slot = bucket.get(env_key)
+    return _norm_seq_slot(slot) if isinstance(slot, dict) and (slot.get("start") or slot.get("next")) else {}
+
+
+def write_policy_seq_slot(env_doc: dict, key: str, env_key: str, slot: dict, app_id: str = "") -> bool:
+    policy = matching_login_policy(env_doc, app_id)
+    if not isinstance(policy, dict):
+        return False
+    bucket = dict(policy.get(key) or {})
+    bucket[env_key] = {"start": str(slot.get("start") or ""), "next": str(slot.get("next") or "")}
+    policy[key] = bucket
+    return True
+
+
 def env_secrets(env_doc: dict | None, env_key: str = "") -> dict:
     key = _slug(env_key, "")
     for row in (env_doc or {}).get("environments") or []:
@@ -282,6 +400,10 @@ def normalize_project_env(raw: Any) -> dict:
     profiles_in = raw["profiles"]
     seen_ch, seen_env = set(), set()
     channels = [_norm_channel(row,seen_ch) for row in raw["channels"]]
+    if "ios" not in seen_ch:
+        ios = _norm_channel(copy.deepcopy(_PLATFORM_PRESET["ios"]), seen_ch)
+        at = next((i + 1 for i, ch in enumerate(channels) if ch.get("id") == "android"), len(channels))
+        channels.insert(at, ios)
     environments = [_norm_environment(row,seen_env) for row in raw["environments"]]
     pipeline = list(raw["pipeline"])
     default_profile = raw["default_profile"]
@@ -294,6 +416,13 @@ def normalize_project_env(raw: Any) -> dict:
     from mino_nexus.resources.account_facet_schema import normalize_extensions
 
     env_keys = {e["key"] for e in environments}
+    channel_secrets = _norm_channel_secrets(raw.get("channel_secrets"), channels, env_keys)
+    channel_gmail_alias = _norm_channel_gmail_alias_doc(raw.get("channel_gmail_alias"), channels, env_keys)
+    channel_phone_seq = _norm_channel_phone_seq_doc(raw.get("channel_phone_seq"), channels, env_keys)
+    if raw.get("login_policies") is None:
+        login_policies = _policies_from_channels(env_keys, channel_secrets, channel_phone_seq, channel_gmail_alias)
+    else:
+        login_policies = _norm_login_policies(raw.get("login_policies"), env_keys)
     return {
         "default_profile": default_profile,
         "environments": environments,
@@ -301,13 +430,10 @@ def normalize_project_env(raw: Any) -> dict:
         "pipeline": pipeline,
         "profiles": profiles,
         "gmail_inbox": _norm_gmail_inbox({}),
-        "channel_secrets": _norm_channel_secrets(raw.get("channel_secrets"), channels, env_keys),
-        "channel_gmail_alias": _norm_channel_gmail_alias_doc(
-            raw.get("channel_gmail_alias"), channels, env_keys
-        ),
-        "channel_phone_seq": _norm_channel_phone_seq_doc(
-            raw.get("channel_phone_seq"), channels, env_keys
-        ),
+        "channel_secrets": channel_secrets,
+        "channel_gmail_alias": channel_gmail_alias,
+        "channel_phone_seq": channel_phone_seq,
+        "login_policies": login_policies,
         "account_facet_extensions": normalize_extensions(raw.get("account_facet_extensions")),
         "account_template_ids": _norm_template_ids(raw.get("account_template_ids")),
         "account_pool_local": raw.get("account_pool_local")
@@ -809,7 +935,7 @@ def profile_snapshot(env_doc: dict, env_profile: Optional[str] = None) -> dict:
 def target_id_from_snapshot(snap: dict, platform: str = "android", surface: str = "") -> str:
     from mino_nexus.core.platform_contract import target_platform
     plat = target_platform(platform)
-    field = {"android":"package","web":"base_url","mac":"bundle","win":"path"}[plat]
+    field = {"android": "package", "ios": "bundle", "web": "base_url", "mac": "bundle", "win": "path"}[plat]
     return _profile_value(snap.get(surface or plat),field)
 
 
@@ -907,4 +1033,4 @@ def validate_environment_write(doc: dict) -> None:
         try:
             environment_channel(ch)
         except ValueError as exc:
-            raise ValueError(f"渠道 {cid} 平台合同无效：{exc}；目标平台限 mac/win/android/web，server 不设 platform") from exc
+            raise ValueError(f"渠道 {cid} 平台合同无效：{exc}；目标平台限 mac/win/android/ios/web，server 不设 platform") from exc

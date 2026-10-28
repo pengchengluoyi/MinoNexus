@@ -10,7 +10,8 @@ def app_platforms(app):
 def application_channels(document, apps):
     doc = deepcopy(document)
     channels = doc.setdefault("channels", [])
-    presets = {"android": ("package", "com.example.app"), "web": ("base_url", "https://"),
+    presets = {"android": ("package", "com.example.app"), "ios": ("bundle", "com.example.ios"),
+               "web": ("base_url", "https://"),
                "mac": ("bundle", "com.example.desktop"), "win": ("path", "完整 EXE 路径或 AUMID")}
     for app in apps:
         aid = str(app["id"])

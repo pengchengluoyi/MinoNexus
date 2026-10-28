@@ -72,7 +72,8 @@ def capture(ctx, proposed, *, source, expected_before):
         changes = {k: v for k, v in proposed.items() if effective.get(k, 'unknown') != v}
         if not changes:
             return None
-        row = AccountFactCandidate(candidate_id='fact-' + uuid.uuid4().hex, owner_user_id=actor,
+        from mino_nexus.core.ids import prefixed
+        row = AccountFactCandidate(candidate_id=prefixed('fact'), owner_user_id=actor,
             project_id=pid, account_id=aid, session_id=sid, run_id=ctx.run_id, case_id=ctx.case_id,
             env=account.env, source=source, evidence_context={'app_id': session.app_id,
                 'platform': str(getattr(ctx, 'platform', '') or ''),

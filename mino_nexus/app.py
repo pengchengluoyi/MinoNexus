@@ -116,7 +116,8 @@ async def lifespan(app: FastAPI):
     async def _case_compile_loop() -> None:
         import uuid
         from mino_nexus.casework.case_compilation import interrupt_expired, run_one
-        worker_id = "nexus-" + uuid.uuid4().hex
+        from mino_nexus.core.ids import prefixed
+        worker_id = prefixed("nexus")
         while True:
             try:
                 await asyncio.to_thread(interrupt_expired)
@@ -364,9 +365,8 @@ def create_app() -> FastAPI:
             fallback_executors=body.fallback_executors,
             ai_reasoning="debug 手动下发",
         )
-        import uuid
-
-        run_id = body.run_id or f"debug-{uuid.uuid4().hex[:8]}"
+        from mino_nexus.core.ids import prefixed
+        run_id = body.run_id or prefixed("debug", 8)
         proxy = RouterProxy(body.sn, run_id=run_id)
         res = await proxy.dispatch_async(event, run_id=run_id, step_idx=body.step_idx)
         return {

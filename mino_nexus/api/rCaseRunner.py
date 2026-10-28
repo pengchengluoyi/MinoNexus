@@ -147,6 +147,8 @@ def list_devices(only_online: bool = Query(False), compatible_only: bool = False
 
 @router.post("/run")
 def run_cases(body: RunRequest, sess: dict = Depends(current_session)):
+    if str(body.instruction or "").strip() or str(body.run_type or "").strip().lower() == "copilot":
+        raise HTTPException(status_code=400, detail="一句话指令跑批已关闭")
     if not str(body.app_id or "").strip():
         raise HTTPException(status_code=400, detail="缺少 app_id")
     try:
@@ -170,7 +172,6 @@ def run_cases(body: RunRequest, sess: dict = Depends(current_session)):
             requirement_id=body.requirement_id or "",
             release_id=body.release_id or "",
             slot_id=body.slot_id or "",
-            instruction=str(body.instruction or "").strip(),
             provider_id=str(body.provider_id or "").strip(),
             playwright_headless=bool(body.playwright_headless),
             env_profile=str(body.env_profile or "").strip(),
@@ -470,3 +471,12 @@ async def recheck_write_safety(task_id: str, _sess: dict = Depends(current_sessi
         return ok(await recover_stopped(task_id))
     except ValueError as exc:
         raise HTTPException(status_code=404 if str(exc) == "task_not_found" else 409, detail=str(exc)) from exc
+
+
+@router.post("/tasks/{task_id}/write-safety/baseline")
+async def baseline_write_safety(task_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.casework.run_write_safety import confirm_baseline
+    try:
+        return ok(await confirm_baseline(task_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404 if str(exc) == "task_not_found" else 409, detail={"reason_code": str(exc), "message": str(exc)}) from exc

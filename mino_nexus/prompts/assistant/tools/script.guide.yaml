@@ -1,0 +1,23 @@
+id: script.guide
+title: 用例脚本仓库与基础指令
+description: 编写用例脚本时调用，且应在 agent_guide 之后。返回本机工作目录、仓库公开地址，以及 case 上可调用的基础指令。不返回仓库凭据。脚本文本写在 workspace.checkout，不要提交给 Nexus。
+route: GET /project/{project_id}/resources/script-guide
+risk: read
+async: false
+version: 1
+params_schema:
+  type: object
+  properties:
+    project_id:
+      type: string
+      description: 项目 id 或项目名
+  required:
+  - project_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

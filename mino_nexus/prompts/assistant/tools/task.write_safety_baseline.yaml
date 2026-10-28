@@ -1,0 +1,23 @@
+id: task.write_safety_baseline
+title: 基线复核并解除设备隔离
+description: 对已结束且资源仍隔离的本人任务，先拍当前画面作为基线，再把该任务在这台设备上的写隔离标为已复核，并释放残留的执行资源、设备租约和号池账号租约。不改变原任务的通过或失败结论。设备已解开但下次仍 resource_busy，或新任务秒失败 resource_isolated 时使用。截图失败则保持隔离，也不释放账号。
+route: POST /case-runner/tasks/{task_id}/write-safety/baseline
+risk: write
+async: false
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    task_id:
+      type: string
+      minLength: 1
+      pattern: ^[A-Za-z0-9_-]+$
+  required:
+  - task_id
+param_resolvers: {}
+result_pick:
+- data
+card: answer
+surfaces:
+- mcp
+enabled: true

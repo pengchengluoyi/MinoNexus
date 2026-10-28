@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import threading
 import time
-import uuid
+from mino_nexus.core.ids import prefixed
 from sqlalchemy import text
 from mino_nexus.core.database import session_scope
 from mino_nexus.platform.identity import require_user_id, execution_user
@@ -19,7 +19,7 @@ def admission(doc, case, *, project_id, package, platform):
         "run_id": doc["run_id"], "sn": case.get("sn") or doc.get("sn"), "case_id": case["case_id"],
         "execution_unit_id": case["execution_unit_id"], "app_id": doc.get("app_id", ""),
         "env": doc.get("env_profile") or "test", "owner": require_user_id(),
-        "attempt_id": "resource-" + uuid.uuid4().hex, "claimed": False, "reason": ""}
+        "attempt_id": prefixed("resource"), "claimed": False, "reason": ""}
     token = _claim.set(request)
     try:
         yield request

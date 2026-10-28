@@ -318,13 +318,28 @@ def _run_case_list(
             start_attempt(run_id, case)
             result = None
             with heartbeat(resource_attempt):
-                result = run_case(
+                from mino_nexus.casework.script_store import load_bundle
+                from mino_nexus.casework.script_workspace import get_repo
+                from mino_nexus.loop.script_case import run_script_case
+
+                scripts = load_bundle(project_id, cid, platform) if project_id else {}
+                repo = get_repo(project_id) if project_id else {}
+                run_kwargs = dict(
                     run_id=run_id, case=case, sn=sn, app_id=app_id,
                     app_name=str(doc.get("app_name") or ""), package=package, provider_id=provider_id,
                     playbook=playbook if isinstance(playbook, dict) else {},
                     cancel_check=lambda: run_store.task_cancelled(run_id), case_seq=case_seq,
                     playwright_headless=bool(doc.get("playwright_headless", True)),
-                    resource_attempt=resource_attempt, run_env_brief=env_brief, next_case=next_case if isinstance(next_case, dict) else None)
+                    resource_attempt=resource_attempt, run_env_brief=env_brief,
+                    next_case=next_case if isinstance(next_case, dict) else None,
+                    platform=platform,
+                )
+                if str(repo.get("url") or "").strip():
+                    result = run_script_case(**run_kwargs, repo=repo)
+                elif str(scripts.get("run") or "").strip():
+                    result = run_script_case(**run_kwargs, scripts=scripts)
+                else:
+                    result = run_case(**{key: value for key, value in run_kwargs.items() if key != "platform"})
             doc = run_store.get(run_id) or doc
             env_brief = str(doc.get("env_brief") or env_brief)
             run_store.patch_case(

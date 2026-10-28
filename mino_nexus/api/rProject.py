@@ -51,6 +51,7 @@ class ProjectEnvUpdate(BaseModel):
     channel_secrets: Optional[dict[str, Any]] = None
     channel_gmail_alias: Optional[dict[str, Any]] = None
     channel_phone_seq: Optional[dict[str, Any]] = None
+    login_policies: Optional[list] = None
 
 
 class TestAccountSaveBody(BaseModel):
@@ -417,6 +418,10 @@ def update_project_env(project_id: str, item: ProjectEnvUpdate, _sess: dict = De
         body["channel_phone_seq"] = item.channel_phone_seq
     elif prev.get("channel_phone_seq"):
         body["channel_phone_seq"] = prev.get("channel_phone_seq")
+    if item.login_policies is not None:
+        body["login_policies"] = item.login_policies
+    elif prev.get("login_policies") is not None:
+        body["login_policies"] = prev.get("login_policies")
     from mino_nexus.resources.project_env import validate_environment_write
     try:
         validate_environment_write(body)

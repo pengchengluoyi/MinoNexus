@@ -952,13 +952,13 @@ def release_ctx_lease(ctx: Any) -> None:
     ctx.accounts_brief = ""
 
 
-def release_run_lease(run_id: str, *, app_id: str = "") -> None:
-    """run 结束：按 run_id 清空号池占用（兜底，幂等）。"""
+def release_run_lease(run_id: str, *, app_id: str = "") -> int:
+    """run 结束：按 run_id 清空号池占用（兜底，幂等）。返回释放条数。"""
     from mino_nexus.resources.pool_account_store import clear_leases_for_run
 
     rid = str(run_id or "").strip()
     if not rid:
-        return
+        return 0
     project_ids: list[str] = []
     if app_id:
         try:
@@ -986,3 +986,4 @@ def release_run_lease(run_id: str, *, app_id: str = "") -> None:
                 SLog.i(TAG, f"released {n} lease(s) run={rid[:12]} project={pid[:8]}")
         except Exception as exc:
             SLog.w(TAG, f"release_run_lease project={pid[:8]}: {exc!r}")
+    return total

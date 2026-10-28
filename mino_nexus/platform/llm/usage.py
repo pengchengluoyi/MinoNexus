@@ -16,7 +16,8 @@ def begin_attempt(*, provider: dict, meta: dict, kind: str = "chat", model: str 
     if owner != provider.get("owner_user_id"):
         raise PermissionError("模型用量必须归属当前执行账号")
     env, writer = ctx(), active_writer()
-    call_id = "mu-" + uuid.uuid4().hex
+    from mino_nexus.core.ids import prefixed
+    call_id = prefixed("mu")
     step = env.get("case_step_index", env.get("step_index"))
     with session_scope() as db:
         db.add(ModelUsage(id=call_id, owner_user_id=owner, at=datetime.now(timezone.utc).isoformat(),
@@ -48,7 +49,8 @@ def record_attempt(*, provider: dict, meta: dict, response: dict | None, kind: s
         return max(0, int(value)) if isinstance(value, (int, float)) else None
     prompt, completion = count("prompt_tokens", usage.get("input_tokens")), count("completion_tokens", 0 if kind == "embedding" and usage else usage.get("output_tokens"))
     total = count("total_tokens", prompt + completion if prompt is not None and completion is not None else None)
-    call_id = call_id or "mu-" + uuid.uuid4().hex
+    from mino_nexus.core.ids import prefixed
+    call_id = call_id or prefixed("mu")
     task_id = str(getattr(writer, "run_id", "") or env.get("task_id") or "")
     case_id = str(getattr(writer, "case_id", "") or env.get("case_id") or "")
     session_id = str(getattr(writer, "session_id", "") or env.get("session_id") or "")

@@ -303,7 +303,8 @@ def default_zentao_template_row(
     raw: Any = None,
 ) -> dict[str, Any]:
     body = normalize_zentao_bug_template(raw)
-    return {"id": template_id or f"tpl-{uuid.uuid4().hex[:10]}", "name": name, "is_default": bool(is_default), **body}
+    from mino_nexus.core.ids import prefixed
+    return {"id": template_id or prefixed("tpl", 10), "name": name, "is_default": bool(is_default), **body}
 
 
 def normalize_zentao_bug_template(raw: Any = None) -> dict[str, Any]:
@@ -336,9 +337,10 @@ def normalize_zentao_templates(raw: Any = None) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         body = normalize_zentao_bug_template(item)
-        tid = str(item.get("id") or "").strip() or f"tpl-{uuid.uuid4().hex[:10]}"
+        from mino_nexus.core.ids import prefixed
+        tid = str(item.get("id") or "").strip() or prefixed("tpl", 10)
         if tid in seen:
-            tid = f"tpl-{uuid.uuid4().hex[:10]}"
+            tid = prefixed("tpl", 10)
         seen.add(tid)
         rows.append({
             "id": tid,

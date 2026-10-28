@@ -96,7 +96,7 @@ def _looks_like_url(value: str) -> bool:
 
 
 def _kind_for(platform: str, target_id: str) -> str:
-    return {"web": "url", "android": "package", "mac": "bundle", "win": "application"}[_norm_platform(platform)]
+    return {"web": "url", "android": "package", "ios": "bundle", "mac": "bundle", "win": "application"}[_norm_platform(platform)]
 
 
 def web_page_matches_target(target: str, page: str) -> bool:

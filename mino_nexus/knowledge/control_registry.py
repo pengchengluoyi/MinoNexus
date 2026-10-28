@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 import uuid
+
+from mino_nexus.core.ids import prefixed
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Iterator
@@ -170,7 +172,7 @@ def ensure_control(
             locator["vlm_text"] = text
             locator["source"]["vlm_text"] = "case"
             row = UiControl(
-                control_id=f"ctl_{uuid.uuid4().hex[:8]}",
+                control_id=prefixed("ctl", 8),
                 project_id=pid,
                 desc_key=key,
                 element_type=kind,
@@ -286,7 +288,7 @@ def locator_cell(scheme: str, platform: str) -> str:
     plat = target_platform(platform)
     if scheme == "visual": return "vlm_text"
     if scheme not in {"dom","dom_preferred"}: raise ValueError("locator_scheme_invalid")
-    return {"android": "uiautomator", "web": "playwright", "mac": "ax", "win": "uia"}[plat]
+    return {"android": "uiautomator", "ios": "xcuitest", "web": "playwright", "mac": "ax", "win": "uia"}[plat]
 
 
 def read_locator(control: dict[str, Any] | None, *, scheme: str, platform: str) -> str:

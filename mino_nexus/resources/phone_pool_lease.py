@@ -44,16 +44,22 @@ def get_channel_phone_seq(
     env_surface: str,
     env_profile: str,
     apply_phone_default: bool = False,
+    app_id: str = "",
 ) -> dict[str, str]:
+    from mino_nexus.resources.project_env import policy_seq_slot
+
     doc = env_doc if isinstance(env_doc, dict) else {}
     surface = str(env_surface or "").strip()
     env_key = str(env_profile or "test").strip() or "test"
+    policy_slot = policy_seq_slot(doc, "phone_seq", env_key, app_id)
     ch_map = doc.get("channel_phone_seq")
     slot: dict[str, Any] = {}
     if surface and isinstance(ch_map, dict):
         per = ch_map.get(surface)
         if isinstance(per, dict):
             slot = per.get(env_key) or {}
+    if policy_slot.get("start"):
+        slot = policy_slot
     out = _norm_alias_slot(slot)
     if out.get("start"):
         return out
@@ -64,7 +70,7 @@ def get_channel_phone_seq(
         resolve_effective_secrets,
     )
 
-    secrets = resolve_effective_secrets(doc, env_profile=env_key, env_surface=surface)
+    secrets = resolve_effective_secrets(doc, env_profile=env_key, env_surface=surface, app_id=app_id)
     if login_kind_from_secrets(secrets) != "phone":
         return out
     return _norm_alias_slot({"start": _DEFAULT_PHONE_START, "next": _DEFAULT_PHONE_START})
@@ -79,7 +85,8 @@ def phone_pool_lease_enabled(env_doc: dict | None, ctx: Any) -> bool:
     doc = env_doc if isinstance(env_doc, dict) else {}
     env_profile = str(getattr(ctx, "env_profile", "") or "test").strip() or "test"
     surface = ensure_ctx_env_surface(ctx, doc)
-    secrets = resolve_effective_secrets(doc, env_profile=env_profile, env_surface=surface)
+    app_id = str(getattr(ctx, "app_id", "") or "")
+    secrets = resolve_effective_secrets(doc, env_profile=env_profile, env_surface=surface, app_id=app_id)
     if login_kind_from_secrets(secrets) != "phone":
         return False
     slot = get_channel_phone_seq(
@@ -87,6 +94,7 @@ def phone_pool_lease_enabled(env_doc: dict | None, ctx: Any) -> bool:
         env_surface=surface,
         env_profile=env_profile,
         apply_phone_default=True,
+        app_id=app_id,
     )
     return bool(slot.get("start"))
 
@@ -175,7 +183,7 @@ def phone_seq_account_id(ctx: Any, *, project_id: str, run_id: str) -> str:
                 str(getattr(ctx, "case_id", "") or ""), sn,
                 str(getattr(ctx, "env_surface", "") or ""),
                 str(getattr(ctx, "env_profile", "") or "test")]
-    return "acc_" + hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()[:24]
+    return "acc" + hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()[:24]
 
 
 def provision_phone_seq_account(
@@ -226,7 +234,8 @@ def provision_phone_seq_account(
             raise ValueError("phone_seq_channel_missing")
         if env_profile not in {str(e.get("key") or "") for e in doc.get("environments") or []}:
             raise ValueError("phone_seq_environment_missing")
-        slot = get_channel_phone_seq(doc, env_surface=surface, env_profile=env_profile)
+        app_id = str(getattr(ctx, "app_id", "") or "")
+        slot = get_channel_phone_seq(doc, env_surface=surface, env_profile=env_profile, app_id=app_id)
         start = slot.get("start") or _DEFAULT_PHONE_START
         number = max(int(start), int(slot.get("next") or start))
         # 老号可能来自导入/其他渠道；不能把已存在手机号重新宣称为新用户。
@@ -240,11 +249,14 @@ def provision_phone_seq_account(
             number += 1
         else:
             raise ValueError("phone_seq_collision_limit")
-        channel_map = dict(doc.get("channel_phone_seq") or {})
-        per_env = dict(channel_map.get(surface) or {})
-        per_env[env_profile] = {"start": start, "next": str(number + 1)}
-        channel_map[surface] = per_env
-        doc["channel_phone_seq"] = channel_map
+        nxt = {"start": start, "next": str(number + 1)}
+        from mino_nexus.resources.project_env import write_policy_seq_slot
+        if not write_policy_seq_slot(doc, "phone_seq", env_profile, nxt, app_id):
+            channel_map = dict(doc.get("channel_phone_seq") or {})
+            per_env = dict(channel_map.get(surface) or {})
+            per_env[env_profile] = nxt
+            channel_map[surface] = per_env
+            doc["channel_phone_seq"] = channel_map
         project.env = doc
         now = int(time.time())
         account = PoolAccount(id=aid, project_id=pid, env=env_profile, phone=phone,

@@ -55,7 +55,8 @@ def save_domain(project_id: str, domain_id: str, body: DomainBody):
         if db.query(ExecutionResource).filter_by(resource_key="domain:" + domain_id).filter(ExecutionResource.state != "released").first():
             raise HTTPException(409, "resource_domain_busy")
         if row is None:
-            row = ResourceDomain(domain_id="domain-" + uuid.uuid4().hex, project_id=project_id)
+            from mino_nexus.core.ids import prefixed
+            row = ResourceDomain(domain_id=prefixed("domain"), project_id=project_id)
             db.add(row)
         for key, value in body.model_dump().items():
             setattr(row, key, value)

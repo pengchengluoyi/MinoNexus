@@ -55,7 +55,8 @@ def append_candidates(app_id: str, rows: list[dict[str, Any]], *, source: str = 
         batch["source"] = source
     existing = {str(c.get("candidate_id") or ""): c for c in (batch.get("candidates") or [])}
     for row in rows:
-        cid = str(row.get("candidate_id") or "").strip() or f"cand.{uuid.uuid4().hex[:10]}"
+        from mino_nexus.core.ids import prefixed
+        cid = str(row.get("candidate_id") or "").strip() or prefixed("cand", 10)
         prev = existing.get(cid) or {}
         merged = {**prev, **row, "candidate_id": cid, "status": row.get("status") or prev.get("status") or "pending"}
         existing[cid] = merged

@@ -14,8 +14,6 @@ ASSIST_JOBS = (
     "draft_gate",
     "pick_regression",
     "analyze_req",
-    "draft_mindmap",
-    "draft_cases",
     "propose_atlas",
 )
 
@@ -282,7 +280,7 @@ def pick_regression(rel: dict, requirements: list, suites: list) -> dict:
 
 
 def run_job(job: str, *, requirement=None, release=None, requirements=None, cases=None, tasks=None, suites=None) -> dict:
-    if job in ("analyze_req", "draft_mindmap", "draft_cases", "propose_atlas"):
+    if job in ("analyze_req", "propose_atlas"):
         from mino_nexus.casework.qa.qa_cover import run_llm_job
 
         art = run_llm_job(

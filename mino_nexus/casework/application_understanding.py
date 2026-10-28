@@ -200,7 +200,8 @@ def propose(project_id, app_id, state_id, body):
             raise ValueError('page_revision_conflict')
         _evidence(db, app_id, data['examples'], actor)
         revision = expected + 1
-        record = {**data, 'review_id': 'page-review-' + uuid.uuid4().hex,
+        from mino_nexus.core.ids import prefixed
+        record = {**data, 'review_id': prefixed('pagereview'),
             'request_id': request_id, 'request_digest': digest(data), 'owner_user_id': actor,
             'revision': revision, 'base_digest': base_digest(state_view(row)),
             'status': 'candidate', 'created_at': now(), 'decisions': []}
@@ -310,7 +311,6 @@ def impact(project_id, app_id, state_id, *, version='v1', review_id=''):
 
 def revalidate(project_id, app_id, state_id, body):
     from mino_nexus.casework.case_compilation import enqueue
-    from mino_nexus.casework.case_review import recheck
     with session_scope() as db:
         scope(db, project_id, app_id, write=True)
     preview = impact(project_id, app_id, state_id, version=body.version, review_id=body.review_id)
@@ -329,9 +329,7 @@ def revalidate(project_id, app_id, state_id, body):
                                   'knowledge:' + body.request_id + ':' + cid)
                 result.append({'case_id': cid, 'status': receipt['status'], 'job_id': receipt['job_id']})
             else:
-                receipt = recheck(project_id, cid, case['expected_revision'], case['expected_job_id'],
-                                  body.reason, context={}, evidence_session_id='')
-                result.append({'case_id': cid, 'status': receipt['resolution_status']})
+                result.append({'case_id': cid, 'status': 'failed', 'reason': 'review_removed'})
         except ValueError as exc:
             result.append({'case_id': cid, 'status': 'failed', 'reason': str(exc)})
     return {'request_id': body.request_id, 'items': result, 'business_verified': False}
@@ -339,43 +337,10 @@ def revalidate(project_id, app_id, state_id, body):
 
 def trends(project_id, app_id, *, platform=''):
     from mino_nexus.casework.case_store import list_cases
-    from mino_nexus.casework.case_review import describe
-    from mino_nexus.models.case_review_record import CaseReviewRecord
     cases = [c for c in list_cases(project_id) if (not c.get('app_id') or c['app_id'] == app_id)
              and (not platform or c.get('platform') == platform)]
-    ids = {c['case_id'] for c in cases}
     with session_scope() as db:
         actor = scope(db, project_id, app_id)
-        records = db.query(CaseReviewRecord).filter_by(project_id=project_id, owner_user_id=actor).order_by(
-            CaseReviewRecord.reviewed_at, CaseReviewRecord.record_id).all()
-        history = [{'case_id': r.case_id, 'status': r.review_status, 'at': r.reviewed_at,
-                    'evidence': deepcopy(r.evidence), 'context': deepcopy(r.context)}
-                   for r in records if r.case_id in ids and r.action != 'recheck_snapshot'
-                   and (not r.context or r.context.get('app_id') == app_id)]
-    daily, resolved, reopened = {}, set(), set()
-    def identity(cid, item):
-        return digest([cid, item.get('origin'), item.get('reason_code'), item.get('phase'), item.get('control_id'), item.get('source_clause'), item.get('case_step'), item.get('context')])
-    last = {}
-    for row in history:
-        evidence = row['evidence'] or {}
-        item = evidence.get('diagnostic') or {}
-        if not item:
-            continue
-        key = identity(row['case_id'], item)
-        day = daily.setdefault(row['at'][:10], {'reviewed': set(), 'resolved': set(), 'reopened': set()})
-        day['reviewed'].add(row['case_id'])
-        verified = row['status'] == 'verified_resolved' and evidence.get('execution_verified') is True
-        if verified:
-            resolved.add(row['case_id']); day['resolved'].add(row['case_id'])
-        elif last.get(key) == 'verified_resolved' and row['status'] not in {'fixed_pending_run', 'verified_resolved'}:
-            reopened.add(row['case_id']); day['reopened'].add(row['case_id'])
-        last[key] = 'verified_resolved' if verified else row['status']
-    for case in cases:
-        for item in describe(case)['requirements']:
-            if last.get(identity(case['case_id'], item)) == 'verified_resolved':
-                reopened.add(case['case_id'])
-    return {'app_id': app_id, 'owner_user_id': actor, 'platform': platform, 'total_cases': len(ids),
-            'reviewed_cases': len({r['case_id'] for r in history}), 'ever_verified_resolved_cases': len(resolved),
-            'reopened_cases': len(reopened), 'improvement_rate': None,
-            'days': [{'date': date, **{k+'_cases': len(v) for k, v in counts.items()}} for date, counts in sorted(daily.items())],
-            'note': '按用例去重；历史解决与复发可重叠。没有对照基线，不计算改善率；运行失败不直接算用例问题。'}
+    return {'app_id': app_id, 'owner_user_id': actor, 'platform': platform, 'total_cases': len(cases),
+            'reviewed_cases': 0, 'ever_verified_resolved_cases': 0, 'reopened_cases': 0,
+            'improvement_rate': None, 'days': [], 'note': '用例评审已关闭。'}

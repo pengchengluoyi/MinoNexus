@@ -1034,6 +1034,8 @@ class RouterProxy:
 
         if event.fallback_executors:
             raise NoRouteError("executor_fallback_forbidden")
+        from mino_nexus.contract.executors import cap_uses_wda
+
         allowed = set(executors_for_device(self.sn, node))
         chosen = str(event.expected_executor or "")
         if chosen:
@@ -1041,6 +1043,10 @@ class RouterProxy:
                 raise NoRouteError("selected_executor_unavailable:" + chosen)
         else:
             eligible = [ex for ex in by_executor if ex in allowed]
+            if not eligible and plat == "ios" and "ios_wda" in allowed and cap_uses_wda(event.capability_id):
+                return ["ios_wda"], {
+                    "executor": "ios_wda", "runs_on": "scout", "platforms": ["ios"], "low_level": {},
+                }
             if len(eligible) != 1:
                 raise NoRouteError("executor_selection_required:" + ",".join(eligible))
             chosen = eligible[0]
@@ -1076,6 +1082,11 @@ class RouterProxy:
             return hint
         if plat in ("web", "browser", "playwright"):
             hint["headless"] = self.playwright_headless
+            return hint
+        if plat == "ios":
+            hint["udid"] = self.sn
+            if self.target_package:
+                hint["bundle_id"] = self.target_package
             return hint
         if dev is not None:
             hint["model"] = dev.model

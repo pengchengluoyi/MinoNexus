@@ -9,7 +9,7 @@ def parse_case_platforms(case: dict[str, Any]) -> set[str]:
 
 
 def platform_label(platforms: set[str]) -> str:
-    names = {"mac": "macOS", "win": "Windows", "android": "Android", "web": "Web"}
+    names = {"mac": "macOS", "win": "Windows", "android": "Android", "ios": "iOS", "web": "Web"}
     return " / ".join(names[p] for p in TARGET_PLATFORMS if p in platforms) or "无适用平台"
 
 

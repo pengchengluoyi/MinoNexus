@@ -152,7 +152,7 @@ Console 不提供 Scout 安装或包配置。
 
 HITL 问人界面、排期 cron、基线库、从设计稿/定位抽登录图标（CLIP/视觉）、完整 3500 行 Agent 恢复/拟人化路径。
 
-已经可联：登录、概览、账号、发信、模型 Key、**技能**（`/settings/ai/skills`）与 **Jobs**（`/settings/ai/jobs`）prompt 编辑、角色 prompt / 对话、扩展包只读、节点列表、项目/应用/环境/号池、自动化配置与用例草稿、**Case Runner 下发与轮询**（无 Scout / 无 Key 时任务失败并带中文原因，不再 501）、qa-process tick/assist/脑图、**项目用例库导入 preview/commit**、Figma 同步（无 Token 时 400）。
+已经可联：登录、概览、账号、发信、模型 Key、**技能**（`/settings/ai/skills`）与 **Jobs**（`/settings/ai/jobs`）prompt 编辑、角色 prompt / 对话、扩展包只读、节点列表、项目/应用/环境/号池、自动化配置、**Case Runner 下发与轮询**（无 Scout / 无 Key 时任务失败并带中文原因，不再 501）、**项目用例库导入 preview/commit**、Figma 同步（无 Token 时 400）。脑图、草稿推进和一句话指令跑批已关闭。
 
 ## 项目用例库与导入
 
@@ -161,7 +161,12 @@ HITL 问人界面、排期 cron、基线库、从设计稿/定位抽登录图标
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/project/{project_id}/cases` | 项目用例列表。每条含 `step_keys_summary`（含 `ui_automation.coverable` / `blocked_by` / 逐步 `lights`） |
-| GET | `/project/{project_id}/cases/{case_id}` | 单条用例 + `step_keys_summary`。`coverable=false` 时 Studio 选用例应禁用开跑 |
+| GET | `/project/{project_id}/cases/{case_id}` | 单条用例 + `step_keys_summary`。`coverable=false` 时 Studio 选用例应禁用开跑。用例含 `script` / `pretest` / `posttest` |
+| PUT | `/project/{project_id}/cases/{case_id}` | 保存用例。`script` / `pretest` / `posttest` 缺省不改；传入空串则清空。`script_platform` 为 `mac` / `win` / `android` / `ios` / `web` 时写入该端脚本。脚本须分别定义 `run(case)`、`pretest(case)`、`posttest(case)` |
+| GET / PUT | `/project/{project_id}/script-repo` | 用例脚本仓库地址和分支。GET 同时返回本机 `workspace.root`、`workspace.checkout`、`workspace.venv`。PUT 需项目维护权限。库中只保存仓库地址 |
+| POST | `/project/{project_id}/script-repo/check` | 检查工作目录里的本地脚本。body：`case_id` 或 `path`。需项目维护权限 |
+| PUT | `/project/{project_id}/cases/{case_id}` 的 `script_path` | 这条用例在仓库内的相对路径，例如 `cases/login.py` |
+| GET / PUT | `/project/{project_id}/case-scripts` | GET 仍可读历史上通过接口保存的项目级前后置。PUT 拒绝，脚本在本机仓库里修改 |
 | GET | `/project/{project_id}/requirements` | 导入可选需求（项目内各 App 聚合） |
 | POST | `/project/{project_id}/cases/preflight` | `{app_id,case_ids,recompile_stale?:false}`；默认只读，返回 `runnable` / `blocked`（不含 advisory）；启动入口传 true，以当前用例排队修复失效产物并返回 `compilation_jobs`，需项目维护权限 |
 | POST | `/project/{project_id}/cases/import/preview` | 解析表格。每行：`steps_parsed` / `expected_parsed`（编译出的事件）、`remark`（不可覆盖的人话）、`ui_automation`。`flags` 仍是机器码。**不拦入库** |
@@ -425,6 +430,8 @@ Workbench 入口：项目配置 → 「项目维护者」。
 | GET | `/resources/devices` | 设备台账；`include_sessions=true` 时带最多 5 条机态（掩码 `identity_hint`） |
 | GET | `/resources/logs` | 资源分配日志；`account_ident` 掩码、`detail` 递归脱敏、`page_size≤100` |
 | GET | `/resources/env` | 环境/渠道/号池结构；只返回 `configured` 与 `secret_slots` 名称，不返回密钥 |
+| GET | `/assistant/agent-guide` | MCP `agent.guide`。外部 agent 的入口：工具分组和脚本、Git、设备的分工。不依赖仓库里的 skill 文件 |
+| GET | `/resources/script-guide` | MCP `script.guide`。返回 `workspace`（本机工作目录根、检出目录、虚拟环境）、仓库公开地址和分支，以及 `case.*` 基础指令。不含仓库凭据 |
 | POST | `/resources/accounts/reserve` | MCP 预约；body `{account_id?, env?, lifecycle?, run_id?, ttl_sec?}`；写号池 lease，账号立刻算 `occupied`；返回账号/密码/OTP 明文 |
 | POST | `/resources/accounts/{account_id}/release` | body `{run_id}`；必须与当前 lease 一致，否则 409 |
 | GET | `/apps/{app_id}/logic/overview` | 页面/控件/入口/缺口覆盖度 |
@@ -521,10 +528,7 @@ Workbench 的“预检所选用例”按当前完整选择逐条调用；选择�
 | `POST .../compile-jobs` | `{expected_revision,client_request_id}`；排队同版本重编，有在途任务时复用；返回 job，不等待模型 |
 | `POST .../compile-jobs/{job_id}/cancel` | `{expected_revision}`；取消激活资格；不能保证远程模型调用已停止 |
 | `POST .../compile-jobs/{job_id}/recover` | `{expected_revision,client_request_id}`；仅最新 failed/interrupted/cancelled 任务可显式创建关联新 job；可能再次调用模型 |
-| `GET .../review-requirements` | 当前 source/revision/job，编译、发布、断言/资源及已检查目标的诊断；来源、六类建议根因或根因待确认、缺项、point/operation、动作、逐项历史 |
-| `PUT .../review-requirements` | 原有 `{expected_revision,source:{precondition,steps_raw,expected_raw},reason}`；原文与新 revision+queued job 原子落盘，不同步编译 |
-| `POST .../review-requirements/{item_id}/review` | `{expected_revision,expected_job_id,reason,category?}`；category 允许 case_definition/semantic_parsing/capability_gap/configuration/execution_toolchain/external_evidence，null 表示暂不定责；只登记人工意见，不改变用例执行资格 |
-| `POST .../review-requirements/recheck` | `{expected_revision,expected_job_id,reason,context?,evidence_session_id?}`；context 为当前项目应用及 owned 设备 `{app_id,sn,env_profile,env_surface,execution_mode?,action_scheme?,provider_id?}`。实际重算静态资格、目标绑定和资源登记检查，不租设备、不调用执行器。目标诊断按上下文保存，省略目标不能清除原目标问题；观察超过 60 秒或版本改变标过时 |
+用例评审接口 `review-requirements` 已关闭。原文仍通过用例保存进入 revision 和编译任务。
 
 原有 `POST .../v5/compile`、`.../step-keys/compile`、`.../resource-key/compile` 统一进入队列，仍返回 `{case,job,preview}`。新客户端发送上述稳定请求身份；兼容无 body 的旧入口可复用在途工作，不能把 HTTP 返回当编译已完成。保存/导入不再被模型时延阻塞；预览的解析仍是可丢弃候选，确认导入保留原文并以持久任务报告编译缺口。
 
@@ -536,7 +540,7 @@ Workbench 的“预检所选用例”按当前完整选择逐条调用；选择�
 ### 2026-10-16：MCP 节点更新、写安全复核与多语言证据
 
 - MCP `scout_list` / `scout_update` / `scout_update_status` 复用当前 owner 的节点接口。`scout_update` 只请求节点已配置发布清单的最新版本，不接受任意本地包路径、任意 URL 或指定未发布版本；离线不能宣称升级成功，须通过状态和重新连接核对运行版本。本地未发布修复包的备份安装另记交付记录。
-- `POST /case-runner/tasks/{task_id}/write-safety/recheck`（MCP `task_write_safety_recheck`）：仅当前 owner 的已结束任务可显式复核；其他账号任务 404、在途任务 409。只重新获取 Scout 停止证明，不重放原设备写动作。证明缺失仍 `resource_isolated=true`；成功返回逐动作 `recovered`、`mode`、`reason_code`、`baseline_required`，并明确 `business_result_unchanged=true`。跨进程必须有旧代际退役证明，新进程在线本身不是停止证明。停止证明不等于资源复位：当前只更新停止状态并保留隔离，历史失败或阻断不改成通过。迟到的有效停止回执也会更新已结束任务的当前停止状态；普通迟到写回执仅追加对账。
+- `POST /case-runner/tasks/{task_id}/write-safety/recheck`（MCP `task_write_safety_recheck`）：仅当前 owner 的已结束任务可显式复核；其他账号任务 404、在途任务 409。只重新获取 Scout 停止证明，不重放原设备写动作。证明缺失仍 `resource_isolated=true`；成功返回逐动作 `recovered`、`mode`、`reason_code`、`baseline_required`，并明确 `business_result_unchanged=true`。跨进程必须有旧代际退役证明，新进程在线本身不是停止证明。停止证明不等于资源复位：当前只更新停止状态并保留隔离，历史失败或阻断不改成通过。要解除隔离并让这台设备重新可调度，用 `POST /case-runner/tasks/{task_id}/write-safety/baseline`（MCP `task_write_safety_baseline`）：先拍当前画面，再把该任务在这台设备上的写隔离标为已复核，并释放残留的执行资源、设备租约和号池账号租约（含 attempt 的 run_id）。截图失败则保持隔离。不改变原任务结论。迟到的有效停止回执也会更新已结束任务的当前停止状态；普通迟到写回执仅追加对账。
 - 文案检查点冻结 `rules.text_match=exact|intent`。作者指定固定文案仍精确检查；明确跨语言意图按原用例含义核验，保留 `observed_text`、`observed_language`、`evidence` 与逐项 `semantic_checks`。新策略通过新编译/草稿生效，不改写历史发布。缺原文、缺逐项证据、输出语言标签非法等仍拒绝，不能退化成普通布尔断言。
 - 单次观察回看可证明某个语言检查点符合，不自动回写整条业务用例结果。身份、协议、交互能力、完整 check 和严格 `verified_pass` 仍各自按合同核验。
 

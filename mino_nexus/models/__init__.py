@@ -13,6 +13,9 @@ from mino_nexus.models.assistant import (
 from mino_nexus.models.atlas import AtlasAlias
 from mino_nexus.models.auth import AuthSession, AuthState, User
 from mino_nexus.models.case import ProjectCase
+from mino_nexus.models.case_script import CaseScript
+from mino_nexus.models.case_platform_script import CasePlatformScript
+from mino_nexus.models.project_script_repo import ProjectScriptRepo
 from mino_nexus.models.case_source import CaseSource, CaseSourceRead, CaseSourceRow
 from mino_nexus.models.run_admission import RunAdmission
 from mino_nexus.models.execution_resource import ExecutionResource, ResourceDomain
@@ -46,7 +49,7 @@ from mino_nexus.models.plugin import PluginPolicy, UserPluginSecret
 from mino_nexus.models.pool_account import PoolAccount, PoolAccountFacet
 from mino_nexus.models.project import App, Project
 from mino_nexus.models.project_pool_config import ProjectPoolConfig
-from mino_nexus.models.run import AppRegressionRun, MCaseBaseline, MCaseRunTrace
+from mino_nexus.models.run import AppRegressionRun
 from mino_nexus.models.session_event import SessionEvent, SessionMeta
 from mino_nexus.models.settings import Settings
 from mino_nexus.models.token import InstallToken, NodeCredential
@@ -64,9 +67,11 @@ __all__ = [
     "AppIntelProposal",
     "App",
     "ProjectCase",
+    "CaseScript",
+    "CasePlatformScript",
+    "ProjectScriptRepo",
     "CaseRevision",
     "CaseCompileJob",
-    "CaseReviewRecord",
     "CaseImportPreview",
     "CaseImportReceipt",
     "CaseImportReceiptLine",
@@ -84,8 +89,6 @@ __all__ = [
     "KnowledgeEntry",
     "InstallToken",
     "NodeCredential",
-    "MCaseBaseline",
-    "MCaseRunTrace",
     "NavFsm",
     "NavFsmEdge",
     "NavFsmState",
@@ -110,7 +113,6 @@ __all__ = [
 
 from mino_nexus.models.case_revision import CaseRevision
 from mino_nexus.models.case_compile_job import CaseCompileJob
-from mino_nexus.models.case_review_record import CaseReviewRecord
 
 from mino_nexus.models.scout_update import ScoutUpdate
 

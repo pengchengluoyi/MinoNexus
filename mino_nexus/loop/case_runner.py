@@ -44,21 +44,6 @@ def _normalize_sns(sn: str = "", sns: Optional[list[str]] = None) -> list[str]:
     return out
 
 
-def _instruction_case(instruction: str) -> dict[str, Any]:
-    text = str(instruction or "").strip()
-    cid = f"chat-{run_store.new_run_id()[3:]}"
-    return {
-        "case_id": cid,
-        "name": (text[:80] or cid),
-        "precondition": "",
-        "steps": [text] if text else [],
-        "expected": [],
-        "steps_raw": text,
-        "expected_raw": "",
-        "source": "copilot",
-    }
-
-
 def _pick_online_sns() -> list[str]:
     return [str(d.get("sn") or "") for d in ui_devices.ui_devices() if d.get("status") == "online" and d.get("sn")]
 
@@ -116,7 +101,6 @@ def run_cases(
     requirement_id: str = "",
     release_id: str = "",
     slot_id: str = "",
-    instruction: str = "",
     provider_id: str = "",
     playwright_headless: bool = True,
     env_profile: str = "",
@@ -138,11 +122,13 @@ def run_cases(
     action_scheme = normalize_action_scheme(action_scheme)
     require_user_id(plugin_user_id or None)
     from mino_nexus.core.stable_digest import digest
+    if str(run_type or "").strip().lower() == "copilot":
+        raise ValueError("copilot_run_removed")
     if client_request_id and (len(client_request_id) > 160 or not all(character.isalnum() or character in "_.:-" for character in client_request_id)):
         raise ValueError("run_request_id_invalid")
     request_digest = digest({"app_id": app.get("id"), "sn": sn, "sns": sns, "coverage": coverage,
         "platform": platform, "case_ids": case_ids, "start_index": start_index, "run_type": run_type,
-        "requirement_id": requirement_id, "release_id": release_id, "slot_id": slot_id, "instruction": instruction,
+        "requirement_id": requirement_id, "release_id": release_id, "slot_id": slot_id,
         "provider_id": provider_id, "playwright_headless": playwright_headless, "env_profile": env_profile,
         "env_surface": env_surface, "action_scheme": action_scheme, "execution_mode": execution_mode, "expected_build": expected_build})
     if client_request_id:
@@ -169,12 +155,7 @@ def run_cases(
     cov = cov or "once"
 
     all_cases = aas.list_app_cases(app)
-    instruction = str(instruction or "").strip()
-    if instruction:
-        cases = [_instruction_case(instruction)]
-        if not str(run_type or "").strip() or str(run_type).lower() == "manual":
-            run_type = "copilot"
-    elif case_ids is not None:
+    if case_ids is not None:
         by_id = {str(c.get("case_id")): c for c in all_cases if c.get("case_id")}
         cases = [by_id[str(cid)] for cid in case_ids if str(cid) in by_id]
         missing = [cid for cid in case_ids if str(cid) not in by_id]
@@ -188,15 +169,14 @@ def run_cases(
         raise ValueError("没有可执行的用例草稿。请先在流程里生成用例，或指定 case_ids。")
     requested_total = len(cases)
     skipped_cases: list[dict[str, Any]] = []
-    if not instruction:
-        from mino_nexus.casework.case_preflight import prepare_cases_for_execution
+    from mino_nexus.casework.case_preflight import prepare_cases_for_execution
 
-        cases, preflight = prepare_cases_for_execution(str(app.get("project_id") or ""),
-            [str(case["case_id"]) for case in cases])
-        skipped_cases = preflight["blocked"]
-        if not cases:
-            raise UiNotCoverable(skipped_cases, compilation_jobs=preflight.get("compilation_jobs"),
-                                 report=preflight)
+    cases, preflight = prepare_cases_for_execution(str(app.get("project_id") or ""),
+        [str(case["case_id"]) for case in cases])
+    skipped_cases = preflight["blocked"]
+    if not cases:
+        raise UiNotCoverable(skipped_cases, compilation_jobs=preflight.get("compilation_jobs"),
+                             report=preflight)
     mark("cases")
 
     from mino_nexus.resources.device_targets import select

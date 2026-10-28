@@ -16,6 +16,7 @@ import uuid
 
 from sqlalchemy import func, text
 from mino_nexus.core.database import session_scope
+from mino_nexus.core.ids import prefixed
 from mino_nexus.platform.identity import require_user_id
 from mino_nexus.core.stable_digest import digest as _digest, now as _now
 from mino_nexus.platform.identity import execution_user
@@ -110,7 +111,7 @@ def _snapshot(db, case, revision, actor, origin):
             raise ValueError("compile_app_scope_mismatch")
     from mino_nexus.casework.v5_publication import source_view
     frozen = input_view(case)
-    row = CaseRevision(revision_id="rev-" + uuid.uuid4().hex, owner_user_id=actor,
+    row = CaseRevision(revision_id=prefixed("rev"), owner_user_id=actor,
         project_id=case["project_id"], case_id=case["case_id"], revision=revision,
         source=source_view(case), source_digest=digest(source_view(case)), compile_input=frozen,
         input_digest=digest(frozen), origin=deepcopy(origin), created_at=now())
@@ -131,7 +132,7 @@ def _queue(db, row, revision, *, request_id, parent_job_id="", initial_status="q
         if existing.revision_id != revision.revision_id or existing.parent_job_id != parent_job_id:
             raise ValueError("compile_request_conflict")
         return existing
-    job = CaseCompileJob(job_id="compile-" + uuid.uuid4().hex, owner_user_id=actor,
+    job = CaseCompileJob(job_id=prefixed("compile"), owner_user_id=actor,
         project_id=row.project_id, case_id=row.case_id, revision_id=revision.revision_id,
         source_revision=revision.revision, request_id=request_id, parent_job_id=parent_job_id,
         status=initial_status, input_digest=revision.input_digest, build={**build_identity(),

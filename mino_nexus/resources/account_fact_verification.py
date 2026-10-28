@@ -87,7 +87,8 @@ def save_rule(project_id, rule_id, body):
         if (row.definition.get('revision', 0) if row else 0) != body.expected_revision:
             raise ValueError('fact_rule_revision_conflict')
         if row is None:
-            row = AccountFactRule(rule_id='fact-rule-' + uuid.uuid4().hex, project_id=project_id)
+            from mino_nexus.core.ids import prefixed
+            row = AccountFactRule(rule_id=prefixed('factrule'), project_id=project_id)
             db.add(row)
         row.app_id = app.id
         row.definition = {**body.model_dump(exclude={'expected_revision'}), 'revision': body.expected_revision + 1,
@@ -171,6 +172,7 @@ def capture_strict_session(session_id):
     from mino_nexus.platform.identity import require_user_id
     from mino_nexus.resources.pool_account_store import _facets_for_account
     from mino_nexus.resources.account_fact_review import view
+    from mino_nexus.core.ids import prefixed
     actor = require_user_id()
     with session_scope() as db:
         db.execute(text('BEGIN IMMEDIATE'))
@@ -197,7 +199,7 @@ def capture_strict_session(session_id):
                     or _facets_for_account(db, project_id, account_id, apply_observations=False) != binding.get('before')):
                 continue
             proposed = {r.definition['facet_key']: r.definition['facet_value'] for r in rules_for_session}
-            row = AccountFactCandidate(candidate_id='fact-' + uuid.uuid4().hex, owner_user_id=actor,
+            row = AccountFactCandidate(candidate_id=prefixed('fact'), owner_user_id=actor,
                 project_id=project_id, account_id=account_id, session_id=session_id, run_id=session.run_id,
                 case_id=session.case_id, env=account.env, source='deterministic_checkpoint',
                 before=deepcopy(binding['before']), proposed=proposed,

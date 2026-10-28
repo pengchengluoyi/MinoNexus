@@ -96,6 +96,27 @@ class CaseUpdateBody(BaseModel):
     expected_raw: str = ""
     resource_key: dict[str, Any] | None = None
     case_scene: dict[str, Any] | None = None
+    script: str | None = None
+    pretest: str | None = None
+    posttest: str | None = None
+    script_platform: str = ""
+    script_path: str = ""
+
+
+class ProjectScriptBody(BaseModel):
+    pretest: str = ""
+    posttest: str = ""
+    script_platform: str = ""
+
+
+class ScriptRepoBody(BaseModel):
+    url: str = ""
+    branch: str = ""
+
+
+class ScriptCheckBody(BaseModel):
+    case_id: str = ""
+    path: str = ""
 
 
 class V5PublishBody(BaseModel):
@@ -121,19 +142,6 @@ class V5ControlProbeBody(BaseModel):
     url: str = Field(min_length=1)
 
 
-class CaseReviewSource(BaseModel):
-    precondition: str = Field(max_length=30000)
-    steps_raw: str = Field(max_length=60000)
-    expected_raw: str = Field(max_length=60000)
-
-
-class CaseReviewBody(BaseModel):
-    expected_revision: int = Field(ge=1)
-    source: CaseReviewSource
-    reason: str = Field(min_length=1, max_length=1000)
-
-
-
 class CompileJobBody(BaseModel):
     expected_revision: int = Field(ge=1)
     client_request_id: str = Field(min_length=1, max_length=160)
@@ -141,27 +149,6 @@ class CompileJobBody(BaseModel):
 
 class CompileJobCancelBody(BaseModel):
     expected_revision: int = Field(ge=1)
-
-
-class CaseReviewItemBody(BaseModel):
-    expected_revision: int = Field(ge=1)
-    expected_job_id: str = ""
-    reason: str = Field(min_length=1, max_length=1000)
-    category: str | None = None
-
-
-class CaseReviewContext(BaseModel):
-    app_id: str = Field(min_length=1)
-    sn: str = Field(min_length=1)
-    env_profile: str = ""
-    env_surface: str = ""
-    action_scheme: str = "dom_preferred"
-    provider_id: str = ""
-
-
-class CaseReviewRecheckBody(CaseReviewItemBody):
-    context: CaseReviewContext | None = None
-    evidence_session_id: str = ""
 
 
 def _case_error(exc):
@@ -214,24 +201,6 @@ def recover_case_compile(project_id: str, case_id: str, job_id: str, body: Compi
     except ValueError as exc:
         raise _case_error(exc) from exc
 
-
-@router.post("/{project_id}/cases/{case_id}/review-requirements/recheck", dependencies=[Depends(project_maintainer)])
-def recheck_case_review(project_id: str, case_id: str, body: CaseReviewRecheckBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.casework.case_review import recheck
-    try:
-        return ok(recheck(project_id, case_id, body.expected_revision, body.expected_job_id, body.reason,
-            context=body.context.model_dump() if body.context else None, evidence_session_id=body.evidence_session_id))
-    except ValueError as exc:
-        raise _case_error(exc) from exc
-
-
-@router.post("/{project_id}/cases/{case_id}/review-requirements/{item_id}/review", dependencies=[Depends(project_maintainer)])
-def review_case_item(project_id: str, case_id: str, item_id: str, body: CaseReviewItemBody, _sess: dict = Depends(current_session)):
-    from mino_nexus.casework.case_review import review
-    try:
-        return ok(review(project_id, case_id, body.expected_revision, body.expected_job_id, item_id, body.reason, category=body.category))
-    except ValueError as exc:
-        raise _case_error(exc) from exc
 
 class V5BaselineBody(BaseModel):
     expected_revision: int = Field(ge=1)
@@ -309,28 +278,6 @@ def event_migration_apply(project_id: str, case_id: str, body: EventMigrationBod
         return ok(apply(project_id, case_id, **body.model_dump()))
     except ValueError as exc:
         raise _case_error(exc) from exc
-
-
-@router.get("/{project_id}/cases/{case_id}/review-requirements")
-def case_review_requirements(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
-    _project(project_id)
-    from mino_nexus.casework.case_store import get_case
-    from mino_nexus.casework.case_review import describe
-    case = get_case(project_id, case_id)
-    if not case:
-        raise HTTPException(status_code=404, detail="用例不存在")
-    return ok(describe(case))
-
-
-@router.put("/{project_id}/cases/{case_id}/review-requirements", dependencies=[Depends(project_maintainer)])
-def case_review_supplement(project_id: str, case_id: str, body: CaseReviewBody, _sess: dict = Depends(current_session)):
-    _project(project_id)
-    from mino_nexus.casework.case_review import supplement
-    try:
-        return ok(supplement(project_id, case_id, body.expected_revision, body.source.model_dump(), body.reason))
-    except ValueError as exc:
-        code = str(exc)
-        raise HTTPException(status_code=409 if code == "case_revision_conflict" else 404 if code == "case_missing" else 400, detail=code) from exc
 
 
 @router.get("/{project_id}/controls")
@@ -516,6 +463,90 @@ def post_case_preflight(project_id: str, body: CasePreflightBody, _sess: dict = 
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/{project_id}/script-repo")
+def get_script_repo(project_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.casework.script_workspace import ensure_workspace, get_repo, public_url
+
+    _project(project_id)
+    row = get_repo(project_id)
+    place = ensure_workspace(project_id)
+    return ok({
+        "url": public_url(row["url"]),
+        "branch": row["branch"],
+        "updated_at": row["updated_at"],
+        "workspace": place,
+    })
+
+
+@router.put("/{project_id}/script-repo", dependencies=[Depends(project_maintainer)])
+def put_script_repo(project_id: str, body: ScriptRepoBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.casework.script_workspace import ensure_workspace, save_repo
+
+    _project(project_id)
+    try:
+        saved = save_repo(project_id, body.url, body.branch)
+    except ValueError as exc:
+        raise _case_error(exc) from exc
+    place = ensure_workspace(project_id)
+    return ok({
+        "url": saved["public_url"],
+        "branch": saved["branch"],
+        "updated_at": saved["updated_at"],
+        "workspace": place,
+    }, msg="脚本仓库已保存" if place.get("ready") or not str(body.url or "").strip() else "地址已保存，检出失败")
+
+
+@router.post("/{project_id}/script-repo/check", dependencies=[Depends(project_maintainer)])
+def check_script_repo_file(project_id: str, body: ScriptCheckBody, _sess: dict = Depends(current_session)):
+    from mino_nexus.casework.script_check import ScriptRejected, check_script
+    from mino_nexus.casework.script_workspace import local_script_text, safe_script_path
+    from mino_nexus.casework.case_store import get_case
+
+    _project(project_id)
+    path = str(body.path or "").strip()
+    if body.case_id and not path:
+        case = get_case(project_id, body.case_id) or {}
+        path = str(case.get("script_path") or "")
+    try:
+        path = safe_script_path(path) if path else ""
+    except ValueError as exc:
+        raise _case_error(exc) from exc
+    text = local_script_text(project_id, body.case_id, script_path=path)
+    if not text:
+        raise HTTPException(status_code=404, detail={"reason_code": "script_file_missing", "message": "工作目录里还没有这个脚本文件"})
+    try:
+        check_script(text, role="run")
+    except ScriptRejected as exc:
+        raise HTTPException(status_code=400, detail={"reason_code": exc.reason_code, "message": str(exc), "line": exc.line}) from exc
+    return ok({"path": path, "ok": True})
+
+
+@router.get("/{project_id}/case-scripts")
+def get_project_case_scripts(project_id: str, _sess: dict = Depends(current_session)):
+    from mino_nexus.casework.script_store import get_scripts, scripts_by_platform
+
+    _project(project_id)
+    row = get_scripts(project_id, "")
+    by_end = {
+        plat: {"pretest": item["pretest"], "posttest": item["posttest"]}
+        for plat, item in scripts_by_platform(project_id, "").items()
+    }
+    return ok({
+        "pretest": row["pretest"], "posttest": row["posttest"], "updated_at": row["updated_at"],
+        "scripts_by_platform": by_end,
+    })
+
+
+@router.put("/{project_id}/case-scripts", dependencies=[Depends(project_maintainer)])
+def put_project_case_scripts(project_id: str, body: ProjectScriptBody, _sess: dict = Depends(current_session)):
+    _project(project_id)
+    del body
+    raise HTTPException(status_code=400, detail={
+        "reason_code": "script_edited_locally",
+        "message": "脚本在本机仓库里修改，不通过接口保存",
+    })
+
+
 @router.get("/{project_id}/cases/{case_id}")
 def get_project_case(project_id: str, case_id: str, _sess: dict = Depends(current_session)):
     from mino_nexus.casework.case_key_registry import step_keys_summary_for_case
@@ -526,6 +557,13 @@ def get_project_case(project_id: str, case_id: str, _sess: dict = Depends(curren
     row = get_case(project_id, cid)
     if not row:
         raise HTTPException(status_code=404, detail="用例不存在")
+    from mino_nexus.casework.script_store import attach
+    from mino_nexus.casework.script_workspace import local_script_text
+
+    row = attach(row)
+    repo_script = local_script_text(project_id, cid, str(row.get("platform") or ""), str(row.get("script_path") or ""))
+    if repo_script:
+        row = {**row, "script": repo_script}
     return ok(
         {
             "case": row,
@@ -632,13 +670,30 @@ def update_one_case(
     if not existing:
         raise HTTPException(status_code=404, detail="用例不存在")
     patch = body.model_dump(exclude_unset=True)
+    patch.pop("script_platform", None)
+    script_path = patch.pop("script_path", None)
+    if any(key in patch for key in ("script", "pretest", "posttest")):
+        raise HTTPException(status_code=400, detail={
+            "reason_code": "script_edited_locally",
+            "message": "脚本在本机仓库里修改，不通过接口保存",
+        })
+    for key in ("script", "pretest", "posttest"):
+        patch.pop(key, None)
     merged = {**existing, **patch, "case_id": cid}
+    if script_path is not None:
+        from mino_nexus.casework.script_workspace import safe_script_path
+        try:
+            merged["script_path"] = safe_script_path(str(script_path))
+        except ValueError as exc:
+            raise _case_error(exc) from exc
     rid = str(patch.get("requirement_id") or existing.get("requirement_id") or "").strip()
     try:
         saved = save_case(project_id, merged, requirement_id=rid)
     except ValueError as exc:
         raise _case_error(exc) from exc
-    return ok({"case": saved}, msg="用例已保存")
+    from mino_nexus.casework.script_store import attach
+
+    return ok({"case": attach(saved)}, msg="用例已保存")
 
 
 @router.post("/{project_id}/cases/step-keys/validate")

@@ -447,3 +447,10 @@ def focus_assistant_request(request_id: str, sess: dict = Depends(current_sessio
         except (ValueError, PermissionError) as exc:
             raise HTTPException(status_code=404, detail='任务不存在或无权访问') from exc
     return ok(result)
+
+
+@router.get("/agent-guide")
+def get_agent_guide(_sess: dict = Depends(current_session)):
+    from mino_nexus.assistant.agent_guide import agent_guide
+
+    return ok(agent_guide())

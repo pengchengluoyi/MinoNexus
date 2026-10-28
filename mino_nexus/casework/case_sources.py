@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 import time
-import uuid
 
 from sqlalchemy import text
 
 from mino_nexus.core.database import session_scope
+from mino_nexus.core.ids import prefixed
 from mino_nexus.models.case import ProjectCase
 from mino_nexus.models.case_source import CaseSource, CaseSourceRead, CaseSourceRow
 from mino_nexus.casework.case_compilation import record_change
@@ -80,7 +80,7 @@ def save(project_id, body, source_id=""):
                 row.generation += 1
                 row.active_read_id, row.read_lease_until = "", 0
         else:
-            row = CaseSource(source_id="source-" + uuid.uuid4().hex, project_id=project_id,
+            row = CaseSource(source_id=prefixed("src"), project_id=project_id,
                 owner_user_id=actor, generation=1)
             db.add(row)
         row.kind, row.configuration = body.kind, configuration
@@ -104,7 +104,7 @@ def discover(project_id, config, operation):
     with session_scope() as db:
         actor = owned(db, project_id)
     result = read_source({"configuration": config, "kind": "case_api", "owner_user_id": actor,
-        "source_id": "discovery-" + uuid.uuid4().hex, "read_id": uuid.uuid4().hex, "generation": 1}, operation=operation)
+        "source_id": prefixed("src"), "read_id": prefixed("read"), "generation": 1}, operation=operation)
     if result.get("complete") is not True or not isinstance(result.get("options"), list) or len(result["options"]) > 10000:
         raise ValueError("source_api_payload_invalid")
     from mino_nexus.casework.case_source_api import identifier, origin
@@ -143,7 +143,7 @@ def claim(project_id, source_id, expected_generation):
             if previous and previous.status == "reading":
                 previous.status, previous.finished_at = "interrupted", now()
                 previous.receipt = {"reason_code": "source_read_lease_expired"}
-        read_id = "read-" + uuid.uuid4().hex
+        read_id = prefixed("read")
         db.add(CaseSourceRead(read_id=read_id, source_id=source_id, generation=row.generation,
             status="reading", created_at=now()))
         row.active_read_id, row.read_lease_until = read_id, time.time() + 180
@@ -246,7 +246,8 @@ def finish(snapshot, result=None, *, error_code=""):
                         raise ValueError("source_bound_case_missing")
                     previous = _public(case)
                 else:
-                    case = ProjectCase(case_id="case-" + uuid.uuid4().hex[:16], project_id=source.project_id,
+                    from mino_nexus.casework.case_store import allocate_case_id
+                    case = ProjectCase(case_id=allocate_case_id(source.project_id), project_id=source.project_id,
                         sort_index=0, extra={}, steps=[], expected=[])
                     db.add(case)
                     db.flush()

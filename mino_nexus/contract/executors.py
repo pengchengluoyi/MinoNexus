@@ -5,13 +5,23 @@
 from __future__ import annotations
 
 
+WDA_CAPS = frozenset({
+    "launch_app", "open_app", "close_app", "kill_app", "tap_element", "tap_xy",
+    "input_text", "swipe", "press_key", "install_app", "uninstall_app", "clear_app_cache",
+})
+
+
+def cap_uses_wda(capability_id: str) -> bool:
+    return str(capability_id or "").strip() in WDA_CAPS
+
+
 def executors_for_platform(platform: str) -> tuple[str, ...]:
     """这台设备类型允许的通道。家族互斥：Web 没有 adb，安卓/iOS 没有 playwright。"""
     plat = str(platform or "").strip().lower()
     if plat in ("web", "browser", "playwright"):
         return ("playwright",)
     if plat in ("ios",):
-        return ("ios_wda", "remote")
+        return ("ios_wda",)
     if plat in {"desktop", "mac", "win"}:
         return ("desktop",)
     if plat == "android":

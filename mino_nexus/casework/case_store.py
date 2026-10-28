@@ -1,7 +1,6 @@
 """项目用例库。真源表 project_cases。"""
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -61,11 +60,13 @@ def _public(row) -> dict[str, Any]:
 
 
 def allocate_case_id(project_id: str) -> str:
+    from mino_nexus.core.ids import prefixed
+
     pid = str(project_id or "").strip()
     if not pid:
         raise ValueError("缺少 project_id")
     for _ in range(32):
-        cid = f"case-{uuid.uuid4().hex[:8]}"
+        cid = prefixed("case", 8)
         if get_case(pid, cid) is None:
             return cid
     raise ValueError("无法分配用例编号")
@@ -308,10 +309,8 @@ def _retain_publication(obj, fields):
     old = dict(obj.extra or {})
     new = dict(fields["extra"])
     from mino_nexus.casework.v5_publication import source_view
-    from mino_nexus.casework.case_review import sync as sync_review
     # Rebase server-owned revision/history on the row held by this transaction.
     new["v5_draft_revision"] = int(old.get("v5_draft_revision") or 1) + int(source_view(_public(obj)) != source_view(new))
-    new = sync_review(new, old)
     if old.get("v5_publication"):
         new["v5_publication"] = deepcopy(old["v5_publication"])
         # Preserve historical publication as evidence, never as the active plan.
@@ -489,6 +488,13 @@ def delete_case(project_id: str, case_id: str) -> bool:
             return False
         if (obj.extra or {}).get("source_binding"):
             raise ValueError("source_bound_fields_readonly")
+        from mino_nexus.models.case_platform_script import CasePlatformScript
+        from mino_nexus.models.case_script import CaseScript
+
+        db.query(CaseScript).filter(CaseScript.project_id == pid, CaseScript.case_id == cid).delete()
+        db.query(CasePlatformScript).filter(
+            CasePlatformScript.project_id == pid, CasePlatformScript.case_id == cid,
+        ).delete()
         db.delete(obj)
         db.flush()
     return True

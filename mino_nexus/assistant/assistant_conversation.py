@@ -52,7 +52,8 @@ def create(tool_id: str, args: dict, target: dict, question: dict, origin: dict,
     lane = lane_for(uid, origin)
     with session_scope() as db:
         expire(db, uid)
-        row = Pending(id='req-' + uuid.uuid4().hex, user_id=uid, lane=lane, tool_id=tool_id,
+        from mino_nexus.core.ids import prefixed
+        row = Pending(id=prefixed('req'), user_id=uid, lane=lane, tool_id=tool_id,
                       args=_request_args(tool_id, args),
                       target={key: value for key, value in target.items() if key in ARG_KEYS},
                       question=question, origin=origin, state=state, revision=1,
@@ -294,7 +295,8 @@ def group_policy(origin: dict) -> dict:
 
 
 def reference(origin: dict, request_id: str = '', revision: int = 0, *, message_id: str = '', provider_id: str = '') -> str:
-    message_id = message_id or 'im-out-' + uuid.uuid4().hex
+    from mino_nexus.core.ids import prefixed
+    message_id = message_id or prefixed('imout')
     with session_scope() as db:
         if db.get(Reference, message_id) is None:
             db.add(Reference(id=message_id, user_id=require_user_id(), lane=lane_for(require_user_id(), origin),

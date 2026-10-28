@@ -7,8 +7,14 @@ from mino_nexus.platform.project_guard import owned
 from mino_nexus.contract.business_event_contract import migration_candidate, references, VERSION
 
 
+def _state(case):
+    from mino_nexus.casework.v5_publication import source_view
+    from mino_nexus.core.stable_digest import digest
+    return digest({"source": source_view(case), **{key: case.get(key) for key in ("source_revision_id", "v5_draft_revision", "latest_compile_job_id",
+        "compile_state", "resource_key", "effective_artifact", "v5_publication")}})
+
+
 def preview(case):
-    from mino_nexus.casework.case_review import _state
     meta = case.get('meta') or {}
     plans = meta.get('v5_draft_step_program_keys') or meta.get('step_program_keys') or {}
     result = migration_candidate(plans)

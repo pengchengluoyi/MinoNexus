@@ -249,7 +249,8 @@ def project_turns(session_id: str) -> dict[str, Any] | None:
             continue
 
         if turn <= 0 and typ not in ("session/start", "session/end"):
-            if typ in ("recovery/match", "tool/call", "tool/result"):
+            if typ in ("recovery/match", "tool/call", "tool/result", "node/enter", "node/leave",
+                       "script/call", "script/note", "script/error", "script/pretest", "script/posttest", "script/run"):
                 bucket = _turn_bucket(turns, 0)
             else:
                 continue
@@ -322,17 +323,33 @@ def project_turns(session_id: str) -> dict[str, Any] | None:
             bucket["tools"].append({"kind": "call", "ts": ts, **payload})
         elif typ == "tool/result":
             bucket["tools"].append({"kind": "result", "ts": ts, **payload})
+        elif typ == "node/enter":
+            role = str(payload.get("role") or "")
+            if role == "check":
+                bucket["expected"] = str(payload.get("expected") or payload.get("text") or "")
+            else:
+                bucket["instruction"] = str(payload.get("instruction") or payload.get("text") or "")
+            bucket["case_step"] = int(payload.get("n") or turn or 0)
+        elif typ == "script/error":
+            bucket["script_error"] = {"ts": ts, **payload}
+        elif typ in ("script/call", "script/note", "script/pretest", "script/posttest", "script/run", "node/leave"):
+            bucket.setdefault("script_calls", []).append({"type": typ, "ts": ts, **payload})
         elif typ == "stream/emit":
             phase_name = str(payload.get("phase") or "")
             slim = {
                 "phase": phase_name,
                 "ts": ts,
                 "thought": payload.get("thought") or "",
+                "step_text": payload.get("step_text") or "",
                 "status": payload.get("status") or "",
                 "capability_id": payload.get("capability_id") or "",
                 "dispatch_id": payload.get("dispatch_id") or "",
                 "summary": payload.get("summary") or "",
+                "line": payload.get("line") or 0,
+                "script_source": payload.get("script_source") or "",
             }
+            if slim["step_text"] and not bucket.get("instruction"):
+                bucket["instruction"] = str(slim["step_text"])
             bucket["stream"].append(slim)
             if phase_name == "think" and not bucket.get("think"):
                 bucket["think"] = slim
@@ -743,6 +760,44 @@ def _structured_to_ui(
                 "capability_id": payload.get("capability_id") or "",
                 "status": payload.get("status") or "",
                 "summary": payload.get("summary") or "",
+            }
+        elif typ == "node/enter":
+            shown = str(payload.get("text") or payload.get("instruction") or "")
+            base = {
+                "phase": "step",
+                "step": int(payload.get("n") or turn or 0),
+                "role": payload.get("role") or "",
+                "step_text": shown,
+                "thought": shown,
+                "summary": shown,
+                "capability_id": "script." + str(payload.get("role") or "do"),
+                "source": "case_script",
+            }
+        elif typ in ("script/call", "script/note"):
+            shown = str(payload.get("text") or payload.get("instruction") or "")
+            base = {
+                "phase": "result",
+                "step": int(payload.get("case_step") or turn or 0),
+                "role": payload.get("role") or "",
+                "step_text": shown,
+                "thought": shown,
+                "capability_id": payload.get("name") or "",
+                "status": payload.get("status") or "",
+                "summary": payload.get("summary") or "",
+                "source": "case_script",
+            }
+        elif typ == "script/error":
+            base = {
+                "phase": "result",
+                "step": int(payload.get("n") or turn or 0),
+                "step_text": payload.get("instruction") or "",
+                "thought": payload.get("instruction") or payload.get("phase") or "",
+                "status": "fail",
+                "summary": payload.get("message") or "",
+                "line": payload.get("line") or 0,
+                "script_source": payload.get("source") or "",
+                "exc_type": payload.get("exc_type") or "",
+                "source": "case_script",
             }
         elif typ == "llm/response":
             base = {

@@ -230,6 +230,120 @@ async def recover_stopped(task_id: str):
             "business_result_unchanged": True, "baseline_required": baseline}
 
 
+async def confirm_baseline(task_id: str):
+    """结束任务后拍一张当前画面，确认设备还能观察，再解除这台设备上的隔离。不改原任务结论。"""
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.core.ids import prefixed
+    from mino_nexus.loop.router_proxy import RouterProxy
+    from mino_nexus.models.device_reservation import DeviceReservation
+    from mino_nexus.models.execution_resource import ExecutionResource
+    from mino_nexus.models.resource_ops import DeviceResourceLease
+    from mino_nexus.platform.identity import require_user_id
+    from mino_nexus.casework import run_store
+    from mino_nexus.records.eventlog import store as session_store
+    from mino_nexus.records.eventlog.atomic import append_batch
+    from mino_nexus.resources.access_scope import require_owned_device
+
+    actor = require_user_id()
+    doc = run_store.get(task_id)
+    if not doc or doc.get("owner_user_id") != actor:
+        raise ValueError("task_not_found")
+    if run_store.task_is_live(doc):
+        raise ValueError("task_still_running")
+    actions = unresolved(doc)
+    if not actions:
+        raise ValueError("baseline_not_required")
+    sns = sorted({str(item.get("sn") or "") for item in actions if str(item.get("sn") or "")})
+    if not sns:
+        raise ValueError("baseline_device_missing")
+    shots = []
+    for sn in sns:
+        require_owned_device(sn)
+        session_id = prefixed("baselinerecheck")
+        session_store.open_meta(session_id=session_id, run_id=session_id, case_id="", app_id=str(doc.get("app_id") or ""))
+        shot = await RouterProxy(sn, run_id=session_id).observe_async("screenshot", timeout_sec=8)
+        if not callable(getattr(shot, "has_image", None)) or not shot.has_image():
+            raise ValueError("baseline_screenshot_unavailable")
+        refs = append_batch(session_id, [{"type": "observe/screen", "payload": {
+            "thumb": "data:" + (shot.image_mime or "image/png") + ";base64," + shot.image_base64,
+            "width": shot.width, "height": shot.height, "source": "baseline_recheck",
+            "task_id": task_id,
+        }}], {"status": "done", "summary": "隔离解除前的当前画面"})
+        shots.append({"sn": sn, "session_id": session_id, **(refs[0] if refs else {})})
+    with run_store._LOCK:
+        current = run_store.get(task_id)
+        if not current or current.get("owner_user_id") != actor or run_store.task_is_live(current):
+            raise ValueError("task_still_running")
+        fresh = unresolved(current)
+        if not fresh:
+            raise ValueError("baseline_not_required")
+        reviewed = run_store._now()
+        for key, item in list((current.get("write_safety") or {}).items()):
+            if not isinstance(item, dict) or item.get("state") not in {"pending", "isolated"}:
+                continue
+            if str(item.get("sn") or "") not in sns:
+                continue
+            current["write_safety"][key] = {
+                **item,
+                "state": "recovered",
+                "stop_confirmed": True,
+                "reason_code": "",
+                "recovery": {
+                    **(item.get("recovery") or {}),
+                    "resource_reset_verified": True,
+                    "verification_kind": "baseline_recheck",
+                    "reviewed_by": actor,
+                    "at": reviewed,
+                    "observations": shots,
+                },
+            }
+        run_store.put(current)
+    released = 0
+    with session_scope() as db:
+        rows = db.query(ExecutionResource).filter(
+            ExecutionResource.run_id == task_id,
+            ExecutionResource.sn.in_(sns),
+            ExecutionResource.state != "released",
+        ).all()
+        for row in rows:
+            row.epoch = int(row.epoch or 0) + 1
+            row.state = "released"
+            row.expires_at = 0
+            released += 1
+        leases = db.query(DeviceResourceLease).filter(
+            DeviceResourceLease.run_id == task_id,
+            DeviceResourceLease.sn.in_(sns),
+        ).all()
+        for row in leases:
+            db.delete(row)
+        reservations = db.query(DeviceReservation).filter(DeviceReservation.run_id == task_id).all()
+        for row in reservations:
+            db.delete(row)
+        db.commit()
+    # 设备租约先落库，protected() 才不再挡住号池。账号租约按任务和各次 attempt 的 run_id 清。
+    from mino_nexus.resources.accounts.lease import release_run_lease
+    app_id = str((current or {}).get("app_id") or "")
+    release_ids = {str(task_id or "").strip()}
+    for item in ((current or {}).get("write_safety") or {}).values():
+        ref = item.get("action_ref") if isinstance(item, dict) else None
+        attempt = str(ref.get("run_id") or "").strip() if isinstance(ref, dict) else ""
+        if attempt:
+            release_ids.add(attempt)
+    accounts_released = 0
+    for rid in sorted(release_ids):
+        if rid:
+            accounts_released += release_run_lease(rid, app_id=app_id)
+    return {
+        "task_id": task_id,
+        "resource_isolated": protected(task_id),
+        "business_result_unchanged": True,
+        "verification_kind": "baseline_recheck",
+        "observations": shots,
+        "resources_released": released,
+        "accounts_released": accounts_released,
+    }
+
+
 def _require_fresh_baseline(sn: str, package: str) -> dict:
     """A recovered unknown write leaves page, login state and identity unproven for the next task."""
     if not sn or not package:

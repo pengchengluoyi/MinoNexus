@@ -298,7 +298,8 @@ def _trace_value(value: Any) -> Any:
 
 
 def new_turn_id() -> str:
-    return "t_" + uuid.uuid4().hex[:16]
+    from mino_nexus.core.ids import prefixed
+    return prefixed("t", 16)
 
 
 def msg_seen(msg_key: str) -> bool:
