@@ -157,6 +157,37 @@ PARAM_DEFAULTS: dict[str, dict[str, Any]] = {
         },
     },
     "wait_screen_ready": {"type": "object", "properties": {}},
+    "note": {
+        "type": "object",
+        "properties": {
+            "text": {
+                "type": "string",
+                "description": "写入当前会话证据的自由文本。不操作设备。也可传 note 或 content。",
+            },
+        },
+        "required": ["text"],
+    },
+    "sample": {
+        "type": "object",
+        "properties": {
+            "description": {
+                "type": "string",
+                "description": "样本说明：这条样本是什么、为何保留。也可传 sample 或 text。",
+            },
+            "label": {"type": "string", "description": "可选样本标签，不代替说明正文"},
+        },
+        "required": ["description"],
+    },
+    "self_prove": {
+        "type": "object",
+        "properties": {
+            "package": {
+                "type": "string",
+                "description": "可选。Android 包名，iOS bundle id。给出后才读安装身份；不给则只证明设备和节点。",
+            },
+        },
+        "required": [],
+    },
     "launch_app": {"type": "object", "properties": {}},
     "close_app": {"type": "object", "properties": {}},
     "kill_app": {"type": "object", "properties": {}},

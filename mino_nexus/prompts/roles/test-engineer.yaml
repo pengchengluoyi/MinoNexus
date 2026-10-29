@@ -38,5 +38,8 @@ tools:
 - case.retry_failed
 - task.list
 - task.get
+- task.resource_recovery_preview
+- task.resource_recovery_observe
+- task.resource_recovery_commit
 - session.list
 - session.events

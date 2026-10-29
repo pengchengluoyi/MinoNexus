@@ -7,6 +7,8 @@ LOCAL_EXECUTORS = {
     # Flow-block program hook: observes the login form locally in prep/do.
     # It is not the check-only assert_visual capability (on any platform).
     'confirm_login_state': 'internal',
+    'note': 'internal',
+    'sample': 'internal',
 }
 
 

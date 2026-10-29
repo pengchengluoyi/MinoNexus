@@ -576,6 +576,8 @@ def _run_tool_owned(spec: dict[str, Any], args: dict[str, Any], *, user_id: str,
     if spec.get('id') == 'case.api':
         # 这个工具把 project_id 放在 body 里，而不是路径参数。
         rest = {key: value for key, value in args.items() if key in props and value not in (None, '')}
+    if spec.get("id") == "task.resource_recovery_commit":
+        rest = {key: rest[key] for key in ("request_id", "expected_digest", "reason", "proofs") if key in rest}
     if spec.get("id") == "case.list":
         rest["limit"] = min(200, max(1, int(args.get("limit") or 50)))
         if args.get("module"):

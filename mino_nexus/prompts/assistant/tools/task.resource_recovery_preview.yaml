@@ -1,0 +1,31 @@
+id: task.resource_recovery_preview
+title: 预览任务资源恢复
+description: 查看已结束任务的隔离资源，以及每项资源当前仍有效的观察证明。返回 expected_digest 和 observations。不释放隔离，不改租约。证据不足时列表为空，先调用 task.resource_recovery_observe。run_id 与 task.get 的 task_id 相同。仅在用户要求恢复该任务资源时调用。
+route: GET /project/{project_id}/execution-resources/runs/{run_id}/recovery
+risk: read
+async: false
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    project_id:
+      type: string
+      minLength: 1
+      description: 项目 id 或名称
+    run_id:
+      type: string
+      minLength: 1
+      pattern: ^[A-Za-z0-9_-]+$
+      description: 跑批任务 id（task.get 的 task_id）
+  required:
+  - project_id
+  - run_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- im
+- mcp
+enabled: true

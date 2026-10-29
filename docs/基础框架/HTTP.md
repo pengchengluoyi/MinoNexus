@@ -654,3 +654,15 @@ Workbench 节点配置里的 CLI、用例服务 API、IM 和 Gmail 不再只服�
 - `POST /{work_id}/steps/{step_id}/retry|skip|takeover|resolve`：重试失败步骤、跳过、暂停并接管、裁决 `unknown` 写结果。`unknown` 不自动重放；必须先确认已执行/未执行。
 
 写操作成功仍返回 `{code:200, data}`；业务错误使用 `{detail:{reason_code,message}}`，前端 `errText` 可直接显示。工作事件只在 SQLite commit 后通过 `/ws` 以 `work_event` 推送，归属按 `work_items.owner_user_id` 解析。
+
+## 执行资源恢复（MCP）
+
+Workbench 的完整恢复仍是这三条，助手和 MCP 调用同一路由。`task.write_safety_recheck` 只复核停止证明，不代替这里的证据提交。
+
+| 工具 | 路由 | 作用 |
+|---|---|---|
+| `task.resource_recovery_preview` | `GET /project/{project_id}/execution-resources/runs/{run_id}/recovery` | 返回 `expected_digest` 和每项资源仍有效的观察。不释放资源 |
+| `task.resource_recovery_observe` | `POST .../recovery/observe` | 隔离期间只做框架截图，写出新的观察会话。不释放资源 |
+| `task.resource_recovery_commit` | `POST .../recovery` | 停止证据和每项观察证明都通过时，同一事务释放设备隔离、执行资源、设备租约和账号池租约 |
+
+`run_id` 就是 Case Runner 的任务 id。调用者必须是项目维护者，且是该任务的 owner。证明缺失、过期、设备不符或快照已变时整单 409，隔离和租约保持原样。不重放原写动作，不把业务结果改成通过。新 yaml 的加载见 [PROMPTS.md](PROMPTS.md)：默认重启后生效；`MINO_PROMPTS_RELOAD=1` 时下一次 `tools/list` 即可看到。
