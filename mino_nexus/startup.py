@@ -16,6 +16,8 @@ def bootstrap() -> None:
     """Register current definitions only. No historical data migration or backfill."""
     from mino_nexus.platform.llm.repo import load_all
     load_all()
+    from mino_nexus.catalog.evidence_seed import register_evidence_capabilities
+    from mino_nexus.catalog.self_prove_seed import register_self_prove_capability
     from mino_nexus.catalog.recovery_seed import seed_recovery_rules, register_current_local_capabilities
     from mino_nexus.catalog.resource_transition_seed import seed_resource_transition_rules
     from mino_nexus.catalog.flow_block_seed import seed_global_flow_blocks
@@ -29,6 +31,8 @@ def bootstrap() -> None:
     # 启动不再要求「全局九块」同时存在；块是否可用在用例预检里按引用校验
     # （flow_block_seed.verify_referenced_blocks，规划 §4）。
     register_current_local_capabilities()
+    register_evidence_capabilities()
+    register_self_prove_capability()
     ensure_read_web_auth_capability()
     register_program_capabilities()
 

@@ -1,0 +1,31 @@
+id: task.resource_recovery_observe
+title: 为资源恢复采集只读观察
+description: 在隔离仍然有效时，对任务占用的设备做一次框架截图，写入新的观察会话。不重放原设备写动作，不释放隔离，不改租约。截图失败则没有可用证明。成功后用 task.resource_recovery_preview 读取 session_id 与 seq，再提交恢复。仅在用户要求恢复该任务资源且现有观察不够时调用。
+route: POST /project/{project_id}/execution-resources/runs/{run_id}/recovery/observe
+risk: write
+async: false
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    project_id:
+      type: string
+      minLength: 1
+      description: 项目 id 或名称
+    run_id:
+      type: string
+      minLength: 1
+      pattern: ^[A-Za-z0-9_-]+$
+      description: 跑批任务 id（task.get 的 task_id）
+  required:
+  - project_id
+  - run_id
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- im
+- mcp
+enabled: true

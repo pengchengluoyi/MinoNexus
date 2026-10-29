@@ -194,6 +194,85 @@ def degrade_program_block_to_visual(
     return True
 
 
+_EVIDENCE_TEXT_KEYS = {
+    "note": ("text", "note", "content"),
+    "sample": ("description", "sample", "text"),
+}
+_EVIDENCE_TEXT_MAX = 4000
+
+
+def _evidence_text(cap: str, params: dict[str, Any]) -> str:
+    for key in _EVIDENCE_TEXT_KEYS[cap]:
+        raw = params.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return ""
+
+
+def _record_case_evidence(event: PlanEvent, *, t0: float) -> EventResult:
+    """Append free text to the session stream. Does not touch the device."""
+    cap = event.capability_id
+    params = dict(event.params or {})
+    text = _evidence_text(cap, params)
+
+    def elapsed() -> int:
+        return int((time.time() - t0) * 1000)
+
+    if not text:
+        return _result(
+            event, status=EventStatus.FAIL,
+            summary="证据正文为空",
+            error="evidence_text_required",
+            elapsed_ms=elapsed(),
+        )
+    if len(text) > _EVIDENCE_TEXT_MAX:
+        return _result(
+            event, status=EventStatus.FAIL,
+            summary=f"证据正文超过 {_EVIDENCE_TEXT_MAX} 字",
+            error="evidence_text_too_long",
+            elapsed_ms=elapsed(),
+        )
+    from mino_nexus.records.eventlog.writer import active_writer
+
+    writer = active_writer()
+    if writer is None:
+        return _result(
+            event, status=EventStatus.FAIL,
+            summary="当前没有会话，证据没有写入",
+            error="evidence_session_missing",
+            elapsed_ms=elapsed(),
+        )
+    from mino_nexus.catalog.evidence_seed import EVENT_TYPES
+
+    event_type = EVENT_TYPES[cap]
+    payload: dict[str, Any] = {
+        "capability_id": cap,
+        "text": text,
+        "step_seq": int(getattr(event, "seq", 0) or 0),
+        "recorded_at_ns": time.time_ns(),
+    }
+    if cap == "sample":
+        payload["description"] = text
+        label = params.get("label")
+        if isinstance(label, str) and label.strip():
+            payload["label"] = label.strip()[:200]
+    seq = writer.append(event_type, payload)
+    if not seq:
+        return _result(
+            event, status=EventStatus.FAIL,
+            summary="证据没有写入会话",
+            error="evidence_not_persisted",
+            elapsed_ms=elapsed(),
+        )
+    preview = text if len(text) <= 120 else text[:117] + "..."
+    return _result(
+        event, status=EventStatus.PASS,
+        summary=preview,
+        elapsed_ms=elapsed(),
+        raw_response={"event_type": event_type, "seq": seq, "text": text},
+    )
+
+
 def dispatch_local(
     event: PlanEvent,
     *,
@@ -367,6 +446,8 @@ def dispatch_local(
             error="" if key else "missing step_key",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
+    if cap in ("note", "sample"):
+        return _record_case_evidence(event, t0=t0)
     if cap == "wait_ms":
         ms = int((event.params or {}).get("duration_ms") or (event.params or {}).get("ms") or 500)
         ms = max(0, min(ms, 60_000))

@@ -163,7 +163,7 @@ def _handle(uid: str, msg: dict[str, Any]) -> dict[str, Any] | None:
     if method == "initialize":
         return {"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": PROTOCOL,
-            "capabilities": {"tools": {"listChanged": False}},
+            "capabilities": {"tools": {"listChanged": os.environ.get("MINO_PROMPTS_RELOAD") == "1"}},
             "serverInfo": {"name": "mino-nexus", "version": "1"},
         }}
     if method == "ping":

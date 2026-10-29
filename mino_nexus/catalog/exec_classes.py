@@ -21,6 +21,8 @@ LOCAL_EXECUTOR_IDS = frozenset({
     "operation.check_box", "dismiss_ime", "confirm_login_state",
     "assert_visual", "persona_subtask", "wait_ms", "wait_screen_ready",
     "signal_nav_calib_step", "run_flow_block",
+    # 自由文本证据留在 Nexus。未知能力不加进这份名单。
+    "note", "sample",
 })
 LOCAL_ORCH_IDS = LOCAL_EXECUTOR_IDS
 
@@ -37,10 +39,13 @@ MUTATE_CAPS = frozenset({
     "operation.check_box", "dismiss_ime",
 })
 
-# 计入本步已执行（require_do_work）：突变 + 等待/租号/取码。等待不算改界面，但算进展。
+# 计入本步已执行（require_do_work）：突变 + 等待/租号/取码/证据记录。
+# 等待和自由文本证据不算改界面，但算进展。
 PROGRESS_CAPS = MUTATE_CAPS | frozenset({
     "wait_ms",
     "wait_screen_ready",
     "lease_account",
     "get_otp",
+    "note",
+    "sample",
 })

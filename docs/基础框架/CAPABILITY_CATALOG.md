@@ -159,6 +159,25 @@ Agent 在 prep/do 菜单里也可主动调 `recover_<规则id>`（prep 阶段已
 通用 `tap_element` / `input_text` 仍由 LLM 决策。块定义、HTTP、`steps_json` v2、check `mino.checkpoints.v1` 见 [FLOW_BLOCKS.md](FLOW_BLOCKS.md)。
 
 
+## 自定义证据：`note` 与 `sample`
+
+用例脚本里的自由文本和样本说明走这两条能力，不另开未登记通道。能力 id 与 `wait_ms` 一样是单词：`note`、`sample`。会话事件用现有的 `domain/name` 流：`case/note`、`case/sample`。执行结果仍会另记一条 `tool/result`。
+
+| id | 参数 | 事件 | 执行 |
+|---|---|---|---|
+| `note` | `text`（也可传 `note` / `content`） | `case/note` | Nexus 本地 `internal` |
+| `sample` | `description`（也可传 `sample` / `text`），可选 `label` | `case/sample` | Nexus 本地 `internal` |
+
+启动时 `catalog/evidence_seed.py` 写入 `catalog_entries`（`caller=case`，`kind=generic`，平台 mac/win/android/web，阶段 prep/do/check，`observe=program`，`ui_coverable=false`）。正文为空或超过 4000 字记失败，不把空文本当成已取证。没有活动会话也不写入。已停用的行不会被启动重新打开。
+
+其它未登记能力仍然是 `capability_unregistered`。这两条不进设备突变集合，成功只计入本步进展。
+
+## `self_prove`（Scout 执行）
+
+`self_prove` 也在启动时写入目录，但是发给 Scout 的设备读，不是本地证据。Android 实现 `self_prove.adb`（`executor_order=["adb"]`）。iOS 走本分支已有的 `ios_wda` 家族：目录实现是 `self_prove.ios_wda`，并列入 `WDA_CAPS`。`device_hint.udid` 仍由现有 iOS 提示填写。目录平台仍只有 `android`；`platform=ios` 只出现在这条能力的线路上，不是新的目标平台。
+
+参数只有可选的 `params.package`。回执形状是 `self_prove.v1`，字段以 [PROTOCOL.md](PROTOCOL.md) §4.4.3 为准，这里不另写一套。`status=pass` 表示设备应答；缺包摘要或证书仍 pass，差距在 `missing`。它算读，不进写隔离。节点必须是已实现该能力的 Scout（MinoScout #2）；旧节点不会被改派到别的执行器。
+
 ## 程序能力注册（2026-10-14 用户新要求）
 
 confirm_login_state、open_url、open_app 等程序能力通过 skill_channel._ensure_program_rows 的正常启动链路注册及更新，平台与 caller/phases/version 同步写入现库，不再要求用户点击 Workbench 目录升级。confirm_login_state 的旧显式 [web] 会升级为 [android,ios,web,desktop]，channel_contract_version=2。业务能力仍由 Workbench 管理；程序能力注册只处理代码声明的系统行，不覆盖业务能力。

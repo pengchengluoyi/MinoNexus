@@ -1,0 +1,82 @@
+id: task.resource_recovery_commit
+title: 按证据提交资源恢复
+description: 走 Workbench 同一条恢复：POST /project/{project_id}/execution-resources/runs/{run_id}/recovery。只有停止证据充分，且每项隔离资源都带上预览里仍有效的观察证明时，才在同一事务释放设备隔离、执行资源、设备租约和账号池租约。证明缺失、过期或快照已变则整单拒绝，隔离与租约保持原样。不重放设备动作，不把原业务结果改成通过。expected_digest、session_id、seq 必须来自刚刚的 task.resource_recovery_preview，不能手填。仅在用户要求恢复该任务资源时调用。
+route: POST /project/{project_id}/execution-resources/runs/{run_id}/recovery
+risk: write
+async: false
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    project_id:
+      type: string
+      minLength: 1
+      description: 项目 id 或名称
+    run_id:
+      type: string
+      minLength: 1
+      pattern: ^[A-Za-z0-9_-]+$
+      description: 跑批任务 id（task.get 的 task_id）
+    request_id:
+      type: string
+      minLength: 1
+      maxLength: 100
+      pattern: ^[A-Za-z0-9_-]+$
+      description: 本次提交的稳定标识；同一请求重试保持不变
+    expected_digest:
+      type: string
+      minLength: 64
+      maxLength: 64
+      pattern: ^[0-9a-f]{64}$
+      description: task.resource_recovery_preview 返回的 expected_digest
+    reason:
+      type: string
+      minLength: 5
+      maxLength: 500
+      description: 为什么现在可以释放这些资源
+    proofs:
+      type: array
+      minItems: 1
+      maxItems: 200
+      description: 覆盖预览中的每一项 resource_key
+      items:
+        type: object
+        additionalProperties: false
+        properties:
+          resource_key:
+            type: string
+            minLength: 1
+            maxLength: 300
+          session_id:
+            type: string
+            minLength: 1
+            maxLength: 200
+          seq:
+            type: integer
+            minimum: 0
+          statement:
+            type: string
+            minLength: 5
+            maxLength: 500
+            description: 人工核对这张观察后写下的说明
+        required:
+        - resource_key
+        - session_id
+        - seq
+        - statement
+  required:
+  - project_id
+  - run_id
+  - request_id
+  - expected_digest
+  - reason
+  - proofs
+param_resolvers:
+  project_id: project.by_name
+result_pick:
+- data
+card: answer
+surfaces:
+- im
+- mcp
+enabled: true

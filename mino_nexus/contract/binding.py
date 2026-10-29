@@ -15,7 +15,8 @@ SCHEMA_VERSION = 1
 CONTRACT = "execution_binding.v1"
 MAX_DEPENDENCIES = 32
 READ_EVENTS = frozenset({"plugin.gmail.fetch_otp", "probe", "probe_device_state", "screenshot", "get_foreground_app", "get_app_version",
-                         "read_web_auth", "read_web_target_facts", "read_device_data", "hierarchy", "wait_ms", "assert_visual", "check_run_env"})
+                         "read_web_auth", "read_web_target_facts", "read_device_data", "hierarchy", "wait_ms", "assert_visual", "check_run_env",
+                         "self_prove"})
 _IDENTITY = ("plan_ref", "project_id", "app_id", "owner_scope_ref", "requirements_ref",
              "source_revision", "timeout_profile_ref", "evidence_policy_ref")
 _TARGET = ("node_id", "sn", "platform", "env_profile", "env_surface", "target_ref")
