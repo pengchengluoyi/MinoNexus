@@ -1,4 +1,8 @@
-"""Explicit, evidence-bound human recovery. Stopping alone never releases resources."""
+"""Explicit, evidence-bound recovery. Stopping alone never releases resources.
+
+Human observation is the stronger reset proof. Stop evidence plus a package
+baseline uses the same account-lease clear so a device exit cannot leave the
+pool lease held."""
 from copy import deepcopy
 from datetime import datetime
 import time
@@ -52,12 +56,12 @@ def _snapshot(db, project_id, run_id, actor):
     sns = {row.sn for row in rows}
     if any(action.get('sn') not in sns for action in actions):
         raise ValueError('recovery_resource_scope_incomplete')
-    aliases = {run_id} | {str((a.get('action_ref') or {}).get('run_id') or '') for a in actions}
+    from mino_nexus.casework.isolation_exit import lease_aliases
+    aliases = lease_aliases(run_id, doc, actions)
     accounts = db.query(PoolAccount).filter_by(project_id=project_id).all()
-    leases = {a.id: deepcopy(a.lease) for a in accounts if (a.lease or {}).get('run_id') in aliases}
-    resource_accounts = {str((row.detail or {}).get('account_id') or '') for row in rows}
-    if set(leases) - resource_accounts:
-        raise ValueError('recovery_resource_scope_incomplete')
+    leases = {a.id: deepcopy(a.lease) for a in accounts if str((a.lease or {}).get('run_id') or '') in aliases}
+    # Pool leases of this run are released with the device proof. A missing
+    # account id on the execution-resource detail must not leave the lease held.
     resources = [{key: deepcopy(getattr(row, key)) for key in ('resource_key', 'attempt_id', 'execution_unit_id',
         'sn', 'epoch', 'state', 'expires_at', 'detail')} for row in rows]
     snapshot = {'run_id': run_id, 'app_id': run.app_id, 'env': doc.get('env_profile') or 'test',
@@ -198,6 +202,8 @@ def recover(project_id, run_id, body):
         for reservation in db.query(DeviceReservation).filter_by(run_id=run_id).all():
             db.delete(reservation)
         doc = deepcopy(run.payload)
+        from mino_nexus.casework.isolation_exit import apply_baselines
+        apply_baselines(db, doc)
         for key, action in (doc.get('write_safety') or {}).items():
             if action.get('state') in {'pending', 'isolated'}:
                 doc['write_safety'][key] = {**action, 'state': 'recovered', 'reason_code': '',

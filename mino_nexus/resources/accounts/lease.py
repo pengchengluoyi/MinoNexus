@@ -680,7 +680,8 @@ def _lease_for_context(
                     if not _mark_leased(project_id, aid, run_id,
                             case_id=str(getattr(ctx, "case_id", "") or ""), sn=holder_sn,
                             env=env_profile, requirements=requirements):
-                        return None, "resource_busy"
+                        from mino_nexus.resources.resource_claim_tx import claim_failure_code
+                        return None, claim_failure_code("resource_busy")
                     return restored, ""
             else:
                 SLog.i(
@@ -828,6 +829,10 @@ def _lease_for_context(
             package_id=target_id,
             detail={"requirements": requirements},
         )
+        from mino_nexus.resources.resource_claim_tx import claim_failure_code
+        held = claim_failure_code("")
+        if held:
+            return None, held
         return None, f"{base}{hint}"
 
     apply_lease_to_ctx(ctx, row, project_id=project_id)
