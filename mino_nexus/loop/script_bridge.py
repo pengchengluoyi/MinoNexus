@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import socket
 import subprocess
 import threading
@@ -94,6 +95,16 @@ class ScriptBridge:
         return target(*args, **kwargs)
 
 
+def _kill_group(process: subprocess.Popen) -> None:
+    """结束脚本及其拉起的子进程。macOS 没有 PDEATHSIG，进程组是停止时的边界。"""
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        process.kill()
+
+
 def run_in_workspace(
     *,
     python: Path,
@@ -113,6 +124,7 @@ def run_in_workspace(
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=True,
     )
     captured: list[bytes] = []
 
@@ -134,18 +146,18 @@ def run_in_workspace(
         while process.poll() is None:
             if runtime.cancel_check and runtime.cancel_check():
                 killed = "任务已取消"
-                process.kill()
+                _kill_group(process)
                 break
             if runtime.deadline and time.time() >= runtime.deadline and runtime.phase != "posttest":
                 killed = "超过用例时间，已停止脚本进程"
-                process.kill()
+                _kill_group(process)
                 break
             time.sleep(0.1)
     finally:
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            process.kill()
+            _kill_group(process)
         bridge.close()
         thread.join(timeout=2)
         for item in threads:

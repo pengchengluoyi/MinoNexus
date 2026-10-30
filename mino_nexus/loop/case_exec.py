@@ -102,7 +102,6 @@ def _run_case_list(
     cases: list[dict[str, Any]],
     doc: dict[str, Any],
 ) -> None:
-    from mino_nexus.loop.agent_loop import run_case
     from mino_nexus.casework.run_write_safety import protected
     from mino_nexus.loop.device_run_continuity import (
         continuity_blockers,
@@ -235,18 +234,24 @@ def _run_case_list(
         if gaps:
 
             SLog.i("CaseRunner", f"resource preflight case={cid} " + "; ".join(gaps[:3]))
-        platform = str(doc.get("platform") or case.get("platform") or "android")
-        if isinstance(rk, dict) and rk.get("platform"):
-            platform = str(rk.get("platform") or platform)
+        platform = str(
+            doc.get("platform")
+            or case.get("platform")
+            or (rk.get("platform") if isinstance(rk, dict) else "")
+            or "android"
+        )
         from mino_nexus.resources.device_resource_lease import (
             release_device_lease,
         )
         from mino_nexus.casework.execution_resources import admission, claim_without_account, heartbeat, release as release_bundle
-
         device_held = False
         result = None
+        repo: dict = {}
         try:
+            from mino_nexus.casework.script_workspace import get_repo
             from mino_nexus.resources.accounts.lease import ensure_case_account_lease
+
+            repo = get_repo(project_id) if project_id else {}
             with admission(doc, case, project_id=project_id, package=package, platform=platform) as resource_attempt:
                 ok, lease_err = ensure_case_account_lease(
                     run_id, app_id=app_id, env_profile=str(doc.get("env_profile") or "test"),
@@ -333,28 +338,13 @@ def _run_case_list(
             start_attempt(run_id, case)
             result = None
             with heartbeat(resource_attempt):
-                from mino_nexus.casework.script_store import load_bundle
-                from mino_nexus.casework.script_workspace import get_repo
-                from mino_nexus.loop.script_case import run_script_case
+                from mino_nexus.loop.script_dispatch import dispatch_script_case
 
-                scripts = load_bundle(project_id, cid, platform) if project_id else {}
-                repo = get_repo(project_id) if project_id else {}
-                run_kwargs = dict(
-                    run_id=run_id, case=case, sn=sn, app_id=app_id,
-                    app_name=str(doc.get("app_name") or ""), package=package, provider_id=provider_id,
-                    playbook=playbook if isinstance(playbook, dict) else {},
-                    cancel_check=lambda: run_store.task_cancelled(run_id), case_seq=case_seq,
-                    playwright_headless=bool(doc.get("playwright_headless", True)),
-                    resource_attempt=resource_attempt, run_env_brief=env_brief,
-                    next_case=next_case if isinstance(next_case, dict) else None,
-                    platform=platform,
+                result = dispatch_script_case(
+                    run_id=run_id, case=case, sn=sn, app_id=app_id, package=package,
+                    provider_id=provider_id, cancel_check=lambda: run_store.task_cancelled(run_id),
+                    case_seq=case_seq, platform=platform, project_id=project_id, repo=repo,
                 )
-                if str(repo.get("url") or "").strip():
-                    result = run_script_case(**run_kwargs, repo=repo)
-                elif str(scripts.get("run") or "").strip():
-                    result = run_script_case(**run_kwargs, scripts=scripts)
-                else:
-                    result = run_case(**{key: value for key, value in run_kwargs.items() if key != "platform"})
             doc = run_store.get(run_id) or doc
             env_brief = str(doc.get("env_brief") or env_brief)
             run_store.patch_case(

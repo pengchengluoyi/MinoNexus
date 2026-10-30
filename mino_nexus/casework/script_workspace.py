@@ -126,24 +126,20 @@ def sync_workspace(project_id: str, repo: dict[str, str]) -> Path:
 
 
 def resolve_script(checkout: Path, case_id: str, platform: str = "", script_path: str = "") -> Path | None:
-    explicit = str(script_path or "").strip()
-    if explicit:
-        path = (checkout / safe_script_path(explicit)).resolve()
-        if checkout.resolve() not in path.parents:
-            raise ValueError("script_path_invalid")
-        return path if path.is_file() else None
-    return case_script_file(checkout, case_id, platform)
+    del platform
+    from mino_nexus.casework.script_bundle import ScriptPackError, locate_case_script
+
+    try:
+        return locate_case_script(checkout, case_id, script_path)
+    except ScriptPackError as exc:
+        if exc.code == "script_path_invalid":
+            raise ValueError("script_path_invalid") from exc
+        return None
 
 
 def case_script_file(checkout: Path, case_id: str, platform: str = "") -> Path | None:
-    folder = checkout / "cases"
-    plat = str(platform or "").strip().lower()
-    if plat:
-        specific = folder / f"{case_id}.{plat}.py"
-        if specific.is_file():
-            return specific
-    common = folder / f"{case_id}.py"
-    return common if common.is_file() else None
+    del platform
+    return resolve_script(checkout, case_id, script_path="")
 
 
 def hook_file(checkout: Path, name: str) -> Path | None:

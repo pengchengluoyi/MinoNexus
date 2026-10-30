@@ -1,0 +1,36 @@
+id: node.channel_program
+version: 1
+title: 安装或更新渠道程序
+description: >-
+  把安装或更新渠道程序转成该用户当前在线节点的下载中心请求。
+  允许 chromium、adb.keyboard，以及 Appium（tool_id 为 appium）。
+  Nexus 不下载、不保存安装包，也不接受临时地址。
+route: POST /runtime/channel-programs/install
+risk: write
+async: false
+timeout_sec: 30
+params_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    node_id:
+      type: string
+      minLength: 1
+      maxLength: 128
+      description: 已认证用户名下、当前在线的节点
+    tool_id:
+      type: string
+      enum: [chromium, adb.keyboard, appium]
+      description: 渠道程序。appium 是本批新增项
+    action:
+      type: string
+      enum: [install, update]
+      default: install
+    operation_id:
+      type: string
+      maxLength: 100
+      description: 稳定任务标识。重试沿用同一个，避免重复安装
+  required: [node_id, tool_id]
+result_pick: [data]
+surfaces: [mcp]
+enabled: true

@@ -1,17 +1,13 @@
-"""应用逻辑安全读模型：页面、控件、入口/缺口、总览。
+"""应用逻辑安全读模型：页面、控件、入口。
 
-数据真源仍是 nav_fsm / ui_controls / nav_page_entries / nav_page_gaps。
-这里只做白名单映射、聚合和分页；写入仍走既有 configure / entries.extract 路由。
+真源是项目仓库的 pages/*.yaml。没有 pages/ 时返回空列表，不读库。
 """
 from __future__ import annotations
 
 from typing import Any
 
-from mino_nexus.casework.application_understanding import case_refs, pages
-from mino_nexus.casework.v5_controls import audit, list_controls
+from mino_nexus.casework.page_files import load_pages
 from mino_nexus.core.redact import redact, scrub_text, text
-from mino_nexus.navigation.entries.store import list_entries, list_gaps, summary
-from mino_nexus.navigation.entries.text import norm_key
 from mino_nexus.resources import project_store as ps
 
 MAX_LIMIT = 200
@@ -56,20 +52,9 @@ def extract_entries(
     include_capture: bool = True,
     actor: str = "",
 ) -> dict[str, Any]:
-    """MCP 的安全入口重抽路由：先校验应用归属，再只返回计数摘要。"""
+    """入口不再写回库表。"""
     _app(project_id, app_id)
-    from mino_nexus.navigation.entries import extract as entry_extract
-
-    result = entry_extract.extract_for_app(
-        app_id=app_id,
-        project_id=project_id,
-        platform=str(platform or ""),
-        case_ids=list(case_ids or []) or None,
-        include_cases=bool(include_cases),
-        include_capture=bool(include_capture),
-        actor=str(actor or ""),
-    )
-    return _entry_extract_summary(result)
+    raise ValueError("logic_write_stopped")
 
 
 def _page_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -115,14 +100,16 @@ def _control_row(row: dict[str, Any], *, detail: bool = False) -> dict[str, Any]
 
 def overview(project_id: str, app_id: str) -> dict[str, Any]:
     _app(project_id, app_id)
-    page_rows = list(pages(project_id, app_id).get("pages") or [])
+    catalog = load_pages(project_id)
+    page_rows = list(catalog.get("pages") or [])
     state_ids = {str(row.get("state_id") or "") for row in page_rows}
-    controls = list_controls(project_id)
+    controls = list(catalog.get("controls") or [])
     app_controls = [row for row in controls if str(row.get("page_state_id") or "") in state_ids]
     elements = [row for row in app_controls if str(row.get("semantic_role") or "") == "element"]
-    identities = audit(project_id)
-    entry_summary = summary(app_id)
-    gaps = list_gaps(app_id, status="open", limit=200)
+    identities: list[dict[str, Any]] = []
+    entry_rows = list(catalog.get("entries") or [])
+    entry_summary = {"entry_count": len(entry_rows), "open_gaps": 0}
+    gaps: list[dict[str, Any]] = []
     pages_with_refs = sum(1 for row in page_rows if int(row.get("case_ref_count") or 0) > 0)
     bound_controls = sum(1 for row in app_controls if str(row.get("page_state_id") or "").strip())
     total_pages = len(page_rows)
@@ -136,9 +123,9 @@ def overview(project_id: str, app_id: str) -> dict[str, Any]:
     }
     warnings = []
     if total_pages == 0:
-        warnings.append("应用还没有页面状态，先采集或运行一次")
-    if not app_controls:
-        warnings.append("应用还没有控件记录")
+        warnings.append("仓库里还没有 pages/")
+    if total_pages and not app_controls:
+        warnings.append("页面里还没有控件")
     if identities:
         warnings.append(f"{len(identities)} 个 control_id 存在重复记录")
     if entry_summary.get("open_gaps"):
@@ -176,7 +163,7 @@ def list_pages(
     offset: int = 0,
 ) -> dict[str, Any]:
     _app(project_id, app_id)
-    rows = list(pages(project_id, app_id).get("pages") or [])
+    rows = list(load_pages(project_id).get("pages") or [])
     status_q = str(status or "").strip()
     needle = str(q or "").strip().lower()
     filtered = []
@@ -220,20 +207,10 @@ def propose_review(
     state_id: str,
     body: Any,
 ) -> dict[str, Any]:
-    """MCP 只创建候选；批准/驳回仍由 Workbench 的人工 decide 完成。"""
+    """页面评审不再写入导航库。"""
+    del body
     _app(project_id, app_id)
-    from mino_nexus.casework import application_understanding as svc
-
-    record = svc.propose(project_id, app_id, state_id, body)
-    out = _review_row(record)
-    out.update({
-        "request_id": text(record.get("request_id"), 80),
-        "version": text(getattr(body, "version", ""), 40),
-        "platform": text(record.get("platform"), 24),
-        "build": text(record.get("build"), 80),
-        "reason": scrub_text(record.get("reason"), 300),
-    })
-    return out
+    raise ValueError("logic_write_stopped")
 
 
 def page_detail(
@@ -246,7 +223,8 @@ def page_detail(
     refs_limit: int = 20,
 ) -> dict[str, Any] | None:
     _app(project_id, app_id)
-    rows = list(pages(project_id, app_id).get("pages") or [])
+    catalog = load_pages(project_id)
+    rows = list(catalog.get("pages") or [])
     row = next((item for item in rows if str(item.get("state_id") or "") == str(state_id or "")), None)
     if row is None:
         return None
@@ -260,7 +238,7 @@ def page_detail(
     }
     if "controls" in wanted:
         controls = [
-            item for item in list_controls(project_id)
+            item for item in (catalog.get("controls") or [])
             if str(item.get("page_state_id") or "") == str(state_id or "")
             and str(item.get("semantic_role") or "") == "element"
         ]
@@ -269,35 +247,32 @@ def page_detail(
         out["controls_total"] = len(controls)
         out["controls_truncated"] = len(controls) > lim
     if "case_refs" in wanted:
-        refs = case_refs(project_id, app_id, state_id)
-        grouped: dict[str, dict[str, Any]] = {}
-        relation_counts: dict[str, int] = {}
-        for item in refs.get("items") or []:
-            cid = str(item.get("case_id") or "")
-            if not cid:
-                continue
-            bucket = grouped.setdefault(cid, {
+        grouped = {
+            cid: {
                 "case_id": text(cid, 80),
-                "case_name": text(item.get("case_name"), 120),
-                "count": 0,
-                "relations": {},
-            })
-            bucket["count"] += 1
-            rel = str(item.get("relation") or "unknown")
-            bucket["relations"][rel] = int(bucket["relations"].get(rel) or 0) + 1
-            relation_counts[rel] = relation_counts.get(rel, 0) + 1
+                "case_name": "",
+                "count": 1,
+                "relations": {"script": 1},
+            }
+            for cid in (row.get("case_ids") or [])
+            if str(cid or "").strip()
+        }
+        relation_counts = {"script": len(grouped)} if grouped else {}
         lim = max(1, min(int(refs_limit or 20), 50))
         cases = sorted(grouped.values(), key=lambda item: item["count"], reverse=True)
         out["case_refs"] = {
             "total_cases": len(cases),
-            "total_refs": len(refs.get("items") or []),
+            "total_refs": len(grouped),
             "by_relation": relation_counts,
             "items": cases[:lim],
             "truncated": len(cases) > lim,
         }
     label = str(row.get("label") or "")
     if "entry" in wanted:
-        entries = list_entries(app_id, target=label, limit=20) if label else []
+        entries = [
+            item for item in (catalog.get("entries") or [])
+            if label and str(item.get("target_label") or "") == label
+        ] if label else []
         out["entry"] = {
             "items": [_entry_row(item) for item in entries[:10]],
             "total_candidates": len(entries),
@@ -311,11 +286,7 @@ def page_detail(
             "truncated": len(records) > 20,
         }
     if "gaps" in wanted:
-        gaps = [
-            item for item in list_gaps(app_id, status="open", limit=200)
-            if str(item.get("target_state_id") or "") == str(state_id or "")
-            or (label and norm_key(item.get("target_label")) == norm_key(label))
-        ]
+        gaps = []
         out["gaps"] = {
             "items": [redact(item, scrub=True) for item in gaps[:10]],
             "total": len(gaps),
@@ -355,14 +326,12 @@ def list_controls_view(
     limit: int = DEFAULT_LIMIT,
     offset: int = 0,
 ) -> dict[str, Any]:
+    catalog = load_pages(project_id)
     state_ids: set[str] | None = None
     if app_id:
         _app(project_id, app_id)
-        state_ids = {
-            str(row.get("state_id") or "")
-            for row in (pages(project_id, app_id).get("pages") or [])
-        }
-    rows = list_controls(project_id)
+        state_ids = {str(row.get("state_id") or "") for row in (catalog.get("pages") or [])}
+    rows = list(catalog.get("controls") or [])
     page_q = str(page_state_id or "").strip()
     role_q = str(semantic_role or "").strip()
     sensitive_q = str(sensitive or "").strip().lower()
@@ -395,12 +364,12 @@ def list_controls_view(
         "limit": lim,
         "next_offset": off + lim if off + lim < total else None,
         "truncated": off + lim < total,
-        "identity_conflicts": audit(project_id),
+        "identity_conflicts": [],
     }
 
 
 def control_detail(project_id: str, control_id: str) -> dict[str, Any] | None:
-    rows = [row for row in list_controls(project_id) if str(row.get("control_id") or "") == str(control_id or "")]
+    rows = [row for row in (load_pages(project_id).get("controls") or []) if str(row.get("control_id") or "") == str(control_id or "")]
     if not rows:
         return None
     rows.sort(key=lambda row: int(row.get("revision") or 0), reverse=True)
@@ -435,27 +404,30 @@ def list_entries_view(
     kind_q = str(kind or "entry").strip().lower()
     lim = max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
     off = max(0, int(offset or 0))
+    catalog = load_pages(project_id)
     if kind_q in {"summary", "stats"}:
-        return {"kind": "summary", "summary": summary(app_id)}
+        return {"kind": "summary", "summary": {"entry_count": len(catalog.get("entries") or []), "open_gaps": 0}}
     if kind_q in {"gap", "gaps"}:
-        rows = list_gaps(app_id, status=str(status or "open"), limit=MAX_LIMIT)
-        total = len(rows)
         return {
             "kind": "gap",
-            "items": [redact(row, scrub=True) for row in rows[off: off + lim]],
-            "total": total,
+            "items": [],
+            "total": 0,
             "limit": lim,
-            "next_offset": off + lim if off + lim < total else None,
-            "truncated": off + lim < total,
+            "next_offset": None,
+            "truncated": False,
         }
-    rows = list_entries(
-        app_id,
-        target=str(target or ""),
-        from_state_id=str(from_state_id or ""),
-        status=str(status or ""),
-        platform=str(platform or ""),
-        limit=500,
-    )
+    rows = []
+    for row in catalog.get("entries") or []:
+        if target and str(row.get("target_label") or "") != str(target) and str(row.get("target_state_id") or "") != str(target):
+            continue
+        if from_state_id and str(row.get("from_state_id") or "") != str(from_state_id):
+            continue
+        if status and str(row.get("status") or "") != str(status):
+            continue
+        platforms = row.get("platforms") if isinstance(row.get("platforms"), list) else []
+        if platform and str(platform) not in platforms and str(row.get("platform") or "") != str(platform):
+            continue
+        rows.append(row)
     total = len(rows)
     page = rows[off: off + lim]
     return {
@@ -487,25 +459,12 @@ def _flow_block_row(row: dict[str, Any], *, detail: bool = False) -> dict[str, A
 
 
 def list_flow_blocks(project_id: str, *, channel: str = "") -> dict[str, Any]:
-    from mino_nexus.navigation.atlas.nav_flow_block_catalog import list_catalog
-
+    del channel
     ps.require_project(project_id)
-    rows = list_catalog(channel=str(channel or "").strip())
-    return {
-        "items": [_flow_block_row(row) for row in rows],
-        "total": len(rows),
-        "project_id": text(project_id, 80),
-    }
+    return {"items": [], "total": 0, "project_id": text(project_id, 80)}
 
 
 def flow_block_detail(project_id: str, block_id: str) -> dict[str, Any] | None:
-    from mino_nexus.models.nav_flow_block_catalog import GLOBAL_APP_ID
-    from mino_nexus.navigation.atlas.nav_flow_block_catalog import load_block_row
-
+    del block_id
     ps.require_project(project_id)
-    row = load_block_row(app_id=GLOBAL_APP_ID, block_id=str(block_id or ""))
-    if row is None:
-        return None
-    out = _flow_block_row(row, detail=True)
-    out["project_id"] = text(project_id, 80)
-    return out
+    return None

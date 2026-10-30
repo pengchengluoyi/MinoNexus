@@ -17,8 +17,10 @@ from mino_nexus.resources.node_registry import get_registry
 ACTIVE = {'pending', 'running', 'unknown'}
 TERMINAL = {'succeeded', 'failed', 'interrupted'}
 TOOLS = [('scout.core', 'Scout 核心', '节点运行'), ('chromium', 'Chromium', 'Web 自动化'),
-         ('adb.keyboard', 'ADB Keyboard', 'Android 文本输入'), ('cli.feishu', '飞书 CLI', '工作项接入'),
+         ('adb.keyboard', 'ADB Keyboard', 'Android 文本输入'), ('appium', 'Appium', '移动端自动化'),
+         ('cli.feishu', '飞书 CLI', '工作项接入'),
          ('cli.meego', 'Meego CLI', '工作项接入'), ('langbot', 'LangBot', '飞书、钉钉、企业微信共用对话宿主')]
+CHANNEL_PROGRAMS = {'chromium', 'adb.keyboard', 'appium'}
 
 
 def _owner(node_id, user_id):
@@ -124,7 +126,7 @@ async def refresh_task(node_id, user_id, task_id):
 
 async def submit(node_id, user_id, operation_id, tool_id, action):
     live = _owner(node_id, user_id)
-    if action not in {'install', 'update'} or tool_id not in {'cli.feishu', 'cli.meego', 'langbot', 'chromium', 'adb.keyboard'}:
+    if action not in {'install', 'update'} or tool_id not in {'cli.feishu', 'cli.meego', 'langbot', 'chromium', 'adb.keyboard', 'appium'}:
         raise HTTPException(422, 'unsupported_tool_action')
     with session_scope() as db:
         db.execute(text('BEGIN IMMEDIATE'))
@@ -137,7 +139,7 @@ async def submit(node_id, user_id, operation_id, tool_id, action):
                 return _public(row)
         else:
             live = _live(node_id, user_id)
-            if live.tool_tasks_version < 2 and (action == 'update' or tool_id in {'chromium', 'adb.keyboard'}):
+            if live.tool_tasks_version < 2 and (action == 'update' or tool_id in {'chromium', 'adb.keyboard', 'appium'}):
                 raise HTTPException(409, '当前 Scout 仅支持旧版插件安装，请先升级到下载中心合同 v2')
             from mino_nexus.resources.scout_updates import check_admission
             check_admission(db, [node_id])

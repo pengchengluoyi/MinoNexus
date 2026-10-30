@@ -230,6 +230,13 @@ class NodeConnection:
     async def _on_inbound_execute(self, env: P.Envelope) -> None:
         req: P.Execute = env.payload
         cap = str(req.capability_id or "")
+        from mino_nexus.loop.script_callback import CALLBACKS, STEP_CAP, handle as handle_script_callback
+
+        op = str((req.params or {}).get("op") or "") if cap == "script.callback" else ""
+        if cap in CALLBACKS or cap == STEP_CAP or (cap == "script.callback" and op in CALLBACKS):
+            result = await asyncio.to_thread(handle_script_callback, self.node_id, req)
+            await self._reply_result(env, result)
+            return
         if cap not in P.NODE_EVENT_CAPS:
             SLog.w(TAG, f"[{self.node_id}] 忽略非框架入站 EXECUTE cap={cap}")
             await self._reply_result(env, P.Result(

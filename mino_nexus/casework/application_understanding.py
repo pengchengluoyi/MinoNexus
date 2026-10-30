@@ -70,7 +70,6 @@ def _page_anchors(meta: dict) -> list[str]:
 
 
 def pages(project_id, app_id):
-    _publish_capture_pages(project_id, app_id)
     with session_scope() as db:
         actor = scope(db, project_id, app_id)
         ref_counts = {
@@ -175,6 +174,7 @@ def _evidence(db, app_id, examples, actor):
 
 
 def propose(project_id, app_id, state_id, body):
+    raise ValueError("logic_write_stopped")
     from mino_nexus.knowledge.control_registry import _assert_runtime_writable
     _assert_runtime_writable()
     data = body.model_dump()

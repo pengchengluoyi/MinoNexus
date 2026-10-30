@@ -7,7 +7,7 @@ from __future__ import annotations
 
 WDA_CAPS = frozenset({
     "launch_app", "open_app", "close_app", "kill_app", "tap_element", "tap_xy",
-    "input_text", "swipe", "press_key", "install_app", "uninstall_app", "clear_app_cache",
+    "input_text", "swipe", "press_key", "install_app", "uninstall_app",
     "self_prove",
 })
 

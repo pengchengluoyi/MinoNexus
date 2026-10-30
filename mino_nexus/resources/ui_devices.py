@@ -138,8 +138,31 @@ def ui_devices(
             node_name=str((node_snapshots.get(node_id) or {}).get("hostname") or node_id),
         )
         out.append(offline)
+    isolated = _isolation_index()
+    for row in out:
+        row["isolation"] = isolated.get(str(row.get("sn") or "")) or {"state": ""}
     from mino_nexus.resources.device_targets import evaluate
     return [evaluate(row) for row in out]
+
+
+def _isolation_index() -> dict[str, dict[str, str]]:
+    """在线列表仍保留隔离中的设备，并标出可以做 baseline 的任务。"""
+    from mino_nexus.core.database import session_scope
+    from mino_nexus.models.execution_resource import ExecutionResource
+
+    found: dict[str, dict[str, str]] = {}
+    with session_scope() as db:
+        rows = db.query(ExecutionResource).filter(ExecutionResource.state == "isolated").all()
+        for row in rows:
+            sn = str(row.sn or "")
+            if not sn or sn in found:
+                continue
+            found[sn] = {
+                "state": "isolated",
+                "run_id": str(row.run_id or ""),
+                "resource_key": str(row.resource_key or ""),
+            }
+    return found
 
 
 def _offline_device_row(persisted: dict[str, Any], *, node_alive: bool = False, node_name: str = "") -> dict[str, Any]:

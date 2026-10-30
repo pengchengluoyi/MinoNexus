@@ -1,11 +1,11 @@
-"""节点断开/设备丢失：在途 run 立刻失败，不重派。"""
+"""节点断开/设备丢失：在途 run 记为取消，不重派，不计入失败。"""
 from __future__ import annotations
 
 from mino_nexus.casework.run_store import finish, get, request_cancel, task_is_live
 
 
 def interrupt_runs(run_ids: list[str], *, reason: str) -> list[str]:
-    """节点断开 / 设备丢失：在途 run 立刻失败，不重派。"""
+    """节点断开 / 设备丢失：在途用例记为 cancelled，不重派。"""
     from mino_nexus.loop.observe.agent_stream import emit_testing_task
     from mino_nexus.loop.web.web_env import release_devices_for_run
 
@@ -20,7 +20,7 @@ def interrupt_runs(run_ids: list[str], *, reason: str) -> list[str]:
         doc = get(rid)
         if not doc or not task_is_live(doc):
             continue
-        finished = finish(rid, status="failed", error=reason)
+        finished = finish(rid, status="cancelled", error=reason, reason_code="node_offline")
         sns = [str(x) for x in (finished.get("sns") or []) if str(x).strip()]
         head = str(finished.get("sn") or "").strip()
         if head and head not in sns:
@@ -39,7 +39,7 @@ def interrupt_runs(run_ids: list[str], *, reason: str) -> list[str]:
             "event": "task_finished",
             "run_id": rid,
             "task_id": rid,
-            "status": finished.get("status") or "failed",
+            "status": finished.get("status") or "cancelled",
             "app_id": str(finished.get("app_id") or ""),
         })
         done.append(rid)

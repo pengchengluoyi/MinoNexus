@@ -55,6 +55,11 @@ def _requirements_from_ctx(
         params.get("template_id") or params.get("account_template_id") or ""
     ).strip()
     need = dict(need_facets) if isinstance(need_facets, dict) else {}
+    if need.get("skip_prose"):
+        req = dict(need.get("requirements") or {})
+        if param_tid:
+            req = augment_requirements_with_template(req, param_tid, env_doc)
+        return req
     if param_tid:
         need["template_id"] = param_tid
     if isinstance(params.get("requirements"), dict):
@@ -838,6 +843,37 @@ def _lease_for_context(
     apply_lease_to_ctx(ctx, row, project_id=project_id)
     SLog.i(TAG, f"leased {account_ident(row)} for run={run_id[:12]} score={row.get('score')}")
     return row, ""
+
+
+def lease_script_account(ctx: Any, case: dict[str, Any] | None) -> tuple[dict[str, Any] | None, str]:
+    """脚本要账号时再租。只认用例上写明的 facet 子句和模板，不扫描前置散文。"""
+    from mino_nexus.resources.resource_pool import _clause, empty_requirements
+
+    row = case if isinstance(case, dict) else {}
+    explicit = row.get("account_requirements") if isinstance(row.get("account_requirements"), dict) else {}
+    template_id = str(row.get("account_template_id") or row.get("template_id") or "").strip()
+    req = empty_requirements()
+    env = str(getattr(ctx, "env_profile", "") or "test").strip().lower()
+    if env:
+        req["env"] = env
+    for bucket in ("all", "prefer"):
+        req[bucket] = [
+            clause for clause in (explicit.get(bucket) or [])
+            if isinstance(clause, dict) and str(clause.get("facet") or "").strip() and str(clause.get("op") or "").strip()
+        ]
+    if not req["all"]:
+        req["all"] = [_clause("health", "eq", "available")]
+    need = {
+        "need_account": True,
+        "skip_prose": True,
+        "prompt": "",
+        "session": "",
+        "profile": False,
+        "address": False,
+        "template_id": template_id,
+        "requirements": req,
+    }
+    return lease_for_context(ctx, {"template_id": template_id} if template_id else {}, need_facets=need)
 
 
 def ensure_case_account_lease(

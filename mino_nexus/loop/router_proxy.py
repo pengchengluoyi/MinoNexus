@@ -539,6 +539,8 @@ class RouterProxy:
                 reason = "capability_unregistered"
             elif "无可用实现" in msg:
                 reason = "no_impl_for_device"
+            elif msg.startswith("not_supported"):
+                reason = "not_supported"
             else:
                 reason = "cap_not_in_catalog"
             return _fail(event, started, t0, msg, executor_used="router_proxy", local_reason=reason,
@@ -1010,6 +1012,8 @@ class RouterProxy:
         只接受明确执行器或唯一可用实现；缺失、歧义和失败都不换路。
         """
         plat = _device_platform(self.sn, node)
+        if plat == "ios" and str(event.capability_id or "") == "clear_app_cache":
+            raise NoRouteError("not_supported:iOS 没有清应用数据的通道")
         cap = catalog.get_capability(event.capability_id)
         if plat in {"desktop", "mac", "win"}:
             from mino_nexus.knowledge.desktop_catalog import CAPABILITY_IDS, capabilities

@@ -74,6 +74,16 @@ class NodePluginCallBody(BaseModel):
     params: dict[str, Any] = {}
 
 
+class ChannelProgramBody(BaseModel):
+    """把渠道程序安装转成节点下载中心已有请求。不接收临时地址，Nexus 不保存安装包。"""
+    model_config = ConfigDict(extra='forbid')
+    node_id: str = Field(min_length=1, max_length=128)
+    tool_id: Literal['chromium', 'adb.keyboard', 'appium']
+    action: Literal['install', 'update'] = 'install'
+    operation_id: str = Field(default='', max_length=100)
+    wait_ms: int = Field(default=0, ge=0, le=60000)
+
+
 class PluginInstallBody(BaseModel):
     """插件安装/更新任务；不接收下载地址或密钥。"""
     model_config = ConfigDict(extra='forbid')
@@ -818,6 +828,29 @@ async def plugin_status(node_id: str = Query(default=''), sess: dict = Depends(c
     return ok({'items': items, 'count': len(items)})
 
 
+@router.post('/channel-programs/install', status_code=202)
+async def install_channel_program(body: ChannelProgramBody, sess: dict = Depends(current_session)):
+    """安装或更新渠道程序。请求转给该节点下载中心，Nexus 不下载安装包。"""
+    import re
+    import uuid
+    from mino_nexus.resources import node_tools as service
+
+    if body.tool_id not in service.CHANNEL_PROGRAMS:
+        raise HTTPException(status_code=422, detail='unsupported_tool_action')
+    operation_id = str(body.operation_id or '').strip() or uuid.uuid4().hex
+    if not re.fullmatch(r'[A-Za-z0-9_-]{8,100}', operation_id):
+        raise HTTPException(status_code=422, detail='operation_id 必须为 8-100 位字母、数字、下划线或短横线')
+    task = await service.submit(str(body.node_id), str(sess.get('user_id') or ''), operation_id, body.tool_id, body.action)
+    return ok({
+        'task_id': str(task.get('task_id') or ''),
+        'state': str(task.get('state') or ''),
+        'active': bool(task.get('active')),
+        'tool_id': body.tool_id,
+        'action': body.action,
+        'task': task,
+    })
+
+
 @router.post('/plugins/install', status_code=202)
 async def install_plugin(body: PluginInstallBody, sess: dict = Depends(current_session)):
     """提交插件安装/更新任务；真正下载和安装由 Scout 下载中心执行。"""
@@ -1045,7 +1078,7 @@ def cancel_scout_update(node_id: str, operation_id: str, sess: dict = Depends(cu
 class NodeToolTaskBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,100}$")
-    tool_id: str = Field(pattern=r"^(cli\.(feishu|meego)|langbot|chromium|adb\.keyboard)$")
+    tool_id: str = Field(pattern=r"^(cli\.(feishu|meego)|langbot|chromium|adb\.keyboard|appium)$")
     action: str = Field(pattern=r"^(install|update)$")
 
 

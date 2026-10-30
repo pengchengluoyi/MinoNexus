@@ -256,8 +256,18 @@ async def confirm_baseline(task_id: str):
     sns = sorted({str(item.get("sn") or "") for item in actions if str(item.get("sn") or "")})
     if not sns:
         raise ValueError("baseline_device_missing")
+    from mino_nexus.casework.isolation_exit import _is_web_lane, lane_release_block
+
+    web = [sn for sn in sns if _is_web_lane(sn, doc)]
+    for sn in web:
+        blocked = lane_release_block(doc, sn)
+        if blocked:
+            raise ValueError(blocked)
     shots = []
     for sn in sns:
+        if sn in web:
+            shots.append({"sn": sn, "verification_kind": "web_lane_stop"})
+            continue
         require_owned_device(sn)
         session_id = prefixed("baselinerecheck")
         session_store.open_meta(session_id=session_id, run_id=session_id, case_id="", app_id=str(doc.get("app_id") or ""))

@@ -378,6 +378,80 @@ class UnknownMessageType(Exception):
     """收到未知 type。按 docs/PROTOCOL.md §7，接收方记 warn 并忽略，不可关连接。"""
 
 
+# 脚本运行载荷。字段与 docs/PROTOCOL.md「脚本运行载荷」表一致，不另加版本号。
+SCRIPT_RUN_CAPABILITY = "script.run"
+SCRIPT_RUN_FIELDS = ("run_id", "session_id", "case_id", "sn", "platform", "script_path", "files")
+
+
+@dataclass
+class ScriptRun:
+    run_id: str
+    session_id: str
+    case_id: str
+    sn: str
+    platform: str
+    script_path: str
+    files: dict[str, str] = field(default_factory=dict)
+
+
+def _script_path_unsafe(path: str) -> bool:
+    from pathlib import Path
+
+    text = str(path or "").strip().replace("\\", "/")
+    if not text or text.startswith("/") or text.startswith("~"):
+        return True
+    if len(text) >= 2 and text[1] == ":":
+        return True
+    parts = Path(text).parts
+    return any(part in {"", ".", ".."} for part in parts)
+
+
+def dump_script_run(payload: ScriptRun) -> dict[str, Any]:
+    """脚本运行载荷 → dict。只含合同字段，空字符串也保留。"""
+    return {
+        "run_id": str(payload.run_id or ""),
+        "session_id": str(payload.session_id or ""),
+        "case_id": str(payload.case_id or ""),
+        "sn": str(payload.sn or ""),
+        "platform": str(payload.platform or ""),
+        "script_path": str(payload.script_path or "").replace("\\", "/"),
+        "files": {str(key).replace("\\", "/"): str(value) for key, value in dict(payload.files or {}).items()},
+    }
+
+
+def load_script_run(raw: dict[str, Any]) -> ScriptRun:
+    """dict → 脚本运行载荷。未知字段忽略；缺字段或路径不合法则拒绝。"""
+    if not isinstance(raw, dict):
+        raise ValueError("script_run_invalid")
+    missing = [key for key in SCRIPT_RUN_FIELDS if key not in raw]
+    if missing:
+        raise ValueError("script_run_incomplete")
+    files = raw.get("files")
+    if not isinstance(files, dict):
+        raise ValueError("script_run_files_invalid")
+    cleaned: dict[str, str] = {}
+    for key, value in files.items():
+        path = str(key or "").replace("\\", "/")
+        if not isinstance(value, str) or _script_path_unsafe(path):
+            raise ValueError("script_run_files_invalid")
+        cleaned[path] = value
+    script_path = str(raw.get("script_path") or "").replace("\\", "/")
+    if _script_path_unsafe(script_path) or not script_path.endswith(".py"):
+        raise ValueError("script_run_path_invalid")
+    loaded = ScriptRun(
+        run_id=str(raw.get("run_id") or ""),
+        session_id=str(raw.get("session_id") or ""),
+        case_id=str(raw.get("case_id") or ""),
+        sn=str(raw.get("sn") or ""),
+        platform=str(raw.get("platform") or ""),
+        script_path=script_path,
+        files=cleaned,
+    )
+    if dump_script_run(loaded)["files"] != cleaned:
+        raise ValueError("script_run_files_invalid")
+    return loaded
+
+
 @dataclass
 class ImEnvelope:
     channel: str

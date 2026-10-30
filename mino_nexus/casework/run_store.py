@@ -913,7 +913,7 @@ def _close_open_sessions(doc: dict[str, Any], *, summary: str = "") -> None:
 
 
 
-def finish(run_id: str, *, status: str = "done", error: str = "") -> dict[str, Any]:
+def finish(run_id: str, *, status: str = "done", error: str = "", reason_code: str = "") -> dict[str, Any]:
     doc = get(run_id)
     if not doc:
         raise KeyError(run_id)
@@ -925,6 +925,8 @@ def finish(run_id: str, *, status: str = "done", error: str = "") -> dict[str, A
             if str(case.get("status") or "") in ("pending", "running"):
                 case["status"] = "cancelled"
                 case["summary"] = case.get("summary") or error or "任务已取消"
+                if reason_code:
+                    case["reason_code"] = reason_code
     elif status == "failed":
         # 单条失败不应把队列里未跑条目标成 cancelled；仅收口异常退出时仍挂起的行。
         for case in doc.get("cases") or []:
@@ -934,6 +936,8 @@ def finish(run_id: str, *, status: str = "done", error: str = "") -> dict[str, A
                 case.setdefault("reason_code", "batch_aborted")
     doc["status"] = status
     doc["error"] = error or doc.get("error") or ""
+    if reason_code:
+        doc["reason_code"] = reason_code
     doc["finished_at"] = _now()
     _close_open_sessions(doc, summary=error or "")
     clear_cancel(run_id)

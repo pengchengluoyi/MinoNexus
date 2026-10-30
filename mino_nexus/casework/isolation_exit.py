@@ -71,6 +71,25 @@ def _proof_ok(action: dict, doc: dict | None) -> bool:
     return False
 
 
+def _is_web_lane(sn: str, doc: dict | None = None) -> bool:
+    from mino_nexus.contract.execution.device import is_per_node_web_sn, is_web_slot
+
+    device = str(sn or "").strip()
+    plat = str((doc or {}).get("platform") or "")
+    return is_per_node_web_sn(device) or is_web_slot(device, plat or "web")
+
+
+def lane_release_block(doc: dict | None, sn: str) -> str:
+    """Web lane 只要求停机证据，不要求设备包名基线。"""
+    actions = [action for _, action in _open_actions(doc) if str(action.get("sn") or "") == sn]
+    if not actions:
+        return "baseline_not_required"
+    for action in actions:
+        if not _proof_ok(action, doc):
+            return "stop_evidence_required"
+    return ""
+
+
 def _baseline_package(action: dict, doc: dict | None) -> str:
     recovery = action.get("recovery") if isinstance(action.get("recovery"), dict) else {}
     mark = recovery.get("baseline_required") if isinstance(recovery.get("baseline_required"), dict) else {}
@@ -84,7 +103,10 @@ def exit_ready(doc: dict | None) -> tuple[bool, str]:
     for _, action in open_actions:
         if not _proof_ok(action, doc):
             return False, "stop_evidence_required"
-        if not str(action.get("sn") or "").strip() or not _baseline_package(action, doc):
+        sn = str(action.get("sn") or "").strip()
+        if _is_web_lane(sn, doc):
+            continue
+        if not sn or not _baseline_package(action, doc):
             return False, "baseline_package_missing"
     return True, ""
 
@@ -149,7 +171,7 @@ def apply_baselines(db, doc: dict | None) -> list[dict]:
     for _, action in _open_actions(doc):
         sn = str(action.get("sn") or "").strip()
         package = _baseline_package(action, doc)
-        if not sn or not package or (sn, package) in seen:
+        if _is_web_lane(sn, doc) or not sn or not package or (sn, package) in seen:
             continue
         seen.add((sn, package))
         row = db.query(DeviceAppSession).filter_by(sn=sn, package_id=package).first()
@@ -257,7 +279,7 @@ def commit_baseline_release(task_id: str, *, actor: str, sns: set[str], observat
                 from mino_nexus.models.device_app_session import DeviceAppSession
                 seen = set()
                 for sn in sorted(devices):
-                    if (sn, package) in seen:
+                    if _is_web_lane(sn, doc) or (sn, package) in seen:
                         continue
                     seen.add((sn, package))
                     row = db.query(DeviceAppSession).filter_by(sn=sn, package_id=package).first()

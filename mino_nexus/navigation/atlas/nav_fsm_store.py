@@ -330,6 +330,7 @@ def save(
     allow_calibrate: bool = False,
 ) -> dict[str, Any]:
     """整份替换（states / edges 全量重写）。校验不过直接抛，由调用方转 422。"""
+    raise NavFsmInvalid("logic_write_stopped")
     aid = str(app_id or "").strip()
     if not aid:
         raise NavFsmInvalid("app_id 为空")
@@ -417,6 +418,7 @@ def save(
 
 
 def delete(app_id: str, *, version: str = DEFAULT_VERSION) -> bool:
+    raise NavFsmInvalid("logic_write_stopped")
     from mino_nexus.core.database import SessionLocal, ensure_db
 
     ensure_db()

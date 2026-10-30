@@ -195,6 +195,7 @@ def _target_score(target: str, row: NavPageEntry) -> float:
 
 def upsert_entry(doc: dict[str, Any], *, actor: str = "") -> dict[str, Any]:
     """插入或合并一条入口。`doc` 的字段与模型同名，缺省安全。"""
+    raise ValueError("logic_write_stopped")
     app_id = str(doc.get("app_id") or "")
     if not app_id:
         raise ValueError("app_id_required")

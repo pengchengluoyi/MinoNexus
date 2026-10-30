@@ -221,6 +221,7 @@ def upsert_global_block(
     enabled: bool = True,
     key_ref: str = "",
 ) -> dict[str, Any]:
+    raise ValueError("logic_write_stopped")
     from mino_nexus.core.database import SessionLocal
 
     from mino_nexus.navigation.atlas.nav_key_refs import default_block_key_ref
@@ -285,6 +286,7 @@ def upsert_app_block(
     case_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """App 私有块：从用例拓扑沉淀，不进 global 骨架。"""
+    raise ValueError("logic_write_stopped")
     from mino_nexus.core.database import SessionLocal
     from mino_nexus.navigation.atlas.nav_key_refs import default_block_key_ref
 

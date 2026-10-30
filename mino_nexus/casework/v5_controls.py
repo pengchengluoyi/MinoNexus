@@ -28,6 +28,7 @@ def list_controls(project_id):
 
 
 def configure(project_id, control_id, *, expected_revision, locator_spec, sensitive, publish=False, page_state_id=None, platform="web"):
+    raise ValueError("logic_write_stopped")
     _assert_runtime_writable()
     actor = require_user_id()
     from mino_nexus.contract.locator_spec import validate_locator_spec

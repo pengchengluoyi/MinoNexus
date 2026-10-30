@@ -25,7 +25,8 @@ def record_progress_pass(
     visual_scheme: bool,
     login_module_case: bool,
     inspect_slots: dict[str, str],
-) -> None:
+) -> str:
+    """记下进展并返回操作后的界面指纹。未记进展时返回空串。"""
     if status_val == "pass" and (fuseable_cap(cap_id) or cap_id in ("fsm_navigate", "recover_fsm_navigate")):
         if visual_scheme:
             # 纯视觉的进展键不看像素。操作后再截一张会占住截图线程，下一回合决策图报 scout timeout。
@@ -72,3 +73,5 @@ def record_progress_pass(
                     pre_fp=screen_fp,
                     post_fp=post_fp,
                 )
+        return str(post_fp or "")
+    return ""

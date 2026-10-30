@@ -417,6 +417,7 @@ def extract_for_app(
     include_capture: bool = True,
     actor: str = "",
 ) -> dict[str, Any]:
+    raise ValueError("logic_write_stopped")
     from mino_nexus.navigation.atlas import nav_fsm_store
     from mino_nexus.navigation.atlas import nav_screen_registry
 

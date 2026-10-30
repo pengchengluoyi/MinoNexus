@@ -10,6 +10,22 @@ from mino_nexus.core.protocol import EventStatus
 from mino_nexus.core.schemas import PlanEvent
 from mino_nexus.loop.observe.agent_stream import emit_agent_event
 
+def _hierarchy_text(detail: dict) -> str:
+    """脚本看到的界面文本。节点上的 text 与 content_desc 都保留。"""
+    text = str(detail.get("hierarchy_text") or detail.get("text") or "").strip()
+    if text:
+        return text[:4000]
+    nodes = detail.get("nodes")
+    if not isinstance(nodes, list):
+        extra = detail.get("extra") if isinstance(detail.get("extra"), dict) else {}
+        nodes = extra.get("nodes")
+    if not isinstance(nodes, list):
+        return ""
+    from mino_nexus.navigation.geometry.hierarchy_slots import flatten, normalize_nodes
+
+    return flatten(normalize_nodes(nodes))[:4000]
+
+
 _SCRIPT_FILES = frozenset({
     "project_pretest.py", "case_pretest.py", "case_run.py", "case_posttest.py", "project_posttest.py",
 })
@@ -417,9 +433,7 @@ class CaseRuntime:
         self._guard()
         shot = self.proxy.observe("hierarchy", force_fresh=True)
         detail = getattr(shot, "remote_detail", None)
-        text = ""
-        if isinstance(detail, dict):
-            text = str(detail.get("hierarchy_text") or detail.get("text") or "")[:4000]
+        text = _hierarchy_text(detail if isinstance(detail, dict) else {})
         ok = bool(getattr(shot, "ok", False))
         result = ActionResult(
             ok=ok,
@@ -434,7 +448,12 @@ class CaseRuntime:
         self._guard()
         row = dict(getattr(self.ctx, "picked_account", None) or {})
         if not str(row.get("id") or row.get("account_id") or "").strip():
-            raise ScriptAbort("这条用例没有租到账号", reason_code="resource_account_missing")
+            from mino_nexus.resources.accounts.lease import lease_script_account
+
+            leased, err = lease_script_account(self.ctx, self.case)
+            row = dict(leased or getattr(self.ctx, "picked_account", None) or {})
+            if not str(row.get("id") or row.get("account_id") or "").strip():
+                raise ScriptAbort(err or "这条用例没有租到账号", reason_code="resource_account_missing")
         return SimpleNamespace(
             id=str(row.get("id") or row.get("account_id") or ""),
             email=str(row.get("email") or ""),
